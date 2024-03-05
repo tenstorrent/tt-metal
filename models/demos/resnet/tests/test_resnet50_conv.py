@@ -792,7 +792,7 @@ def test_resnet50_conv(
             output_on_device = tt_lib.tensor.sharded_to_interleaved(output_on_device, memory_config)
 
         # convert tiled output to RM
-        assert output_on_device.layout() == tt_lib.tensor.Layout.TILE
+        assert output_on_device.get_layout() == tt_lib.tensor.Layout.TILE
         output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config)
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
@@ -803,7 +803,7 @@ def test_resnet50_conv(
 
         # Copy to host and Compare against pytorch
         out = output_on_device.cpu()
-        assert out.layout() == tt_lib.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
 
         out_result = out.to_torch()
         # NHWC to NCHW

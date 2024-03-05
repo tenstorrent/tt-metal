@@ -32,9 +32,9 @@ class TtMnistModel(torch.nn.Module):
         self.fc3_weight = tt_lib.tensor.transpose(self.fc3_weight, -2, -1)
 
     def forward(self, x):
-        # tt_lib.tensor.reshape throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
+        # tt_lib.tensor.reshape throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.get_legacy_shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
         # Operand/target width must be a multiple of 32. So using fallback_ops.reshape.
-        x = tt_lib.fallback_ops.reshape(x, x.shape()[0], 1, 1, 784)
+        x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, 784)
 
         x = tt_lib.tensor.matmul(x, self.fc1_weight)
         x = tt_lib.tensor.bcast(x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)

@@ -17,11 +17,11 @@ namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
-    const auto& ashape = a.shape();
+    const auto& ashape = a.get_legacy_shape();
 
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
 
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -234,7 +234,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     uint32_t num_h_cores = rm ? bbox.end.y + 1 : bbox.end.x + 1;
     uint32_t num_w_cores = rm ? bbox.end.x + 1 : bbox.end.y + 1;
     // tensor shape
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t M = shape[2] * shape[0]; // 4608
     uint32_t K = shape[3]; // 3072
     uint32_t Mt = M / TILE_WIDTH;

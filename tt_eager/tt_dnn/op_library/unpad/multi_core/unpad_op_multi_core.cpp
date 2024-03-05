@@ -35,8 +35,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
 
     uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
@@ -124,14 +124,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
 operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-    const Shape output_shape = output.shape();
+    const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    uint32_t num_unpadded_sticks = output.volume() / output.shape()[-1];
+    uint32_t num_unpadded_sticks = output.volume() / output.get_legacy_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -143,9 +143,9 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    uint32_t padded_row_size_bytes = a.shape()[-1] * a.element_size();
+    uint32_t padded_row_size_bytes = a.get_legacy_shape()[-1] * a.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -225,7 +225,7 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = num_cores_x*num_cores_y;
-        uint32_t num_unpadded_sticks = dst_tensor.volume() / dst_tensor.shape()[-1];
+        uint32_t num_unpadded_sticks = dst_tensor.volume() / dst_tensor.get_legacy_shape()[-1];
         auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
         const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
@@ -268,8 +268,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
                                                                                 ){
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
@@ -356,7 +356,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
 operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-    const Shape output_shape = output.shape();
+    const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -378,7 +378,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -482,7 +482,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
 }
 
 operation::ProgramWithCallbacks unpad_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
-    switch (a.layout()) {
+    switch (a.get_layout()) {
         case Layout::ROW_MAJOR:
             return unpad_rm_multi_core(a, output, output_tensor_start, output_tensor_end);
         case Layout::TILE:

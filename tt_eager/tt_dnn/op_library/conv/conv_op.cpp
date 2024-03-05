@@ -138,30 +138,30 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
-    uint32_t act_batch_size = a.shape()[0];
+    TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    uint32_t act_batch_size = a.get_legacy_shape()[0];
     TT_ASSERT(act_batch_size == 1, "Only batch size 1 supported.");
-    TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_ASSERT(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, use_fast_reader);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.get_legacy_shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, use_fast_reader);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t) act_matrix_shape[2];
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_ASSERT(b.shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_ASSERT(b.shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.shape()[2];
-    uint32_t weight_matrix_width = b.shape()[3];
+    TT_ASSERT(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
+    TT_ASSERT(b.get_legacy_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_ASSERT(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.get_legacy_shape()[2];
+    uint32_t weight_matrix_width = b.get_legacy_shape()[3];
 
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_ASSERT(bias.has_value());
         TT_ASSERT(bias.value().buffer() != nullptr);
-        auto bias_shape_without_padding = bias.value().shape().without_padding();
+        auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
         TT_ASSERT(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
         TT_ASSERT(bias_shape_without_padding[1] == 1 && bias_shape_without_padding[2] == 1, "Bias should have H == W == 1");
         TT_ASSERT(bias_shape_without_padding[3] == output_channels, "Bias should have output_channels");
@@ -270,15 +270,15 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
-        bias_ntiles = bias.value().shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+        bias_ntiles = bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
         bias_tile_nbytes = single_tile_size;
         bias_log2_of_pagesize = (uint32_t) std::log2((float) bias_tile_nbytes);
     }
 
     // more args for reader
-    uint32_t conv_act_size_h = a.shape()[1];
-    uint32_t conv_act_size_w = a.shape()[2];
-    uint32_t conv_act_size_c = a.shape()[3];
+    uint32_t conv_act_size_h = a.get_legacy_shape()[1];
+    uint32_t conv_act_size_w = a.get_legacy_shape()[2];
+    uint32_t conv_act_size_c = a.get_legacy_shape()[3];
     uint32_t weight_size_h = (uint32_t) conv_params[0];
     uint32_t weight_size_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
@@ -314,7 +314,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t out_row_size_bytes = output_channels_padded_to_tile_width*num_bytes_of_df;
     uint32_t batch_size = 1;
     // output data format
-    const auto out_df = datatype_to_dataformat_converter(a.dtype());
+    const auto out_df = datatype_to_dataformat_converter(a.get_dtype());
     // For debug
     {
         log_debug(tt::LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
@@ -550,7 +550,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             bias_ntiles
         };
     }
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
     auto reader_id = CreateKernel(
         program,
         reader_kernel,
@@ -920,13 +920,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     bool pass = true;
     assert(untilize_out == true);
     tt_metal::Device *device = a.device();
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
-    TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
-    TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_ASSERT(a.get_legacy_shape()[0] == 1, "Only batch size 1 supported.");
+    TT_ASSERT(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
 
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [matrix_shape, matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, false);
+    auto [matrix_shape, matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.get_legacy_shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, false);
     assert(matrix_shape.size() == 3);
     assert(matrix_shape[0] == 1);
     uint32_t num_rows = (uint32_t) matrix_shape[1];
@@ -937,10 +937,10 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t Ca = 1;
     auto Ha = num_rows;
     auto Wa = num_cols;
-    uint32_t Bb = b.shape()[0];
-    uint32_t Cb = b.shape()[1];
-    uint32_t Hb = b.shape()[2];
-    uint32_t Wb = b.shape()[3];
+    uint32_t Bb = b.get_legacy_shape()[0];
+    uint32_t Cb = b.get_legacy_shape()[1];
+    uint32_t Hb = b.get_legacy_shape()[2];
+    uint32_t Wb = b.get_legacy_shape()[3];
     // Normal matrix shape checks
     TT_ASSERT(Ba == 1, "So far, large matmul op has only been tested for batch one.");
     TT_ASSERT(Ba == Bb, "Batch dimension needs to match");
@@ -997,10 +997,10 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     assert(num_blocks_output_w == num_blocks_weight_w);
 
     // DTX conv activation transform data access pattern
-    auto [act_address_map, act_address_map_metadata] = generate_conv_activation_address_map(a.shape(), conv_params, act_block_h_datums, act_block_w_datums, weight_block_w_datums,
+    auto [act_address_map, act_address_map_metadata] = generate_conv_activation_address_map(a.get_legacy_shape(), conv_params, act_block_h_datums, act_block_w_datums, weight_block_w_datums,
                                                             num_blocks_act_h, num_blocks_act_w, num_blocks_weight_w, num_bytes_of_df);
 
-    auto [weight_address_map, weight_address_map_metadata] = generate_conv_weight_address_map(b.shape(), act_block_w_datums, weight_block_w_datums,
+    auto [weight_address_map, weight_address_map_metadata] = generate_conv_weight_address_map(b.get_legacy_shape(), act_block_w_datums, weight_block_w_datums,
                                                                 num_blocks_act_h, num_blocks_act_w, num_blocks_weight_w, num_bytes_of_df);
 
     // sanity check
@@ -1172,7 +1172,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t weight_noc_y = weight_dram_noc_xy.y;
 
     // output data format
-    const auto out_df = datatype_to_dataformat_converter(a.dtype());
+    const auto out_df = datatype_to_dataformat_converter(a.get_dtype());
     // For debug
     {
         log_debug(tt::LogOp, "Hat (activation height in tiles): {}", Hat);
@@ -1378,13 +1378,13 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
                     uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                     uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
                     bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, bool fuse_relu = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
+    TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
+    auto padded_a_shape = Shape({a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
-    FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
+    FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     FormatParams input_bias_format_params = {};
     if (has_bias) {
-        input_bias_format_params = {.pad_shape=bias.value().shape(), .pad_value=0, .target_layout=Layout::TILE};
+        input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_without_autoformat(
@@ -1428,8 +1428,8 @@ void Conv::validate(const std::vector<Tensor>& input_tensors, const std::vector<
 
 std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    uint32_t conv_activation_h = input_tensor_a.shape()[1];
-    uint32_t conv_activation_w = input_tensor_a.shape()[2];
+    uint32_t conv_activation_h = input_tensor_a.get_legacy_shape()[1];
+    uint32_t conv_activation_w = input_tensor_a.get_legacy_shape()[2];
     // TODO: clean up here
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
@@ -1462,7 +1462,7 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, input_tensor.memory_config());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), output_layout, input_tensor.memory_config());
 }
 
 operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors,

@@ -307,7 +307,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             tt_tensor.storage()
         );
 
-        auto tt_dtype = tt_tensor.dtype();
+        auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -323,7 +323,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         };
         auto torch_dtype = tt_dtype_to_torch_dtype.at(tt_dtype);
 
-        auto shape = tt_tensor.shape();
+        auto shape = tt_tensor.get_legacy_shape();
         auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
         auto tensor = frombuffer(buffer, "dtype"_a=torch_dtype);
         tensor = tensor.attr("reshape")(torch_shape);
@@ -356,7 +356,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             },
             tt_tensor.storage());
 
-        auto tt_dtype = tt_tensor.dtype();
+        auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
@@ -372,7 +372,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         };
         auto np_dtype = tt_dtype_to_np_dtype.at(tt_dtype);
 
-        auto shape = tt_tensor.shape();
+        auto shape = tt_tensor.get_legacy_shape();
         auto np_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
         auto tensor = frombuffer(buffer, "dtype"_a = np_dtype);
         tensor = tensor.attr("reshape")(np_shape);
@@ -1106,14 +1106,14 @@ Tensor convert_python_tensor_to_tt_tensor(
 
             )doc")
             .def(
-                "shape",
-                [](const Tensor &self) { return self.shape(); },
+                "get_legacy_shape",
+                [](const Tensor &self) { return self.get_legacy_shape(); },
                 R"doc(
                 Get the shape of the tensor as Shape class.
 
                 .. code-block:: python
 
-                    shape = tt_tensor.shape()
+                    shape = tt_tensor.get_legacy_shape()
 
             )doc")
             .def(
@@ -1198,12 +1198,12 @@ Tensor convert_python_tensor_to_tt_tensor(
 
             )doc")
             .def(
-                "layout", [](const Tensor &self) { return self.layout(); }, R"doc(
+                "get_layout", [](const Tensor &self) { return self.get_layout(); }, R"doc(
                 Get memory layout of TT Tensor.
 
                 .. code-block:: python
 
-                    layout = tt_tensor.layout()
+                    layout = tt_tensor.get_layout()
 
             )doc")
             .def(
@@ -1234,16 +1234,16 @@ Tensor convert_python_tensor_to_tt_tensor(
 
             )doc")
             .def(
-                "dtype", [](const Tensor &self) { return self.dtype(); }, R"doc(
+                "get_dtype", [](const Tensor &self) { return self.get_dtype(); }, R"doc(
                 Get dtype of TT Tensor.
 
                 .. code-block:: python
 
-                    dtype = tt_tensor.dtype()
+                    dtype = tt_tensor.get_dtype()
             )doc")
             .def(
                 "shape_without_padding",
-                [](const Tensor &self) { return Shape{self.shape().without_padding()}; },
+                [](const Tensor &self) { return Shape{self.get_legacy_shape().without_padding()}; },
                 R"doc(
                 Get shape without padding of TT Tensor.
 

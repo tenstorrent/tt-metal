@@ -20,10 +20,10 @@ void MorehCumSum::validate(const std::vector<Tensor>& inputs) const {
     const auto& input = inputs.at(0);
     const auto& output = inputs.at(1);
 
-    auto input_shape = input.shape();
-    const auto& output_shape = output.shape();
-    auto input_shape_wo_padding = input.shape().without_padding();
-    const auto& output_shape_wo_padding = output.shape().without_padding();
+    auto input_shape = input.get_legacy_shape();
+    const auto& output_shape = output.get_legacy_shape();
+    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
 
     for (int i = 0; i < input_shape.rank(); ++i) {
         TT_ASSERT(input_shape[i] == output_shape[i]);

@@ -36,7 +36,7 @@ def transpose(
 
     xt = xt.to(device, input_mem_config)
     xtt = ttl.tensor.transpose(xt, dim0, dim1, output_mem_config)
-    assert list(xtt.shape()) == output_shape
+    assert list(xtt.get_legacy_shape()) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

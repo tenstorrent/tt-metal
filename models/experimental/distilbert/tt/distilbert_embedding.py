@@ -19,9 +19,7 @@ class TtDistilBert_Embeddings(nn.Module):
         self.config = config
         self.device = device
 
-        self.word_embedding_weight = state_dict[
-            f"{base_address}.word_embeddings.weight"
-        ]
+        self.word_embedding_weight = state_dict[f"{base_address}.word_embeddings.weight"]
 
         self.word_embeddings = nn.Embedding(
             num_embeddings=self.config.vocab_size,
@@ -30,21 +28,15 @@ class TtDistilBert_Embeddings(nn.Module):
             _weight=self.word_embedding_weight,
         )
 
-        self.position_embedding_weight = state_dict[
-            f"{base_address}.position_embeddings.weight"
-        ]
+        self.position_embedding_weight = state_dict[f"{base_address}.position_embeddings.weight"]
         self.position_embeddings = nn.Embedding(
             num_embeddings=self.config.max_position_embeddings,
             embedding_dim=self.config.dim,
             _weight=self.position_embedding_weight,
         )
 
-        self.gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.LayerNorm.weight"], self.device
-        )
-        self.beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.LayerNorm.bias"], self.device
-        )
+        self.gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.weight"], self.device)
+        self.beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.bias"], self.device)
 
         self.LayerNorm = tt_lib.tensor.layernorm
 
@@ -64,11 +56,9 @@ class TtDistilBert_Embeddings(nn.Module):
         """
         if input_ids is not None:
             input_embeds = self.word_embeddings(input_ids)
-            input_embeds = torch_to_tt_tensor_rm(
-                input_embeds, self.device, put_on_device=True
-            )
+            input_embeds = torch_to_tt_tensor_rm(input_embeds, self.device, put_on_device=True)
 
-        seq_length = input_embeds.shape()[-2]
+        seq_length = input_embeds.get_legacy_shape()[-2]
 
         if hasattr(self, "position_ids"):
             position_ids = self.position_ids[:, :seq_length]
@@ -77,13 +67,9 @@ class TtDistilBert_Embeddings(nn.Module):
             position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
 
         position_embeddings = self.position_embeddings(position_ids)
-        position_embeddings = torch_to_tt_tensor_rm(
-            position_embeddings, self.device, put_on_device=True
-        )
+        position_embeddings = torch_to_tt_tensor_rm(position_embeddings, self.device, put_on_device=True)
 
         embeddings = tt_lib.tensor.add(input_embeds, position_embeddings)
-        embeddings = self.LayerNorm(
-            embeddings, eps=1e-12, gamma=self.gamma, beta=self.beta
-        )
+        embeddings = self.LayerNorm(embeddings, eps=1e-12, gamma=self.gamma, beta=self.beta)
 
         return embeddings

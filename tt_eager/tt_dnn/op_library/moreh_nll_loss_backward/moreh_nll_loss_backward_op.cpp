@@ -33,36 +33,36 @@ void MorehNllLossBackward::validate(const std::vector<Tensor> &input_tensors, co
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor.get_layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
+    TT_ASSERT(input_tensor.get_dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(target_tensor.dtype() == DataType::UINT32);
+    TT_ASSERT((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_ASSERT(target_tensor.get_dtype() == DataType::UINT32);
 
     TT_ASSERT(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(output_grad_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((output_grad_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(output_grad_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_ASSERT(output_grad_tensor.get_dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(input_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(input_grad_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_grad_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_grad_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_ASSERT(input_grad_tensor.get_dtype() == DataType::BFLOAT16);
 
     if (weight_tensor.has_value()) {
         TT_ASSERT(weight_tensor.value().storage_type() == StorageType::DEVICE, "weight_tensor to nll_loss need to be on device!");
         TT_ASSERT(weight_tensor.value().buffer() != nullptr, "weight_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_ASSERT((weight_tensor.value().layout() == Layout::ROW_MAJOR), "weight_tensor to nll_loss must be in row major layout");
-        TT_ASSERT(weight_tensor.value().dtype() == DataType::BFLOAT16);
+        TT_ASSERT((weight_tensor.value().get_layout() == Layout::ROW_MAJOR), "weight_tensor to nll_loss must be in row major layout");
+        TT_ASSERT(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
     }
 
     if (divisor_tensor.has_value()) {
         TT_ASSERT(divisor_tensor.value().storage_type() == StorageType::DEVICE, "divisor_tensor to nll_loss need to be on device!");
         TT_ASSERT(divisor_tensor.value().buffer() != nullptr, "divisor_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_ASSERT((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
-        TT_ASSERT(divisor_tensor.value().dtype() == DataType::BFLOAT16);
+        TT_ASSERT((divisor_tensor.value().get_layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
+        TT_ASSERT(divisor_tensor.value().get_dtype() == DataType::BFLOAT16);
     }
 }
 

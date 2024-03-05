@@ -134,7 +134,7 @@ def test_split_tiled_w(shape, in_mem_config, out_mem_config, device, dtype=ttl.t
     assert len(dev_buffers) == num_splits
     for index, buff in enumerate(dev_buffers):
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
-        assert list(buff.shape()) == [W, Z, Y, int(X / num_splits)]
+        assert list(buff.get_legacy_shape()) == [W, Z, Y, int(X / num_splits)]
         tt_host_rm_buff = buff.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
         pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()
         pyt_buff_list.append(pyt_got_back_rm_buff)

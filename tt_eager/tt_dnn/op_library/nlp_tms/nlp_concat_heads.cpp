@@ -17,11 +17,11 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
-    const auto& ashape = a.shape();
+    const auto& ashape = a.get_legacy_shape();
 
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.shape()[-2];
+        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.get_legacy_shape()[-2];
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else {

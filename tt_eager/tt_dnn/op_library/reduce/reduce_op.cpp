@@ -58,7 +58,7 @@ void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to reduce need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
@@ -74,7 +74,7 @@ void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = input_tensor.shape();
+    auto output_shape = input_tensor.get_legacy_shape();
     auto padding = output_shape.padding();
     switch (this->dim){
         case ReduceOpDim::H:
@@ -132,7 +132,7 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
     const auto& input_tensor = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    auto shape = input_tensor.shape();
+    auto shape = input_tensor.get_legacy_shape();
     uint32_t Wt = shape[3]/TILE_WIDTH;
     uint32_t Ht = shape[2]/TILE_HEIGHT;
     uint32_t NC = shape[1]*shape[0];
@@ -175,15 +175,15 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         } else {
             device = input_tensor.device();
         }
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
         auto formatted_input_tensor = input_tensor;
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
-        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {formatted_input_tensor}).at(0);
-        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {output_tensor}).at(0);
+        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {formatted_input_tensor}).at(0);
+        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {output_tensor}).at(0);
     } else {
-        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {input_tensor}, {}, pad_value).at(0);
+        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, pad_value).at(0);
     }
 }
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
@@ -194,7 +194,7 @@ Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_co
     return mul_unary_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
 }
 Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
-    tt::tt_metal::Shape shape = input_tensor.shape();
+    tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();
 
     TT_FATAL( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
     switch( aggregate_dims ) {
@@ -241,8 +241,8 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
     // Fused tranpose cw and reduce sum on w
     if ( dim == 1 ) {
         // Pad before running the op to only pay cost of formatting once
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), true);
-        auto out_shape = input_tensor.shape();
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), true);
+        auto out_shape = input_tensor.get_legacy_shape();
         out_shape[1] = 1;
 
         auto formatted_input_tensor = input_tensor;
@@ -257,8 +257,8 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
         // Pad before running the op to only pay cost of formatting once
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), false, true);
-        auto out_shape = input_tensor.shape();
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), false, true);
+        auto out_shape = input_tensor.get_legacy_shape();
         out_shape[0] = 1;
 
         auto formatted_input_tensor = input_tensor;
@@ -292,7 +292,7 @@ Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
 using ReduceFnT = Tensor(*)(const Tensor&,unsigned int, const MemoryConfig&);
 Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_mem_config) {
     Tensor result = val;
-    for(int rank = val.shape().rank()-1; rank >=0; rank--)
+    for(int rank = val.get_legacy_shape().rank()-1; rank >=0; rank--)
         result = f(result, rank, output_mem_config);
     return result;
 }

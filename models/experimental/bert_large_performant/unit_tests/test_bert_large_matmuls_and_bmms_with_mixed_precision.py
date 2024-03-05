@@ -119,21 +119,21 @@ def run_bert_large_matmul_test(
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert a_t.dtype() == in0_dtype
+    assert a_t.get_dtype() == in0_dtype
     assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
-    assert b_t.dtype() == in1_dtype
+    assert b_t.get_dtype() == in1_dtype
     if bias_mem_config is not None:
         assert bias_t.memory_config().buffer_type == bias_mem_config.buffer_type
-        assert bias_t.dtype() == bias_dtype
+        assert bias_t.get_dtype() == bias_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
-    assert t2.dtype() == out_dtype
-    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
+    assert t2.get_dtype() == out_dtype
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
     if bias_mem_config is not None:
-        logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.dtype()}")
-    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}")
+        logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.get_dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape() == expected_output_shape
+    assert t2.get_legacy_shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
@@ -214,16 +214,16 @@ def run_bert_large_bmm_test(
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert a_t.dtype() == in0_dtype
+    assert a_t.get_dtype() == in0_dtype
     assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
-    assert b_t.dtype() == in1_dtype
+    assert b_t.get_dtype() == in1_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
-    assert t2.dtype() == out_dtype
-    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
-    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}")
+    assert t2.get_dtype() == out_dtype
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape() == expected_output_shape
+    assert t2.get_legacy_shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = tt_host_rm.to_torch()
 

@@ -337,7 +337,7 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
     }
 
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
 }
 
 template <typename T>
@@ -355,7 +355,7 @@ inline Tensor to_host_sharded(const Tensor& tensor) {
     ::detail::ReadFromBuffer(*device_buffer, device_data, true);
     auto data_vec = unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
 }
 
 template <typename T>
@@ -371,9 +371,9 @@ inline Tensor to_device(
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
 
-    auto shape = tensor.shape();
-    auto data_type = tensor.dtype();
-    auto layout = tensor.layout();
+    auto shape = tensor.get_legacy_shape();
+    auto data_type = tensor.get_dtype();
+    auto layout = tensor.get_layout();
 
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if (memory_config.is_sharded()) {
@@ -390,12 +390,12 @@ inline Tensor to_device(
 
 template <typename T>
 inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
-    if (tensor.layout() == target_layout) {
+    if (tensor.get_layout() == target_layout) {
         return tensor;
     }
 
-    auto shape = tensor.shape();
-    auto source_layout = tensor.layout();
+    auto shape = tensor.get_legacy_shape();
+    auto source_layout = tensor.get_layout();
     auto convert = [&shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
@@ -434,7 +434,7 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         tensor.storage());
 
     auto output_buffer = owned_buffer::create<T>(std::move(output_data));
-    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
+    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
 }
 
 Tensor to_layout_bfloat8_b(const Tensor& tensor, Layout target_layout);
@@ -446,9 +446,9 @@ template <typename T>
 inline Tensor pad(
     const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_tensor_shape = tensor.shape();
+    const auto input_tensor_shape = tensor.get_legacy_shape();
     const auto input_tensor_strides = tensor.strides();
-    const auto input_tensor_data_type = tensor.dtype();
+    const auto input_tensor_data_type = tensor.get_dtype();
 
     auto pad = [&input_tensor_shape,
                 &input_tensor_strides,
@@ -531,7 +531,7 @@ inline Tensor pad(
             }
         },
         tensor.storage());
-    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
 Tensor pad_bfloat8_b(
@@ -539,7 +539,7 @@ Tensor pad_bfloat8_b(
 
 template <typename T>
 inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
-    const auto input_tensor_shape = tensor.shape();
+    const auto input_tensor_shape = tensor.get_legacy_shape();
     const auto input_tensor_strides = tensor.strides();
 
     // Check if tensor start and end indices are within input tensor shape
@@ -601,7 +601,7 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
             }
         },
         tensor.storage());
-    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
 Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
@@ -780,9 +780,9 @@ std::string to_string(const BufferType& buffer, const Shape& shape, DataType dty
 
 template <typename T>
 inline std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype = std::nullopt) {
-    const auto shape = tensor.shape();
-    const auto dtype = original_dtype.value_or(tensor.dtype());
-    const auto layout = tensor.layout();
+    const auto shape = tensor.get_legacy_shape();
+    const auto dtype = original_dtype.value_or(tensor.get_dtype());
+    const auto layout = tensor.get_layout();
 
     if (not tensor.is_allocated()) {
         return fmt::format(
@@ -803,8 +803,8 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
         auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
         auto float_tensor =
-            Tensor(OwnedStorage{input_float_buffer}, tensor.shape(), DataType::FLOAT32, tensor.layout());
-        return to_string<float>(float_tensor, tensor.dtype());
+            Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+        return to_string<float>(float_tensor, tensor.get_dtype());
     }
 
     return std::visit(
@@ -841,7 +841,7 @@ Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
 
     auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
-    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout());
 
 }
 

@@ -238,9 +238,9 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
@@ -278,7 +278,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(const Tensor &a, const T
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

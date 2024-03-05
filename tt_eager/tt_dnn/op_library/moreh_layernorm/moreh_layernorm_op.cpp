@@ -37,8 +37,8 @@ inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_bloc
 }
 
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
     TT_ASSERT(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
     TT_ASSERT(
@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.shape();
+    const auto input_shape = input.get_legacy_shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t +
@@ -430,27 +430,27 @@ void MorehLayerNorm::validate(
     check_tensor(input, "moreh_layernorm");
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= input.shape().rank());
+    TT_ASSERT(this->normalized_dims <= input.get_legacy_shape().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm");
         TT_ASSERT(
-            input.shape()[3] == gamma.value().shape()[3],
-            fmt::format("{} != {}", input.shape()[3], gamma.value().shape()[3]));
+            input.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3],
+            fmt::format("{} != {}", input.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
         TT_ASSERT(
-            input.shape().without_padding()[3] == gamma.value().shape().without_padding()[3],
-            fmt::format("{} != {}", input.shape().without_padding()[3], gamma.value().shape().without_padding()[3]));
+            input.get_legacy_shape().without_padding()[3] == gamma.value().get_legacy_shape().without_padding()[3],
+            fmt::format("{} != {}", input.get_legacy_shape().without_padding()[3], gamma.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == gamma.value().device());
     }
 
     if (beta.has_value()) {
         check_tensor(beta.value(), "moreh_layernorm");
         TT_ASSERT(
-            input.shape()[3] == beta.value().shape()[3],
-            fmt::format("{} != {}", input.shape()[3], beta.value().shape()[3]));
+            input.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3],
+            fmt::format("{} != {}", input.get_legacy_shape()[3], beta.value().get_legacy_shape()[3]));
         TT_ASSERT(
-            input.shape().without_padding()[3] == beta.value().shape().without_padding()[3],
-            fmt::format("{} != {}", input.shape().without_padding()[3], beta.value().shape().without_padding()[3]));
+            input.get_legacy_shape().without_padding()[3] == beta.value().get_legacy_shape().without_padding()[3],
+            fmt::format("{} != {}", input.get_legacy_shape().without_padding()[3], beta.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == beta.value().device());
     }
 
@@ -465,13 +465,13 @@ void MorehLayerNorm::validate(
 
 std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 
 std::vector<Tensor> MorehLayerNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehLayerNorm::create_program(

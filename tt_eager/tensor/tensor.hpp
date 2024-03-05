@@ -79,9 +79,9 @@ class Tensor {
         //                                      Getters
         // ======================================================================================
         const Storage &storage() const;
-        const Shape &shape() const { return this->shape_; }
-        DataType dtype() const { return this->dtype_; }
-        Layout layout() const { return this->layout_; }
+        const Shape &get_legacy_shape() const { return this->shape_; }
+        DataType get_dtype() const { return this->dtype_; }
+        Layout get_layout() const { return this->layout_; }
 
         // ======================================================================================
         //                                      Extra Helper Functions

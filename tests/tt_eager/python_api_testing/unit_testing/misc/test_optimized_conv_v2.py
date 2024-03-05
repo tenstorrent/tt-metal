@@ -186,7 +186,7 @@ def test_optimized_conv_v2(
     # out is in row major layout and NHWC shape
     out = conv.copy_output_from_device(output_on_device)
 
-    assert out.layout() == tt_lib.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
 
     out_result = out.to_torch()
     # NHWC to NCHW

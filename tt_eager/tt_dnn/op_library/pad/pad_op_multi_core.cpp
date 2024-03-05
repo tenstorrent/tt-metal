@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
 
     auto output_shape = output_tensor_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.get_legacy_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();   // Assuming output is same datatype as input
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t cb_npages = 16; // multibuffering for perf
     // uint32_t cb_npages = 1; // multibuffering for perf
     uint32_t cb_pagesize = (uint32_t) ceil((float) dst_nbytes_per_core_w / constants::TILE_WIDTH) * constants::TILE_WIDTH;
-    DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(a.get_dtype());
     tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
@@ -212,13 +212,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
         log_debug("ntiles_per_core_w: {}", ntiles_per_core_w);
         log_debug("src0_buffer_addr: {}", src0_buffer->address());
         log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        log_debug("a.shape[0]: {}", a.shape()[0]);
+        log_debug("a.shape[0]: {}", a.get_legacy_shape()[0]);
         log_debug("out.shape[0]: {}", output_shape[0]);
-        log_debug("a.shape[1]: {}", a.shape()[1]);
+        log_debug("a.shape[1]: {}", a.get_legacy_shape()[1]);
         log_debug("out.shape[1]: {}", output_shape[1]);
-        log_debug("a.shape[2]: {}", a.shape()[2]);
+        log_debug("a.shape[2]: {}", a.get_legacy_shape()[2]);
         log_debug("out.shape[2]: {}", output_shape[2]);
-        log_debug("s.shape[3]: {}", a.shape()[3]);
+        log_debug("s.shape[3]: {}", a.get_legacy_shape()[3]);
         log_debug("out.shape[3]: {}", output_shape[3]);
         log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     int32_t local_nsticks = ntiles_per_core_h * TILE_HEIGHT;
     int32_t rem_nbatch = nbatch;    // per core h, there are ncores_per_batch_h cores, ie each batch ncores_h = ncores_per_batch_h
     for (int32_t b = 0; b < nbatch; ++ b) {
-        int32_t rem_src_nsticks = a.shape()[2];
+        int32_t rem_src_nsticks = a.get_legacy_shape()[2];
         for (uint32_t j = 0; j < ncores_per_batch_h; ++ j) {
             uint32_t num_local_unpadded_nsticks = local_nsticks;
             if (rem_src_nsticks - local_nsticks >= 0) {
@@ -269,13 +269,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                 }
                 vector<uint32_t> reader_rt_args = {src0_buffer->address(),
                                                     dst_buffer->address(),
-                                                    a.shape()[0],
+                                                    a.get_legacy_shape()[0],
                                                     output_shape[0],
-                                                    a.shape()[1],
+                                                    a.get_legacy_shape()[1],
                                                     output_shape[1],
-                                                    a.shape()[2],
+                                                    a.get_legacy_shape()[2],
                                                     output_shape[2],
-                                                    a.shape()[3],
+                                                    a.get_legacy_shape()[3],
                                                     output_shape[3],
                                                     curr_stick_size_nbytes,
                                                     (uint32_t) dst_nbytes_per_core_w,

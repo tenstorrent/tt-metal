@@ -22,8 +22,8 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
     // TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == output_mem_config_.memory_layout, "Input tensor memory layout should be same as output tensor memory layout");
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Input tensor memory layout should be HEIGHT or BLOCK sharded");
@@ -36,7 +36,7 @@ std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &in
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.shape().without_padding();
+    const auto input_shape = input.get_legacy_shape().without_padding();
 
     uint32_t out_n = input_shape[0];
     uint32_t out_h = input_shape[1] * scale_factor_h_;
@@ -63,7 +63,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 mem_config.shard_spec = output_shard_spec;
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
-                return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), mem_config)};
+                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto shard_grid = input_shard_spec.grid.ranges();
                 TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
@@ -78,7 +78,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto output_shard_shape = output_shard_spec.shape;
                 log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-                return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), mem_config)};
+                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
                 TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
             }
@@ -86,7 +86,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
             TT_FATAL(false, "Output memory config is sharded but input memory config is not sharded");
         }
     } else {
-        return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), output_mem_config_);
+        return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), output_mem_config_);
     }
 }
 

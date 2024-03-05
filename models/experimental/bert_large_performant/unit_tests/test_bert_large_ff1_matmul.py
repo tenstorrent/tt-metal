@@ -86,7 +86,7 @@ def run_bert_large_ff1_matmul_test(
         bias_t = None
 
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, a_t.shape()[0]),
+        compute_with_storage_grid_size=(12, a_t.get_legacy_shape()[0]),
         in0_block_w=4,
         out_subblock_h=6,
         out_subblock_w=1,
@@ -114,7 +114,7 @@ def run_bert_large_ff1_matmul_test(
         logger.debug(f"bias is on: {bias_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    assert t2.shape() == [9, 1, 384, 4096]
+    assert t2.get_legacy_shape() == [9, 1, 384, 4096]
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = tt_host_rm.to_torch()
 

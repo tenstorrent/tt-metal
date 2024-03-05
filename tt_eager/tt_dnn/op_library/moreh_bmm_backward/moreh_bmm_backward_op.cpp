@@ -17,9 +17,9 @@ inline void moreh_bmm_backward_validate(
     const Tensor &mat2,
     std::optional<std::reference_wrapper<const Tensor>> input_grad,
     std::optional<std::reference_wrapper<const Tensor>> mat2_grad) {
-    const auto &input_shape = input.shape().without_padding();
-    const auto &mat2_shape = mat2.shape().without_padding();
-    const auto &output_grad_shape = output_grad.shape().without_padding();
+    const auto &input_shape = input.get_legacy_shape().without_padding();
+    const auto &mat2_shape = mat2.get_legacy_shape().without_padding();
+    const auto &output_grad_shape = output_grad.get_legacy_shape().without_padding();
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
             mat2.storage_type() == StorageType::DEVICE,
@@ -36,14 +36,14 @@ inline void moreh_bmm_backward_validate(
     if (input_grad) {
         const auto &input_grad_tensor = input_grad->get();
         TT_ASSERT(
-            input_grad_tensor.shape().without_padding() == input_shape,
+            input_grad_tensor.get_legacy_shape().without_padding() == input_shape,
             "shape of input_grad should be the same as shape of input");
     }
 
     if (mat2_grad) {
         const auto &mat2_grad_tensor = mat2_grad->get();
         TT_ASSERT(
-            mat2_grad_tensor.shape().without_padding() == mat2_shape,
+            mat2_grad_tensor.get_legacy_shape().without_padding() == mat2_shape,
             "shape of mat2_grad should be the same as shape of mat2");
     }
 }

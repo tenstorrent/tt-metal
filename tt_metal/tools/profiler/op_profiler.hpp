@@ -80,9 +80,9 @@ namespace op_profiler {
             }
 
             vector<string> tensorStrs = {
-                shape_to_str(tensor.shape()),
-                fmt::format("{}", magic_enum::enum_name(tensor.layout())),
-                fmt::format("{}", magic_enum::enum_name(tensor.dtype())),
+                shape_to_str(tensor.get_legacy_shape()),
+                fmt::format("{}", magic_enum::enum_name(tensor.get_layout())),
+                fmt::format("{}", magic_enum::enum_name(tensor.get_dtype())),
                 tensorStorageStr
             };
 

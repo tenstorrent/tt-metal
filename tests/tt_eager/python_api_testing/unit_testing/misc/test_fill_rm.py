@@ -38,7 +38,7 @@ def test_fill_rm(device):
         .to(device)
     )
     xtt = tt_lib.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
-    assert list(xtt.shape()) == [N, C, H, W]
+    assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
     tt_got_back = xtt.cpu().to_torch()
 

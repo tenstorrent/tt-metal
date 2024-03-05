@@ -41,7 +41,7 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
         return tensor.reshape(shape.value());
     });
 
-    const auto layout = tensor.layout();
+    const auto layout = tensor.get_layout();
 
     if (tensor.is_contiguous()) {
         if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
@@ -68,7 +68,7 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
     }
 
     if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE) and tensor_shape.rank() == 4 and
-        shape.rank() == 4 and tensor.dtype() == ttnn::bfloat16) {
+        shape.rank() == 4 and tensor.get_dtype() == ttnn::bfloat16) {
         auto shape_with_tile_padding = shape.with_tile_padding();
         const auto w = shape_with_tile_padding[0];
         const auto z = shape_with_tile_padding[1];

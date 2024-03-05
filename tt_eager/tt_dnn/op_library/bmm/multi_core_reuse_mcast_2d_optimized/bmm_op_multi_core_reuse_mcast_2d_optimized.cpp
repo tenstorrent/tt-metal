@@ -846,12 +846,12 @@ namespace tt_metal {
 
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation) {
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype()); // in0
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype()); // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype()); // output
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype()); // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype()); // in1
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype()); // output
 
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b; // bias; doesn't matter if bias=nullptr
@@ -863,7 +863,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
 
         bias_buffer = c.buffer();
 
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
     tt_metal::Device *device = a.device();

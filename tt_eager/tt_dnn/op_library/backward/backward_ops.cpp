@@ -315,9 +315,9 @@ std::vector<Tensor> fill_bw(const Tensor& grad, const MemoryConfig& output_mem_c
 }
 
 std::vector<Tensor> _embedding_bw(const Tensor& grad, const Tensor& input, const Tensor& weight, const MemoryConfig& output_mem_config) {
-    TT_FATAL(input.dtype() == DataType::UINT32, "Input must be UINT32");
-    TT_FATAL(grad.shape()[0] == 1 && grad.shape()[1] == 1, "First two dimensions for the grad must be 1");
-    TT_FATAL(input.shape()[1] == 1 && input.shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    TT_FATAL(input.get_dtype() == DataType::UINT32, "Input must be UINT32");
+    TT_FATAL(grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1, "First two dimensions for the grad must be 1");
+    TT_FATAL(input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = embeddings(input, grad, false);
     grad_tensor.emplace_back(grad_a);
@@ -768,7 +768,7 @@ std::vector<Tensor> logaddexp2_bw(const Tensor& grad, const Tensor& input_a, con
 std::vector<Tensor> _concat_bw(const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     const Shape start_index = {0, 0, 0, 0};
-    const Shape end_index = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2] - 1, input.shape()[3] - 1};
+    const Shape end_index = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2] - 1, input.get_legacy_shape()[3] - 1};
 
     Tensor grad_a = unpad(grad, start_index, end_index);
     grad_tensor.emplace_back(grad_a);
@@ -776,21 +776,21 @@ std::vector<Tensor> _concat_bw(const Tensor& grad, const Tensor& input, const Te
     Shape start_index_2 = {0, 0, 0, 0};
     if(dim == 0)
     {
-      start_index_2 = {input.shape()[0], 0, 0, 0};
+      start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
     }
     else if(dim == 1)
     {
-        start_index_2 = {input.shape()[0] - 1, input.shape()[1], 0, 0};
+        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
     }
     else if(dim == 2)
     {
-        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2], 0};
+        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
     }
     else if(dim == 3)
     {
-        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, 0, input.shape()[3]};
+        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, 0, input.get_legacy_shape()[3]};
     }
-    const Shape end_index_2 = {grad.shape()[0] - 1, grad.shape()[1] - 1, grad.shape()[2] - 1, grad.shape()[3] - 1};
+    const Shape end_index_2 = {grad.get_legacy_shape()[0] - 1, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1, grad.get_legacy_shape()[3] - 1};
     Tensor grad_b = unpad(grad, start_index_2, end_index_2);
     grad_tensor.emplace_back(grad_b);
 

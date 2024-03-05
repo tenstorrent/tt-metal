@@ -58,12 +58,12 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     }
 
     DeallocateBuffer(*input_tensor.buffer());
-    auto output_tensor = create_device_tensor(input_tensor.shape(), input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), output_mem_config);
+    auto output_tensor = create_device_tensor(input_tensor.get_legacy_shape(), input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), output_mem_config);
 
-    bool tilized = input_tensor.layout() == Layout::TILE;
+    bool tilized = input_tensor.get_layout() == Layout::TILE;
 
     // get_parallelization_strategy
-    uint32_t num_units = tilized ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.shape()[-1];
+    uint32_t num_units = tilized ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
 
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
 
@@ -128,9 +128,9 @@ inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& me
     auto shard_spec = input_tensor.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input_tensor.shape();
-    auto input_dtype = input_tensor.dtype();
-    auto input_layout = input_tensor.layout();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_dtype = input_tensor.get_dtype();
+    auto input_layout = input_tensor.get_layout();
 
     DeallocateBuffer(*input_tensor.buffer());
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);

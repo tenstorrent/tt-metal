@@ -140,20 +140,20 @@ def test_resnet50_first_conv(
             pad_w,
             extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
-        print("A_cl_host shape", A_cl_host.shape())
+        print("A_cl_host shape", A_cl_host.get_legacy_shape())
         memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
         # save original shape (N, H, W, C)
-        original_A_cl_host_shape = A_cl_host.shape()
+        original_A_cl_host_shape = A_cl_host.get_legacy_shape()
 
         # re-shape to (N, H, 1, W*C)
         A_cl_host = A_cl_host.reshape(
-            A_cl_host.shape()[0],
-            A_cl_host.shape()[1],
+            A_cl_host.get_legacy_shape()[0],
+            A_cl_host.get_legacy_shape()[1],
             1,
-            A_cl_host.shape()[2] * A_cl_host.shape()[3],
+            A_cl_host.get_legacy_shape()[2] * A_cl_host.get_legacy_shape()[3],
         )
-        print("A_cl_host shape after re-shape (only for transfer)", A_cl_host.shape())
+        print("A_cl_host shape after re-shape (only for transfer)", A_cl_host.get_legacy_shape())
         A_cl_device = A_cl_host.to(device, memory_config)
 
         print(original_A_cl_host_shape)
@@ -164,7 +164,7 @@ def test_resnet50_first_conv(
             original_A_cl_host_shape[2],
             original_A_cl_host_shape[3],
         )
-        print("A_cl_device shape into OP", A_cl_device.shape())
+        print("A_cl_device shape into OP", A_cl_device.get_legacy_shape())
 
         # Prepare weights
         B_tiled_host = create_conv_weight_tensor_special_special(
@@ -238,8 +238,8 @@ def test_resnet50_first_conv(
                 conv_output_shape[3],
             )
         out = out.cpu()
-        assert list(out.shape()) == conv_output_shape
-        assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert list(out.get_legacy_shape()) == conv_output_shape
+        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch()

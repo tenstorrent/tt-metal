@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-
-
 import torch
 import torch.nn as nn
 
@@ -20,6 +18,7 @@ from models.utility_functions import (
     tt2torch_tensor,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+
 
 @dataclass
 class TtBaseModelOutputWithPoolingAndCrossAttentions:
@@ -58,7 +57,9 @@ class TtRobertaModel(nn.Module):
         add_pooling_layer=True,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.config = config
         self.device = device
 
@@ -94,9 +95,7 @@ class TtRobertaModel(nn.Module):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
-    def create_extended_attention_mask_for_decoder(
-        self, input_shape, torch_attention_mask
-    ):
+    def create_extended_attention_mask_for_decoder(self, input_shape, torch_attention_mask):
         """
         Using torch implementation bc of missing ops.
         This function is only used in decoder mode. For preprocessing attention masks.
@@ -104,10 +103,7 @@ class TtRobertaModel(nn.Module):
         batch_size, seq_length = input_shape
         seq_ids = torch.arange(seq_length)
 
-        causal_mask = (
-            seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
-            <= seq_ids[None, :, None]
-        )
+        causal_mask = seq_ids[None, None, :].repeat(batch_size, seq_length, 1) <= seq_ids[None, :, None]
         # in case past_key_values are used we need to add a prefix ones mask to the causal mask
         # causal and attention masks must have same type with pytorch version < 1.3
         causal_mask = causal_mask.to(torch_attention_mask.dtype)
@@ -126,9 +122,7 @@ class TtRobertaModel(nn.Module):
                 axis=-1,
             )
 
-        extended_attention_mask = (
-            causal_mask[:, None, :, :] * torch_attention_mask[:, None, None, :]
-        )
+        extended_attention_mask = causal_mask[:, None, :, :] * torch_attention_mask[:, None, None, :]
         return extended_attention_mask
 
     def get_extended_attention_mask(
@@ -158,10 +152,8 @@ class TtRobertaModel(nn.Module):
             # - if the model is a decoder, apply a causal mask in addition to the padding mask
             # - if the model is an encoder, make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
             if self.config.is_decoder:
-                torch_extended_attention_mask = (
-                    self.create_extended_attention_mask_for_decoder(
-                        input_shape, torch_attention_mask
-                    )
+                torch_extended_attention_mask = self.create_extended_attention_mask_for_decoder(
+                    input_shape, torch_attention_mask
                 )
             else:
                 torch_extended_attention_mask = torch_attention_mask[:, None, None, :]
@@ -171,19 +163,15 @@ class TtRobertaModel(nn.Module):
                 f"Wrong shape for input_ids (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
             )
 
-        extended_attention_mask = torch2tt_tensor(
-            torch_extended_attention_mask, self.device
-        )
+        extended_attention_mask = torch2tt_tensor(torch_extended_attention_mask, self.device)
 
         # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
         # masked positions, this operation will create a tensor which is 0.0 for
         # positions we want to attend and the dtype's smallest value for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        self.ones_const = tt_lib.tensor.full(extended_attention_mask.shape(), 1.0)
-        self.mul_const = tt_lib.tensor.full(
-            extended_attention_mask.shape(), self.dtype_min_const
-        )
+        self.ones_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), 1.0)
+        self.mul_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
         extended_attention_mask = tt_lib.tensor.sub(
             self.ones_const, extended_attention_mask, output_mem_config=self.mem_config
         )
@@ -193,9 +181,7 @@ class TtRobertaModel(nn.Module):
         )
         return extended_attention_mask
 
-    def invert_attention_mask(
-        self, encoder_attention_mask: tt_lib.tensor.Tensor
-    ) -> tt_lib.tensor.Tensor:
+    def invert_attention_mask(self, encoder_attention_mask: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         """
         Invert an attention mask (e.g., switches 0. and 1.).
 
@@ -207,25 +193,15 @@ class TtRobertaModel(nn.Module):
         """
         torch_encoder_attention_mask = tt2torch_tensor(encoder_attention_mask)
 
-        if len(encoder_attention_mask.shape()) == 3:
-            torch_encoder_extended_attention_mask = torch_encoder_attention_mask[
-                :, None, :, :
-            ]
-        if len(encoder_attention_mask.shape()) == 2:
-            torch_encoder_extended_attention_mask = torch_encoder_attention_mask[
-                :, None, None, :
-            ]
+        if len(encoder_attention_mask.get_legacy_shape()) == 3:
+            torch_encoder_extended_attention_mask = torch_encoder_attention_mask[:, None, :, :]
+        if len(encoder_attention_mask.get_legacy_shape()) == 2:
+            torch_encoder_extended_attention_mask = torch_encoder_attention_mask[:, None, None, :]
 
-        encoder_extended_attention_mask = torch2tt_tensor(
-            torch_encoder_extended_attention_mask, self.device
-        )
+        encoder_extended_attention_mask = torch2tt_tensor(torch_encoder_extended_attention_mask, self.device)
 
-        self.ones_const = tt_lib.tensor.full(
-            encoder_extended_attention_mask.shape(), 1.0
-        )
-        self.mul_const = tt_lib.tensor.full(
-            encoder_extended_attention_mask.shape(), self.dtype_min_const
-        )
+        self.ones_const = tt_lib.tensor.full(encoder_extended_attention_mask.get_legacy_shape(), 1.0)
+        self.mul_const = tt_lib.tensor.full(encoder_extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
 
         encoder_extended_attention_mask = tt_lib.tensor.sub(
             self.ones_const,
@@ -247,13 +223,9 @@ class TtRobertaModel(nn.Module):
             head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
             head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
         elif head_mask.dim() == 2:
-            head_mask = (
-                head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-            )  # We can specify head_mask for each layer
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
         assert head_mask.dim() == 5, f"head_mask.dim != 5, instead {head_mask.dim()}"
-        head_mask = head_mask.to(
-            dtype=self.dtype
-        )  # switch to float if need + fp16 compatibility
+        head_mask = head_mask.to(dtype=self.dtype)  # switch to float if need + fp16 compatibility
         return head_mask
 
     def get_head_mask(
@@ -283,9 +255,7 @@ class TtRobertaModel(nn.Module):
             torch_head_mask = None
 
         if torch_head_mask is not None:
-            torch_head_mask = self._convert_head_mask_to_5d(
-                torch_head_mask, num_hidden_layers
-            )
+            torch_head_mask = self._convert_head_mask_to_5d(torch_head_mask, num_hidden_layers)
             if is_attention_chunked is True:
                 torch_head_mask = torch_head_mask.unsqueeze(-1)
             head_mask = torch2tt_tensor(torch_head_mask, self.device)
@@ -324,9 +294,7 @@ class TtRobertaModel(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[
-        Tuple[tt_lib.tensor.Tensor], TtBaseModelOutputWithPoolingAndCrossAttentions
-    ]:
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtBaseModelOutputWithPoolingAndCrossAttentions]:
         r"""
         encoder_hidden_states  (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
             Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention if
@@ -347,19 +315,11 @@ class TtRobertaModel(nn.Module):
             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
             `past_key_values`).
         """
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if self.config.is_decoder:
             use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -367,13 +327,11 @@ class TtRobertaModel(nn.Module):
             use_cache = False
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time"
-            )
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = list(input_ids.size())
         elif inputs_embeds is not None:
-            input_shape = inputs_embeds.shape()[:-1]
+            input_shape = inputs_embeds.get_legacy_shape()[:-1]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
@@ -382,30 +340,22 @@ class TtRobertaModel(nn.Module):
         _, _, batch_size, seq_length = input_shape
 
         # past_key_values_length
-        past_key_values_length = (
-            past_key_values[0][0].shape()[2] if past_key_values is not None else 0
-        )
+        past_key_values_length = past_key_values[0][0].get_legacy_shape()[2] if past_key_values is not None else 0
 
         if attention_mask is None:
-            attention_mask = tt_lib.tensor.full(
-                (1, 1, batch_size, seq_length + past_key_values_length), 0.0
-            )
+            attention_mask = tt_lib.tensor.full((1, 1, batch_size, seq_length + past_key_values_length), 0.0)
 
         if token_type_ids is None:
             if hasattr(self.embeddings, "token_type_ids"):
                 buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
-                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(
-                    batch_size, seq_length
-                )
+                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(batch_size, seq_length)
                 token_type_ids = buffered_token_type_ids_expanded
             else:
                 token_type_ids = torch.zeros(input_shape, dtype=torch.long)
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
-            attention_mask, input_shape
-        )
+        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape)
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
@@ -415,13 +365,11 @@ class TtRobertaModel(nn.Module):
                 encoder_batch_size,
                 encoder_sequence_length,
                 _,
-            ) = encoder_hidden_states.shape()
+            ) = encoder_hidden_states.get_legacy_shape()
             encoder_hidden_shape = (1, 1, encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
                 encoder_attention_mask = tt_lib.tensor.full(encoder_hidden_shape, 1.1)
-            encoder_extended_attention_mask = self.invert_attention_mask(
-                encoder_attention_mask
-            )
+            encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None
 
@@ -436,9 +384,7 @@ class TtRobertaModel(nn.Module):
             input_ids=input_ids,
             position_ids=position_ids,
             token_type_ids=token_type_ids,
-            inputs_embeds=tt2torch_tensor(inputs_embeds)
-            if inputs_embeds is not None
-            else None,
+            inputs_embeds=tt2torch_tensor(inputs_embeds) if inputs_embeds is not None else None,
             past_key_values_length=past_key_values_length,
         )
         torch_embedding_output = torch_embedding_output.squeeze(0)
@@ -457,9 +403,7 @@ class TtRobertaModel(nn.Module):
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs.last_hidden_state
-        pooled_output = (
-            self.pooler(sequence_output) if self.pooler is not None else None
-        )
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]

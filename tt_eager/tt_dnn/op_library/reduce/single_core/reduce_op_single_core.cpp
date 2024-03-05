@@ -16,7 +16,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
 
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     uint32_t HW = H*W;
 
@@ -33,12 +33,12 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     CoreRange core({0, 0}, {0, 0});
 
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     uint32_t num_tiles = a.volume()/TILE_HW;

@@ -47,25 +47,25 @@ inline Tensor rotary_embedding(
     const Tensor &sin,
     std::optional<uint32_t> token_idx = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    TT_FATAL(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
-    uint32_t seq_len = input_tensor.shape()[-2];
-    uint32_t B = input_tensor.shape()[0];
-    uint32_t X = input_tensor.shape()[-1];
-    TT_FATAL(cos.shape() == sin.shape(), "Cos and Sin dims must match");
-    TT_FATAL(cos.shape()[0] == 1 && cos.shape()[1] == 1 && cos.shape()[-1] == X, "Cos dims must match input dims");
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
+    uint32_t B = input_tensor.get_legacy_shape()[0];
+    uint32_t X = input_tensor.get_legacy_shape()[-1];
+    TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
+    TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X, "Cos dims must match input dims");
     if (token_idx.has_value()) {
-        seq_len = input_tensor.shape()[0];
+        seq_len = input_tensor.get_legacy_shape()[0];
         TT_FATAL(seq_len == 1);
-        TT_FATAL(cos.shape()[-2] >= token_idx, "Cos dims must match input dims");
+        TT_FATAL(cos.get_legacy_shape()[-2] >= token_idx, "Cos dims must match input dims");
     } else {
-        TT_FATAL(cos.shape()[-2] >= seq_len, "Cos dims must match input dims");
+        TT_FATAL(cos.get_legacy_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
 
-    Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
+    Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.shape());
+    Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.get_legacy_shape());
     FormatParams cos_format_params = {.pad_shape = cos_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    Shape sin_pad_shape = AutoFormat::pad_to_tile_shape(sin.shape());
+    Shape sin_pad_shape = AutoFormat::pad_to_tile_shape(sin.get_legacy_shape());
     FormatParams sin_format_params = {.pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     return operation::run_with_autoformat(
                RotaryEmbedding{seq_len, token_idx, output_mem_config},

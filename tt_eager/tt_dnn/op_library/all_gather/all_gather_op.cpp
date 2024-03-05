@@ -21,8 +21,8 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     constexpr uint32_t semaphore_offset = 32;
     constexpr uint32_t MAX_BUFFER = round_down((eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE - semaphore_offset) / 2, 32) - header_size;
     TT_FATAL(input_tensors.size() == 1);
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
+    const auto& layout = input_tensors[0].get_layout();
+    const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size <= MAX_BUFFER, "Page size too large");
     TT_FATAL(page_size % 32 == 0);
@@ -41,14 +41,14 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].shape();
+    auto shape = input_tensors[0].get_legacy_shape();
     shape[this->dim] *= this->ring_size;
     return std::vector<Shape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), input_tensor.layout(), this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {

@@ -42,7 +42,7 @@ def test_logsoftmax_for_dim_hw(shape_dim, device):
     tt_cpu = F.log_softmax(x, dim)
     tt_npu = ttl.operations.primary.moreh_logsoftmax(dev_x, dim)
 
-    assert list(tt_npu.shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.1
@@ -81,7 +81,7 @@ def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, device):
     )
     tt_npu = ttl.operations.primary.moreh_logsoftmax(dev_x, dim, None, strategy)
 
-    assert list(tt_npu.shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.1
@@ -122,7 +122,7 @@ def test_logsoftmax_not_multiple_of_32_for_dim_hw(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_logsoftmax(dev_x, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert list(tt_npu.shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.1
@@ -162,7 +162,7 @@ def test_logsoftmax_for_dim_nc(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_logsoftmax(dev_x, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert list(tt_npu.shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.1
@@ -210,7 +210,7 @@ def test_logsoftmax_backward_for_dim_hw(shape_dim, device):
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
 
-    assert list(tt_npu.shape()) == list(x.grad.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.5
@@ -257,7 +257,7 @@ def test_logsoftmax_backward_large_algorithm_for_dim_hw(shape_dim, device):
     )
     tt_npu = ttl.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim, None, strategy)
 
-    assert list(tt_npu.shape()) == list(x.grad.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.5
@@ -312,7 +312,7 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert list(tt_npu.shape()) == list(x.grad.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.1
@@ -368,7 +368,7 @@ def test_logsoftmax_backward_for_dim_nc(shape_dim, device):
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
-    assert list(tt_npu.shape()) == list(x.grad.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.5
@@ -410,7 +410,7 @@ def test_logsoftmax_optional_output_tensor(shape_dim, optional_output_tensor, de
     else:
         tt_npu = ttl.operations.primary.moreh_logsoftmax(dev_x, dim)
 
-    assert list(tt_npu.shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -459,7 +459,7 @@ def test_logsoftmax_backward_optional_output_tensor(shape_dim, optional_output_t
     else:
         tt_npu = ttl.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
 
-    assert list(tt_npu.shape()) == list(x.grad.shape)
+    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05

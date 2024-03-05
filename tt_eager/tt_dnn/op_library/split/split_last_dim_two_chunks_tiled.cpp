@@ -98,14 +98,14 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t dim = op.dim;
     uint32_t num_chunks = op.num_chunks;
 
-    auto input_shape = input_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
 
     Program program{};
     tt_metal::Device *device = input_tensor.device();
     op.boiler_plate_asserts(input_tensor);
     op.shape_asserts(input_tensor);
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1}
     );
 
-    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     TT_FATAL(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
@@ -269,7 +269,7 @@ operation::ProgramWithCallbacks SplitLastDimTwoChunksTiled::create_program(
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config);
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
-    const auto shape = input_tensor.shape();
+    const auto shape = input_tensor.get_legacy_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {
@@ -291,7 +291,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
     SplitLastDimTwoChunksTiled op(mem_config);
 
-    auto input_shape = input_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
     TT_FATAL(input_shape[-1] % TILE_WIDTH == 0, "Split last dim currently only supported tile sized widths");
 
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);

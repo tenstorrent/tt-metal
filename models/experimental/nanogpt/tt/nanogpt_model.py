@@ -110,7 +110,7 @@ class TtGPT(nn.Module):
             # forward the model to get the logits for the index in the sequence
             tt_logits = self.forward(idx_cond)
 
-            logits_shapes = tt_logits.shape()
+            logits_shapes = tt_logits.get_legacy_shape()
 
             slice_list = [
                 slice(None),
@@ -120,7 +120,7 @@ class TtGPT(nn.Module):
             ]
             tt_logits = fallback_ops.tensor_slice(tt_logits, slice_list)
 
-            tt_temperature = fallback_ops.full(tt_logits.shape(), temperature)
+            tt_temperature = fallback_ops.full(tt_logits.get_legacy_shape(), temperature)
 
             tt_temperature = tt_lib.tensor.recip(tt_temperature)
             tt_logits = tt_lib.tensor.mul(tt_logits, tt_temperature)

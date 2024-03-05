@@ -32,12 +32,12 @@ Tensor groupnorm(
     std::optional<const Tensor> gamma,
     std::optional<const Tensor> beta,
     const MemoryConfig& output_mem_config) {
-    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+    TT_ASSERT(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
     if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        TT_ASSERT(gamma.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Gamma width must be equal to input width");
     }
     if (beta.has_value()) {
-        TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        TT_ASSERT(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
     }
 
     TT_ASSERT(group_size == 1 && "group norm size is only supported for size = 1");
@@ -45,7 +45,7 @@ Tensor groupnorm(
      * shortcut when group size = 1 we use layernorm with transpose and non-transpose
      */
 
-    Shape shape = a.shape();
+    Shape shape = a.get_legacy_shape();
     Tensor ar = reshape(const_cast<Tensor&>(a),shape[0],1,shape[1]*shape[2],shape[3],output_mem_config);
     Tensor group_norm_1 = normalize_hw(ar,output_mem_config);
     Tensor output = reshape (group_norm_1,shape[0],shape[1],shape[2],shape[3],output_mem_config);
@@ -146,11 +146,11 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     DataType im_data_format,
     CoreCoord grid_size
 ) {
-    bool is_row_major_layout = a.layout() == Layout::ROW_MAJOR;
-    bool is_height_sharding = a.shape()[3] == a.shard_spec().value().shape[1];
+    bool is_row_major_layout = a.get_layout() == Layout::ROW_MAJOR;
+    bool is_height_sharding = a.get_legacy_shape()[3] == a.shard_spec().value().shape[1];
     // convert data format
-    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     // tile sizes
@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     // uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
     uint32_t per_core_Nt_padded = per_core_N_padded / TILE_WIDTH;
     // tensor shape
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -490,8 +490,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) TILE_WIDTH
     };
 
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -500,8 +500,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         } else {
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -516,7 +516,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     }
 
     // writer kernel
-    bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/writer_unary_sharded_gn_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/writer_unary_sharded_gn.cpp";
     auto writer_kernels_id = CreateKernel(
         program,
@@ -868,49 +868,49 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     auto& a = input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
-    TT_FATAL(a.layout() == Layout::ROW_MAJOR);
-    TT_FATAL(a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(a.get_dtype() == DataType::BFLOAT16);
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    TT_FATAL(a.shape()[3] % this->num_groups == 0,  "channel must be divisible by num_groups!");
-    TT_FATAL(a.shape()[1] == 1,  "input tensor shape[1] must be 1!");
+    TT_FATAL(a.get_legacy_shape()[3] % this->num_groups == 0,  "channel must be divisible by num_groups!");
+    TT_FATAL(a.get_legacy_shape()[1] == 1,  "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
-        if (gamma.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == gamma.value().shape()[3], fmt::format("{} != {}", a.shape()[3], gamma.value().shape()[3]));
+        if (gamma.value().get_layout() == Layout::TILE) {
+            TT_FATAL(a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3], fmt::format("{} != {}", a.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
             TT_FATAL(a.device() == gamma.value().device());
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().shape()[2] == TILE_HEIGHT);
+            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT);
         } else {
-            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().shape()[3] == TILE_WIDTH));
+            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
+            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH));
             TT_FATAL(a.device() == gamma.value().device());
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16);
+            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16);
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().layout() == beta.value().layout());
+            TT_FATAL(gamma.value().get_layout() == beta.value().get_layout());
         }
     }
 
     if (beta.has_value()) {
-        if (beta.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == beta.value().shape()[3]);
+        if (beta.value().get_layout() == Layout::TILE) {
+            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3]);
             TT_FATAL(a.device() == beta.value().device());
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().shape()[2] == TILE_HEIGHT);
+            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT);
         } else {
-            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL(beta.value().shape()[3] == TILE_WIDTH);
+            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
+            TT_FATAL(beta.value().get_legacy_shape()[3] == TILE_WIDTH);
             TT_FATAL(a.device() == beta.value().device());
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().dtype() == DataType::BFLOAT16);
+            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16);
         }
     }
 }
 std::vector<Shape> GroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -936,7 +936,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     uint32_t num_cores_x = this->program_config.compute_with_storage_grid_size.x;
     uint32_t num_cores_y = this->program_config.compute_with_storage_grid_size.y;
     CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-    uint32_t batch = a.shape()[0];
+    uint32_t batch = a.get_legacy_shape()[0];
 
     return groupnorm_sharded_(
                                 a, gamma, beta, output_tensor, this->eps,

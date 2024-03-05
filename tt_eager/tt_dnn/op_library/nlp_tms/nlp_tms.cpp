@@ -16,12 +16,12 @@ namespace tt_metal {
 // Hard-coded for Falcon7B
 void NlpCreateHeadsFalcon7B::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE);
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0);
     TT_FATAL((input_shape == Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
@@ -31,7 +31,7 @@ void NlpCreateHeadsFalcon7B::validate(const std::vector<Tensor>& input_tensors) 
 std::vector<Shape> NlpCreateHeadsFalcon7B::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
     output_shape_vec = {(Shape) {input_shape[0], 71, input_shape[2], 64}, (Shape) {input_shape[0], 1, input_shape[2], 64}, (Shape) {input_shape[0], 1, input_shape[2], 64}};
     return output_shape_vec;
 }
@@ -42,7 +42,7 @@ std::vector<Tensor> NlpCreateHeadsFalcon7B::create_output_tensors(const std::vec
         TT_ASSERT(false);
         return {};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -65,18 +65,18 @@ tt::stl::reflection::Attributes NlpCreateHeadsFalcon7B::attributes() const {
 // Generic NLP CreateHeads op
 void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
 
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE);
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input shape");
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.shape()[-1]);
+        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1]);
         TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -102,19 +102,19 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
 
     if (optional_input_tensors.at(0).has_value()) {
         const auto& input_tensor_kv = optional_input_tensors.at(0).value();
-        const auto input_shape_kv = input_tensor_kv.shape();
+        const auto input_shape_kv = input_tensor_kv.get_legacy_shape();
 
         TT_FATAL(input_tensor_kv.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
         TT_FATAL(input_tensor_kv.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-        TT_FATAL(input_tensor_kv.dtype() == input_tensor.dtype(), "KV tensor dtype must be same as Q tensor dtype!");
-        TT_FATAL(input_tensor_kv.layout() == Layout::TILE);
+        TT_FATAL(input_tensor_kv.get_dtype() == input_tensor.get_dtype(), "KV tensor dtype must be same as Q tensor dtype!");
+        TT_FATAL(input_tensor_kv.get_layout() == Layout::TILE);
 
         TT_FATAL(input_shape_kv[0] == input_shape[0], "KV tensor batch dim must be same as Q tensor batch!");
         TT_FATAL(input_shape_kv[1] == 1, "Unsupported input shape");
         TT_FATAL(input_shape_kv[2] == input_shape[2], "KV tensor seq_len dim must be same as Q tensor seq_len!");
         if (input_tensor_kv.is_sharded()) {
             TT_FATAL(input_tensor.is_sharded());
-            TT_FATAL(input_tensor_kv.shard_spec().value().shape[0] == input_tensor_kv.volume() / input_tensor_kv.shape()[-1]);
+            TT_FATAL(input_tensor_kv.shard_spec().value().shape[0] == input_tensor_kv.volume() / input_tensor_kv.get_legacy_shape()[-1]);
             TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
             TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == 2 * this->head_dim);
             TT_FATAL(this->num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0);
@@ -125,7 +125,7 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
 std::vector<Shape> NlpCreateHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
     const Shape q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
     const Shape v_output_shape = {input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
     const Shape k_output_shape = this->transpose_k_heads ? (Shape) {input_shape[0], this->num_kv_heads, this->head_dim, input_shape[2]} : v_output_shape;
@@ -148,13 +148,13 @@ std::vector<Tensor> NlpCreateHeads::create_output_tensors(const std::vector<Tens
         kv_mem_config.shard_spec = kv_shard_spec;
         auto output_shapes = this->compute_output_shapes(input_tensors);
         return {
-            create_sharded_device_tensor(output_shapes[0], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), q_mem_config),
-            create_sharded_device_tensor(output_shapes[1], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), kv_mem_config),
-            create_sharded_device_tensor(output_shapes[2], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), kv_mem_config)
+            create_sharded_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
+            create_sharded_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
+            create_sharded_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
         };
 
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -184,19 +184,19 @@ tt::stl::reflection::Attributes NlpCreateHeads::attributes() const {
 // Generic NLP ConcatHeads op
 void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE);
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(shard_spec.shape[1] == input_tensor.shape()[-1]);
-        TT_FATAL(shard_spec.shape[0] % input_tensor.shape()[-2] == 0);
-        TT_FATAL(input_tensor.shape()[1] % (shard_spec.shape[0] / input_tensor.shape()[-2]) == 0);
+        TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1]);
+        TT_FATAL(shard_spec.shape[0] % input_tensor.get_legacy_shape()[-2] == 0);
+        TT_FATAL(input_tensor.get_legacy_shape()[1] % (shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2]) == 0);
         TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
     } else {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -206,7 +206,7 @@ void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<Shape> NlpConcatHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
     output_shape_vec = {(Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
 
     return output_shape_vec;
@@ -217,13 +217,13 @@ std::vector<Tensor> NlpConcatHeads::create_output_tensors(const std::vector<Tens
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec = input_tensor.shard_spec().value();
         uint32_t num_cores = shard_spec.num_cores();
-        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.shape()[-2];
+        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
 }
 

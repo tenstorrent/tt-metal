@@ -48,7 +48,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // input
-    const auto input_shape = input.shape();
+    const auto input_shape = input.get_legacy_shape();
     const auto input_rank = static_cast<int64_t>(input_shape.rank());
 
     const auto input_n = input_shape[0];
@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     const auto input_origin_w = input_origin_shape[3];
 
     // output
-    const auto output_shape = output.shape();
+    const auto output_shape = output.get_legacy_shape();
     const auto output_rank = static_cast<int64_t>(output_shape.rank());
 
     const auto output_n = output_shape[0];
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
 
     const uint32_t in0_t{1};  // input(==x)
     const uint32_t in1_t{1};  // output(==y)

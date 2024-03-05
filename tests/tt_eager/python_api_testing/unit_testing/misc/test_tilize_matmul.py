@@ -36,7 +36,7 @@ def run_tilize_matmul_test(M, K, N, device):
         device,
     )
     t2 = ttl.tensor.matmul(a_t, b_t)
-    assert list(t2.shape()) == [1, 1, M, N]
+    assert list(t2.get_legacy_shape()) == [1, 1, M, N]
     tt_host_rm = t2.cpu().to_torch()
     pyt_got_back = tt_host_rm.reshape((1, 1, M, N))
     pyt_got_back_rm = untilize(pyt_got_back)

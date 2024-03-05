@@ -55,7 +55,7 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
     # a_sharded = ttl.tensor.interleaved_to_sharded(
     #     a,
     #     [12, 9],
-    #     [a.shape()[-2] // 100, a.shape()[-1]],
+    #     [a.get_legacy_shape()[-2] // 100, a.get_legacy_shape()[-1]],
     #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
     #     ttl.tensor.ShardOrientation.ROW_MAJOR,
     # )

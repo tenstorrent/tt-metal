@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 		.set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t num_dims = input_tensors[0].shape().rank();
+    uint32_t num_dims = input_tensors[0].get_legacy_shape().rank();
 
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<bool> is_dram(num_input_tensors);
@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
         scale_factor = TILE_WIDTH;
     }
     for (uint32_t i = dim + 1; i < num_dims; i++) {
-        num_accum_tiles *=  input_tensors[0].shape()[i];
+        num_accum_tiles *=  input_tensors[0].get_legacy_shape()[i];
         if (i == num_dims - 2) {
             num_accum_tiles /= TILE_HEIGHT;
         } else if (i == num_dims - 1) {
@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
         auto buffer = input_tensors[i].buffer();
         src_addr[i] = buffer->address();
         is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-        uint32_t dim_tiles = input_tensors[i].shape()[dim] / scale_factor;
+        uint32_t dim_tiles = input_tensors[i].get_legacy_shape()[dim] / scale_factor;
         num_tiles_per_block[i] = num_accum_tiles * dim_tiles;
         num_output_tiles_per_block += num_accum_tiles * dim_tiles;
         tile_id_per_tensor[i] = 0;

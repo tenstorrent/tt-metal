@@ -53,8 +53,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     # gamma, beta, epsilon should be tt::tensors of size 32*W
     # with a single populated top row
     # H, W need to be from the "true" shape (unpadded)
-    assert gamma is None or gamma.shape() == [1, 1, 32, W]  # single H-tile
-    assert beta is None or beta.shape() == [1, 1, 32, W]  # single H-tile
+    assert gamma is None or gamma.get_legacy_shape() == [1, 1, 32, W]  # single H-tile
+    assert beta is None or beta.get_legacy_shape() == [1, 1, 32, W]  # single H-tile
 
     H_ = H
     W_ = W
@@ -116,10 +116,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
     def layernorm_1d_(x, overrideH=None, refx=None, refgamma=None, refbeta=None):
-        N = x.shape()[0]
-        C = x.shape()[1]
-        H = x.shape()[2]
-        W = x.shape()[3]
+        N = x.get_legacy_shape()[0]
+        C = x.get_legacy_shape()[1]
+        H = x.get_legacy_shape()[2]
+        W = x.get_legacy_shape()[3]
 
         H_ = 1
         if overrideH is not None:
@@ -127,9 +127,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
 
         # first compute the mean (m)
         means = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
-        x_minus_mean = tensor.bcast(
-            x, means, BCSUB, BCW
-        )  # need to blank out the H for non-multiple of 32
+        x_minus_mean = tensor.bcast(x, means, BCSUB, BCW)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
@@ -161,34 +159,24 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             return x_gamma
 
     def layernorm_2d_(x):
-        N = x.shape()[0]
-        C = x.shape()[1]
-        H = x.shape()[2]
-        W = x.shape()[3]
+        N = x.get_legacy_shape()[0]
+        C = x.get_legacy_shape()[1]
+        H = x.get_legacy_shape()[2]
+        W = x.get_legacy_shape()[3]
 
         # first compute the mean (m)
         redW = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
-        mean = tensor.reduce(
-            redW, RSUM, RH, 1.0
-        )  # -> NC11 (HW reduce doesn't behave well with small scaler)
-        x_minus_mean0 = tensor.bcast(
-            x, mean, BCSUB, BCHW
-        )  # need to blank out the H for non-multiple of 32
+        mean = tensor.reduce(redW, RSUM, RH, 1.0)  # -> NC11 (HW reduce doesn't behave well with small scaler)
+        x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
 
-        hmasku = tensor.fill_ones_rm(
-            N, C, H, 32, 1, 1, x
-        )  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
+        hmasku = tensor.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
         hmaskt = tensor.tilize(hmasku)  # tilize the mask
-        x_minus_mean = tensor.bcast(
-            x_minus_mean0, hmaskt, BCMUL, BCW
-        )  # zero out (x-m) for h>=H_, h<H
+        x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW)  # zero out (x-m) for h>=H_, h<H
 
         var = tensor.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
         var_redHW = tensor.reduce(var_redW, RSUM, RH, 1.0)  # sum[(x-m)^2]
-        var_div_n1 = tensor.bcast(
-            var_redHW, var_scaler_, BCMUL, BCHW
-        )  # *= 1/(everything not batch)
+        var_div_n1 = tensor.bcast(var_redHW, var_scaler_, BCMUL, BCHW)  # *= 1/(everything not batch)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
         var_sqrt = tensor.sqrt(var_plus_eps)

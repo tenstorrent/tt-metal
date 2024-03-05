@@ -20,7 +20,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
-    const auto shape = input_tensor.shape();
+    const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     uint32_t HW = H*W;
     TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
@@ -42,47 +42,47 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     }
     if (this->dim == TransposeOpDim::HC) {
         TT_FATAL(C % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::CW) {
         TT_FATAL(C % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::NH) {
         TT_FATAL(N % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::NW) {
         TT_FATAL(N % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
     }
 }
 
 
 std::vector<Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto out_shape = input_tensor.shape();
+    auto out_shape = input_tensor.get_legacy_shape();
     switch (this->dim){
         case TransposeOpDim::CN:
-            out_shape[0] = input_tensor.shape()[1];
-            out_shape[1] = input_tensor.shape()[0];
+            out_shape[0] = input_tensor.get_legacy_shape()[1];
+            out_shape[1] = input_tensor.get_legacy_shape()[0];
             break;
         case TransposeOpDim::HC:
-            out_shape[1] = input_tensor.shape()[2];
-            out_shape[2] = input_tensor.shape()[1];
+            out_shape[1] = input_tensor.get_legacy_shape()[2];
+            out_shape[2] = input_tensor.get_legacy_shape()[1];
             break;
         case TransposeOpDim::WH:
-            out_shape[2] = input_tensor.shape()[3];
-            out_shape[3] = input_tensor.shape()[2];
+            out_shape[2] = input_tensor.get_legacy_shape()[3];
+            out_shape[3] = input_tensor.get_legacy_shape()[2];
             break;
         case TransposeOpDim::NH:
-            out_shape[0] = input_tensor.shape()[2];
-            out_shape[2] = input_tensor.shape()[0];
+            out_shape[0] = input_tensor.get_legacy_shape()[2];
+            out_shape[2] = input_tensor.get_legacy_shape()[0];
             break;
         case TransposeOpDim::NW:
-            out_shape[3] = input_tensor.shape()[0];
-            out_shape[0] = input_tensor.shape()[3];
+            out_shape[3] = input_tensor.get_legacy_shape()[0];
+            out_shape[0] = input_tensor.get_legacy_shape()[3];
             break;
         case TransposeOpDim::CW:
-            out_shape[1] = input_tensor.shape()[3];
-            out_shape[3] = input_tensor.shape()[1];
+            out_shape[1] = input_tensor.get_legacy_shape()[3];
+            out_shape[3] = input_tensor.get_legacy_shape()[1];
             break;
     }
     return {out_shape};
@@ -95,22 +95,22 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
     if (this->output_mem_config.is_sharded()) {
         if (this->dim == TransposeOpDim::WH) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.shape()[-2] * input_tensor.shape()[-1];
-            shard_spec.shape[1] = input_tensor.shape()[-2];
+            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2] * input_tensor.get_legacy_shape()[-1];
+            shard_spec.shape[1] = input_tensor.get_legacy_shape()[-2];
             const auto output_shape = this->compute_output_shapes(input_tensors)[0];
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(
                 output_shape,
-                input_tensor.dtype(),
-                input_tensor.layout(),
+                input_tensor.get_dtype(),
+                input_tensor.get_layout(),
                 input_tensor.device(),
                 mem_config)};
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
 
 TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto ashape = input_tensor.shape();
+    auto ashape = input_tensor.get_legacy_shape();
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     if (this->dim == TransposeOpDim::WH && (num_tiles > 1 || input_tensor.is_sharded())) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
@@ -162,7 +162,7 @@ const operation::Hash Transpose::compute_program_hash(
     auto input_mem_config = input_tensor.memory_config();
     auto input_device_id = input_tensor.device()->id();
     auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
+    auto dtype = input_tensor.get_dtype();
     return operation::hash_operation<Transpose>(
         input_mem_config, input_device_id, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
 }
@@ -196,15 +196,15 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
 }
 
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {
-    uint32_t normalized_dim1 = a.shape().get_normalized_index(dim1);
-    uint32_t normalized_dim2 = a.shape().get_normalized_index(dim2);
+    uint32_t normalized_dim1 = a.get_legacy_shape().get_normalized_index(dim1);
+    uint32_t normalized_dim2 = a.get_legacy_shape().get_normalized_index(dim2);
 
     TT_FATAL( normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     TT_FATAL(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
     if (
         (normalized_dim1 == normalized_dim2) ||
-        (a.shape()[normalized_dim1] == 1 && a.shape()[normalized_dim2] == 1)
+        (a.get_legacy_shape()[normalized_dim1] == 1 && a.get_legacy_shape()[normalized_dim2] == 1)
     ) {
         return AutoFormat::move_tensor_to_mem_config(a, output_mem_config);
     }

@@ -24,7 +24,7 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
+    if tt_output.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
 

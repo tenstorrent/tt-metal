@@ -31,7 +31,7 @@ class ConvParameters {
 template <typename T>
 std::vector<std::vector<T>> move_act_dram_to_l1(tt::deprecated::Tensor<T> &input_nhwc, ConvParameters conv_params) {
     std::vector<std::vector<T>> output;
-    auto in_shape = input_nhwc.get_shape();
+    auto in_shape = input_nhwc.get_legacy_shape();
     auto input_values = input_nhwc.get_values();
 
     std::vector<std::pair<int, int>> increments;
@@ -200,7 +200,7 @@ std::vector<T> flatten(std::vector<std::vector<T>> &act_matrix) {
 template <typename T>
 std::vector<std::vector<T>> move_weights_dram_to_l1(tt::deprecated::Tensor<T> &input_nhwc) {
     std::vector<std::vector<T>> output;
-    std::array<uint32_t, 4> in_shape = input_nhwc.get_shape();
+    std::array<uint32_t, 4> in_shape = input_nhwc.get_legacy_shape();
     const auto& input_nhwc_values = input_nhwc.get_values();
 
     for(auto w = 0; w < in_shape[0]; w++) {
@@ -221,7 +221,7 @@ std::vector<std::vector<T>> move_weights_dram_to_l1(tt::deprecated::Tensor<T> &i
 template <typename T>
 std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::deprecated::Tensor<T> &input_nhwc) {
     std::vector<std::vector<T>> output;
-    std::array<uint32_t, 4> in_shape = input_nhwc.get_shape();
+    std::array<uint32_t, 4> in_shape = input_nhwc.get_legacy_shape();
     const auto& input_nhwc_values = input_nhwc.get_values();
     uint32_t num_rows = in_shape[1] * in_shape[2] * in_shape[3];
     for(auto i = 0; i < num_rows; i++) {

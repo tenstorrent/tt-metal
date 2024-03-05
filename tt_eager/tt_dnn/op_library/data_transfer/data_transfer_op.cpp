@@ -18,7 +18,7 @@ void DataTransferToHost::validate(const std::vector<Tensor> &input_tensors) cons
 }
 std::vector<Shape> DataTransferToHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -39,14 +39,14 @@ Tensor data_transfer_to_host(const Tensor &input_tensor) {
 
 void DataTransferToDevice::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    switch (input_tensor.layout()) {
-        case Layout::ROW_MAJOR: TT_FATAL(input_tensor.shape()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0); break;
+    switch (input_tensor.get_layout()) {
+        case Layout::ROW_MAJOR: TT_FATAL(input_tensor.get_legacy_shape()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0); break;
         default: break;
     }
 }
 std::vector<Shape> DataTransferToDevice::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);

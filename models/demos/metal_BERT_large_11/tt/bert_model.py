@@ -100,7 +100,7 @@ class TtBertBatchDram:
                 self.model_config["SHARD_ORIENTATION"],
                 self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
             )
-        elif tt_embeddings.dtype() != self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]:
+        elif tt_embeddings.get_dtype() != self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]:
             logger.warning("Perf warning: On host conversion of dtype after embeddings")
             embeddings = tt_embeddings.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
             tt_embeddings = (

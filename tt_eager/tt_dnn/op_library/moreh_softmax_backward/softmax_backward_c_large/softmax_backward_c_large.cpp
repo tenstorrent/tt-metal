@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
     log_info(LogTest, "Large tensor algorithm selected");
 
     // split work
-    auto shape = input_grad.shape();
+    auto shape = input_grad.get_legacy_shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
@@ -44,7 +44,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
 
     CreateCircularBuffer(
         program,

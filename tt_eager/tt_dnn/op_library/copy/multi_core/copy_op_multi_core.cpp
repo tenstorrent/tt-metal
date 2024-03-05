@@ -21,15 +21,15 @@ namespace tt_metal {
 operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tensor &output, bool backwards) {
     tt_metal::Program program{};
 
-    bool tilized = output.layout() == Layout::TILE;
+    bool tilized = output.get_layout() == Layout::TILE;
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_unit_size = tilized ? tt_metal::detail::TileSize(input_cb_data_format) : input.shape()[-1] * input.element_size();
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_unit_size = tilized ? tt_metal::detail::TileSize(output_cb_data_format) : output.shape()[-1] * output.element_size();
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    uint32_t input_unit_size = tilized ? tt_metal::detail::TileSize(input_cb_data_format) : input.get_legacy_shape()[-1] * input.element_size();
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_unit_size = tilized ? tt_metal::detail::TileSize(output_cb_data_format) : output.get_legacy_shape()[-1] * output.element_size();
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
-    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.shape()[-1];
+    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
 
     tt_metal::Device *device = output.device();
 

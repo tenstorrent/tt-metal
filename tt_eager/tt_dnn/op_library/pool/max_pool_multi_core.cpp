@@ -163,14 +163,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.shape();
-    Shape output_shape = output.shape();
+    Shape input_shape = input.get_legacy_shape();
+    Shape output_shape = output.get_legacy_shape();
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
     // TODO [AS]: Support other data formats??
-    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
     uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)
@@ -633,13 +633,13 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     Buffer *reader_indices_buffer = reader_indices.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.shape();
-    Shape output_shape = output.shape();
+    Shape input_shape = input.get_legacy_shape();
+    Shape output_shape = output.get_legacy_shape();
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
-    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
     uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)
@@ -647,7 +647,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");    // in_nbytes_c is power of 2
     TT_ASSERT((out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2"); // out_nbytes_c is power of 2
 
-    DataFormat indices_df = DataFormat::RawUInt16; //datatype_to_dataformat_converter(reader_indices.dtype());
+    DataFormat indices_df = DataFormat::RawUInt16; //datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
 
     uint32_t nbatch = in_n;

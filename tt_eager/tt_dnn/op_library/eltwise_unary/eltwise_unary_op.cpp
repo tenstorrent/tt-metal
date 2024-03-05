@@ -257,19 +257,19 @@ void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor_a.layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
+    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Eltwise unary does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Eltwise unary does not currently support sharding");
 }
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -301,13 +301,13 @@ UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const 
 
 const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
 
     operation::Hash hash = tt::stl::hash::hash_objects(
         0,
         typeid(*this).hash_code(),
         compute_volume(input_shape),
-        input_tensor.dtype(),
+        input_tensor.get_dtype(),
         input_tensor.memory_config(),
         input_tensor.device()->id(),
         this->output_mem_config);

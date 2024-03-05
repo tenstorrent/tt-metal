@@ -169,9 +169,9 @@ class TtEfficientNet(torch.nn.Module):
         x = self.features(x)
         x = self.avgpool(x)
 
-        last_shape = x.shape()[-1] * x.shape()[-2] * x.shape()[-3]
+        last_shape = x.get_legacy_shape()[-1] * x.get_legacy_shape()[-2] * x.get_legacy_shape()[-3]
         # tt_lib.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
-        x = tt_lib.fallback_ops.reshape(x, x.shape()[0], 1, 1, last_shape)
+        x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
 
         x = tt_lib.tensor.matmul(x, self.classifier_weight)
 

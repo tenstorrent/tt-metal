@@ -477,12 +477,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
     TT_ASSERT(bcast_batch == false, "Bcast batch not supported for this parallelization");
 
-    const auto& ashape = a.shape();
-    const auto& bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape();
+    const auto& bshape = b.get_legacy_shape();
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype()); // in0
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype()); // in1
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype()); // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype()); // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype); // output
 
     tt_metal::Device *device = a.device();

@@ -20,7 +20,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
 
     TT_ASSERT(reduce_dim == ReduceOpDim::H);
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
 
     uint32_t Wt = W/TILE_WIDTH;
@@ -29,11 +29,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     uint32_t num_tiles = a.volume()/TILE_HW;

@@ -38,20 +38,16 @@ class TtDistilBertForQuestionAnswering(nn.Module):
             base_address=f"distilbert",
             device=self.device,
         )
-        self.qa_weight = torch_to_tt_tensor_rm(
-            state_dict["qa_outputs.weight"], self.device
-        )
+        self.qa_weight = torch_to_tt_tensor_rm(state_dict["qa_outputs.weight"], self.device)
         self.qa_bias = torch_to_tt_tensor_rm(state_dict["qa_outputs.bias"], self.device)
         self.qa_linear = TtLinear(
-            self.qa_weight.shape()[-1],
-            self.qa_weight.shape()[-2],
+            self.qa_weight.get_legacy_shape()[-1],
+            self.qa_weight.get_legacy_shape()[-2],
             self.qa_weight,
             self.qa_bias,
         )
         if self.config.num_labels != 2:
-            raise ValueError(
-                f"config.num_labels should be 2, but it is {config.num_labels}"
-            )
+            raise ValueError(f"config.num_labels should be 2, but it is {config.num_labels}")
 
     def forward(
         self,
@@ -65,9 +61,7 @@ class TtDistilBertForQuestionAnswering(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[TtQuestionAnsweringModelOutput, Tuple[tt_lib.tensor.Tensor, ...]]:
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         distilbert_output = self.distilbert(
             input_ids=input_ids,
@@ -86,12 +80,8 @@ class TtDistilBertForQuestionAnswering(nn.Module):
 
         start_logits, end_logits = logits.split(1, dim=-1)
 
-        start_logits = torch_to_tt_tensor_rm(
-            start_logits.squeeze(-1), self.device, put_on_device=False
-        )
-        end_logits = torch_to_tt_tensor_rm(
-            end_logits.squeeze(-1), self.device, put_on_device=False
-        )
+        start_logits = torch_to_tt_tensor_rm(start_logits.squeeze(-1), self.device, put_on_device=False)
+        end_logits = torch_to_tt_tensor_rm(end_logits.squeeze(-1), self.device, put_on_device=False)
 
         if not return_dict:
             output = (start_logits, end_logits) + distilbert_output[1:]

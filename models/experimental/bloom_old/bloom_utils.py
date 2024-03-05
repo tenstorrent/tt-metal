@@ -77,19 +77,12 @@ def create_padded_tensor(
     return a_dev
 
 
-def create_unpadded_tensor(
-    ttm_tensor, input_tensors_shape, input_tensor_start=[0, 0, 0, 0]
-):
+def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[0, 0, 0, 0]):
     output_tensor_start = input_tensor_start
     output_tensor_end = tuple(
-        input_tensor_start[i] + input_tensors_shape[i] - 1
-        for i in range(len(input_tensors_shape))
+        input_tensor_start[i] + input_tensors_shape[i] - 1 for i in range(len(input_tensors_shape))
     )
-    ttm_tensor = (
-        ttm_tensor.cpu()
-        .to(ttm.tensor.Layout.ROW_MAJOR)
-        .unpad(output_tensor_start, output_tensor_end)
-    )
+    ttm_tensor = ttm_tensor.cpu().to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
 
     return ttm_tensor
 
@@ -116,7 +109,7 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.layout() != ttm.tensor.Layout.ROW_MAJOR:
+    if tt_output.get_layout() != ttm.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttm.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
 

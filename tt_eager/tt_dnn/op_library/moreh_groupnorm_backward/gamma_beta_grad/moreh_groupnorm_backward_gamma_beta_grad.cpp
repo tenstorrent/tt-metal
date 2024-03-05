@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.shape();
+    const auto output_grad_shape = output_grad.get_legacy_shape();
 
     const auto n = output_grad_shape[0];
     const auto c = output_grad_shape[1];
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const uint32_t im4_t = 1;  // x - mean
     const uint32_t im5_t = 1;  // dycopy
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
 
     CreateCircularBuffer(
         program,

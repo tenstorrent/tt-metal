@@ -23,7 +23,7 @@ void Downsample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to downsample need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to downsample need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only downsample tile major data");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only downsample tile major data");
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
     TT_FATAL(input_tensor_a.memory_config().is_sharded());
@@ -47,13 +47,13 @@ std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(CoreRangeSet all
 
 std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.shape()[0] == 1 && input_tensor_a.shape()[1] == 1);
-    uint32_t input_height = input_tensor_a.shape()[2];
+    TT_ASSERT(input_tensor_a.get_legacy_shape()[0] == 1 && input_tensor_a.get_legacy_shape()[1] == 1);
+    uint32_t input_height = input_tensor_a.get_legacy_shape()[2];
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = this->downsample_params;
     TT_ASSERT(input_height >= img_batch_size * img_height * img_width);
     uint32_t output_height_unpadded = img_batch_size * ceil( (double) img_height / (double) img_stride_h) * ceil( (double) img_width / (double) img_stride_w);
     uint32_t output_height = round_up(output_height_unpadded, TILE_HEIGHT);
-    uint32_t output_width = input_tensor_a.shape()[3];
+    uint32_t output_width = input_tensor_a.get_legacy_shape()[3];
     auto output_padding = Padding({{0, 0}, {0, 0}, {0, (output_height - output_height_unpadded)}, {0, 0}}, Padding::PadValue::Any);
     auto output_tensor_shape = Shape({1, 1, output_height, output_width}, output_padding);
     return {output_tensor_shape};
@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Ten
 }
 
 Tensor downsample(const Tensor &input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype) {
-    return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
 }
 
 struct DownsampleReadPatternParams {
@@ -362,17 +362,17 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
     tt::DataFormat untilized_cb_data_format = DataFormat::Float16_b;
     uint32_t untilized_single_tile_size = tt_metal::detail::TileSize(untilized_cb_data_format);
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    TT_ASSERT(a.shape()[0] == 1 && a.shape()[1] == 1);
-    TT_ASSERT(output.shape()[0] == 1 && output.shape()[1] == 1);
+    TT_ASSERT(a.get_legacy_shape()[0] == 1 && a.get_legacy_shape()[1] == 1);
+    TT_ASSERT(output.get_legacy_shape()[0] == 1 && output.get_legacy_shape()[1] == 1);
 
     tt_metal::Device *device = a.device();
 
@@ -405,10 +405,10 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     auto core_range = all_cores;
 
-    uint32_t input_height = a.shape()[2]; // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.shape()[3]; // input width == input image # of channels
-    uint32_t output_height = output.shape()[2]; // output height == flattened face of output image, multiple images are stacked in H dim
-    uint32_t output_width = output.shape()[3];
+    uint32_t input_height = a.get_legacy_shape()[2]; // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.get_legacy_shape()[3]; // input width == input image # of channels
+    uint32_t output_height = output.get_legacy_shape()[2]; // output height == flattened face of output image, multiple images are stacked in H dim
+    uint32_t output_width = output.get_legacy_shape()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;

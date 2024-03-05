@@ -30,20 +30,20 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    auto output_shape = output.shape();
+    auto output_shape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    auto width = a.shape()[-1];
+    auto width = a.get_legacy_shape()[-1];
     uint32_t stick_s =  width;
     uint32_t num_sticks = a.volume() / width;
     uint32_t stick_size = stick_s * a.element_size(); // Assuming bfloat16 dataformat
@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
 
-    auto output_shape = output.shape();
+    auto output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -195,16 +195,16 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     int32_t num_tiles = output.volume() / TILE_HW;
 
-    auto true_input_shape = a.shape();
-    auto true_output_shape = output.shape();
+    auto true_input_shape = a.get_legacy_shape();
+    auto true_output_shape = output.get_legacy_shape();
 
     uint32_t unpadded_row_size_datum = true_input_shape[3];
     uint32_t padded_row_size_datum = true_output_shape[3];

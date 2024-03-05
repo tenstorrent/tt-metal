@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
 
     const uint32_t out0_t = 1;  // output(inplace)
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(inputs.at(0).dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(inputs.at(0).get_dtype());
 
     CreateCircularBuffer(
         program,

@@ -17,11 +17,11 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
-    const auto& input_shape = input_tensor.shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
 
     tt_metal::Device *device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
-        in1_w_tiles = input_tensor_kv.value().shape()[3] / TILE_WIDTH;
+        in1_w_tiles = input_tensor_kv.value().get_legacy_shape()[3] / TILE_WIDTH;
     }
 
     // Per output tensor args
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = false;
     if (read_from_input_tensor_kv) {
@@ -279,11 +279,11 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
 
     tt_metal::Device *device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 

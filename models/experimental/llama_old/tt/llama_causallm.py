@@ -23,9 +23,7 @@ class TtLlamaForCausalLM(TtLlamaShared):
         config,
         num_decoders,
     ):
-        super().__init__(
-            device, state_dict, base_url, max_position_embeddings, config, num_decoders
-        )
+        super().__init__(device, state_dict, base_url, max_position_embeddings, config, num_decoders)
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
@@ -35,7 +33,7 @@ class TtLlamaForCausalLM(TtLlamaShared):
         self.bias = None
 
         self.linear = TTLinear(
-            self.weight.shape()[-1], self.weight.shape()[-2], self.weight, self.bias
+            self.weight.get_legacy_shape()[-1], self.weight.get_legacy_shape()[-2], self.weight, self.bias
         )
 
     def forward(self, x):

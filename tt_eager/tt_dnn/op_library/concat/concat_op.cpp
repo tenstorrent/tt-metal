@@ -27,15 +27,15 @@ ConcatOpParallelizationStrategy Concat::get_parallelization_strategy(const std::
 
 void Concat::validate(const std::vector<Tensor> &input_tensors) const {
 
-    tt::tt_metal::Shape shape_first = input_tensors[0].shape();
+    tt::tt_metal::Shape shape_first = input_tensors[0].get_legacy_shape();
     shape_first[dim] = 0;
 
     for (const Tensor &in_ref : input_tensors) {
-        TT_FATAL((in_ref.layout() == Layout::TILE) && "Only tile layout supported.");
+        TT_FATAL((in_ref.get_layout() == Layout::TILE) && "Only tile layout supported.");
         TT_FATAL(in_ref.device() && "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.buffer() && "Operand to concat needs to be allocated in a buffer on device.");
-        TT_FATAL(in_ref.layout() == input_tensors.at(0).layout() && "All Tensors should have same layouts.");
-        tt::tt_metal::Shape curr_shape = in_ref.shape();
+        TT_FATAL(in_ref.get_layout() == input_tensors.at(0).get_layout() && "All Tensors should have same layouts.");
+        tt::tt_metal::Shape curr_shape = in_ref.get_legacy_shape();
         curr_shape[dim] = 0;
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         TT_FATAL(in_ref.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Concat does not currently support sharding");
@@ -44,10 +44,10 @@ void Concat::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<tt::tt_metal::Shape> Concat::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::Shape shape_out = input_tensors[0].shape();
+    tt::tt_metal::Shape shape_out = input_tensors[0].get_legacy_shape();
     shape_out[dim] = 0;
     for (const Tensor &in_ref : input_tensors) {
-        tt::tt_metal::Shape curr_shape = in_ref.shape();
+        tt::tt_metal::Shape curr_shape = in_ref.get_legacy_shape();
         shape_out[dim] += curr_shape[dim];
     }
     return {shape_out};
@@ -55,7 +55,7 @@ std::vector<tt::tt_metal::Shape> Concat::compute_output_shapes(const std::vector
 
 std::vector<Tensor> Concat::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const Tensor &ref_in_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, ref_in_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, ref_in_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Concat::create_program(
@@ -73,15 +73,15 @@ Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim, const Memory
     if (input_tensors.size() == 1) {
         return AutoFormat::move_tensor_to_mem_config(input_tensors[0], output_mem_config);
     }
-    uint32_t ref_rank = input_tensors[0].shape().rank();
-    uint32_t normalized_dim =  input_tensors[0].shape().get_normalized_index(dim);
+    uint32_t ref_rank = input_tensors[0].get_legacy_shape().rank();
+    uint32_t normalized_dim =  input_tensors[0].get_legacy_shape().get_normalized_index(dim);
     if (normalized_dim == ref_rank - 1) {
         for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(input_tensor.shape()[dim] % TILE_WIDTH == 0);
+            TT_FATAL(input_tensor.get_legacy_shape()[dim] % TILE_WIDTH == 0);
         }
     } else if (normalized_dim == ref_rank - 2) {
         for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(input_tensor.shape()[dim] % TILE_HEIGHT == 0);
+            TT_FATAL(input_tensor.get_legacy_shape()[dim] % TILE_HEIGHT == 0);
         }
     }
     return operation::run_with_autoformat(Concat{normalized_dim}, {input_tensors}).at(0);

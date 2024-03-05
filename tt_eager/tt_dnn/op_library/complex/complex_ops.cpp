@@ -18,7 +18,7 @@ namespace tt_metal {
 
 #define CHECK_FOR_COMPLEX(input) do {\
   TT_ASSERT( utility::is_complex_shape(input), "works for complex shape only"); \
-  /* TT_ASSERT( input.shape()[0] == 1, "tensor should have batch size 1"); */ \
+  /* TT_ASSERT( input.get_legacy_shape()[0] == 1, "tensor should have batch size 1"); */ \
   } while(0);
 
 Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConfig& output_mem_config) {
@@ -28,7 +28,7 @@ Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConf
 
 namespace utility {
     bool is_complex_shape(const Tensor& input) {
-        const Shape& shape = input.shape();
+        const Shape& shape = input.get_legacy_shape();
         return shape[-1]%(2*TILE_WIDTH) == 0; //last dim should be partitionable
     }
 }

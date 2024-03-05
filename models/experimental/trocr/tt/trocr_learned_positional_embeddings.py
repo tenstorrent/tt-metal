@@ -29,13 +29,11 @@ class TtTrOCRLearnedPositionalEmbedding(nn.Embedding):
         self.config = config
         self.base_address = base_address
         self.weights = state_dict[f"{self.base_address}.weight"]
-        super().__init__(
-            num_embeddings + self.offset, embedding_dim, _weight=self.weights
-        )
+        super().__init__(num_embeddings + self.offset, embedding_dim, _weight=self.weights)
 
     def forward(self, input_ids: tt_lib.tensor.Tensor, past_key_values_length: int = 0):
         """`input_ids' shape is expected to be [bsz x seqlen]."""
-        bsz, seq_len = input_ids.shape()[2:]
+        bsz, seq_len = input_ids.get_legacy_shape()[2:]
         positions = torch.arange(
             past_key_values_length,
             past_key_values_length + seq_len,

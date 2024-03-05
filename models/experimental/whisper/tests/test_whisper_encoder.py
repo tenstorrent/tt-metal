@@ -25,20 +25,13 @@ from models.experimental.whisper.tt.whisper_encoder import (
 )
 
 
-
 def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1):
     if for_audio_classification:
-        model = WhisperForAudioClassification.from_pretrained(
-            "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-        )
-        feature_extractor = AutoFeatureExtractor.from_pretrained(
-            "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-        )
+        model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
+        feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     else:
         model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
-        feature_extractor = AutoFeatureExtractor.from_pretrained(
-            "openai/whisper-tiny.en"
-        )
+        feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny.en")
 
     configuration = model.config
     if encoder_layers != configuration.encoder_layers:
@@ -89,9 +82,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
         )
         tt_whisper_encoder.eval()
 
-        input_features = torch2tt_tensor(
-            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
         ttm_output = tt_whisper_encoder(
             input_features=input_features,
             head_mask=head_mask,
@@ -99,7 +90,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
             output_hidden_states=False,
         )
 
-        logger.debug(f"Encoder returned {ttm_output.last_hidden_state.shape()}")
+        logger.debug(f"Encoder returned {ttm_output.last_hidden_state.get_legacy_shape()}")
 
         # TT Output To Torch
         ttm_output_pt = tt2torch_tensor(ttm_output.last_hidden_state)
@@ -107,9 +98,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
 
         logger.debug(f"Encoder output to torch {ttm_output_pt.size()}")
 
-        does_pass, pcc_message = comp_pcc(
-            pytorch_output.last_hidden_state, ttm_output_pt, 0.98
-        )
+        does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, ttm_output_pt, 0.98)
         logger.info(pcc_message)
 
         if does_pass:

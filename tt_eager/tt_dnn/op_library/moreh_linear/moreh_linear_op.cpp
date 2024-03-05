@@ -24,11 +24,11 @@ inline bool is_shape_scalar(const Shape& bias) {
 
 inline void moreh_linear_validate(
     const Tensor& input, const Tensor& weight, std::optional<std::reference_wrapper<const Tensor>> bias) {
-    const auto& weight_shape = weight.shape().without_padding();
+    const auto& weight_shape = weight.get_legacy_shape().without_padding();
     TT_ASSERT(weight_shape[0] == 1 && weight_shape[1] == 1, "weight should be a 2D tensor");
     if (bias) {
         const auto& bias_tensor = bias->get();
-        const auto& bias_shape = bias_tensor.shape().without_padding();
+        const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
         TT_ASSERT(
             is_shape_out_features(bias_shape, weight_shape) || is_shape_scalar(bias_shape),
             "shape of bias should be [1, 1, 1, wieght_shape[2]] or [1, 1, 1, 1]");
@@ -44,7 +44,7 @@ Tensor moreh_linear_(
     Tensor mm_output = moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
     if (bias) {
         const auto& bias_tensor = bias->get();
-        const auto& bias_shape = bias_tensor.shape().without_padding();
+        const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
         BcastOpDim bcast_dim = is_shape_scalar(bias_shape) ? BcastOpDim::HW : BcastOpDim::H;
         return bcast(mm_output, bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
     }

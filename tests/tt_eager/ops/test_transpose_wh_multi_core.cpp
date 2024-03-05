@@ -23,12 +23,12 @@ using namespace constants;
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
     TT_FATAL(input_tensor.storage_type() == StorageType::OWNED);
-    auto ashape = input_tensor.shape();
+    auto ashape = input_tensor.get_legacy_shape();
     TT_FATAL(ashape.rank() == 4);
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
-    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
+    TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
     auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
     auto output_buffer = owned_buffer::create<bfloat16>(input_buffer.size());
     auto N = ashape[0];
@@ -58,7 +58,7 @@ Tensor perform_transpose_wh(Tensor& input_tensor) {
             }
         }
     }
-    return tt_metal::Tensor(OwnedStorage{output_buffer}, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
+    return tt_metal::Tensor(OwnedStorage{output_buffer}, bshape, input_tensor.get_dtype(), tt::tt_metal::Layout::TILE);
 }
 
 int main(int argc, char **argv) {

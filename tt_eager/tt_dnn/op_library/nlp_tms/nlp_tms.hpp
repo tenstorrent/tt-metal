@@ -66,13 +66,13 @@ inline std::vector<Tensor> nlp_create_qkv_heads(
     // Infer head_dim
     uint32_t head_dim;
     if (input_tensor_kv.has_value()) {
-        TT_FATAL(input_tensor.shape()[3] % num_heads == 0, "Unsupported input shape");
-        TT_FATAL(input_tensor_kv.value().shape()[3] % (2 * num_kv_heads_val) == 0, "Unsupported input shape");
-        head_dim = input_tensor.shape()[3] / num_heads;
-        TT_FATAL(input_tensor_kv.value().shape()[3] / (2 * num_kv_heads_val) == head_dim, "Head dims must be the same for Q and K, V");
+        TT_FATAL(input_tensor.get_legacy_shape()[3] % num_heads == 0, "Unsupported input shape");
+        TT_FATAL(input_tensor_kv.value().get_legacy_shape()[3] % (2 * num_kv_heads_val) == 0, "Unsupported input shape");
+        head_dim = input_tensor.get_legacy_shape()[3] / num_heads;
+        TT_FATAL(input_tensor_kv.value().get_legacy_shape()[3] / (2 * num_kv_heads_val) == head_dim, "Head dims must be the same for Q and K, V");
     } else {
-        TT_FATAL(input_tensor.shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
-        head_dim = input_tensor.shape()[3] / (num_heads + 2 * num_kv_heads_val);
+        TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
+        head_dim = input_tensor.get_legacy_shape()[3] / (num_heads + 2 * num_kv_heads_val);
     }
 
     return operation::run(NlpCreateHeads{num_heads, num_kv_heads_val, head_dim, transpose_k_heads, mem_config}, {input_tensor}, {input_tensor_kv});

@@ -19,20 +19,20 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
     Buffer *src_buffer = output_grad.buffer();
-    const auto &bias_grad_shape = bias_grad.shape().without_padding();
+    const auto &bias_grad_shape = bias_grad.get_legacy_shape().without_padding();
     Buffer *dst_buffer = bias_grad.buffer();
     uint32_t num_tiles = output_grad.volume() / TILE_HW;
-    const auto &output_grad_shape_wo_padding = output_grad.shape().without_padding();
+    const auto &output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
     const bool do_mask_h = (output_grad_shape_wo_padding[2] % TILE_HEIGHT) != 0;
     const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[2] % TILE_HEIGHT : TILE_HEIGHT;
     const bool do_mask_w = (output_grad_shape_wo_padding[3] % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[3] % TILE_WIDTH : TILE_WIDTH;
 
-    const auto &output_grad_shape = output_grad.shape();
+    const auto &output_grad_shape = output_grad.get_legacy_shape();
     uint32_t B1 = output_grad_shape[0];
     uint32_t B2 = output_grad_shape[1];
     uint32_t Ht = output_grad_shape[2] / TILE_HEIGHT;

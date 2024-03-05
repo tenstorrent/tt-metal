@@ -118,7 +118,7 @@ class TtAttention(nn.Module):
         mask: Optional[torch.Tensor],
         seqlen: int,
     ) -> tt_lib.tensor.Tensor:
-        _, bsz, _, _ = x.shape()
+        _, bsz, _, _ = x.get_legacy_shape()
 
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
@@ -179,12 +179,12 @@ class TtAttention(nn.Module):
 
         query = tt_lib.tensor.transpose(xq, 1, -2, output_mem_config=self.args.out_mem_config)
         desired_score_shape = [
-            query.shape()[-1],
-            query.shape()[-2],
-            query.shape()[-3],
-            query.shape()[-4],
+            query.get_legacy_shape()[-1],
+            query.get_legacy_shape()[-2],
+            query.get_legacy_shape()[-3],
+            query.get_legacy_shape()[-4],
         ]
-        desired_score_shape[-1] = key.shape()[1]
+        desired_score_shape[-1] = key.get_legacy_shape()[1]
         xq.deallocate()
 
         key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
@@ -214,7 +214,7 @@ class TtAttention(nn.Module):
             )
             scores = tt_lib.tensor.permute(scores, [2, 3, 0, 1])
         desired_output_shape = [bsz, 32, seqlen, seqlen]
-        desired_output_shape[-1] = value.shape()[-1]
+        desired_output_shape[-1] = value.get_legacy_shape()[-1]
 
         if self.args.FALLBACK_SOFTMAX:
             scores = fallback_ops.softmax(scores, dim=-1)
@@ -233,7 +233,7 @@ class TtAttention(nn.Module):
 
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
 
-        desired_output_shape = output.shape()
+        desired_output_shape = output.get_legacy_shape()
         output = format_tensor(output, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
         output = self.wo(output)
         return output

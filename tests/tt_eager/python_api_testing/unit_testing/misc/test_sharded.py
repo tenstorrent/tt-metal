@@ -819,7 +819,10 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
         xt = ttl.tensor.interleaved_to_sharded(
             xt,
             grid_size,
-            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            [
+                math.ceil((xt.get_legacy_shape()[-2] // 32) / grid_size[0]) * 32,
+                xt.get_legacy_shape()[-1] // grid_size[1],
+            ],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
@@ -909,14 +912,20 @@ def test_sharded_binary_padded_shard(
         xt = ttl.tensor.interleaved_to_sharded(
             xt,
             grid_size,
-            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            [
+                math.ceil((xt.get_legacy_shape()[-2] // 32) / grid_size[0]) * 32,
+                xt.get_legacy_shape()[-1] // grid_size[1],
+            ],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
         yt = ttl.tensor.interleaved_to_sharded(
             yt,
             grid_size,
-            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            [
+                math.ceil((xt.get_legacy_shape()[-2] // 32) / grid_size[0]) * 32,
+                xt.get_legacy_shape()[-1] // grid_size[1],
+            ],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
@@ -981,7 +990,10 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
         xt = ttl.tensor.interleaved_to_sharded(
             xt,
             grid_size,
-            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            [
+                math.ceil((xt.get_legacy_shape()[-2] // 32) / grid_size[0]) * 32,
+                xt.get_legacy_shape()[-1] // grid_size[1],
+            ],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
