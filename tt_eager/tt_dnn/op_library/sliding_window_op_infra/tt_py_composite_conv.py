@@ -998,7 +998,7 @@ class TTPyCompositeConv(TTPyOp):
                 interleaved_mem_config,
             )
         elif not self.untilize_out:
-            assert conv_output_on_device.layout() == ttl.tensor.Layout.TILE
+            assert conv_output_on_device.get_layout() == ttl.tensor.Layout.TILE
             conv_output_on_device = ttl.tensor.untilize(
                 conv_output_on_device, interleaved_mem_config, use_multicore=True
             )
