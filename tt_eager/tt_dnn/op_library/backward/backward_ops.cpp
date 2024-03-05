@@ -788,7 +788,7 @@ std::vector<Tensor> _concat_bw(const Tensor& grad, const Tensor& input, const Te
     }
     else if(dim == 3)
     {
-        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, 0, input.get_legacy_shape()[3]};
+        start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
     }
     const Shape end_index_2 = {grad.get_legacy_shape()[0] - 1, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1, grad.get_legacy_shape()[3] - 1};
     Tensor grad_b = unpad(grad, start_index_2, end_index_2);
@@ -1278,6 +1278,32 @@ std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const Memor
 {
     return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
 }
+std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    Tensor zero_input = zeros_like(input, output_mem_config);
+    grad_tensor.emplace_back(zero_input);
+    return grad_tensor;
+}
+std::vector<Tensor> binary_ge_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _binary_ge_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _binary_eq_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    Tensor zero_input = zeros_like(input, output_mem_config);
+    grad_tensor.emplace_back(zero_input);
+    return grad_tensor;
+}
+std::vector<Tensor> binary_eq_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _binary_eq_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
