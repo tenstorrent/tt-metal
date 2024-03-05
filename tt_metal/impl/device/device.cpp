@@ -763,6 +763,7 @@ void Device::initialize_command_queue() {
             }
         }
     }
+    tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::initialize_synchronous_sw_cmd_queue() {
