@@ -340,11 +340,10 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
-        sample = pre_process_input_new(self.device, sample)
         # sample in l1 interelaved and tiled and nhwc
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         sample = self.conv_in(sample)
-        sample = ttnn.reallocate(sample)
+        sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
 
@@ -545,8 +544,6 @@ class UNet2DConditionModel:
             sample = pre_process_input(self.device, sample)
 
         else:
-            print(f"Starting final group norm")
-            print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
             sample = ttnn.group_norm(
                 sample,
                 num_groups=norm_num_groups,
@@ -559,7 +556,6 @@ class UNet2DConditionModel:
                     self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[0],
                 ),
             )
-            print(f"Finished final group norm")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
         sample = ttnn.silu(sample)
@@ -567,14 +563,6 @@ class UNet2DConditionModel:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = post_process_output(
-            self.device,
-            sample,
-            self.conv_out.batch_size,
-            self.conv_out.input_height,
-            self.conv_out.input_width,
-            self.conv_out.out_channels,
-        )
         # con_in completes
 
         return sample

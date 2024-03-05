@@ -59,6 +59,21 @@ class upblock_2d:
                     res_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
                 )
 
+            if ttnn.is_sharded(hidden_states) and hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
+                hidden_states = ttnn.to_layout(
+                    hidden_states, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+                )
+            elif ttnn.is_sharded(hidden_states):
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            if ttnn.is_sharded(on_dev_res_hidden_states) and on_dev_res_hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
+                on_dev_res_hidden_states = ttnn.to_layout(
+                    on_dev_res_hidden_states,
+                    ttnn.TILE_LAYOUT,
+                    output_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    use_multicore=True,
+                )
+            elif ttnn.is_sharded(on_dev_res_hidden_states):
+                on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
             hidden_states = resnet(
                 hidden_states,

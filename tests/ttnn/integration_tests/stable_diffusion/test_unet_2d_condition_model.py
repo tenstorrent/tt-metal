@@ -18,6 +18,10 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_2d_
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input_new,
+    post_process_output,
+)
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -164,6 +168,8 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     reader_patterns_cache = {}
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
+
+    input = pre_process_input_new(model.device, input)
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -173,6 +179,14 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         cross_attention_kwargs=cross_attention_kwargs,
         return_dict=return_dict,
         config=config,
+    )
+    ttnn_output = post_process_output(
+        model.device,
+        ttnn_output,
+        model.conv_out.batch_size,
+        model.conv_out.input_height,
+        model.conv_out.input_width,
+        model.conv_out.out_channels,
     )
     ttnn_output = ttnn_to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

@@ -164,7 +164,7 @@ class resnetBlock2D:
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 weights_dtype=ttnn.bfloat8_b,
                 use_shallow_conv_variant=False,
-                # enable_auto_formatting=not group_norm_on_device,
+                enable_auto_formatting=self.fallback_on_groupnorm,
                 compute_kernel_config=compute_kernel_config,
             )
             self.output_height = self.conv_shortcut.output_height
@@ -206,7 +206,7 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override=conv2_config_override,
             use_shallow_conv_variant=False,
-            # enable_auto_formatting=not group_norm_on_device,
+            enable_auto_formatting=self.fallback_on_groupnorm,
             deallocate_activation=True,
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
             compute_kernel_config=compute_kernel_config,
@@ -276,7 +276,6 @@ class resnetBlock2D:
                 hidden_states, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.get_memory_config(hidden_states)
             )
             # breakpoint()
-            print(f"Resnetblock GN1: memory_config={ttnn.get_memory_config(hidden_states)}")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -287,9 +286,10 @@ class resnetBlock2D:
                 core_grid=ttnn.CoreGrid(self.first_group_norm_grid_size[1], self.first_group_norm_grid_size[0]),
             )
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
         else:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(
                 hidden_states, (self.conv2.batch_size, self.conv2.input_height, self.conv2.input_width, in_channels)
             )
@@ -301,6 +301,7 @@ class resnetBlock2D:
                 bias=self.parameters.norm1.bias,
                 epsilon=eps,
             )
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
         hidden_states = nonlinearity(hidden_states)
 
         if up:
@@ -318,7 +319,7 @@ class resnetBlock2D:
             in_channels = self.parameters.conv1.weight.shape[1]
             split_input_channels = in_channels // conv1_split_chunks
 
-            output_tensor_end_width_dim = split_input_channels - 1
+            output_tensor_end_width_dim = split_input_channels
             for i in range(conv1_split_chunks):
                 split_hidden_states.append(
                     hidden_states[:, :, :, output_tensor_start_width_dim:output_tensor_end_width_dim]
@@ -360,8 +361,12 @@ class resnetBlock2D:
                     raise ValueError(f"unknown time_embedding_norm : {time_embedding_norm} ")
                 # temb=ttnn.linear(temb,parameters.time_emb_proj.weight,bias=parameters.time_emb_proj.bias)
                 # breakpoint()
-                temb = ttnn.matmul(temb, self.parameters.time_emb_proj.weight)
-                temb = ttnn.add(temb, self.parameters.time_emb_proj.bias)
+                temb = ttnn.linear(
+                    temb,
+                    self.parameters.time_emb_proj.weight,
+                    bias=self.parameters.time_emb_proj.bias,
+                    core_grid=temb.device.core_grid,
+                )
 
             temb = ttnn.permute(temb, (2, 0, 1, 3))
 
@@ -383,7 +388,6 @@ class resnetBlock2D:
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
             )
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
-            print(f"Resnetblock GN2: memory_config={ttnn.get_memory_config(hidden_states)}")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -419,18 +423,15 @@ class resnetBlock2D:
             # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         else:
-            if ttnn.get_memory_config(hidden_states) != self.conv2.conv.input_sharded_memory_config:
-                hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
-            hidden_states = self.conv2(hidden_states)
-            # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            #     self.device,
-            #     self.conv2,
-            #     hidden_states,
-            #     self.conv2.batch_size,
-            #     self.conv2.input_height,
-            #     self.conv2.input_width,
-            #     self.conv2.out_channels,
-            # )
+            hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+                self.device,
+                self.conv2,
+                hidden_states,
+                self.conv2.batch_size,
+                self.conv2.input_height,
+                self.conv2.input_width,
+                self.conv2.out_channels,
+            )
 
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
         if use_in_shortcut:

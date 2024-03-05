@@ -13,6 +13,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input,
+    post_process_output,
+)
+
 
 def ttnn_to_torch(input):
     input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
@@ -106,14 +111,14 @@ def test_resnet_block_2d_256x256(
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [
-        (2, 320, 64, 64, 0, 0, "down", None),
+        # (2, 320, 64, 64, 0, 0, "down", None),
         # (2, 320, 32, 32, 0, 0, "down", None),
         # (2, 640, 32, 32, 1, 1, "down", None),
         # (2, 640, 16, 16, 1, 1, "down", None),
         # (2, 1280, 16, 16, 2, 1, "down", None),
         # (2, 1280, 8, 8, 2, 1, "down", None),
         # (2, 2560, 8, 8, 0, 0, "up", 1280),
-        # (2, 2560, 16, 16, 0, 0, "up", 1280),
+        (2, 2560, 16, 16, 0, 0, "up", 1280),
         # (2, 1920, 16, 16, 2, 0, "up", 1280),
         # (2, 1920, 32, 32, 2, 0, "up", 640),
         # (2, 1280, 32, 32, 3, 0, "down", None),
@@ -125,7 +130,7 @@ def test_resnet_block_2d_256x256(
 def test_resnet_block_2d_512x512(
     device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
 ):
-    load_from_disk = True
+    load_from_disk = False
     if not load_from_disk:
         # setup pytorch model
         pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -177,9 +182,9 @@ def test_resnet_block_2d_512x512(
     )
 
     input = ttnn.from_torch(input, ttnn.bfloat16)
+    input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
     # input = ttnn.to_memory_config(input, resnet_block.conv1s[0].conv.input_sharded_memory_config)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
