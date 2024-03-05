@@ -1385,6 +1385,24 @@ std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, cons
 {
     return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
 }
+// maximum
+// self: at::where(self == other, grad / 2, grad).masked_fill_(self < other, 0)
+// other: at::where(self == other, grad / 2, grad).masked_fill_(self > other, 0)
+std::vector<Tensor> _maximum_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor int_res = where(eq(input, other, std::nullopt, output_mem_config), mul_unary(grad, 0.5f, output_mem_config), grad, output_mem_config);
+    Tensor grad_a = where(lt(input, other, std::nullopt, output_mem_config), 0.0, int_res, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = where(lt(other, input, std::nullopt, output_mem_config), 0.0, int_res, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    int_res.deallocate();
+    return grad_tensor;
+}
+std::vector<Tensor> maximum_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _maximum_bw)(grad, input, other, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
