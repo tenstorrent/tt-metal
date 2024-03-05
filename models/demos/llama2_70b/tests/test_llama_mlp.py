@@ -84,6 +84,7 @@ def run_test_LlamaMLP_inference(
     print(f"Compute grid size: {compute_grid_size}")
     print(f"Running optimized: {optimized}")
     print(f"Running emulated: {emulated}")
+    print(f"Running on {n_devices} devices")
 
     if optimized:
         # TT hardware execution -------------------------------------------------------------
