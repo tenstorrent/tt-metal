@@ -5,6 +5,17 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_expm1.h"
+#include "llk_math_eltwise_unary_sfpu_rsqrt.h"
+#include "llk_math_eltwise_unary_sfpu_signbit.h"
+#include "llk_math_eltwise_unary_sfpu_power.h"
+#include "llk_math_eltwise_unary_sfpu_exp2.h"
+#include "llk_math_eltwise_unary_sfpu_heaviside.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu_sign.h"
+#include "llk_math_eltwise_unary_sfpu_comp.h"
+#include "llk_math_eltwise_unary_sfpu_trigonometry.h"
 
 namespace ckernel {
 
