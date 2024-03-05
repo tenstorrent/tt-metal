@@ -9,6 +9,11 @@
 namespace ckernel {
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
     func();
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -24,13 +29,6 @@ inline void llk_math_eltwise_unary_sfpu_init(
         case SfpuType::tanh_derivative:
              sfpu::_init_tanh_<APPROXIMATE>();
              break;
-        case SfpuType::sigmoid_appx:
-             sfpu::_init_sigmoid_<APPROXIMATE>();
-             break;
-        case SfpuType::expm1:
-        case SfpuType::exp2:
-            sfpu::_init_exponential_<APPROXIMATE>();
-            break;
         case SfpuType::dropout:
             sfpu::_init_dropout_(param2);
             break;
