@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-import ttnn
+
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
@@ -16,8 +16,8 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         ((torch.Size([1, 2, 45, 64])), (torch.Size([1, 1, 45, 64])), 1),
         ((torch.Size([1, 1, 125, 32])), (torch.Size([1, 1, 32, 32])), 2),
         (
-            (torch.Size([1, 1, 64, 50])),
-            (torch.Size([1, 1, 64, 40])),
+            (torch.Size([1, 1, 64, 80])),
+            (torch.Size([1, 1, 64, 16])),
             3,
         ),  # size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values
         # Tile shape
@@ -54,5 +54,5 @@ def test_bw_add(input_shapes, input_shapes_2, dimension, device):
 
     golden_tensor = [in_data.grad, other_data.grad]
 
-    status = (tt_output_tensor_on_device, golden_tensor)
-    assert status
+    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    assert comp_pass
