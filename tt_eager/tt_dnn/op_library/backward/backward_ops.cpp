@@ -1278,6 +1278,8 @@ std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const Memor
 {
     return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
 }
+
+
 std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = zeros_like(grad, output_mem_config);
@@ -1440,6 +1442,38 @@ std::vector<Tensor> unary_eq_bw(const Tensor& grad, const Tensor& input, float o
     return operation::decorate_as_composite(__func__, _unary_eq_bw)(grad, input, other, output_mem_config);
 }
 
+
+// Torch reference
+// # if eps is not None:
+// #         lo = eps
+// #         hi = 1.0 - lo
+// #         return torch.where(
+// #             torch.logical_and(self >= lo, self <= hi),
+// #             grad_output / (self * (1.0 - self)),
+// #             0.0,
+// #         )
+// #     else:
+// #         return torch.where(
+// #             torch.logical_and(self >= 0.0, self <= 1.0),
+// #             grad_output / (self * (1.0 - self)),
+// #             self.new_full((), float("nan")),
+// #         )
+std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, float eps, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float low, high;
+    low = eps;
+    high = 1.0 - eps;
+    Tensor grad_result = mul(grad, recip(mul(input, rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)), std::nullopt, output_mem_config);
+    Tensor status = logical_and(gte_unary(input, low, output_mem_config),
+                    lte_unary(input, high, output_mem_config), std::nullopt, output_mem_config);
+    grad_result = where(eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, 0.0);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, float eps, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logit_bw)(grad, input, eps, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
