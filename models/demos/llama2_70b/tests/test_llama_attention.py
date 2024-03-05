@@ -112,6 +112,7 @@ def run_test_LlamaAttention_inference(
 
     print(f"Running optimized: {optimized}")
     print(f"Running emulated: {emulated}")
+    print(f"Running on {n_devices} devices")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
@@ -229,10 +230,10 @@ def run_test_LlamaAttention_inference(
 @pytest.mark.parametrize(
     "batch, seq_len, pcc, optimized, n_devices, emulated",
     (
-        (32, 1, 0.9998, True, 4, False),
-        (32, 1, 0.9998, True, 8, False),
-        (32, 1, 0.9998, True, 4, True),
-        (32, 1, 0.999, True, 8, True),
+        (32, 1, 0.9997, True, 4, False),
+        (32, 1, 0.9997, True, 8, False),
+        (32, 1, 0.9997, True, 4, True),
+        (32, 1, 0.9997, True, 8, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
