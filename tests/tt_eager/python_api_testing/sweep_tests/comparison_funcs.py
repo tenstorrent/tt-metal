@@ -8,12 +8,13 @@ from loguru import logger
 
 
 def get_atol_rtol_pcc(golden, calculated):
-    calculated_dtype = calculated.dtype
     is_calculate_float = calculated.is_floating_point()
 
     if golden.dtype != calculated.dtype:
         logger.warning(f"Converting calculated to golden.dtype {golden.dtype}")
         calculated = calculated.type(golden.dtype)
+
+    calculated_dtype = calculated.dtype
 
     if golden.is_complex() and calculated.is_complex():
         golden = torch.view_as_real(golden.clone())
