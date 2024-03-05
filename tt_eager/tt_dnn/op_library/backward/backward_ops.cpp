@@ -1249,6 +1249,35 @@ std::vector<Tensor> rpow_bw(const Tensor& grad, const Tensor& input, float expon
     return operation::decorate_as_composite(__func__, _rpow_bw)(grad, input, exponent, output_mem_config);
 }
 
+// Silu
+// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
+std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_sigmoid = mul(grad, sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = add1(mul(sub_unary(1.0f, sigmoid(input, output_mem_config), output_mem_config), input, std::nullopt, output_mem_config), output_mem_config);
+    Tensor grad_result = mul(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> silu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _silu_bw)(grad, input, output_mem_config);
+}
+
+// Selu
+// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
+std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_lambd = mul_unary(grad, 1.0507f, output_mem_config);
+    Tensor grad_result = where(gtz(input, output_mem_config), grad_lambd, mul(mul_unary(grad_lambd, 1.673260f, output_mem_config), exp(input, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
