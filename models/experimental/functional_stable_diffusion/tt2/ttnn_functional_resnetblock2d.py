@@ -361,7 +361,11 @@ class resnetBlock2D:
                 )
                 split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
                 if i != 0:
-                    split_hidden_states[i] = ttnn.add(split_hidden_states[i], split_hidden_states[i - 1])
+                    split_hidden_states[i] = ttnn.add(
+                        split_hidden_states[i],
+                        split_hidden_states[i - 1],
+                        memory_config=self.conv1s[i].conv.output_sharded_memory_config,
+                    )
                     ttnn.deallocate(split_hidden_states[i - 1])
             hidden_states = split_hidden_states[-1]
 

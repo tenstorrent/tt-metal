@@ -162,6 +162,7 @@ class transformer_2d_model:
         norm_type="layer_norm",
         eps=1e-5,
         norm_elementwise_affine: bool = True,
+        output_bfloat16: bool = False,
     ):
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -265,11 +266,17 @@ class transformer_2d_model:
                 # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT, use_multicore=True)
                 # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
-                hidden_states = ttnn.add(
-                    hidden_states,
-                    residual,
-                )
-
+                if output_bfloat16:
+                    hidden_states = ttnn.add(
+                        hidden_states,
+                        residual,
+                        dtype=ttnn.bfloat16,
+                    )
+                else:
+                    hidden_states = ttnn.add(
+                        hidden_states,
+                        residual,
+                    )
             else:
                 hidden_states = ttnn.to_device(hidden_states, self.device)
                 hidden_states = ttnn.matmul(hidden_states, self.parameters.proj_out.weight)

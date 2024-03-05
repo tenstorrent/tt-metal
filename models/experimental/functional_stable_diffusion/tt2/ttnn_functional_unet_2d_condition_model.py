@@ -343,14 +343,6 @@ class UNet2DConditionModel:
 
         # 3.down
         sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
-        sample_copied_to_dram = post_process_output(
-            self.device,
-            sample_copied_to_dram,
-            self.conv_in.batch_size,
-            self.conv_in.output_height,
-            self.conv_in.output_width,
-            self.conv_in.out_channels,
-        )
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
@@ -510,27 +502,39 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
+
+        if ttnn.get_memory_config(sample) != self.up_blocks[-1].resnets[-1].conv2.conv.input_sharded_memory_config:
+            sample = ttnn.to_memory_config(
+                sample, self.up_blocks[-1].resnets[-1].conv2.conv.input_sharded_memory_config
+            )
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         sample = ttnn.group_norm(
             sample,
             num_groups=norm_num_groups,
             epsilon=norm_eps,
             weight=self.parameters.conv_norm_out.weight,
             bias=self.parameters.conv_norm_out.bias,
+            memory_config=self.conv_out.conv.input_sharded_memory_config,
+            core_grid=ttnn.CoreGrid(
+                self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[1],
+                self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[0],
+            ),
         )
+        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
         sample = ttnn.silu(sample)
-        if ttnn.get_memory_config(hidden_states) != self.conv_out.conv.input_sharded_memory_config:
-            hidden_states = ttnn.to_memory_config(hidden_states, self.conv_out.conv.input_sharded_memory_config)
+        if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
+            sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
-        # sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-        #     self.device,
-        #     self.conv_out,
-        #     sample,
-        #     self.conv_out.batch_size,
-        #     self.conv_out.input_height,
-        #     self.conv_out.input_width,
-        #     self.conv_out.out_channels,
-        # )
-
+        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
+        sample = post_process_output(
+            self.device,
+            sample,
+            self.conv_out.batch_size,
+            self.conv_out.input_height,
+            self.conv_out.input_width,
+            self.conv_out.out_channels,
+        )
         # con_in completes
 
         return sample

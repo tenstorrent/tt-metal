@@ -171,8 +171,6 @@ class cross_attention:
         return attention_scores
 
     def get_attention_scores_opt(self, query, t_key, head_size, attention_mask=None, device=None):
-        print("Query shape", query.shape)
-        print("Key shape", t_key.shape)
         if (
             True
         ):  # query.shape[-2] == 4096: #query.shape[-2] == 4096:#TODO: Hangs on Query shape ttnn.Shape([2, 8, 1024, 96]) and Key shape ttnn.Shape([2, 8, 96, 96])
@@ -266,7 +264,8 @@ class cross_attention:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
-            ttnn.deallocate(encoder_hidden_states)
+            # Can't deallocate, mnaybe we just move to dram if it causes issues.
+            # ttnn.deallocate(encoder_hidden_states)
             if hidden_seq_len > encoder_hidden_seq_len:
                 padding_needed = hidden_seq_len - encoder_hidden_seq_len
                 kv_proj = ttnn.concat([kv_proj, self.padded_tensors[padding_needed]], dim=1)
