@@ -45,6 +45,8 @@ class TtLlamaDecoder_optimized:
         self.max_seq_len = configuration.max_seq_len
         self.model_config = model_config
         self.emulated = emulated
+        self.batched_attn = self.num_devices == 8
+        self.padded_local_heads = 32
 
         self.layer_name = f"{base_url}.{layer_num}"
 
@@ -174,9 +176,12 @@ class TtLlamaDecoder_optimized:
         rot_mat = gather_rotary_emb(self.rot_emb, position_ids)[:, :1]
 
         padded_layer_past_len = nearest_32(start_pos + 1)
-        attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
+        if self.batched_attn:
+            attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
+        else:
+            attn_mask_shape = (seq_len, self.n_local_heads, batch, padded_layer_past_len)
+        attn_mask = torch.zeros(*attn_mask_shape)
         attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-        attn_mask = attn_mask.expand(-1, self.n_local_heads, -1, -1)
 
         # expected shapes:
         # x: (seq_len, 1, batch, hidden_dim)
@@ -185,7 +190,7 @@ class TtLlamaDecoder_optimized:
         # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
         assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
+        assert attn_mask.size() == attn_mask_shape
 
         x_fractured = torch.chunk(x, self.num_devices, dim=-1)
         xs, rot_mats, attn_masks = [], [], []
