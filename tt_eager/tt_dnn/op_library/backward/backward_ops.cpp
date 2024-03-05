@@ -1362,6 +1362,30 @@ std::vector<Tensor> trunc_bw(const Tensor& grad, const Tensor& input, const Memo
 {
     return operation::decorate_as_composite(__func__, _trunc_bw)(grad, input, output_mem_config);
 }
+
+std::vector<Tensor> _unary_floordiv_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_floordiv_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_floordiv_bw)(grad, input, scalar, output_mem_config);
+}
+
+std::vector<Tensor> _binary_floordiv_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> binary_floordiv_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _binary_floordiv_bw)(grad, input, other, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt

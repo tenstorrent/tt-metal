@@ -1016,6 +1016,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.frac_bw
 
+.. autofunction:: tt_lib.tensor.unary_floordiv_bw
+
+.. autofunction:: tt_lib.tensor.binary_floordiv_bw
+
 Loss Functions
 ==============
 
