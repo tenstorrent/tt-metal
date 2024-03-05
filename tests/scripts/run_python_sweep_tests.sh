@@ -14,3 +14,8 @@ else
     env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_move.py') -vvv
     env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_move.py -k input_L1 -vvv
 fi
+
+# Reset as temporary workaround for https://github.com/tenstorrent-metal/tt-metal/issues/5972 to enable FD tunneling on R chip
+if [ "$ARCH_NAME" == "wormhole_b0" ]; then
+  tt-smi -wr wait all
+fi
