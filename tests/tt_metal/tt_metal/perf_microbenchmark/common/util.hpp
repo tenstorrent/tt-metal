@@ -34,16 +34,17 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
             TT_ASSERT(end_index < (PRINT_BUFFER_SIZE / sizeof(uint32_t)));
             dropped_marker_counter = profile_buffer[DROPPED_MARKER_COUNTER];
 
+            uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;
             for (int i = MARKER_DATA_START; i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
                 uint64_t cycle =
                     ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) | profile_buffer[i + TIMER_VAL_L]);
 
-                if (cycle < min_cycle) {
+                if (timer_id == 1 && cycle < min_cycle) {
                     min_cycle = cycle;
                 }
 
-                if (timer_id == 4 && cycle > max_cycle) {
+                if (timer_id == step && cycle > max_cycle) {
                     max_cycle = cycle;
                 }
             }
