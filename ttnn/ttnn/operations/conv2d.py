@@ -45,6 +45,7 @@ class Conv2d:
         deallocate_activation: bool = False,
         padded_input_channels: Optional[int] = None,
         compute_kernel_config: Union[ttnn.GrayskullComputeKernelConfig, ttnn.WormholeComputeKernelConfig] = None,
+        use_dram_for_matmul: bool = False,
     ):
         assert (
             padding_mode == "zeros"
@@ -114,6 +115,7 @@ class Conv2d:
             deallocate_activation=deallocate_activation,
             padded_input_channels=padded_input_channels,
             compute_kernel_config=compute_kernel_config,
+            use_dram_for_matmul=use_dram_for_matmul,
         )
         self.batch_size = batch_size
         self.input_height = input_height

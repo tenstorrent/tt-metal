@@ -20,7 +20,12 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.utility_functions import (
+    skip_for_wormhole_b0,
+    pad_and_fold_conv_activation_for_unity_stride,
+    is_wormhole_b0,
+    is_grayskull,
+)
 
 from models.experimental.functional_resnet.tt.ttnn_functional_resnet import resnet_basic_block, resnet_bottleneck_block
 
@@ -29,6 +34,7 @@ def update_ttnn_module_args(ttnn_module_args):
     ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
     ttnn_module_args["enable_auto_formatting"] = ttnn_module_args.kernel_size < (7, 7)
     ttnn_module_args["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
+    ttnn_module_args["deallocate_activation"] = True if ttnn_module_args.kernel_size == (3, 3) else False
 
 
 def custom_preprocessor(model, name, ttnn_module_args):
@@ -407,15 +413,40 @@ def test_bottleneck_block_with_downsample(device):
 
 
 @skip_for_wormhole_b0()
-def test_resnet_50(device):
+# @pytest.mark.skip(reason="Tries to allocate >1MB L1 space for CBs - Issue #5966 for optimized_conv")
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    (
+        (8, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi4),  ## pass
+        # (8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),    ## legacy shape assertion
+        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
+)
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     torch.manual_seed(0)
 
     torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+    activation = {}
+
+    # compute_kernel_config = None
+    # if is_grayskull():
+    #     compute_kernel_config = ttnn.types.GrayskullComputeKernelConfig(
+    #         math_fidelity=math_fedility,
+    #         math_approx_mode=True,
+    #         fp32_dest_acc_en=False,
+    #         packer_l1_acc=False,
+    #     )
 
     def update_ttnn_module_args_resnet50(ttnn_module_args):
-        ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels <= 256
-        ttnn_module_args["enable_auto_formatting"] = ttnn_module_args.kernel_size < (7, 7)
+        ttnn_module_args["use_1d_systolic_array"] = True
+        ttnn_module_args["enable_auto_formatting"] = False
         ttnn_module_args["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
+        ttnn_module_args["deallocate_activation"] = True if ttnn_module_args.kernel_size == (3, 3) else False
+        ttnn_module_args["weights_dtype"] = weight_dtype
+        ttnn_module_args["math_fidelity"] = math_fidelity
 
     def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         parameters = {}
@@ -429,20 +460,79 @@ def test_resnet_50(device):
             update_ttnn_module_args_resnet50(ttnn_module_args.conv1)
             update_ttnn_module_args_resnet50(ttnn_module_args.conv2)
             update_ttnn_module_args_resnet50(ttnn_module_args.conv3)
+            if model.downsample is not None:
+                update_ttnn_module_args_resnet50(ttnn_module_args.downsample[0])
 
-            parameters["conv1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1)
-            parameters["conv2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2)
-            parameters["conv3"] = preprocess_conv2d(conv3_weight, conv3_bias, ttnn_module_args.conv3)
+            ## TODO: Cleanup this atrocity
+            if ttnn_module_args.conv1.input_height <= 14 and ttnn_module_args.conv1.input_width <= 14:
+                ttnn_module_args.conv1["use_1d_systolic_array"] = False
+                if model.downsample is not None:
+                    ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+            else:
+                if ttnn_module_args.conv1.input_height == 28 and ttnn_module_args.conv1.input_width == 28:
+                    if ttnn_module_args.conv1.stride == (2, 2):
+                        ttnn_module_args.conv1["use_1d_systolic_array"] = False
+                        if model.downsample is not None:
+                            ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+                    else:
+                        ttnn_module_args.conv1["use_1d_systolic_array"] = True
+                        if model.downsample is not None:
+                            ttnn_module_args.downsample[0]["use_1d_systolic_array"] = True
+                else:
+                    ttnn_module_args.conv1["use_1d_systolic_array"] = True
+                    if model.downsample is not None:
+                        ttnn_module_args.downsample[0]["use_1d_systolic_array"] = True
+
+            if ttnn_module_args.conv2.input_height <= 14 and ttnn_module_args.conv2.input_width <= 14:
+                ttnn_module_args.conv2["use_1d_systolic_array"] = False
+                if model.downsample is not None:
+                    ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+            else:
+                if ttnn_module_args.conv2.input_height == 28 and ttnn_module_args.conv2.input_width == 28:
+                    if ttnn_module_args.conv2.stride == (2, 2):
+                        ttnn_module_args.conv2["use_1d_systolic_array"] = False
+                        if model.downsample is not None:
+                            ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+                    else:
+                        ttnn_module_args.conv2["use_1d_systolic_array"] = True
+                else:
+                    ttnn_module_args.conv2["use_1d_systolic_array"] = True
+
+            if ttnn_module_args.conv3.input_height <= 14 and ttnn_module_args.conv3.input_width <= 14:
+                ttnn_module_args.conv3["use_1d_systolic_array"] = False
+                if model.downsample is not None:
+                    ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+            else:
+                if ttnn_module_args.conv3.input_height == 28 and ttnn_module_args.conv3.input_width == 28:
+                    if ttnn_module_args.conv3.stride == (2, 2):
+                        ttnn_module_args.conv3["use_1d_systolic_array"] = False
+                        if model.downsample is not None:
+                            ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+                    else:
+                        ttnn_module_args.conv3["use_1d_systolic_array"] = True
+                else:
+                    ttnn_module_args.conv3["use_1d_systolic_array"] = True
+
+            parameters["conv1"], pconfig1 = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1, True)
+            parameters["conv2"], pconfig2 = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2, True)
+            parameters["conv3"], pconfig3 = preprocess_conv2d(conv3_weight, conv3_bias, ttnn_module_args.conv3, True)
+
+            logger.debug(f"pconfig1: {pconfig1.num_cores_nhw}")
+            logger.debug(f"pconfig2: {pconfig2.num_cores_nhw}")
+            logger.debug(f"pconfig3: {pconfig3.num_cores_nhw}")
 
             if model.downsample is not None:
+                ttnn_module_args.downsample[0]["use_dram_for_matmul"] = True
                 downsample_weight, downsample_bias = fold_batch_norm2d_into_conv2d(
                     model.downsample[0], model.downsample[1]
                 )
-                update_ttnn_module_args_resnet50(ttnn_module_args.downsample[0])
-                parameters["downsample"] = preprocess_conv2d(
-                    downsample_weight, downsample_bias, ttnn_module_args.downsample[0]
+                parameters["downsample"], pconfig4 = preprocess_conv2d(
+                    downsample_weight, downsample_bias, ttnn_module_args.downsample[0], True
                 )
                 ttnn_module_args["downsample"] = ttnn_module_args.downsample[0]
+
+                logger.debug(f"pconfig4: {pconfig4.num_cores_nhw}")
+
         elif isinstance(model, torchvision.models.resnet.ResNet):
             ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
@@ -464,7 +554,7 @@ def test_resnet_50(device):
         return parameters
 
     reader_patterns_cache = {}
-    torch_input_tensor = torch.rand((8, 3, 224, 224), dtype=torch.float32)
+    torch_input_tensor = torch.rand((batch_size, 3, 224, 224), dtype=torch.float32)
     parameters = preprocess_model(
         initialize_model=lambda: torch_model,
         run_model=lambda model: model(torch_input_tensor),
@@ -472,6 +562,15 @@ def test_resnet_50(device):
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+
+    for module in range(1, 5):
+        parameters.layer3[module].conv1.conv.is_1d_systolic = False
+        parameters.layer3[module].conv2.conv.is_1d_systolic = False
+        parameters.layer3[module].conv3.conv.is_1d_systolic = False
+    for module in range(1, 3):
+        parameters.layer4[module].conv1.conv.is_1d_systolic = False
+        parameters.layer4[module].conv2.conv.is_1d_systolic = False
+        parameters.layer4[module].conv3.conv.is_1d_systolic = False
 
     torch_model.to(torch.bfloat16)
     torch_input_tensor_test = torch_input_tensor.to(torch.bfloat16)
@@ -481,49 +580,64 @@ def test_resnet_50(device):
         torch_input_tensor, *torch_model.conv1.padding, *torch_model.conv1.stride
     )
     input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
-    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+    layout = ttnn.TILE_LAYOUT if act_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT
+    input_tensor = ttnn.from_torch(input_tensor, dtype=act_dtype, layout=layout)
     output_tensor = parameters.conv1.copy_input_to_device(input_tensor)
+
     output_tensor = parameters.conv1(output_tensor)
     output_tensor = parameters.maxpool(output_tensor)
 
     """
     1st bottleneck layer. all the blocks implemented by ttnn
     """
-    output_tensor = ttnn.reshape(output_tensor, (1, 1, 56 * 56 * 8, 64))
-    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape(output_tensor, (1, 1, 56 * 56 * batch_size, 64))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
 
+    module = 1
     for bottleneck_block_parameters in list(parameters.layer1.values()):
         logger.debug(f"parameters 1st block {bottleneck_block_parameters}")
-        output_tensor = resnet_bottleneck_block(output_tensor, bottleneck_block_parameters)
+        output_tensor = resnet_bottleneck_block(output_tensor, bottleneck_block_parameters, layer=1, module=module)
+        module += 1
 
     """
     2nd bottleneck layer. 1st block implemented by torch rest by ttnn
     """
+    module = 1
     for bottleneck_block_parameters in list(parameters.layer2.values()):
         logger.debug(f"parameters 2nd block {bottleneck_block_parameters}")
-        output_tensor = resnet_bottleneck_block(output_tensor, bottleneck_block_parameters)
+        output_tensor = resnet_bottleneck_block(
+            output_tensor, bottleneck_block_parameters, layer=2, device=device, module=module
+        )
+        module += 1
 
     """
     3rd bottleneck layer. 1st block implemented by torch rest by ttnn
     """
+    module = 1
     for bottleneck_block_parameters in list(parameters.layer3.values()):
         logger.debug(f"parameters 3rd block {bottleneck_block_parameters}")
-        output_tensor = resnet_bottleneck_block(output_tensor, bottleneck_block_parameters)
+        output_tensor = resnet_bottleneck_block(
+            output_tensor, bottleneck_block_parameters, layer=3, module=module, device=device
+        )
+        module += 1
 
     """
     4th bottleneck layer. 1st block implemented by torch rest by ttnn
     """
-
+    module = 1
     for bottleneck_block_parameters in list(parameters.layer4.values()):
         logger.debug(f"parameters 4th block {bottleneck_block_parameters}")
-        output_tensor = resnet_bottleneck_block(output_tensor, bottleneck_block_parameters)
+        output_tensor = resnet_bottleneck_block(
+            output_tensor, bottleneck_block_parameters, layer=4, module=module, device=device
+        )
+        module += 1
 
     # """
     # the last layers of the resnet
     # """
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.reshape(output_tensor, (8, 1, 49, 2048))
+    output_tensor = ttnn.reshape(output_tensor, (batch_size, 1, 49, 2048))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.global_avg_pool2d(output_tensor)
     output_tensor = output_tensor @ parameters.fc.weight + parameters.fc.bias
@@ -532,5 +646,5 @@ def test_resnet_50(device):
     output verify
     """
     output_tensor_test = ttnn.to_torch(output_tensor)
-    output_tensor_test = torch.reshape(output_tensor_test, (8, 1000))
+    output_tensor_test = torch.reshape(output_tensor_test, (batch_size, 1000))
     assert_with_pcc(torch_output_tensor, output_tensor_test, pcc=0.98)

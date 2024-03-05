@@ -863,12 +863,12 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>
             ) {
                 if (input_tensor_a.memory_config().is_sharded()) {
+                    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
                     if (program_config.transpose_mcast) {
                         TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR);
                     } else {
                         TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
                     }
-                    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
                         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
