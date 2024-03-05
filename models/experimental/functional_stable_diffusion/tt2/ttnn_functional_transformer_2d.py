@@ -195,10 +195,6 @@ class transformer_2d_model:
         height = self.input_height
         width = self.input_width
 
-        if hidden_states.shape[0] == 2:
-            hidden_states = pre_process_input(self.device, hidden_states)
-        # sample in l1 interelaved and tiled and nhwc
-
         if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
         residual = hidden_states

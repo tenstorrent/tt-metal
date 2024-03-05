@@ -59,7 +59,6 @@ class geglu:
             bias=self.parameters.proj.proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            # core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         gate = ttnn.linear(
             hidden_states,
@@ -67,7 +66,6 @@ class geglu:
             bias=self.parameters.proj.gate_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            # core_grid=ttnn.CoreGrid(y=8, x=8),
             activation="gelu",
         )
         return ttnn.mul(proj, gate)

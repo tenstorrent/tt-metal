@@ -390,7 +390,6 @@ def attention_softmax(
             scaler,
             attention_mask,
             output_mem_config=memory_config,
-            program_config=program_config,
         )
     else:
         scaled_input_tensor = input_tensor * scaler
