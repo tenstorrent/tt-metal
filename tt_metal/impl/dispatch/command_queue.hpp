@@ -13,6 +13,7 @@
 
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "common/env_lib.hpp"
@@ -352,37 +353,6 @@ class EnqueueWaitForEventCommand : public Command {
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT; }
 
     constexpr bool has_side_effects() { return false; }
-};
-
-
-class Trace {
-   // TODO: delete the extra bloat not needed once implementation is complete
-   private:
-    struct TraceNode {
-        DeviceCommand command;
-        const vector<uint32_t> data;
-        EnqueueCommandType command_type;
-        uint32_t num_data_bytes;
-    };
-    bool trace_complete;
-    vector<TraceNode> history;
-    uint32_t num_data_bytes;
-    std::set<uint32_t> trace_instances;
-    std::unique_ptr<CommandQueue> cq;
-    static uint32_t next_trace_id();
-    void record(const TraceNode& trace_node);
-    void validate();
-
-    friend class CommandQueue;
-    friend class EnqueueProgramCommand;
-    friend CommandQueue& BeginTrace(Trace& trace);
-    friend void EndTrace(Trace& trace);
-    friend void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
-
-   public:
-    Trace();
-    CommandQueue& queue() const { return *cq; };
-    uint32_t instantiate(CommandQueue& cq);  // return a unique trace id
 };
 
 namespace detail {
