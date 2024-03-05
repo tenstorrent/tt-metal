@@ -81,9 +81,10 @@ class upsample2d:
     def __call__(self, input, in_channels, out_channels):
         tt_out = upsample_nearest2d(input, self.scale_factor)
         del input
+        tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
         if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
-            hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
-        tt_out = self.conv_out(tt_out)
+            tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
+        tt_out = self.conv(tt_out)
         # tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,
         #     self.conv,
