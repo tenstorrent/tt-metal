@@ -129,6 +129,7 @@ class cross_attention_upblock2d:
                     norm_type=norm_type,
                     upcast_attention=upcast_attention,
                     cross_attention_dim=cross_attention_dim,
+                    output_bfloat16=not add_upsample,
                 )
             else:
                 assert False, "We do not support Dual Transformer2DModel"

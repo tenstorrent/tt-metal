@@ -79,6 +79,8 @@ class upsample2d:
         self.output_width = self.conv.output_width
 
     def __call__(self, input, in_channels, out_channels):
+        if input.layout == ttnn.TILE_LAYOUT:
+            input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
         tt_out = upsample_nearest2d(input, self.scale_factor)
         del input
         tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
