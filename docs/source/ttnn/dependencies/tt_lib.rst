@@ -1012,6 +1012,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.lgamma_bw
 
+.. autofunction:: tt_lib.tensor.trunc_bw
+
+.. autofunction:: tt_lib.tensor.frac_bw
+
 Loss Functions
 ==============
 
