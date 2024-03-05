@@ -149,7 +149,7 @@ std::map<chip_id_t, Device *> CreateDevices(
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto &[device_id, dev] : devices) {
-        CloseDevice(dev);
+        dev->close();
     }
 }
 
