@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <thread>
 #include <future>
 #include <iostream>
@@ -147,6 +148,9 @@ private:
         int hart_index,
         bool new_data_this_iter
     );
+
+    // Stores the last value of setw, so that ARRAY print data can be printed with the same width.
+    char most_recent_setw = 0;
 };
 
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
@@ -193,6 +197,61 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
         }
     }
 } // PrintTileSlice
+
+// Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
+// Assumes the following order of bits in the input data:
+//   [sign bit][mantissa bits][exponent bits]
+float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+    int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
+    const int exp_mask = (1 << (exp_bit_count)) - 1;
+    int exp_bias = (1 << (exp_bit_count - 1)) - 1;
+    int exp_val = (data & exp_mask) - exp_bias;
+    const int mantissa_mask = ((1 << mantissa_bit_count) - 1) << exp_bit_count;
+    int mantissa_val = (data & mantissa_mask) >> exp_bit_count;
+    float result = 1.0 + ((float) mantissa_val / (float) (1 << mantissa_bit_count));
+    result = result * pow(2, exp_val);
+    if (sign) {
+        result = -result;
+    }
+    return result;
+}
+
+// Prints a typed uint32 array given the number of elements including the type.
+// If force_element_type is set to a valid type, it is assumed that the type is not included in the
+// data array, and the type is forced to be the given type.
+static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t* data, uint force_element_type = TypedU32_ARRAY_Format_INVALID ) {
+    uint32_t element_type = (force_element_type == TypedU32_ARRAY_Format_INVALID) ? data[raw_element_count-1] : force_element_type;
+    raw_element_count = (force_element_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
+
+    // stream << setwidth << "  ARRAY[len=" << std::dec << raw_element_count - 1 << ", type=" << element_type << "] = ";
+    for (uint32_t i = 0; i < raw_element_count - 1; i++) {
+        switch (element_type) {
+            case TypedU32_ARRAY_Format_Raw:
+                stream << std::hex << "0x" << data[i] << " ";
+                break;
+            case TypedU32_ARRAY_Format_TensixRegister_FP16_A:
+                stream << setw(setwidth) << make_float (5, 10, data[i] & 0xffff) << " ";
+                stream << setw(setwidth) << make_float (5, 10, (data[i] >> 16) & 0xffff) << " ";
+                break;
+            case TypedU32_ARRAY_Format_TensixRegister_FP16_B:
+                stream << setw(setwidth) << make_float (8, 7, data[i] & 0xffff) << " ";
+                stream << setw(setwidth) << make_float (8, 7, (data[i] >> 16) & 0xffff) << " ";
+                break;
+            case TypedU32_ARRAY_Format_TensixRegister_TF32:
+                stream << setw(setwidth) << make_float(8, 10, data[i]) << " ";
+                break;
+            case TypedU32_ARRAY_Format_TensixRegister_FP32:
+                stream << setw(setwidth) << *reinterpret_cast<float*>(&data[i]) << " "; // Treat data[i] as if it stores bits for a float
+                break;
+            case TypedU32_ARRAY_Format_TensixRegister_INT32:
+                stream << setw(setwidth) << data[i] << " ";
+                break;
+            default:
+                stream << "Unknown type " << element_type;
+                break;
+        }
+    }
+}
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
@@ -582,6 +641,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
+                    most_recent_setw = val;
                     TT_ASSERT(sz == 1);
                 break;
                 case DPrintSETPRECISION:
@@ -653,6 +713,12 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
                     TT_ASSERT(sz == 1);
+                break;
+                case DPrintU32_ARRAY:
+                    PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
+                break;
+                case DPrintTYPED_U32_ARRAY:
+                    PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr));
                 break;
                 case DPrintRAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
