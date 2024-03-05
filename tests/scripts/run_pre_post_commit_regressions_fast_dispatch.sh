@@ -24,11 +24,6 @@ export PYTHONPATH=$TT_METAL_HOME
 
 ./tests/scripts/run_python_api_unit_tests.sh
 
-# Reset as temporary workaround for https://github.com/tenstorrent-metal/tt-metal/issues/5972 to enable FD tunneling on R chip
-if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-  tt-smi -wr wait all
-fi
-
 env python tests/scripts/run_tt_metal.py --dispatch-mode fast
 env python tests/scripts/run_tt_eager.py --dispatch-mode fast
 # ./build/test/tt_metal/unit_tests_fast_dispatch
