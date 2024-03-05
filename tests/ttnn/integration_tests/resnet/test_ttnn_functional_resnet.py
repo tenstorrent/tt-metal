@@ -26,7 +26,7 @@ from models.experimental.functional_resnet.tt.ttnn_functional_resnet import resn
 
 
 def update_ttnn_module_args(ttnn_module_args):
-    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels <= 256
+    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
     ttnn_module_args["enable_auto_formatting"] = ttnn_module_args.kernel_size < (7, 7)
     ttnn_module_args["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
