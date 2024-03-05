@@ -112,28 +112,30 @@ class cross_attention:
 
         self.scales = {40: self.scale_40, 80: self.scale_80, 160: self.scale_160}
 
-        attention_mask_96 = torch.ones((1, 1, 1, 96)) * -1e9
+        attention_mask_96 = torch.ones((2, 1, 1, 96)) * -1e9
         attention_mask_96[:, :, :, :64] = 0
         attention_mask_96 = ttnn.from_torch(
             attention_mask_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        attention_mask_256 = torch.ones((1, 1, 1, 256)) * -1e9
-        attention_mask_256[:, :, :, :77] = 0
+        attention_mask_64 = torch.zeros((2, 1, 1, 64))
+        attention_mask_64 = ttnn.from_torch(
+            attention_mask_64, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        attention_mask_256 = torch.zeros((2, 1, 1, 256))
         attention_mask_256 = ttnn.from_torch(
             attention_mask_256, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        attention_mask_1024 = torch.ones((1, 1, 1, 1024)) * -1e9
-        attention_mask_1024[:, :, :, :77] = 0
+        attention_mask_1024 = torch.zeros((2, 1, 1, 1024))
         attention_mask_1024 = ttnn.from_torch(
             attention_mask_1024, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        attention_mask_4096 = torch.ones((1, 1, 1, 4096)) * -1e9
-        attention_mask_4096[:, :, :, :77] = 0
+        attention_mask_4096 = torch.zeros((2, 1, 1, 4096))
         attention_mask_4096 = ttnn.from_torch(
             attention_mask_4096, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
 
         self.attention_masks = {
+            64: attention_mask_64,
             96: attention_mask_96,
             256: attention_mask_256,
             1024: attention_mask_1024,
@@ -165,6 +167,40 @@ class cross_attention:
             del attention_mask
 
         attention_scores = ttnn.softmax(attention_scores, dim=-1)
+
+        return attention_scores
+
+    def get_attention_scores_opt(self, query, t_key, head_size, attention_mask=None, device=None):
+        print("Query shape", query.shape)
+        print("Key shape", t_key.shape)
+        if (
+            True
+        ):  # query.shape[-2] == 4096: #query.shape[-2] == 4096:#TODO: Hangs on Query shape ttnn.Shape([2, 8, 1024, 96]) and Key shape ttnn.Shape([2, 8, 96, 96])
+            attention_scores = ttnn.matmul(
+                query,
+                t_key,
+            )
+            ttnn.deallocate(query)
+            ttnn.deallocate(t_key)
+
+            attention_scores = ttnn.transformer.attention_softmax(
+                attention_scores, attention_mask=attention_mask, head_size=head_size
+            )
+        else:
+            attention_scores = ttnn.matmul(
+                query,
+                t_key,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(query)
+            ttnn.deallocate(t_key)
+
+            attention_scores = ttnn.transformer.attention_softmax(
+                attention_scores,
+                attention_mask=attention_mask,
+                head_size=head_size,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
         return attention_scores
 
@@ -205,6 +241,7 @@ class cross_attention:
                 num_heads=heads,
             )
             ttnn.deallocate(qkv_out)
+            attention_mask = self.attention_masks[key.shape[-1]]
         else:
             hidden_seq_len = hidden_states.shape.with_tile_padding()[-2]
             encoder_hidden_seq_len = encoder_hidden_states.shape.with_tile_padding()[-2]
@@ -250,13 +287,22 @@ class cross_attention:
             key = ttnn.reallocate(key)
             value = ttnn.reallocate(value)
 
-        attention_probs = self.get_attention_scores(
-            query, key, attention_mask, scale=self.scales[dim_head], device=self.device
+        attention_probs = self.get_attention_scores_opt(
+            query,
+            key,
+            dim_head,
+            attention_mask
+            # query, key, attention_mask, scale=self.scales[dim_head], device=self.device
         )
 
         if hidden_states_padded:
             attention_probs = attention_probs[:, :, :original_seq_len, :]
-        hidden_states = ttnn.matmul(attention_probs, value)
+        hidden_states = ttnn.matmul(
+            attention_probs,
+            value,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
 
         hidden_states = ttnn.transformer.concatenate_heads(
             hidden_states, memory_config=ttnn.get_memory_config(hidden_states)
@@ -269,7 +315,7 @@ class cross_attention:
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
             core_grid=hidden_states.device.core_grid,
-            memory_config=ttnn.get_memory_config(hidden_states),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
         )
 

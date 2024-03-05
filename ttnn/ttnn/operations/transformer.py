@@ -370,7 +370,6 @@ def attention_softmax(
             scaler,
             attention_mask.value,
             output_mem_config=memory_config,
-            program_config=program_config,
         )
         return ttnn.Tensor(output_tensor)
     else:
