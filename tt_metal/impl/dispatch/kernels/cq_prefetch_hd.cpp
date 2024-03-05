@@ -83,6 +83,11 @@ void read_from_pcie(volatile tt_l1_ptr uint16_t *& host_q_rd_ptr,
         fence = cmddat_q_base;
     }
 
+    // Wrap pcie/hugepage
+    if (pcie_read_ptr + size > pcie_size) {
+        pcie_read_ptr = pcie_base;
+    }
+
     uint64_t host_src_addr = get_noc_addr_helper(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y), pcie_read_ptr);
     noc_async_read(host_src_addr, fence, size);
     pending_read_size = size;
@@ -148,21 +153,14 @@ static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
             if (fence < cmd_ptr) {
                 cmd_ptr = fence;
             }
-            // XXXXX hack for now: prefetching the next command if this is a wrap command
-            // will cause the next command to be mis-located. there are multiple ways to fix this
-            // hacking here for now, revisit later
-            volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)fence;
+
             fence += pending_read_size;
             pending_read_size = 0;
-            if (cmd->base.cmd_id != CQ_PREFETCH_CMD_WRAP) {
-                // After the stall, re-check the host
-                fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
-                if (fetch_size != 0) {
-                    DPRINT << "read2: " << (uint32_t)host_q_rd_ptr << " " << fetch_size << ENDL();
-                    read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
-                }
-            } else {
-                DPRINT << "prefetcher wrap" << ENDL();
+            // After the stall, re-check the host
+            fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
+            if (fetch_size != 0) {
+                DPRINT << "read2: " << (uint32_t)host_q_rd_ptr << " " << fetch_size << ENDL();
+                read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
             }
         } else {
             // By here, host_q_ready must be false
@@ -273,16 +271,16 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
 // bandwidth will be low and we'll be DRAM bound (send to dispatcher is ~free).
 // With larger pages we'll get closer to a bandwidth match
 // The dispatch buffer is a ring buffer.
-uint32_t process_relay_dram_paged_cmd(uint32_t cmd_ptr) {
+uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
 
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-    uint32_t page_id = cmd->relay_dram_paged.start_page_id;
-    uint32_t base_addr = cmd->relay_dram_paged.base_addr;
-    uint32_t page_size = cmd->relay_dram_paged.page_size;
-    uint32_t pages = cmd->relay_dram_paged.pages;
+    uint32_t page_id = cmd->relay_paged.start_page;
+    uint32_t base_addr = cmd->relay_paged.base_addr;
+    uint32_t page_size = cmd->relay_paged.page_size;
+    uint32_t pages = cmd->relay_paged.pages;
     uint32_t read_length = pages * page_size;
     uint32_t write_length = pages * page_size;
 
@@ -400,9 +398,9 @@ void kernel_main() {
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
-        case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
+        case CQ_PREFETCH_CMD_RELAY_PAGED:
             DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
-            cmd_ptr = process_relay_dram_paged_cmd(cmd_ptr);
+            cmd_ptr = process_relay_paged_cmd(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
@@ -413,12 +411,6 @@ void kernel_main() {
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             DPRINT << "inline no flush" << ENDL();
             cmd_ptr = process_relay_inline_noflush_cmd(cmd_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_WRAP:
-            DPRINT << "dev wrap: " << ENDL();
-            pcie_read_ptr = pcie_base;
-            cmd_ptr += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
             break;
 
         case CQ_PREFETCH_CMD_STALL:

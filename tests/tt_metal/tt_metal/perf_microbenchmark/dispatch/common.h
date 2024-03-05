@@ -90,9 +90,8 @@ inline void gen_bare_dispatcher_write_cmd(vector<uint32_t>& cmds,
     CQDispatchCmd cmd;
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
-    cmd.base.flags = 0;
-    cmd.write.dst_noc_addr = worker_core.x | (worker_core.y << 6);
-    cmd.write.dst_addr = dst_addr + worker_data.size() * sizeof(uint32_t);
+    cmd.write.noc_xy_addr = worker_core.x | (worker_core.y << 6);
+    cmd.write.addr = dst_addr + worker_data.size() * sizeof(uint32_t);
     cmd.write.length = length;
 
     add_bare_dispatcher_cmd(cmds, cmd);
@@ -107,9 +106,8 @@ inline void gen_dispatcher_write_cmd(vector<uint32_t>& cmds,
     CQDispatchCmd cmd;
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
-    cmd.base.flags = 0;
-    cmd.write.dst_noc_addr = worker_core.x | (worker_core.y << 6);
-    cmd.write.dst_addr = dst_addr + worker_data.size() * sizeof(uint32_t);
+    cmd.write.noc_xy_addr = worker_core.x | (worker_core.y << 6);
+    cmd.write.addr = dst_addr + worker_data.size() * sizeof(uint32_t);
     cmd.write.length = length;
 
     add_dispatcher_cmd(cmds, worker_data, cmd, length);

@@ -117,12 +117,13 @@ void add_prefetcher_dram_cmd(vector<uint32_t>& cmds,
                              uint32_t pages) {
 
     CQPrefetchCmd cmd;
-    cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_DRAM_PAGED;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-    cmd.relay_dram_paged.start_page_id = start_page;
-    cmd.relay_dram_paged.base_addr = base_addr;
-    cmd.relay_dram_paged.page_size = page_size;
-    cmd.relay_dram_paged.pages = pages;
+    cmd.relay_paged.is_dram = true;
+    cmd.relay_paged.start_page = start_page;
+    cmd.relay_paged.base_addr = base_addr;
+    cmd.relay_paged.page_size = page_size;
+    cmd.relay_paged.pages = pages;
 
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
@@ -147,7 +148,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 
     uint32_t payload_length_bytes = payload.size() * sizeof(uint32_t);
     switch (id) {
-    case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
+    case CQ_PREFETCH_CMD_RELAY_PAGED:
         TT_ASSERT(false);
         break;
 
@@ -169,9 +170,6 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
             }
             cmd.debug.checksum = checksum;
         }
-        break;
-
-    case CQ_PREFETCH_CMD_WRAP:
         break;
 
     case CQ_PREFETCH_CMD_TERMINATE:
@@ -384,15 +382,6 @@ void write_prefetcher_cmds(uint32_t iterations,
     static uint32_t *host_mem_ptr;
     static uint32_t host_q_dev_ptr;
     static uint32_t host_q_dev_fence;
-    static vector<uint32_t>wrap_cmd;
-
-    if (wrap_cmd.size() == 0) {
-        CQPrefetchCmd cmd;
-        cmd.base.cmd_id = CQ_PREFETCH_CMD_WRAP;
-        // don't wrap the wrap command in a debug command since we didn't guarantee that there is
-        // wrap+debug space in the hugepage
-        add_bare_prefetcher_cmd(wrap_cmd, cmd, true);
-    }
 
     if (initialize_device_g) {
         host_mem_ptr = (uint32_t *)host_hugepage_base;
@@ -406,10 +395,9 @@ void write_prefetcher_cmds(uint32_t iterations,
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
             uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << HOST_Q_LOG_MINSIZE) / sizeof(uint32_t);
             uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
-            if ((void *)(host_mem_ptr + cmd_size_words + space_at_end_for_wrap_words) >= (void *)((uint8_t *)host_hugepage_base + hugepage_buffer_size_g)) {
+            if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_buffer_size_g)) {
+                // Wrap huge page
                 uint32_t offset = 0;
-                write_prefetcher_cmd(device, wrap_cmd, offset, CQ_PREFETCH_CMD_BARE_MIN_SIZE >> HOST_Q_LOG_MINSIZE,
-                                     host_mem_ptr, host_q_dev_ptr, host_q_dev_fence, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
                 host_mem_ptr = (uint32_t *)host_hugepage_base;
             }
             write_prefetcher_cmd(device, prefetch_cmds, cmd_ptr, cmd_sizes[j],

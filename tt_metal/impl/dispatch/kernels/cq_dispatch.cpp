@@ -127,8 +127,8 @@ FORCE_INLINE
 void dispatch_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
-    uint32_t dst_noc = cmd->write.dst_noc_addr;
-    uint32_t dst_addr = cmd->write.dst_addr;
+    uint32_t dst_noc = cmd->write.noc_xy_addr;
+    uint32_t dst_addr = cmd->write.addr;
     uint32_t length = cmd->write.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     DPRINT << "dispatch_write: " << length << ENDL();
