@@ -32,10 +32,12 @@ OP_KEYS = (
     "V_CACHE_SLICE_OUTPUT",
     "K_TRANSPOSED_OUTPUT",
     "PRE_SOFTMAX_MM_OUTPUT",
+    "ATTN_BATCHED_MM_OUTPUT",
     "PRE_SOFTMAX_SCALE_OUTPUT",
     "PRE_SOFTMAX_MASK_OUTPUT",
     "SOFTMAX_OUTPUT",
     "POST_SOFTMAX_MM_OUTPUT",
+    "SCORES_BATCHED_MM_OUTPUT",
     "CONCAT_HEADS_OUTPUT",
     "SELFOUT_MM_WEIGHTS",
     "SELFOUT_MM_OUTPUT",
@@ -240,13 +242,123 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
                         ttl.tensor.CoreRange(
                             # Volume must match # of attn heads
                             ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
+                            ttl.tensor.CoreCoord(7, 3),
                         ),
                     }
                 ),
                 [
                     32,  # Each core has 32 users
                     1,  # Dynamic - must set before using this config
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 padded heads
+                    128,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config[
+            "ATTN_BATCHED_MM_PROGCFG_LAMBDA"
+        ] = lambda n: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            in0_block_w=128 // 32,  # HEAD_DIM // TILE_DIM
+            out_subblock_h=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
+            per_core_N=n,  # SEQ_LEN // TILE_SIZE (dynamic)
+        )
+
+        model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    1,  # Dynamic (padded seqlen)
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config[
+            "SCORES_BATCHED_MM_PROGCFG_LAMBDA"
+        ] = lambda in0_block_w: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            in0_block_w=in0_block_w,  # SEQ_LEN // TILE_DIM (dynamic)
+            out_subblock_h=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
+            per_core_N=128 // 32,  # HEAD_DIM // TILE_SIZE (dynamic)
+        )
+
+        model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    128,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    128,  # head dim
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -696,8 +808,18 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 8:
-        model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
+        # model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        #     compute_with_storage_grid_size=(8, 1),
+        #     subblock_w=1,
+        #     block_h=1,
+        #     block_w=1,  # Dynamic
+        #     math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        #     im_data_format=ttl.tensor.DataType.BFLOAT16
+        # )
+        model_config[
+            "BATCHED_SOFTMAX_PROGCFG"
+        ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
