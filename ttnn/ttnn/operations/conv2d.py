@@ -46,6 +46,7 @@ class Conv2d:
         padded_input_channels: Optional[int] = None,
         compute_kernel_config: Union[ttnn.GrayskullComputeKernelConfig, ttnn.WormholeComputeKernelConfig] = None,
         use_dram_for_matmul: bool = False,
+        output_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     ):
         assert (
             padding_mode == "zeros"
@@ -116,6 +117,7 @@ class Conv2d:
             padded_input_channels=padded_input_channels,
             compute_kernel_config=compute_kernel_config,
             use_dram_for_matmul=use_dram_for_matmul,
+            output_layout=output_layout,
         )
         self.batch_size = batch_size
         self.input_height = input_height
