@@ -168,3 +168,29 @@ def weight_to_bfp8(weight):
     weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     weight = ttnn.to_device(weight, device, memory_config=memory_config)
     return weight
+
+
+def pad_group_norm_weight(weight, groups, channels):
+    device = weight.device
+    memory_config = ttnn.get_memory_config(weight)
+    weight = ttnn_to_torch(weight)
+    elems_per_group = channels // groups
+    padding_needed = round_up_to_tile_dim(elems_per_group) - elems_per_group
+    weight = weight.view(-1, elems_per_group)
+    weight = torch.nn.functional.pad(weight, (0, padding_needed))
+    weight = weight.flatten()
+    weight = weight[: channels + padding_needed * (channels // elems_per_group)]
+    weight = weight.reshape(1, 1, -1, 32)
+    weight = ttnn.from_torch(weight, ttnn.bfloat16)
+    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight = ttnn.to_device(weight, device, memory_config=memory_config)
+    return weight
+
+
+def permute_conv_parameters(weight, bias):
+    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight = ttnn.to_torch(weight)
+    weight = torch.permute(weight, (2, 3, 0, 1))
+    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias = ttnn.to_torch(bias)
+    return weight, bias

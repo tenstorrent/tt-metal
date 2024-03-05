@@ -8,12 +8,15 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
+import os
 import torch
 from typing import Optional, Dict
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input,
     post_process_output,
+    pad_group_norm_weight,
+    permute_conv_parameters,
 )
 import time
 
@@ -30,36 +33,6 @@ def ttnn_to_torch(input):
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input
-
-
-def permute_conv_weights(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.to_torch(weight)
-    weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
-    bias = ttnn.to_torch(bias)
-    return weight, bias
-
-
-def round_up_to_tile_dim(n):
-    return ((n + 31) // 32) * 32
-
-
-def pad_group_norm_weight(weight, groups, channels):
-    device = weight.device
-    memory_config = ttnn.get_memory_config(weight)
-    weight = ttnn_to_torch(weight)
-    elems_per_group = channels // groups
-    padding_needed = round_up_to_tile_dim(elems_per_group) - elems_per_group
-    weight = weight.view(-1, elems_per_group)
-    weight = torch.nn.functional.pad(weight, (0, padding_needed))
-    weight = weight.flatten()
-    weight = weight[: channels + padding_needed * (channels // elems_per_group)]
-    weight = weight.reshape(1, 1, -1, 32)
-    weight = ttnn.from_torch(weight, ttnn.bfloat16)
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.to_device(weight, device, memory_config=memory_config)
-    return weight
 
 
 config_override = {
@@ -103,8 +76,9 @@ class resnetBlock2D:
         self.device = device
         self.parameters = parameters
         self.conv1s = []
-        self.group_norm_on_device = group_norm_on_device
-        parameters.conv1.weight, parameters.conv1.bias = permute_conv_weights(
+        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
+        self.group_norm_on_device = not self.fallback_on_groupnorm
+        parameters.conv1.weight, parameters.conv1.bias = permute_conv_parameters(
             parameters.conv1.weight, parameters.conv1.bias
         )
         out_channels = parameters.conv1.bias.shape[-1]
@@ -161,7 +135,7 @@ class resnetBlock2D:
 
         use_in_shortcut = True if "conv_shortcut" in parameters else False
         if use_in_shortcut:
-            parameters.conv_shortcut.weight, parameters.conv_shortcut.bias = permute_conv_weights(
+            parameters.conv_shortcut.weight, parameters.conv_shortcut.bias = permute_conv_parameters(
                 parameters.conv_shortcut.weight, parameters.conv_shortcut.bias
             )
 
@@ -198,7 +172,7 @@ class resnetBlock2D:
 
         conv2_input_height = self.conv1s[0].output_height
         conv2_input_width = self.conv1s[0].output_width
-        parameters.conv2.weight, parameters.conv2.bias = permute_conv_weights(
+        parameters.conv2.weight, parameters.conv2.bias = permute_conv_parameters(
             parameters.conv2.weight, parameters.conv2.bias
         )
         parameters.conv2.bias = torch.reshape(parameters.conv2.bias, (1, 1, 1, out_channels))
@@ -252,10 +226,13 @@ class resnetBlock2D:
         in_channels = parameters.conv1.weight.shape[1]
 
         self.groups = 32
-        self.parameters.norm1.weight = pad_group_norm_weight(self.parameters.norm1.weight, self.groups, in_channels)
-        self.parameters.norm1.bias = pad_group_norm_weight(self.parameters.norm1.bias, self.groups, in_channels)
-        self.parameters.norm2.weight = pad_group_norm_weight(self.parameters.norm2.weight, self.groups, out_channels)
-        self.parameters.norm2.bias = pad_group_norm_weight(self.parameters.norm2.bias, self.groups, out_channels)
+        if not self.fallback_on_groupnorm:
+            self.parameters.norm1.weight = pad_group_norm_weight(self.parameters.norm1.weight, self.groups, in_channels)
+            self.parameters.norm1.bias = pad_group_norm_weight(self.parameters.norm1.bias, self.groups, in_channels)
+            self.parameters.norm2.weight = pad_group_norm_weight(
+                self.parameters.norm2.weight, self.groups, out_channels
+            )
+            self.parameters.norm2.bias = pad_group_norm_weight(self.parameters.norm2.bias, self.groups, out_channels)
 
     def __call__(
         self,
@@ -299,6 +276,7 @@ class resnetBlock2D:
                 hidden_states, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.get_memory_config(hidden_states)
             )
             # breakpoint()
+            print(f"Resnetblock GN1: memory_config={ttnn.get_memory_config(hidden_states)}")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -405,6 +383,7 @@ class resnetBlock2D:
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
             )
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
+            print(f"Resnetblock GN2: memory_config={ttnn.get_memory_config(hidden_states)}")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
