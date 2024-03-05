@@ -6,6 +6,7 @@ import tt_lib
 import torch.nn as nn
 import math
 import ttnn
+import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from models.utility_functions import (
@@ -32,6 +33,9 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input_new,
     post_process_output,
+    permute_conv_parameters,
+    pad_group_norm_weight,
+    pre_process_input,
 )
 
 fp32_accum = True
@@ -232,6 +236,15 @@ class UNet2DConditionModel:
             compute_kernel_config=conv_compute_kernel_config,
         )
 
+        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
+        self.norm_num_groups = 32
+        if not self.fallback_on_groupnorm:
+            parameters.conv_norm_out.weight = pad_group_norm_weight(
+                parameters.conv_norm_out.weight, self.norm_num_groups, self.conv_out.in_channels
+            )
+            parameters.conv_norm_out.bias = pad_group_norm_weight(
+                parameters.conv_norm_out.bias, self.norm_num_groups, self.conv_out.in_channels
+            )
         self.emb = TtTimestepEmbedding(parameters.time_embedding)
 
     def __call__(
@@ -508,18 +521,45 @@ class UNet2DConditionModel:
                 sample, self.up_blocks[-1].resnets[-1].conv2.conv.input_sharded_memory_config
             )
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.group_norm(
-            sample,
-            num_groups=norm_num_groups,
-            epsilon=norm_eps,
-            weight=self.parameters.conv_norm_out.weight,
-            bias=self.parameters.conv_norm_out.bias,
-            memory_config=self.conv_out.conv.input_sharded_memory_config,
-            core_grid=ttnn.CoreGrid(
-                self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[1],
-                self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[0],
-            ),
-        )
+        if self.fallback_on_groupnorm:
+            assert self.norm_num_groups == norm_num_groups
+            sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
+            sample = ttnn.reshape(
+                sample,
+                (
+                    self.conv_out.batch_size,
+                    self.conv_out.input_height,
+                    self.conv_out.input_width,
+                    self.conv_out.in_channels,
+                ),
+            )
+            sample = ttnn.permute(sample, (0, 3, 1, 2))
+            sample = ttnn.group_norm(
+                sample,
+                num_groups=norm_num_groups,
+                weight=self.parameters.norm.weight,
+                bias=self.parameters.norm.bias,
+                epsilon=norm_eps,
+            )
+
+            sample = pre_process_input(self.device, sample)
+
+        else:
+            print(f"Starting final group norm")
+            print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
+            sample = ttnn.group_norm(
+                sample,
+                num_groups=norm_num_groups,
+                epsilon=norm_eps,
+                weight=self.parameters.conv_norm_out.weight,
+                bias=self.parameters.conv_norm_out.bias,
+                memory_config=self.conv_out.conv.input_sharded_memory_config,
+                core_grid=ttnn.CoreGrid(
+                    self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[1],
+                    self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[0],
+                ),
+            )
+            print(f"Finished final group norm")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
         sample = ttnn.silu(sample)

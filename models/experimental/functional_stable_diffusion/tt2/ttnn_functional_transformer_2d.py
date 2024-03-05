@@ -5,6 +5,7 @@
 import ttnn
 import torch
 from typing import Optional, Dict
+import os
 
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
@@ -17,6 +18,8 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     post_process_output,
     pre_process_input_new,
     pad_encoder_hidden_states,
+    pad_group_norm_weight,
+    permute_conv_parameters,
 )
 
 
@@ -25,36 +28,6 @@ def ttnn_to_torch(input):
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input
-
-
-def round_up_to_tile_dim(n):
-    return ((n + 31) // 32) * 32
-
-
-def pad_group_norm_weight(weight, groups, channels):
-    device = weight.device
-    memory_config = ttnn.get_memory_config(weight)
-    weight = ttnn_to_torch(weight)
-    elems_per_group = channels // groups
-    padding_needed = round_up_to_tile_dim(elems_per_group) - elems_per_group
-    weight = weight.view(-1, elems_per_group)
-    weight = torch.nn.functional.pad(weight, (0, padding_needed))
-    weight = weight.flatten()
-    weight = weight[: channels + padding_needed * (channels // elems_per_group)]
-    weight = weight.reshape(1, 1, -1, 32)
-    weight = ttnn.from_torch(weight, ttnn.bfloat16)
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.to_device(weight, device, memory_config=memory_config)
-    return weight
-
-
-def permute_conv_parameters(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.to_torch(weight)
-    weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
-    bias = ttnn.to_torch(bias)
-    return weight, bias
 
 
 class transformer_2d_model:
@@ -73,8 +46,10 @@ class transformer_2d_model:
         out_channels = parameters.proj_in.weight.shape[0]
         in_channels = parameters.proj_in.weight.shape[1]
 
-        parameters.norm.weight = pad_group_norm_weight(parameters.norm.weight, 32, in_channels)
-        parameters.norm.bias = pad_group_norm_weight(parameters.norm.bias, 32, in_channels)
+        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
+        if not self.fallback_on_groupnorm:
+            parameters.norm.weight = pad_group_norm_weight(parameters.norm.weight, 32, in_channels)
+            parameters.norm.bias = pad_group_norm_weight(parameters.norm.bias, 32, in_channels)
 
         self.proj_in = ttnn.Conv2d(
             in_channels,
@@ -206,22 +181,45 @@ class transformer_2d_model:
             output_memory_config=self.proj_in.conv.input_sharded_memory_config,
             use_multicore=True,
         )
-        hidden_states = ttnn.group_norm(
-            input_tensor=hidden_states,
-            num_groups=norm_num_groups,
-            epsilon=eps,
-            weight=self.parameters.norm.weight,
-            bias=self.parameters.norm.bias,
-            memory_config=ttnn.get_memory_config(hidden_states),
-            core_grid=ttnn.CoreGrid(self.proj_in.conv.grid_size[1], self.proj_in.conv.grid_size[0]),
-        )
+
+        if self.fallback_on_groupnorm:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.reshape(
+                hidden_states,
+                (self.proj_in.batch_size, self.proj_in.input_height, self.proj_in.input_width, in_channels),
+            )
+            hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=norm_num_groups,
+                weight=self.parameters.norm.weight,
+                bias=self.parameters.norm.bias,
+                epsilon=eps,
+            )
+
+            hidden_states = pre_process_input(self.device, hidden_states)
+
+        else:
+            print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
+            print(f"Hidden states shape: {hidden_states.shape}")
+            hidden_states = ttnn.group_norm(
+                input_tensor=hidden_states,
+                num_groups=norm_num_groups,
+                epsilon=eps,
+                weight=self.parameters.norm.weight,
+                bias=self.parameters.norm.bias,
+                memory_config=ttnn.get_memory_config(hidden_states),
+                core_grid=ttnn.CoreGrid(self.proj_in.conv.grid_size[1], self.proj_in.conv.grid_size[0]),
+            )
         hidden_states = ttnn.to_memory_config(
             hidden_states, ttnn.L1_MEMORY_CONFIG
         )  # sharded to interleaved since we can't tilize block sharded
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # tilize
-        hidden_states = ttnn.to_memory_config(
-            hidden_states, self.proj_in.conv.input_sharded_memory_config
-        )  # interleaved to sharded
+        hidden_states = ttnn.to_layout(
+            hidden_states,
+            ttnn.TILE_LAYOUT,
+            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
+            use_multicore=True,
+        )  # tilize
 
         hidden_states = self.proj_in(hidden_states)
 
