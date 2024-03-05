@@ -16,13 +16,13 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_celu(input_shapes, device):
+def test_bw_silu(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
-    alpha = 1
-    pyt_y = torch.nn.functional.celu(in_data, alpha)
 
-    tt_output_tensor_on_device = tt_lib.tensor.celu_bw(grad_tensor, input_tensor, alpha)
+    pyt_y = torch.nn.functional.silu(in_data)
+
+    tt_output_tensor_on_device = tt_lib.tensor.silu_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
