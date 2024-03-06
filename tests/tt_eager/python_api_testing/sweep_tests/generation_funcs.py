@@ -11,6 +11,7 @@ import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
 from loguru import logger
 
+
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
     "float32": torch.float32,
@@ -41,6 +42,36 @@ supported_mem_configs = [
 # Wrapper around gen functions to include casting
 def gen_func_with_cast(gen_func, dtype, tilize_input=False):
     return lambda size: tilize(gen_func(size).to(dtype)) if tilize_input else gen_func(size).to(dtype)
+
+
+def gen_func_with_cast_tt(gen_func, dtype):
+    def tensor_to_dtype(x):
+        if dtype == ttl.tensor.DataType.BFLOAT16:
+            x = x.to(torch.bfloat16)
+
+        elif dtype == ttl.tensor.DataType.BFLOAT8_B:
+            tt_tensor = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT8_B)
+            x = tt_tensor.to_torch()
+
+        elif dtype == ttl.tensor.DataType.UINT32:
+            x = x.to(torch.int32)
+
+        else:
+            logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")
+
+        return x
+
+    def func(size):
+        x = gen_func(size)
+
+        if x.dtype == torch.cfloat:
+            x.real = tensor_to_dtype(x.real).to(torch.float)
+            x.imag = tensor_to_dtype(x.imag).to(torch.float)
+            return x
+
+        return tensor_to_dtype(x)
+
+    return func
 
 
 def gen_zeros(size):

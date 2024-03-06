@@ -12,7 +12,6 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: 0
           high: 6.283185307179586
@@ -37,7 +36,6 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: 0
           high: 6.283185307179586
