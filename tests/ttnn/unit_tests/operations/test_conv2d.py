@@ -59,6 +59,7 @@ def run_conv(
     padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
+    output_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -125,6 +126,7 @@ def run_conv(
         deallocate_activation=True,
         padded_input_channels=padded_input_channels,
         compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+        output_layout=output_layout,
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
@@ -915,9 +917,10 @@ def test_sd_conv_wh(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_unet_conv(
     use_program_cache,
     device,
@@ -938,7 +941,12 @@ def test_unet_conv(
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant,
+    output_layout,
 ):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
+        pytest.skip("OOM")
     run_conv(
         device,
         math_fidelity,
@@ -959,4 +967,5 @@ def test_unet_conv(
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         padded_input_channels=16 if input_channels == 3 else None,
+        output_layout=output_layout,
     )
