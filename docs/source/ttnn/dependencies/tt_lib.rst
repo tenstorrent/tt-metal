@@ -1010,6 +1010,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.square_bw
 
+.. autofunction:: tt_lib.tensor.lgamma_bw
+
 Loss Functions
 ==============
 
