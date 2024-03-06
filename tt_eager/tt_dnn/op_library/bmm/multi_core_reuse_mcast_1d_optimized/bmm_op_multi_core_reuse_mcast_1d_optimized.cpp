@@ -34,7 +34,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
-    bool in0_is_sharded, bool output_is_sharded
+    bool in0_is_sharded, bool output_is_sharded,
+    bool untilize_out
 ) {
 
     tt_metal::Program program{};
@@ -311,7 +312,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         out_subblock_w, // out_subblock_w
         out_subblock_num_tiles, // out_subblock_num_tiles
         B, // batch
-        out_block_tiles // out_block_num_tiles
+        out_block_tiles, // out_block_num_tiles
+
+        untilize_out // untilize_out
     };
 
     // Create compute kernel
@@ -605,7 +608,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
-    bool in0_is_sharded, bool output_is_sharded
+    bool in0_is_sharded, bool output_is_sharded,
+    bool untilize_out
 ) {
 
     tt_metal::Program program{};
@@ -878,7 +882,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         out_subblock_w, // out_subblock_w
         out_subblock_num_tiles, // out_subblock_num_tiles
         B, // batch
-        out_block_tiles // out_block_num_tiles
+        out_block_tiles, // out_block_num_tiles
+
+        untilize_out // untilize_out
     };
 
     // Create compute kernel
@@ -1148,7 +1154,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool untilize_out) {
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -1274,7 +1280,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
-            a.memory_config().is_sharded(), output.memory_config().is_sharded()
+            a.memory_config().is_sharded(), output.memory_config().is_sharded(),
+            untilize_out
         );
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
@@ -1289,13 +1296,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
-            a.memory_config().is_sharded(), output.memory_config().is_sharded()
+            a.memory_config().is_sharded(), output.memory_config().is_sharded(),
+            untilize_out
         );
     }
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
-    return matmul_multi_core_reuse_mcast_1d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fused_activation, mcast_in0);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool untilize_out) {
+    return matmul_multi_core_reuse_mcast_1d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fused_activation, mcast_in0, untilize_out);
 }
 
 }  // namespace tt_metal

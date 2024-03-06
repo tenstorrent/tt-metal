@@ -101,7 +101,7 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     // TODO: ...
     TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
-        TT_FATAL(this->output_dtype == DataType::BFLOAT16);
+        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
     }
     if (this->output_mem_config.is_sharded()) {
 //        TT_FATAL(not has_bias or !untilize_out, "Optimized conv only supports tiled out if bias isn't present");
