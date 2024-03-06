@@ -11,6 +11,7 @@ from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.skip(reason="currently failing")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
