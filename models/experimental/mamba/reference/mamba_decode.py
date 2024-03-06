@@ -16,75 +16,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
+from typing import Optional
+
 from transformers import AutoTokenizer
-import torch.nn.functional as F
+
 import tt_lib
 
 
 def generate_through_selective_scan(
-    model, tokenizer, prompt: str, n_tokens_to_gen: int = 30, sample: bool = False, top_k: int = None
-):
-    model.eval()
-
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-
-    for token_n in range(n_tokens_to_gen):
-        with torch.no_grad():
-            indices_to_input = input_ids
-            next_token_logits = model(indices_to_input)[:, -1]
-
-        probs = F.softmax(next_token_logits, dim=-1)
-        (batch, vocab_size) = probs.shape
-
-        if top_k is not None:
-            (values, indices) = torch.topk(probs, k=top_k)
-            probs[probs < values[:, -1, None]] = 0
-            probs = probs / probs.sum(axis=1, keepdims=True)
-
-        if sample:
-            next_indices = torch.multinomial(probs, num_samples=1)
-        else:
-            next_indices = torch.argmax(probs, dim=-1)[:, None]
-
-        input_ids = torch.cat([input_ids, next_indices], dim=1)
-
-    output_completions = [tokenizer.decode(output.tolist()) for output in input_ids][0]
-
-    return output_completions
-
-
-def generate_through_decode(
-    model, tokenizer, prompt: str, n_tokens_to_gen: int = 30, sample: bool = False, top_k: int = None
+    model, tokenizer, prompt: str, n_tokens_to_gen: int = 30, sample: bool = False, top_k: Optional[int] = None
 ):
     model.eval()
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-    prompt_token_counts = len(input_ids[0])
-    promt_plus_generated_n_tokens = prompt_token_counts + n_tokens_to_gen - 1
-    for token_n in range(promt_plus_generated_n_tokens):
-        with torch.no_grad():
-            indices_to_input = input_ids
-            next_token_logits = model(indices_to_input[:, token_n].unsqueeze(1))
+    output = model.generate(input_ids, n_tokens_to_gen, sample=sample, top_k=top_k)
+    return [tokenizer.decode(out.tolist()) for out in output][0]
 
-        probs = F.softmax(next_token_logits, dim=-1)
-        (batch, _, vocab_size) = probs.shape
 
-        if top_k is not None:
-            (values, indices) = torch.topk(probs, k=top_k)
-            probs[probs < values[:, -1, None]] = 0
-            probs = probs / probs.sum(axis=-1, keepdims=True)
-
-        if sample:
-            next_indices = torch.multinomial(probs, num_samples=1)
-        else:
-            next_indices = torch.argmax(probs, dim=-1)[:, None]
-        next_indices = next_indices.squeeze(1)
-        if token_n >= prompt_token_counts - 1:
-            input_ids = torch.cat([input_ids, next_indices], dim=1)
-
-    output_completions = [tokenizer.decode(output.tolist()) for output in input_ids][0]
-
-    return output_completions
+def generate_through_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int = 51):
+    model.eval()
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    output = model.generate(input_ids, n_tokens_to_gen)
+    return tokenizer.batch_decode(output)[0]
 
 
 def test_decode():

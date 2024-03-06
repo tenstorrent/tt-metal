@@ -38,6 +38,7 @@ Glossary:
     dt_rank: rank of Δ                  (See [1] Section 3.6 "Parameterization of ∆")
 
 """
+
 from __future__ import annotations
 import json
 import torch
@@ -94,6 +95,20 @@ class MambaDecode(nn.Module):
         logits = self.lm_head(x)
 
         return logits
+
+    def generate(self, inputs: torch.Tensor, num_tokens_to_generate: int) -> torch.Tensor:
+        print(inputs.shape, num_tokens_to_generate)
+        num_tokens_in_full_sequence = num_tokens_to_generate + inputs.shape[1]
+        for idx in range(num_tokens_in_full_sequence - 1):
+            logits = self.forward(inputs[:, idx].unsqueeze(1))
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+            next_token = torch.argmax(probs, dim=-1)
+            if idx >= inputs.shape[1] - 1:
+                inputs = torch.cat([inputs, next_token], dim=1)
+        assert (
+            inputs.shape[1] == num_tokens_in_full_sequence
+        ), f"Expected {num_tokens_in_full_sequence} tokens in the returned result"
+        return inputs
 
     @staticmethod
     def from_pretrained(pretrained_model_name: MambaPretrainedModelName, batch_size: int = 1):
