@@ -90,7 +90,7 @@ CoreCoord get_core_range(
 
 tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt);
+tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
 tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
     uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size);
@@ -143,7 +143,8 @@ tt_metal::Program create_program_single_core (
     std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
     bool matmul_block,
     bool packer_l1,
-    uint32_t num_blocks
+    uint32_t num_blocks,
+    uint32_t interm_cb_dtype
 );
 
 tt_metal::Program create_program(
@@ -242,6 +243,8 @@ int main(int argc, char** argv) {
         bool matmul_block = 0;
         bool packer_l1 = 0;
         bool fp32 = 0;
+        uint32_t interm_cb_dtype = 0;
+        uint32_t subblock_choice = 0;
         bool single_core = 0;
         bool fast_dispatch_mode = false;
         try {
@@ -253,6 +256,8 @@ int main(int argc, char** argv) {
             std::tie(matmul_block, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--block", 0);
             std::tie(packer_l1, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--packer", 0);
             std::tie(fp32, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--fp32", 0);
+            std::tie(interm_cb_dtype, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--interm-cb", 1);
+            std::tie(subblock_choice, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--subblock-index", 0);
             std::tie(single_core, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--one-core", 0);
             std::tie(num_blocks, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-blocks", 1);
             std::tie(num_tests, input_args) =
@@ -411,7 +416,7 @@ int main(int argc, char** argv) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
             fp32_dest_acc_en = fp32 == 0 ? false : true;
         }
-        auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt);
+        auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
             get_all_buffers_addresses(per_core_Mt, per_core_Nt, in0_block_w, single_tile_size);
 
@@ -454,7 +459,8 @@ int main(int argc, char** argv) {
                 output_buffer,
                 matmul_block,
                 packer_l1,
-                num_blocks);
+                num_blocks,
+                interm_cb_dtype);
         } else {
             program = create_program(
                 device,
@@ -781,17 +787,24 @@ tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     return {math_fidelity, fp32_dest_acc_en};
 }
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt) {
+tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice = 0) {
     constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
         {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},
         {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
     }};
 
+    uint32_t index = 0;
     for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         auto subblock_h = std::get<0>(subblock_hw);
         auto subblock_w = std::get<1>(subblock_hw);
-        if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0)
-            return {subblock_h, subblock_w};
+        if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
+            if (index >= choice) {
+                return {subblock_h, subblock_w};
+            } else {
+                index++;
+            }
+        }
+
     }
 
     return {1, 1};
@@ -836,7 +849,8 @@ tt_metal::Program create_program_single_core (
     std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
     bool matmul_block,
     bool packer_l1,
-    uint32_t num_blocks
+    uint32_t num_blocks,
+    uint32_t interm_cb_dtype
 ) {
     tt_metal::Program program{};
 
@@ -932,10 +946,17 @@ tt_metal::Program create_program_single_core (
     uint32_t interm0_cb_index = 24;
 
     if (fp32_dest_acc_en) {
-        tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(out_CB_tiles * 4096, {{interm0_cb_index, tt::DataFormat::Float32}})
-                .set_page_size(interm0_cb_index, 4096);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        if (interm_cb_dtype == 1) {
+            tt_metal::CircularBufferConfig cb_interm_config =
+                tt_metal::CircularBufferConfig(out_CB_tiles * 4096, {{interm0_cb_index, tt::DataFormat::Float32}})
+                    .set_page_size(interm0_cb_index, 4096);
+            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        } else  {
+            tt_metal::CircularBufferConfig cb_interm_config =
+                tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
+                    .set_page_size(interm0_cb_index, 2048);
+            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        }
 
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
