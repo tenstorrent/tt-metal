@@ -62,15 +62,11 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_c_padded = ceil_multiple_of(out_c, (out_c <= 16) ? 16 : constants::TILE_WIDTH);
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
     uint32_t out_hw = out_h * out_w;
-    uint32_t out_hw_padded = (uint32_t) ceil_multiple_of(out_hw, constants::TILE_HEIGHT);
 
     // {N, 1, H * W, C}
     const auto out_dims = std::vector<uint32_t>({ in_n_, 1, out_hw, out_c });
-    const auto padding = Padding({{0, 0},
-                                  {0, 0},
-                                  {0, out_hw_padded - out_hw},
-                                  {0, out_c_padded - out_c}},
-                                 Padding::PadValue::NegativeInfinity);
+    const auto padding =
+        Padding({{0, 0}, {0, 0}, {0, 0}, {0, out_c_padded - out_c}}, Padding::PadValue::NegativeInfinity);
 
     auto out_shape = Shape{out_dims, padding};
 
