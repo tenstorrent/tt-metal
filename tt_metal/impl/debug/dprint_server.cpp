@@ -149,7 +149,7 @@ private:
         bool new_data_this_iter
     );
 
-    // Stores the last value of setw, so that ARRAY print data can be printed with the same width.
+    // Stores the last value of setw, so that array elements can reuse the width.
     char most_recent_setw = 0;
 };
 
