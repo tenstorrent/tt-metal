@@ -270,6 +270,7 @@ int main(int argc, char** argv) {
 
         if (not single_core) {
             TT_ASSERT(dtype == 0, "multi core test only supports bfp8_b");
+            TT_ASSERT(packer_l1 == 0, "multi core test does not support packer_l1 arg");
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -1003,8 +1004,9 @@ tt_metal::Program create_program_single_core (
     bool math_approx_mode = false;
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
-        matmul_block ? "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" :
-                        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation.cpp",
+        matmul_block ?
+        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" :
+        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
