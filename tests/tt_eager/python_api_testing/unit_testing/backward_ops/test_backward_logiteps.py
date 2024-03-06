@@ -19,11 +19,11 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 def test_bw_logit(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
-    tt_output_tensor_on_device = tt_lib.tensor.logit_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = tt_lib.tensor.logiteps_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
-    pyt_y = torch.logit(in_data)
+    pyt_y = torch.logit(in_data, eps=1e-6)
 
     pyt_y.backward(gradient=grad_data)
 
