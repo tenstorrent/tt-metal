@@ -26,7 +26,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
-
+#include "tt_dnn/op_library/work_split.hpp"
 
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
@@ -241,6 +241,7 @@ int main(int argc, char** argv) {
         uint32_t num_blocks = 1;
         bool matmul_block = 0;
         bool packer_l1 = 0;
+        bool fp32 = 0;
         bool single_core = 0;
         bool fast_dispatch_mode = false;
         try {
@@ -251,6 +252,7 @@ int main(int argc, char** argv) {
             std::tie(fidel, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--fidel", 0);
             std::tie(matmul_block, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--block", 0);
             std::tie(packer_l1, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--packer", 0);
+            std::tie(fp32, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--fp32", 0);
             std::tie(single_core, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--one-core", 0);
             std::tie(num_blocks, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-blocks", 1);
             std::tie(num_tests, input_args) =
@@ -406,10 +408,23 @@ int main(int argc, char** argv) {
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+            fp32_dest_acc_en = fp32 == 0 ? false : true;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
             get_all_buffers_addresses(per_core_Mt, per_core_Nt, in0_block_w, single_tile_size);
+
+        if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w > 4)) {
+            if (out_subblock_w >= 4) {
+                out_subblock_h = 1;
+                out_subblock_w = find_max_block_size(out_subblock_w, 4);
+            } else {
+                while (out_subblock_h * out_subblock_w > 4) {
+                    uint32_t div = find_max_divisor(out_subblock_h, out_subblock_h-1);
+                    out_subblock_h = find_max_block_size(out_subblock_h, div);
+                }
+            }
+        }
 
         log_debug(LogTest, "grid_size.x {}", grid_size.x);
         log_debug(LogTest, "grid_size.y {}", grid_size.y);
@@ -535,6 +550,7 @@ int main(int argc, char** argv) {
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
+                tt_metal::DumpDeviceProfileResults(device, program);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
@@ -826,6 +842,7 @@ tt_metal::Program create_program_single_core (
     log_debug("cb_data_format: {} ", cb_data_format);
     log_debug("math_fidelity: {} ", math_fidelity);
     log_debug("single_tile_size: {} ", single_tile_size);
+    log_debug("fp32_dest_acc_en: {} ", fp32_dest_acc_en);
 
     uint32_t num_buffer = 1;  // No double buffer
     uint32_t in0_block_tiles = Mt * Kt;
@@ -913,7 +930,19 @@ tt_metal::Program create_program_single_core (
     uint32_t out_cb_index = 16;  // output operands start at index 16
     uint32_t interm0_cb_index = 24;
 
-    if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
+    if (fp32_dest_acc_en) {
+        tt_metal::CircularBufferConfig cb_interm_config =
+            tt_metal::CircularBufferConfig(out_CB_tiles * 4096, {{interm0_cb_index, tt::DataFormat::Float32}})
+                .set_page_size(interm0_cb_index, 4096);
+        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+
+        tt_metal::CircularBufferConfig cb_out_config =
+            tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
+                .set_page_size(out_cb_index, single_tile_size)
+                .set_globally_allocated_address(*out_cb_addr);
+        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    }
+    else if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(interm0_cb_index, 2048);
@@ -934,6 +963,12 @@ tt_metal::Program create_program_single_core (
                 .set_globally_allocated_address(*out_cb_addr);
         auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
+
+    log_debug("in0_CB_size: {}", in0_CB_tiles * single_tile_size);
+    log_debug("in1_CB_size: {}", in1_CB_tiles * single_tile_size);
+    log_debug("interm_CB_size: {}", out_CB_tiles * 4096);
+    log_debug("out_CB_size: {}", out_CB_size);
+    log_debug("total_CB_size: {}", in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 
     // Create reader and writer kernels per core
     auto mm_in0_reader_kernel_id = tt_metal::CreateKernel(
@@ -961,6 +996,9 @@ tt_metal::Program create_program_single_core (
     std::map<string, string> mm_kernel_defines;
     if (packer_l1) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     bool math_approx_mode = false;
     auto mm_kernel_id = tt_metal::CreateKernel(
