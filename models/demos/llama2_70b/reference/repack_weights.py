@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Llama2-70B weights are saved as 8 sharded checkpoints. Loading weights for a
 single layer is slow since we load all 80 layers into memory to construct the
@@ -23,7 +27,7 @@ def chunk_key(key, chunk_size):
     Return the chunk number that a key should go into
     """
     chunk_id = layer_num(key) // chunk_size
-    print(f'Key: {key} -> chunk_id: {chunk_id}')
+    print(f"Key: {key} -> chunk_id: {chunk_id}")
     return chunk_id
 
 
