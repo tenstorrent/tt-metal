@@ -12,7 +12,6 @@ test-list:
         args:
           low: 0
           high: 0.99
-        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_logit_args

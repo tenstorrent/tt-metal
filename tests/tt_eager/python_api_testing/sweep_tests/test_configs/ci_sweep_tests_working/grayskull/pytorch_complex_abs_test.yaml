@@ -15,13 +15,12 @@ test-list:
         args:
           low: -100
           high: 100
-        dtype: cfloat
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: complex_abs_sweep.csv
@@ -37,7 +36,6 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand_complex
-        dtype: cfloat
         args:
           low: -100
           high: 100

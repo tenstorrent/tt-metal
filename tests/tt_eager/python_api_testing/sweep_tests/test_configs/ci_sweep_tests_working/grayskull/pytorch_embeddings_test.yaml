@@ -10,7 +10,6 @@ test-list:
         method: embeddings
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: 0
           high: 512

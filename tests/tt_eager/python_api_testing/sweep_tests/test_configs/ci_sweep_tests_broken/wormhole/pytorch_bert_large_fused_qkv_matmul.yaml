@@ -11,7 +11,6 @@ test-list:
         method: bert_qkv
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: -100
           high: 100

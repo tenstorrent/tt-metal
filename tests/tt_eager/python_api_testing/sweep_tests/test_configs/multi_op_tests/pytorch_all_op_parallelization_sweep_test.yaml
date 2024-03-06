@@ -10,7 +10,6 @@ test-list:
       num-samples: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -382,7 +381,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand_along_dim
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -398,7 +396,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand_along_dim
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -414,7 +411,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -481,7 +477,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -496,7 +491,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -511,7 +505,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100
@@ -526,7 +519,6 @@ test-list:
       num-shapes: 1
     datagen:
       function: gen_rand
-      dtype: bfloat16
       args:
         low: -100
         high: 100

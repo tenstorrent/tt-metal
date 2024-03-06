@@ -13,13 +13,11 @@ test-list:
       datagen:
         - input_1:
           function: gen_rand
-          dtype: bfloat16
           args:
             low: -100
             high: 100
         - input_2:
           function: gen_rand
-          dtype: bfloat16
           args:
             low: -10
             high: 10
@@ -51,13 +49,11 @@ test-list:
       datagen:
         - input_1:
           function: gen_rand
-          dtype: bfloat16
           args:
             low: -100
             high: 100
         - input_2:
           function: gen_rand
-          dtype: bfloat16
           args:
             low: -10
             high: 10

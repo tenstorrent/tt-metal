@@ -12,7 +12,6 @@ test-list:
       args:
         low: 0
         high: 100
-      dtype: int32
     comparison:
       function: comp_equal
     args-gen: gen_logical_immediate_args
