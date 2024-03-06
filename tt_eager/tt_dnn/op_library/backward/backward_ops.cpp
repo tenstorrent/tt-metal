@@ -1489,6 +1489,19 @@ std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, const Memo
 {
     return operation::decorate_as_composite(__func__, _logit_bw)(grad, input, output_mem_config);
 }
+
+
+// bw(log2(in)) = grad/(in * 0.69314718055994530942)
+std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, recip(mul_unary(input, M_LN2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+std::vector<Tensor> log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _log2_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
