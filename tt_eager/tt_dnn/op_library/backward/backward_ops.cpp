@@ -1316,6 +1316,20 @@ std::vector<Tensor> binary_gt_bw(const Tensor& grad, const Tensor& input, const 
 {
     return operation::decorate_as_composite(__func__, _binary_gt_bw)(grad, input, output_mem_config);
 }
+
+// square
+// result:  2 * input * grad_data
+std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mul(mul_unary(grad, 2.0f, output_mem_config), input, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> square_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _square_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
