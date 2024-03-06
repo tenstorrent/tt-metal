@@ -1028,6 +1028,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.logit_bw
 
+.. autofunction:: tt_lib.tensor.logiteps_bw
+
 Loss Functions
 ==============
 
