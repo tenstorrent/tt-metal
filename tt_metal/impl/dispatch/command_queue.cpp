@@ -398,6 +398,13 @@ void EnqueueWriteBufferCommand::process() {
         this->manager.cq_write(
             (char*)this->src + unpadded_src_offset, data_size_in_bytes, system_memory_temporary_storage_address);
     }
+
+    log_trace(
+        LogDispatch,
+        "EnqueueWriteBufferCommand processed, src_offset = {}, cmd_size = {}, data_size = {}",
+        unpadded_src_offset,
+        cmd_size,
+        data_size_in_bytes);
     this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
 
@@ -591,17 +598,21 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 }
 
 void EnqueueProgramCommand::process() {
+    const bool tracing = this->trace.has_value();
+
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
+    // TODO_TMZ: modify system_memory_temporary_storage_address for trace buffer?
     const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
 
     uint32_t data_size_in_bytes = cmd.get_issue_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
-    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
-    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    if (not tracing) {
+        this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
+        this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    }
 
-    bool tracing = this->trace.has_value() and not this->trace->get().trace_complete;
     vector<uint32_t> trace_host_data;
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
@@ -609,19 +620,18 @@ void EnqueueProgramCommand::process() {
         std::shared_ptr<Kernel> kernel = detail::GetKernel(program, kernel_id);
         for (const auto& c : kernel->cores_with_runtime_args()) {
             const auto& core_runtime_args = kernel->runtime_args(c);
-            this->manager.cq_write(
-                core_runtime_args.data(),
-                core_runtime_args.size() * sizeof(uint32_t),
-                system_memory_temporary_storage_address);
-
-            system_memory_temporary_storage_address = align(
-                system_memory_temporary_storage_address + core_runtime_args.size() * sizeof(uint32_t),
-                padding_alignment);
-
             if (tracing) {
                 trace_host_data.insert(trace_host_data.end(), core_runtime_args.begin(), core_runtime_args.end());
                 trace_host_data.resize(align(trace_host_data.size(), padding_alignment / sizeof(uint32_t)));
+            } else {
+                this->manager.cq_write(
+                    core_runtime_args.data(),
+                    core_runtime_args.size() * sizeof(uint32_t),
+                    system_memory_temporary_storage_address);
             }
+            system_memory_temporary_storage_address = align(
+                system_memory_temporary_storage_address + core_runtime_args.size() * sizeof(uint32_t),
+                padding_alignment);
         }
     }
 
@@ -637,12 +647,13 @@ void EnqueueProgramCommand::process() {
                 cb->size() >> 4,
                 cb->num_pages(buffer_index),
                 cb->size() / cb->num_pages(buffer_index) >> 4};
-            this->manager.cq_write(cb_data.data(), padding_alignment, system_memory_temporary_storage_address);
-            system_memory_temporary_storage_address += padding_alignment;
             if (tracing) {
                 // No need to resize since cb_data size is guaranteed to be 16 bytes
                 trace_host_data.insert(trace_host_data.end(), cb_data.begin(), cb_data.end());
+            } else {
+                this->manager.cq_write(cb_data.data(), padding_alignment, system_memory_temporary_storage_address);
             }
+            system_memory_temporary_storage_address += padding_alignment;
         }
     }
 
@@ -656,6 +667,14 @@ void EnqueueProgramCommand::process() {
         Trace& trace_ = trace.value();
         trace_.record(trace_node);
     }
+
+    tt::log_debug(
+        tt::LogDispatch,
+        "EnqueueProgramCommand processed, sysmem storage = {}, cmd_size = {}, data_size = {}, trace_size = {}",
+        system_memory_temporary_storage_address - start_addr,
+        cmd_size,
+        cmd.get_issue_data_size(),
+        trace_host_data.size() * sizeof(uint32_t));
 }
 
 EnqueueWrapCommand::EnqueueWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager) :
@@ -1029,7 +1048,6 @@ void HWCommandQueue::enqueue_program(
         stall = false;
     }
 
-    tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
     ProgramDeviceMap& program_device_map = program.program_device_map;
     uint32_t host_data_num_pages = program_device_map.runtime_arg_page_transfers.size() + program_device_map.cb_config_page_transfers.size();
     uint32_t host_data_and_device_command_size =
@@ -1442,16 +1460,17 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
     });
 }
 
-void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking) {
+void EnqueueProgramImpl(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program,
+    std::optional<std::reference_wrapper<Trace>> trace,
+    bool blocking) {
+
     ZoneScoped;
-    std::visit ( [&cq, blocking](auto&& program) {
+    std::visit ( [&cq, trace, blocking](auto&& program) {
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
         Device * device = cq.device();
-        std::optional<std::reference_wrapper<Trace>> trace;
-        if (cq.trace()) {
-            trace = std::optional<std::reference_wrapper<Trace>>(*cq.trace());
-        }
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
@@ -1554,10 +1573,7 @@ uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT(cq.trace(), "A trace has not been instantiated on this command queue yet!");
-    if (cq.trace()->trace_instances.count(trace_id) == 0) {
-        TT_THROW("Trace instance " + std::to_string(trace_id) + " does not exist");
-    }
+    TT_FATAL(Trace::has_instance(trace_id), "Trace instance " + std::to_string(trace_id) + " must exist on device");
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_TRACE,
         .blocking = blocking
@@ -1754,7 +1770,7 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         case EnqueueCommandType::ENQUEUE_PROGRAM:
             TT_ASSERT(command.program.has_value(), "Must provide a program!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueProgramImpl(*this, command.program.value(), command.blocking.value());
+            EnqueueProgramImpl(*this, command.program.value(), command.trace, command.blocking.value());
             break;
         case EnqueueCommandType::ENQUEUE_TRACE:
             EnqueueTraceImpl(*this);

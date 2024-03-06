@@ -493,7 +493,7 @@ class HWCommandQueue {
     void completion_wrap(uint32_t event);
     void launch(launch_msg_t& msg);
     friend void EnqueueTraceImpl(CommandQueue& cq);
-    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
+    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, HostDataType src, bool blocking);
     friend void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
@@ -518,6 +518,7 @@ struct CommandInterface {
     std::optional<HostDataType> src;
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
+    std::optional<std::reference_wrapper<Trace>> trace;
 };
 
 class CommandQueue {
