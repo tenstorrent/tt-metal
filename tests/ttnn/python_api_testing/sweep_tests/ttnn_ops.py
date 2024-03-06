@@ -26,6 +26,12 @@ def dtype_to_ttnn(dtype):
     elif dtype == tt_lib.tensor.DataType.BFLOAT8_B:
         return ttnn.bfloat8_b
 
+    elif dtype == tt_lib.tensor.DataType.UINT32:
+        return ttnn.uint32
+
+    elif dtype == tt_lib.tensor.DataType.UINT16:
+        return ttnn.uint16
+
     else:
         assert False, "Unknown dtype passed"
 
@@ -794,12 +800,11 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     x = x.int()
     x = torch.clamp(x, min=0, max=y.shape[0] - 1)
 
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[1])
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.embedding(t0, t1, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    t2 = ttnn.embedding(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def eltwise_tanh(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
@@ -2064,3 +2069,90 @@ def groupnorm(
     t3 = ttnn.group_norm(t0, num_groups=1, weight=t1, bias=t2)
 
     return ttnn_tensor_to_torch(t3)
+
+
+def eltwise_addcdiv(
+    x,
+    y,
+    z,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = ttnn.addcdiv(t0, t1, t2, scalar, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t3)
+
+
+def where(x, y, z, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = ttnn.where(t0, t1, t2, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t3)
+
+
+def concat(
+    x,
+    y,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    xtt = (t0, t1)
+    t2 = ttnn.concat(xtt, dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def global_avg_pool2d(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    input_tensor = torch.permute(x, (0, 2, 3, 1))  # ttnn operates on channels-last tensors
+    input_tensor = ttnn.from_torch(input_tensor, dtype=dtype[0], layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.global_avg_pool2d(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+
+    return output_tensor
+
+
+def upsample(
+    x,
+    *args,
+    scale_factor,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.upsample(t0, scale_factor=scale_factor)
+
+    return ttnn_tensor_to_torch(t1)
