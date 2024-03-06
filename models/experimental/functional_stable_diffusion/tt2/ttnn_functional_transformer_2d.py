@@ -13,13 +13,13 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_t
     basic_transformer_block,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input,
     post_process_output,
     pre_process_input_new,
     pad_encoder_hidden_states,
     pad_group_norm_weight,
     permute_conv_parameters,
+    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 
@@ -71,6 +71,12 @@ class transformer_2d_model:
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
             deallocate_activation=True,
+        )
+
+        self.group_norm_grid_size = list(self.proj_in.conv.grid_size)
+        self.gn_expected_input_sharded_memory_config = self.proj_in.conv.input_sharded_memory_config
+        self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(
+            self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, 32, in_channels
         )
 
         parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
@@ -200,6 +206,10 @@ class transformer_2d_model:
             hidden_states = pre_process_input(self.device, hidden_states)
 
         else:
+            if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
+                hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
+            print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
+            print(f"Hidden states shape: {hidden_states.shape}")
             hidden_states = ttnn.group_norm(
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
@@ -207,7 +217,7 @@ class transformer_2d_model:
                 weight=self.parameters.norm.weight,
                 bias=self.parameters.norm.bias,
                 memory_config=ttnn.get_memory_config(hidden_states),
-                core_grid=ttnn.CoreGrid(self.proj_in.conv.grid_size[1], self.proj_in.conv.grid_size[0]),
+                core_grid=ttnn.CoreGrid(self.group_norm_grid_size[1], self.group_norm_grid_size[0]),
             )
         hidden_states = ttnn.to_memory_config(
             hidden_states, ttnn.L1_MEMORY_CONFIG

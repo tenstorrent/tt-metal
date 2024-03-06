@@ -191,3 +191,34 @@ def permute_conv_parameters(weight, bias):
     bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias = ttnn.to_torch(bias)
     return weight, bias
+
+
+def update_gn_expected_input_sharded_memory_config_and_grid_size(
+    expected_input_sharded_memory_config, grid_size, groups, gn_channels
+):
+    # only support Block sharding and COL major orientation
+    # TODO: enable this assert after figuring out the TTNN types.. assert line errors out with type error currently
+    # assert expected_input_sharded_memory_config.memory_layout == ttnn.ShardStrategy.BLOCK and expected_input_sharded_memory_config.shard_orientation == ttnn.ShardOrientation.COLUMN_MAJOR
+    group_norm_grid_size = grid_size
+    gn_num_datum_row_per_group = gn_channels / groups
+    # breakpoint()
+    gn_nhw_per_core = expected_input_sharded_memory_config.shard_spec.shape[0]
+    gn_in_channels_per_core = expected_input_sharded_memory_config.shard_spec.shape[1]
+    assert (gn_channels // group_norm_grid_size[1]) == gn_in_channels_per_core
+    while gn_in_channels_per_core % gn_num_datum_row_per_group != 0:
+        # breakpoint()
+        # reduce grid size x dim until this constraint is met
+        while True:
+            group_norm_grid_size[1] -= 1
+            assert group_norm_grid_size[1] > 0
+            if gn_channels % group_norm_grid_size[1] == 0:
+                break
+        gn_in_channels_per_core = gn_channels // group_norm_grid_size[1]
+    return ttnn.create_sharded_memory_config(
+        (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
+        ttnn.CoreGrid(group_norm_grid_size[1], group_norm_grid_size[0]),
+        ttnn.ShardStrategy.BLOCK,
+        ttnn.ShardOrientation.COLUMN_MAJOR,
+        halo=False,
+        use_height_and_width_as_shard_shape=True,
+    )
