@@ -485,39 +485,40 @@ class UNet(nn.Module):
         # return r8_3
 
 
-device_id = 0
-device = ttnn.open_device(device_id=device_id)
+if __name__ == "__main__":
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
 
-torch.manual_seed(0)
+    torch.manual_seed(0)
 
-torch_model = UNet()
-for layer in torch_model.children():
-    print(layer)
+    torch_model = UNet()
+    for layer in torch_model.children():
+        print(layer)
 
-new_state_dict = {}
-for name, parameter in torch_model.state_dict().items():
-    if isinstance(parameter, torch.FloatTensor):
-        new_state_dict[name] = parameter + 100.0
+    new_state_dict = {}
+    for name, parameter in torch_model.state_dict().items():
+        if isinstance(parameter, torch.FloatTensor):
+            new_state_dict[name] = parameter + 100.0
 
-torch_model.load_state_dict(new_state_dict)
+    torch_model.load_state_dict(new_state_dict)
 
-torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
-torch_output_tensor = torch_model(torch_input_tensor)
+    torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
+    torch_output_tensor = torch_model(torch_input_tensor)
 
-reader_patterns_cache = {}
-parameters = preprocess_model(
-    initialize_model=lambda: torch_model,
-    run_model=lambda model: model(torch_input_tensor),
-    custom_preprocessor=custom_preprocessor,
-    reader_patterns_cache=reader_patterns_cache,
-    device=device,
-)
+    reader_patterns_cache = {}
+    parameters = preprocess_model(
+        initialize_model=lambda: torch_model,
+        run_model=lambda model: model(torch_input_tensor),
+        custom_preprocessor=custom_preprocessor,
+        reader_patterns_cache=reader_patterns_cache,
+        device=device,
+    )
 
-ttnn_model = ttnn_shallow_unet.UNet(parameters)
-output_tensor = ttnn_model.torch_call(torch_input_tensor)
-output_tensor = output_tensor[:, 0, :, :]
-output_tensor = torch.reshape(
-    output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
-)
-assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
-ttnn.close_device(device)
+    ttnn_model = ttnn_shallow_unet.UNet(parameters)
+    output_tensor = ttnn_model.torch_call(torch_input_tensor)
+    output_tensor = output_tensor[:, 0, :, :]
+    output_tensor = torch.reshape(
+        output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
+    )
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+    ttnn.close_device(device)
