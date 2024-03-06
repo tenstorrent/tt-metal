@@ -52,13 +52,15 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     // - map the trace id to the DRAM buffer for later enqueue Trace
 
     this->history.clear();
-
     for (auto cmd : this->queue().worker_queue) {
         TT_FATAL(
             trace_supported_commands.find(cmd.type) != trace_supported_commands.end(),
             "Unsupported command type found in trace");
         cmd.trace = *this;
         // #6024: Trace command flattening to a buffer should avoid using CQ
+        // however the use of it offloads work to a worker thread for speedup
+        // while can be queued up behind other commands and requires sync before
+        // yielding back to the main thread (eg. this->history usage below requires wait_until_empty)
         cq.run_command(cmd);
     }
     cq.wait_until_empty();
