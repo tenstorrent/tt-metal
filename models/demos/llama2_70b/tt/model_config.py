@@ -16,47 +16,30 @@ OP_KEYS = (
     "WORD_EMBEDDING_OUTPUT",
     # Decoder
     "LN_ATTN_WEIGHTS",
-    "LN_ATTN_BIAS",
     "LN_ATTN_OUTPUT",
     "LN_MLP_WEIGHTS",
-    "LN_MLP_BIAS",
     "LN_MLP_OUTPUT",
     # Rotary
     "ROT_MAT",
     # Attention
-    "FUSED_QKV_MM_WEIGHTS",
     "FUSED_QKV_MM_OUTPUT",
-    "CREATE_QKV_HEADS_OUTPUT",
-    "ROTARY_EMBEDDING_OUTPUT",
-    "K_CACHE_SLICE_OUTPUT",
-    "V_CACHE_SLICE_OUTPUT",
-    "K_TRANSPOSED_OUTPUT",
     "PRE_SOFTMAX_MM_OUTPUT",
     "ATTN_BATCHED_MM_OUTPUT",
-    "PRE_SOFTMAX_SCALE_OUTPUT",
-    "PRE_SOFTMAX_MASK_OUTPUT",
     "SOFTMAX_OUTPUT",
     "POST_SOFTMAX_MM_OUTPUT",
     "SCORES_BATCHED_MM_OUTPUT",
-    "CONCAT_HEADS_OUTPUT",
-    "SELFOUT_MM_WEIGHTS",
     "SELFOUT_MM_OUTPUT",
     # MLP
-    "FF1_MM_WEIGHTS",
-    "FF1_MM_OUTPUT",
-    "FF3_MM_WEIGHTS",
-    "FF3_MM_OUTPUT",
-    "FF2_MM_WEIGHTS",
-    "FF2_MM_OUTPUT",
-    # Decoder Cont
-    "PARALLEL_ATTN_ADD_OUTPUT",
-    "DROPOUT_ADD_OUTPUT",
+    "PADDED_FF1_MM_OUTPUT",
+    "PADDED_FF3_MM_OUTPUT",
+    "PADDED_FF2_MM_OUTPUT",
+    # Decoder
+    "ATTN_ADD_OUTPUT",
+    "MLP_ADD_OUTPUT",
     # Model
     "LN_F_WEIGHTS",
-    "LN_F_BIAS",
     "LN_F_OUTPUT",
     # LM Head
-    "LM_HEAD_MM_WEIGHTS",
     "LM_HEAD_MM_OUTPUT",
 )
 
@@ -64,18 +47,11 @@ NO_MEMCFG = ("SOFTMAX_OUTPUT",)
 
 NO_DTYPE = (
     # Attention
-    "ROTARY_EMBEDDING_OUTPUT",
-    "CREATE_QKV_HEADS_OUTPUT",
-    "K_TRANSPOSED_OUTPUT",
-    "PRE_SOFTMAX_SCALE_OUTPUT",
-    "PRE_SOFTMAX_MASK_OUTPUT",
     "SOFTMAX_OUTPUT",
-    "CONCAT_HEADS_OUTPUT",
     # MLP
-    "MLP_ALL_GATHER_OUTPUT",
-    # Decoder Cont
-    "PARALLEL_ATTN_ADD_OUTPUT",
-    "DROPOUT_ADD_OUTPUT",
+    # Decoder
+    "ATTN_ADD_OUTPUT",
+    "MLP_ADD_OUTPUT",
 )
 
 ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT8_B-DRAM")
@@ -109,7 +85,6 @@ def get_model_config(model_config_str, num_devices=8):
     )
     BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
-    # BFP2_DTYPE = ttl.tensor.DataType.BFLOAT2_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS:
@@ -124,7 +99,6 @@ def get_model_config(model_config_str, num_devices=8):
     model_config = {
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
-        "MOVE_DECODER_OUTPUT_BOOL": False,
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 1,
@@ -140,6 +114,10 @@ def get_model_config(model_config_str, num_devices=8):
         ),
         "L1_MEMCFG": L1_MEMCFG,
         "DRAM_MEMCFG": DRAM_MEMCFG,
+        "BFLOAT16_DTYPE": BFLOAT16_DTYPE,
+        "BFP8_DTYPE": BFP8_DTYPE,
+        "WIDTH_SHARDED_MEMCFG": WIDTH_SHARDED_MEMCFG,
+        "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
@@ -154,7 +132,6 @@ def get_model_config(model_config_str, num_devices=8):
         elif "LN" in key and ("WEIGHTS_DTYPE" in key or "BIAS_DTYPE" in key):
             model_config[key] = BFLOAT16_DTYPE
 
-    model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
     hidden_size = model_config_entries["hidden_size"]
@@ -269,36 +246,61 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
+
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
+
+    # Llama Model Config
+    model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_32_cores_grid,
+            [
+                shard_height,
+                shard_width_hidden_dim_across_32_cores,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    model_config["LN_F_OUTPUT_MEMCFG"] = model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+    model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[8, 4],
+        subblock_w=8,
+        block_h=1,
+        block_w=8,
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        im_data_format=ttl.tensor.DataType.BFLOAT16,
+        out_data_format=model_config["LN_F_OUTPUT_DTYPE"],
+        inplace=True,
+    )
+    # LM Head
+    if num_devices == 4:
+        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    elif num_devices == 8:
+        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     # Decoder
-    # TODO: change name to be llama2 specific
-    model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_per_device_across_32_cores,  # 8192 // 32 // num_devices
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    # TODO: change name to be llama2 specific
-    model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_per_device_across_32_cores,  # 8192 // 32 // num_devices
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
     model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
@@ -322,14 +324,15 @@ def get_model_config(model_config_str, num_devices=8):
         out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
         inplace=True,
     )
-    model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+    model_config["LN_ATTN_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+    model_config["ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 shard_height,
-                shard_width_hidden_dim_across_32_cores,
+                shard_width_hidden_dim_per_device_across_32_cores,  # 8192 // 32 // num_devices
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -345,27 +348,15 @@ def get_model_config(model_config_str, num_devices=8):
         out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
         inplace=True,
     )
-    model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+    model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+    model_config["MLP_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
+                shard_width_hidden_dim_per_device_across_32_cores,  # 8192 // 32 // num_devices
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -386,11 +377,11 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-        model_config["FP32_FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 2),
             in0_block_w=16,
             out_subblock_h=1,
-            out_subblock_w=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize for fp32
             per_core_M=1,
             per_core_N=5,
             fuse_batch=True,
@@ -424,11 +415,11 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-        model_config["FP32_FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,
             out_subblock_h=1,
-            out_subblock_w=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize for fp32
             per_core_M=1,
             per_core_N=5,
             fuse_batch=True,
@@ -476,7 +467,6 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-    model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
@@ -484,9 +474,6 @@ def get_model_config(model_config_str, num_devices=8):
         packer_l1_acc=True,
     )
     # TODO: Remove once confirm we don't need this, using only fallback ops
-    model_config["L1_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG
-    model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-    model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 4:
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 2),
@@ -509,6 +496,19 @@ def get_model_config(model_config_str, num_devices=8):
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=False,
+        )
+        model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_16_cores_grid,
+                [
+                    shard_height,  # Each core has 32 users
+                    head_dim,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
         )
     elif num_devices == 8:
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -533,6 +533,20 @@ def get_model_config(model_config_str, num_devices=8):
             fused_activation=None,
             mcast_in0=False,
         )
+        model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_8_cores_grid,
+                [
+                    shard_height,  # Each core has 32 users
+                    head_dim,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
     model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.BufferType.L1,
@@ -546,7 +560,6 @@ def get_model_config(model_config_str, num_devices=8):
             False,
         ),
     )
-    model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 8:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -625,7 +638,6 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-    model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 4:
         model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 2),
@@ -646,8 +658,6 @@ def get_model_config(model_config_str, num_devices=8):
             math_fidelity=ttl.tensor.MathFidelity.HiFi4,
             im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
-    model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-    model_config["CONCAT_HEADS_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
@@ -661,7 +671,6 @@ def get_model_config(model_config_str, num_devices=8):
             False,
         ),
     )
-    model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 4:
         model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
@@ -688,10 +697,6 @@ def get_model_config(model_config_str, num_devices=8):
         )
 
     # Llama MLP config
-    model_config["FF1_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    model_config["FF3_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    model_config["FF2_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    model_config["FF13_MUL_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     # Padded MLP 32K config:
     if num_devices == 4:
         model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -774,72 +779,6 @@ def get_model_config(model_config_str, num_devices=8):
             False,
         ),
     )
-
-    # Llama Model Config
-    model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    model_config["LN_F_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=1,
-        block_w=8,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=ttl.tensor.DataType.BFLOAT16,
-        out_data_format=model_config["LN_F_OUTPUT_DTYPE"],
-        inplace=True,
-    )
-
-    # LM Head
-    model_config["LM_HEAD_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    # Output = 32 * 8192 x 8192 * 8000 = 32 x 8000
-    if num_devices == 4:
-        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=8,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-    elif num_devices == 8:
-        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=4,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
 
     # uncomment if need to see all the configs
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
