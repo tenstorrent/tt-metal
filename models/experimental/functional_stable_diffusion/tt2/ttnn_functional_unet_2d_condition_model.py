@@ -36,6 +36,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     permute_conv_parameters,
     pad_group_norm_weight,
     pre_process_input,
+    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 fp32_accum = True
@@ -245,6 +246,11 @@ class UNet2DConditionModel:
             parameters.conv_norm_out.bias = pad_group_norm_weight(
                 parameters.conv_norm_out.bias, self.norm_num_groups, self.conv_out.in_channels
             )
+        self.group_norm_grid_size = list(self.conv_out.conv.grid_size)
+        self.gn_expected_input_sharded_memory_config = self.conv_out.conv.input_sharded_memory_config
+        # breakpoint()
+        # self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, self.norm_num_groups, in_channels)
+
         self.emb = TtTimestepEmbedding(parameters.time_embedding)
 
     def __call__(
@@ -515,14 +521,11 @@ class UNet2DConditionModel:
 
         # 6.post-process
 
-        if ttnn.get_memory_config(sample) != self.up_blocks[-1].resnets[-1].conv2.conv.input_sharded_memory_config:
-            sample = ttnn.to_memory_config(
-                sample, self.up_blocks[-1].resnets[-1].conv2.conv.input_sharded_memory_config
-            )
+        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
-            sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
+            # sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
             sample = ttnn.reshape(
                 sample,
                 (
@@ -544,6 +547,9 @@ class UNet2DConditionModel:
             sample = pre_process_input(self.device, sample)
 
         else:
+            sample = ttnn.to_memory_config(sample, self.gn_expected_input_sharded_memory_config)
+            print(f"Starting final group norm")
+            print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
             sample = ttnn.group_norm(
                 sample,
                 num_groups=norm_num_groups,
@@ -552,8 +558,8 @@ class UNet2DConditionModel:
                 bias=self.parameters.conv_norm_out.bias,
                 memory_config=self.conv_out.conv.input_sharded_memory_config,
                 core_grid=ttnn.CoreGrid(
-                    self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[1],
-                    self.up_blocks[-1].resnets[-1].conv2.conv.grid_size[0],
+                    self.group_norm_grid_size[1],
+                    self.group_norm_grid_size[0],
                 ),
             )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
