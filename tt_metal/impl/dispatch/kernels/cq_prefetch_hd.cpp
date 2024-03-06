@@ -258,7 +258,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
 //  - DRAM bw is ~maximized when page size reaches 2K
 //  - for kernel dispatch, it is expected that page sizes will often be <2K
 //  - for buffer writing, page sizes will vary
-//  - writing to dispatcher works best with 4K pages (2K pages cover overhead, 4K gives flexibility)
+//  - writing to dispatcher works best with 4K pages (2K pages cover overhead, 4K gives perf cushion)
 //  - writing a 4K page takes ~32*4=128 cycles
 //  - writing 4 4K pages is 512 cycles, close to parity w/ the latency of DRAM
 //  - to hide the latency (~12% overhead), assume we need to read ~32 pages=128K, double buffered
@@ -294,7 +294,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     uint32_t amt_read = 0;
     while (amt_to_read >= page_size) {
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
-        noc_async_read(noc_addr, scratch_read_addr, page_size); // XXXX can page_size be > 8192?
+        noc_async_read(noc_addr, scratch_read_addr, page_size);
         scratch_read_addr += page_size;
         page_id++;
         amt_to_read -= page_size;
@@ -321,7 +321,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
         amt_read = 0;
         while (amt_to_read >= page_size) {
             uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
-            noc_async_read(noc_addr, scratch_read_addr, page_size); // XXXX can page_size be > 8192?
+            noc_async_read(noc_addr, scratch_read_addr, page_size);
             scratch_read_addr += page_size;
             page_id++;
             amt_to_read -= page_size;
@@ -329,8 +329,9 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
         }
 
         // Third step - write from DB
-        uint32_t npages = (amt_to_write + dispatch_cb_page_size - 1) / dispatch_cb_page_size;
-        // Grabbing all pages at once is ok if the size of the scratch_size < 3 * dispatch_cb_block_size
+        uint32_t page_residual_space = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
+        uint32_t npages = (amt_to_write - page_residual_space + dispatch_cb_page_size - 1) / dispatch_cb_page_size;
+        // Grabbing all pages at once is ok if scratch_size < 3 * dispatch_cb_block_size
         dispatch_cb_acquire_pages(npages);
         uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
 
@@ -358,10 +359,11 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
 
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
-    uint32_t amt_to_write = amt_read;
-    uint32_t npages = (amt_to_write + dispatch_cb_page_size + CQ_DISPATCH_CMD_SIZE - 1) / dispatch_cb_page_size;
-    if (npages > 1) {
-        dispatch_cb_acquire_pages(npages - 1);
+    int32_t amt_to_write = amt_read;
+    uint32_t page_residual_space = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
+    uint32_t npages = (amt_to_write - page_residual_space + dispatch_cb_page_size + CQ_DISPATCH_CMD_SIZE - 1) / dispatch_cb_page_size;
+    if (npages > 0) {
+        dispatch_cb_acquire_pages(npages);
     }
     uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
     if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
@@ -379,7 +381,8 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     uint32_t pad_to_page = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
     dispatch_data_ptr += pad_to_page;
 
-    dispatch_cb_release_pages(npages);
+    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
+    dispatch_cb_release_pages(npages + 1);
 
     return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
