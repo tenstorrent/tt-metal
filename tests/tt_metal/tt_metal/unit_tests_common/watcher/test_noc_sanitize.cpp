@@ -11,12 +11,17 @@
 #include "common/bfloat16.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
-// A test for checking watcher waypoints.
+// A test for checking watcher NOC sanitization.
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, bool test_illegal_core=true) {
+typedef enum sanitization_features {
+    SanitizeAddress,
+    SanitizeAlignment
+} watcher_features_t;
+
+void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature) {
     // Set up program
     Program program = Program();
     CoreCoord phys_core;
@@ -78,11 +83,18 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
 
     // Write runtime args - update to a core that doesn't exist or an improperly aligned address,
     // depending on the flags passed in.
-    if (test_illegal_core) {
-        output_dram_noc_xy.x = 16;
-        output_dram_noc_xy.y = 16;
-    } else {
-        l1_buffer_addr += 1;
+    switch(feature) {
+        case SanitizeAddress:
+            output_dram_noc_xy.x = 16;
+            output_dram_noc_xy.y = 16;
+            break;
+        case SanitizeAlignment:
+            l1_buffer_addr += 1;
+            break;
+        default:
+            log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
+            GTEST_SKIP();
+            break;
     }
     tt_metal::SetRuntimeArgs(
         program,
@@ -109,25 +121,33 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    string expected;
-    if (test_illegal_core) {
-        expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
-        expected[7] = '0' + device->id();
-        expected[18] = '0' + phys_core.x;
-        expected[22] = '0' + phys_core.y;
-        string addr = fmt::format("{:08x}", output_dram_buffer_addr);
-        expected.replace(99, addr.length(), addr);
-        if (is_eth_core)
-            expected[43] = 'e';
-    } else {
-        expected = "Device x, Core (x=x,y=x):    NARW,*,*,*,*  brisc using noc0 reading L1[addr=0x********,len=102400]";
-        expected[7] = '0' + device->id();
-        expected[18] = '0' + phys_core.x;
-        expected[22] = '0' + phys_core.y;
-        string addr = fmt::format("{:08x}", l1_buffer_addr);
-        expected.replace(78, addr.length(), addr);
-        if (is_eth_core)
-            expected[43] = 'e';
+    string expected, addr;
+    switch(feature) {
+        case SanitizeAddress:
+            expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
+            expected[7] = '0' + device->id();
+            expected[18] = '0' + phys_core.x;
+            expected[22] = '0' + phys_core.y;
+            addr = fmt::format("{:08x}", output_dram_buffer_addr);
+            expected.replace(99, addr.length(), addr);
+            if (is_eth_core) {
+                expected[43] = 'e';
+            }
+            break;
+        case SanitizeAlignment:
+            expected = "Device x, Core (x=x,y=x):    NARW,*,*,*,*  brisc using noc0 reading L1[addr=0x********,len=102400]";
+            expected[7] = '0' + device->id();
+            expected[18] = '0' + phys_core.x;
+            expected[22] = '0' + phys_core.y;
+            addr = fmt::format("{:08x}", l1_buffer_addr);
+            expected.replace(78, addr.length(), addr);
+            if (is_eth_core)
+                expected[43] = 'e';
+            break;
+        default:
+            log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
+            GTEST_SKIP();
+            break;
     }
 
     EXPECT_TRUE(
@@ -145,7 +165,7 @@ static void RunTestEth(WatcherFixture* fixture, Device* device) {
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
-    RunTestOnCore(fixture, device, core, true);
+    RunTestOnCore(fixture, device, core, true, SanitizeAddress);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
@@ -177,7 +197,7 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, device, core, false);
+            RunTestOnCore(fixture, device, core, false, SanitizeAddress);
         },
         this->devices_[0]
     );
@@ -189,7 +209,7 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignment) {
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, device, core, false, false);
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignment);
         },
         this->devices_[0]
     );
