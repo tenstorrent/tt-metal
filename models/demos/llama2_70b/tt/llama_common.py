@@ -13,7 +13,7 @@ def rms_decomp(x, norm_weight, eps):
     # mean_squared = tt_lib.tensor.mean(squared, )
     sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
     # Tensor is 1,1,32,1+31 now
-    mean_squared = tt_lib.tensor.div_unary(sum_squared, x.shape()[-1])
+    mean_squared = tt_lib.tensor.div_unary(sum_squared, x.get_legacy_shape()[-1])
     mean_squared_eps = tt_lib.tensor.add_unary(mean_squared, eps)
     rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
     rms_recip = tt_lib.tensor.recip(rms)

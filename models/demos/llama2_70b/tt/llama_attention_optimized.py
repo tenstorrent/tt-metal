@@ -483,7 +483,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
         if kv_cache_memcfg.is_sharded():
             kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
-            kv_cache_shard_shape[0] = self.layer_past_list[0][0].shape()[1] * padded_layer_past_len
+            kv_cache_shard_shape[0] = self.layer_past_list[0][0].get_legacy_shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         for i in range(len(key_layer)):
             keys = self.layer_past_list[i][0]
@@ -644,7 +644,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
 
                 # UNPAD
-                attn_output_shape = attn_output[i].shape()
+                attn_output_shape = attn_output[i].get_legacy_shape()
                 attn_output[i] = tt_lib.tensor.unpad(
                     attn_output[i],
                     [0, 0, 0, 0],
