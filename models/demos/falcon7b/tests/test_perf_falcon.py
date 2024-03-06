@@ -286,8 +286,8 @@ def run_test_FalconCausalLM_end_to_end(
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output: {output_pcc}")
 
-    reference_logits = pytorch_out.view(batch, -1).float().detach().numpy()
-    eval_logits = tt_out.view(batch, -1).float().detach().numpy()
+    reference_logits = pytorch_out.view(batch*seq_len, -1).float().detach().numpy()
+    eval_logits = tt_out.view(batch*seq_len, -1).float().detach().numpy()
     reference_top1 = np.argmax(reference_logits, axis=-1)
     top1_acc = top_k_accuracy_score(reference_top1, eval_logits, k=1, labels=np.arange(eval_logits.shape[-1]))
     top5_acc = top_k_accuracy_score(reference_top1, eval_logits, k=5, labels=np.arange(eval_logits.shape[-1]))
