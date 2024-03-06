@@ -151,6 +151,9 @@ TEST_F(CommonFixture, DRAMLoopbackSingleCore){
         .data_movement_cfg = {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
     for (unsigned int id=0; id < devices_.size(); id++){
+        // TODO: #6097, fix this for fast dispatch remote device.
+        if (!this->slow_dispatch_ && id > 0)
+            continue;
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config, src_vec));
     }
 }

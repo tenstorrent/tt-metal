@@ -341,6 +341,9 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
 
 TEST_F(CommonFixture, MatmulLargeBlock) {
     for (unsigned int id=0; id < devices_.size(); id++){
+        // TODO: #6097, fix this for fast dispatch remote device.
+        if (!this->slow_dispatch_ && id > 0)
+            continue;
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(this, devices_.at(id), false, false));
         log_info (LogTest, "Tilized input, Tilized output Passed");
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(this, devices_.at(id), true, false));

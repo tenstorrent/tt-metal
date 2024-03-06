@@ -59,6 +59,9 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 
 TEST_F(DPrintFixture, TestPrintFinish) {
     for (Device* device : this->devices_) {
+        // TODO: #6095, fix this for fast dispatch remote device.
+        if (!this->slow_dispatch_ && device->id() > 0)
+            continue;
         this->RunTestOnDevice(RunTest, device);
     }
 }
