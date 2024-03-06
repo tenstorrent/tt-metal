@@ -101,14 +101,14 @@ class TtLlamaModel_optimized(nn.Module):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)
                 self.norm_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)
                 self.lm_head_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
         else:
@@ -124,7 +124,7 @@ class TtLlamaModel_optimized(nn.Module):
                     self.state_dict[norm_str].reshape([1, 1, -1, 32]),
                     self.model_config["LN_F_WEIGHTS_DTYPE"],
                 )
-                self.norm_list.append(output_norm_host.to(self.devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"]))
+                self.norm_list.append(output_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)),
                     output_norm_host,
@@ -133,12 +133,10 @@ class TtLlamaModel_optimized(nn.Module):
                 lm_head_host = torch2tt_tensor(
                     padded_lm_head_chunks[i],
                     None,
-                    tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.lm_head_list.append(
-                    lm_head_host.to(self.devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
-                )
+                self.lm_head_list.append(lm_head_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)),
                     lm_head_host,
@@ -285,7 +283,7 @@ class TtLlamaModel_optimized(nn.Module):
         for i in range(self.num_devices):
             # RMSNorm must execute on sharded input
             xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                xs[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+                xs[i], sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
             )
         for i in range(self.num_devices):
             norm_out_replicated.append(
@@ -307,7 +305,7 @@ class TtLlamaModel_optimized(nn.Module):
                     norm_out_replicated[i],
                     self.lm_head_list[i],
                     program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-                    output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )

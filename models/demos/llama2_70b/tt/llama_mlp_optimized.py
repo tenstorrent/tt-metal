@@ -69,21 +69,21 @@ class TtLlamaMLP_optimized(nn.Module):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
                 self.w1_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["FF1_MM_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)
                 self.w2_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["FF2_MM_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
                 self.w3_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["FF3_MM_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
         else:
@@ -106,10 +106,10 @@ class TtLlamaMLP_optimized(nn.Module):
                 w1_host = torch2tt_tensor(
                     padded_w1_chunks[i],
                     None,
-                    tt_memory_config=self.model_config["FF1_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FF1_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.w1_list.append(w1_host.to(self.devices[i], self.model_config["FF1_MM_WEIGHTS_MEMCFG"]))
+                self.w1_list.append(w1_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)),
                     w1_host,
@@ -118,10 +118,10 @@ class TtLlamaMLP_optimized(nn.Module):
                 w2_host = torch2tt_tensor(
                     padded_w2_chunks[i],
                     None,
-                    tt_memory_config=self.model_config["FF2_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FF2_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.w2_list.append(w2_host.to(self.devices[i], self.model_config["FF2_MM_WEIGHTS_MEMCFG"]))
+                self.w2_list.append(w2_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)),
                     w2_host,
@@ -130,10 +130,10 @@ class TtLlamaMLP_optimized(nn.Module):
                 w3_host = torch2tt_tensor(
                     padded_w3_chunks[i],
                     None,
-                    tt_memory_config=self.model_config["FF3_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FF3_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.w3_list.append(w3_host.to(self.devices[i], self.model_config["FF3_MM_WEIGHTS_MEMCFG"]))
+                self.w3_list.append(w3_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)),
                     w3_host,
@@ -147,8 +147,8 @@ class TtLlamaMLP_optimized(nn.Module):
                 x[i],
                 self.w1_list[i],
                 program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-                output_mem_config=self.model_config["FF1_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["FF1_MM_OUTPUT_DTYPE"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                output_dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 
@@ -156,13 +156,13 @@ class TtLlamaMLP_optimized(nn.Module):
                 x[i],
                 self.w3_list[i],
                 program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-                output_mem_config=self.model_config["FF3_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["FF3_MM_OUTPUT_DTYPE"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                output_dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
             x[i].deallocate(True)
             hidden_states.append(
-                tt_lib.tensor.mul(w1_out, w3_out, output_mem_config=self.model_config["FF13_MUL_OUTPUT_MEMCFG"])
+                tt_lib.tensor.mul(w1_out, w3_out, output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
             )
             w1_out.deallocate(True)
             w3_out.deallocate(True)
@@ -194,8 +194,8 @@ class TtLlamaMLP_optimized(nn.Module):
                 hidden_states[i],
                 self.w2_list[i],
                 program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-                output_mem_config=self.model_config["FF2_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["FF2_MM_OUTPUT_DTYPE"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                output_dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 
