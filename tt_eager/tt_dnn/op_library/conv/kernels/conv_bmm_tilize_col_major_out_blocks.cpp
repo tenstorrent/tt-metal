@@ -346,7 +346,7 @@ void MAIN {
                     cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        pack_tile(i, out_cb_id);
+                        pack_tile(i, untilize_mode_out_cb_id);
                     }
                     tile_regs_release();
                     cb_push_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
