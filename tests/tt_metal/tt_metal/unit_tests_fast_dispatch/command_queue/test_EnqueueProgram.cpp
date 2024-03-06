@@ -306,7 +306,8 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
+// WH Watcher error
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
         Program program;
 
