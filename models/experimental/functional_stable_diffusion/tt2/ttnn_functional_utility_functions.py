@@ -15,9 +15,7 @@ def pre_process_input(device, tensor):
     input_channels = tensor.shape[1]
     input_height = tensor.shape[2]
     input_width = tensor.shape[3]
-    tensor = fallback_ops.permute(
-        tensor.value, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False
-    )
+    tensor = fallback_ops.permute(tensor, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
     import math
 
     assert input_channels == tensor.get_legacy_shape()[3]
@@ -39,7 +37,6 @@ def pre_process_input(device, tensor):
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         output_on_device=False,
     )
-    tensor = ttnn.Tensor(tensor)
     tensor = ttnn.to_device(tensor, device)
     tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
     return tensor
@@ -50,7 +47,7 @@ def post_process_output(device, tensor, batch_size, output_height, output_width,
     tensor = ttnn.from_device(tensor)
     assert output_channels == tensor.shape[3]
     tensor = fallback_ops.reshape(
-        tensor.value,
+        tensor,
         batch_size,
         output_height,
         output_width,
@@ -59,7 +56,6 @@ def post_process_output(device, tensor, batch_size, output_height, output_width,
         output_on_device=False,
     )
     tensor = fallback_ops.permute(tensor, (0, 3, 1, 2), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
-    tensor = ttnn.Tensor(tensor)
     tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
     tensor = ttnn.to_device(tensor, device)
     return tensor

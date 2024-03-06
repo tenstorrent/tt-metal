@@ -71,7 +71,7 @@ def override_pcc_of_debug_decorator(value):
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
     if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
-        torch_output = ttnn.to_device(torch_output, output.device)
+        torch_output = ttnn.to_device(torch_output, output.device())
     return torch_output
 
 
@@ -260,49 +260,8 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
 
 
 def register_ttl_operation_as_ttnn_operation(name, function):
-    def get_input_tensors(arg):
-        if isinstance(arg, ttnn.Tensor):
-            yield arg
-        elif isinstance(arg, (list, tuple)):
-            for element in arg:
-                yield from get_input_tensors(element)
-        elif isinstance(arg, dict):
-            for value in arg.values():
-                yield from get_input_tensors(value)
-
-    def validate_input_tensors(operation_name, *args, **kwargs):
-        input_tensors = list(get_input_tensors(args)) + list(get_input_tensors(kwargs))
-        for input_tensor in input_tensors:
-            if len(input_tensor.shape) != 4:
-                raise ValueError(f"{operation_name}: Expected 4D tensor, got {input_tensor.shape}")
-            if not input_tensor.value.is_allocated():
-                raise ValueError(f"{operation_name}: Expected allocated tensor, got {input_tensor}")
-
-    def preprocess_arg(arg):
-        if isinstance(arg, ttnn.Tensor):
-            return arg.value
-        elif isinstance(arg, (list, tuple)):
-            return type(arg)([preprocess_arg(element) for element in arg])
-        elif isinstance(arg, dict):
-            return {key: preprocess_arg(value) for key, value in arg.items()}
-        else:
-            return arg
-
-    @wraps(function)
-    def wrapper(*function_args, **function_kwargs):
-        function_args = preprocess_arg(function_args)
-        function_kwargs = preprocess_arg(function_kwargs)
-        output = function(*function_args, **function_kwargs)
-        if isinstance(output, (list, tuple)):
-            return type(output)([ttnn.Tensor(element) for element in output])
-        elif isinstance(output, ttnn.experimental.tensor.Tensor):
-            return ttnn.Tensor(output)
-        else:
-            raise TypeError(f"Expected Tensor, got {type(output)}")
-
-    wrapper = register_operation(
+    function = register_operation(
         name=name,
-        validate_input_tensors=validate_input_tensors,
-    )(wrapper)
-
-    return wrapper
+        is_cpp_function=True,
+    )(function)
+    return function

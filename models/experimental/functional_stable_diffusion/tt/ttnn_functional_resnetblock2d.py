@@ -184,7 +184,7 @@ def resnetBlock2D(
             padding=1,
         )
         hidden_states = ttnn.from_torch(
-            torch_hidden_states, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+            torch_hidden_states, device=hidden_states.device(), dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
         )
 
     if temb is not None:
@@ -277,7 +277,7 @@ def resnetBlock2D(
             padding=1,
         )
         hidden_states = ttnn.from_torch(
-            torch_hidden_states, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+            torch_hidden_states, device=hidden_states.device(), dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
         )
 
     use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
@@ -333,7 +333,7 @@ def resnetBlock2D(
                 padding=0,
             )
             input_tensor = ttnn.from_torch(
-                torch_input_tensor, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+                torch_input_tensor, device=hidden_states.device(), dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
             )
 
     output_sc_recip = 1 / output_scale_factor

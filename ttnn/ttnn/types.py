@@ -36,7 +36,7 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 TILE_SIZE = 32
 
 Shape = ttnn._ttnn.types.Shape
-Tensor = ttnn._ttnn.types.Tensor
+Tensor = ttl.tensor.Tensor
 
 
 CoreGrid = ttnn._ttnn.types.CoreGrid

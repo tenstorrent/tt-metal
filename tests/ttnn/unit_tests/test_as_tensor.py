@@ -36,7 +36,7 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    assert tensor.device == device
+    assert tensor.device() == device
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 
@@ -49,7 +49,7 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    assert tensor.device == device
+    assert tensor.device() == device
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 

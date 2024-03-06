@@ -17,7 +17,7 @@ def embedding(input_ids, *, parameters):
 
 def bert_embeddings(input_ids, token_type_ids, *, parameters):
     position_ids = torch.randint(0, 2, (1, 128))
-    position_ids = ttnn.from_torch(position_ids, device=input_ids.device)
+    position_ids = ttnn.from_torch(position_ids, device=input_ids.device())
 
     word_embeddings = embedding(input_ids, parameters=parameters.word_embeddings)
     token_type_embeddings = embedding(token_type_ids, parameters=parameters.token_type_embeddings)
@@ -46,7 +46,7 @@ def bert_encoder(hidden_states, *, parameters):
 
 def bert_model(input_ids, *, parameters):
     token_type_ids = torch.randint(0, 2, (1, 128))
-    token_type_ids = ttnn.from_torch(token_type_ids, device=input_ids.device)
+    token_type_ids = ttnn.from_torch(token_type_ids, device=input_ids.device())
     embeddings = bert_embeddings(input_ids, token_type_ids, parameters=parameters.embeddings)
     output = bert_encoder(embeddings, parameters=parameters.encoder)
     return output

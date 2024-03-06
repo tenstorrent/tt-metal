@@ -233,7 +233,7 @@ def split_query_key_value_and_split_heads(
 
         query, key, value = ttnn.experimental.operations.primary.transformers.split_query_key_value_and_split_heads(
             input_tensor,
-            input_tensor.device.compute_with_storage_grid_size(),
+            input_tensor.device().compute_with_storage_grid_size(),
             memory_config,
             num_heads=num_heads,
         )
@@ -363,6 +363,9 @@ def attention_softmax(
     head_size: Optional[int],
     attention_mask: Optional[ttnn.Tensor],
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    program_config: Optional[
+        ttl.operations.primary.transformers.SoftmaxProgramConfig
+    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
 ) -> ttnn.Tensor:
     """
     attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
@@ -383,18 +386,16 @@ def attention_softmax(
 
     if attention_mask is not None:
         output_tensor = ttl.tensor.scale_mask_softmax(
-            input_tensor.value,
+            input_tensor,
             scaler,
-            attention_mask.value,
+            attention_mask,
             output_mem_config=memory_config,
             program_config=program_config,
         )
-        return ttnn.Tensor(output_tensor)
     else:
         scaled_input_tensor = input_tensor * scaler
-        ttl_scaled_input_tensor = scaled_input_tensor.value
-        ttl_output_tensor = ttl.tensor.softmax(ttl_scaled_input_tensor, output_mem_config=memory_config)
-        return ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl.tensor.softmax(scaled_input_tensor, output_mem_config=memory_config)
+        return output_tensor
 
 
 @ttnn.register_operation(
@@ -436,8 +437,8 @@ def attention_softmax_(
         scaler = 1.0
 
     if attention_mask is not None:
-        ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            input_tensor.value, scaler, attention_mask.value, program_config=program_config
+        input_tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+            input_tensor, scaler, attention_mask, program_config=program_config
         )
         return input_tensor
     else:
@@ -504,12 +505,10 @@ def concatenate_heads(
     if padded_head_size - head_size != 0:
         raise RuntimeError("Head size cannot have tile padding!")
 
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.nlp_concat_heads(
-        ttl_input_tensor,
+    output_tensor = ttl.tensor.nlp_concat_heads(
+        input_tensor,
         memory_config,
     )
-    output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(
         output_tensor,
         ttnn.Shape(

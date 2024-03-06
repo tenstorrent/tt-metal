@@ -79,15 +79,9 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         if not _is_scalar(input1) and not _is_scalar(input2):
             input_tensor1 = ttnn.unsqueeze_to_4D(input1)
             input_tensor2 = ttnn.unsqueeze_to_4D(input2)
-            ttl_input_tensor1 = input_tensor1.value
-            ttl_input_tensor2 = input_tensor2.value
         elif _is_scalar(input1) and _is_scalar(input2):
             input_tensor1 = input1
             input_tensor2 = input2
-            ttl_input_tensor1 = input_tensor1
-            ttl_input_tensor2 = input_tensor2
-
-        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected input argument to be a ttnn.Tensor")
@@ -100,11 +94,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
 
-        ttl_output_tensor = ttl_ternary_function(
-            ttl_input_tensor, ttl_input_tensor1, ttl_input_tensor2, output_mem_config=memory_config
-        )
-
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl_ternary_function(input_tensor, input_tensor1, input_tensor2)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -207,10 +197,6 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         input_tensor1 = ttnn.unsqueeze_to_4D(input_tensor1)
         input_tensor2 = ttnn.unsqueeze_to_4D(input_tensor2)
 
-        ttl_input_tensor = input_tensor.value
-        ttl_input_tensor1 = input_tensor1.value
-        ttl_input_tensor2 = input_tensor2.value
-
         if (
             not isinstance(input_tensor, ttnn.Tensor)
             or not isinstance(input_tensor1, ttnn.Tensor)
@@ -228,11 +214,10 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         ):
             raise RuntimeError("input_tensor must be on device!")
 
-        ttl_output_tensor = ttl_ternary_function(
-            ttl_input_tensor, ttl_input_tensor1, ttl_input_tensor2, value=parameter, output_mem_config=memory_config
+        output_tensor = ttl_ternary_function(
+            input_tensor, input_tensor1, input_tensor2, value=parameter, output_mem_config=memory_config
         )
 
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -328,16 +313,8 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         predicate = ttnn.unsqueeze_to_4D(predicate)
         if not _is_scalar(true_value):
             true_value = ttnn.unsqueeze_to_4D(true_value)
-            ttl_true_value = true_value.value
-        else:
-            ttl_true_value = true_value
         if not _is_scalar(false_value):
             false_value = ttnn.unsqueeze_to_4D(false_value)
-            ttl_false_value = false_value.value
-        else:
-            ttl_false_value = false_value
-
-        ttl_predicate = predicate.value
 
         if not isinstance(predicate, ttnn.Tensor):
             raise TypeError("Expected input_tensor arguments to be a ttnn.Tensor")
@@ -345,11 +322,8 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         if not ttnn.has_storage_type_of(predicate, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
 
-        ttl_output_tensor = ttl_ternary_function(
-            ttl_predicate, ttl_true_value, ttl_false_value, output_mem_config=memory_config
-        )
+        output_tensor = ttl_ternary_function(predicate, true_value, false_value, output_mem_config=memory_config)
 
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
