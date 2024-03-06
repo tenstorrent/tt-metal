@@ -74,18 +74,15 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
-        ttl_input_tensor = input_tensor.value
 
-        ttl_output_tensor = ttl_math_op_function(ttl_input_tensor, output_mem_config=memory_config)
+        output_tensor = ttl_math_op_function(input_tensor, output_mem_config=memory_config)
 
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -227,18 +224,9 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
         original_shape = input_tensor_a.shape
 
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        ttl_input_tensor_a = input_tensor_a.value
-
         input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-        ttl_input_tensor_b = input_tensor_b.value
 
-        ttl_output_tensor = ttl_math_binary_function(
-            ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config
-        )
-
-        ttl_input_tensor_a = input_tensor_a.value
-        ttl_input_tensor_b = input_tensor_b.value
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl_math_binary_function(input_tensor_a, input_tensor_b, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -364,25 +352,15 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
             raise RuntimeError("weight tensor must be on device!")
 
         original_shape = input_tensor_a.shape
-        ttl_weight = weight
 
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        ttl_input_tensor_a = input_tensor_a.value
-
         input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-        ttl_input_tensor_b = input_tensor_b.value
 
         if isinstance(weight, ttnn.Tensor):
             weight = ttnn.unsqueeze_to_4D(weight)
-            ttl_weight = weight.value
 
-        ttl_output_tensor = ttl_lerp_function(
-            ttl_input_tensor_a, ttl_input_tensor_b, ttl_weight, output_mem_config=memory_config
-        )
+        output_tensor = ttl_lerp_function(input_tensor_a, input_tensor_b, weight, output_mem_config=memory_config)
 
-        ttl_input_tensor_a = input_tensor_a.value
-        ttl_input_tensor_b = input_tensor_b.value
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -456,7 +434,6 @@ def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, o
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
@@ -466,11 +443,8 @@ def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, o
 
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
-        ttl_input_tensor = input_tensor.value
 
-        ttl_output_tensor = ttl_math_unary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
-
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl_math_unary_function(input_tensor, parameter, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
