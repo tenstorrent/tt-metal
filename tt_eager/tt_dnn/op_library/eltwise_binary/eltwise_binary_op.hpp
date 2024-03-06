@@ -46,7 +46,31 @@ struct EltwiseBinary {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
+    operation::OpPerformanceModel create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor> &output_tensors
+    ) const {
 
+        // GS specific parameters
+        // 80 B/cycle unpacker BW shared
+        // 128 datums per cycle math, but unpacker cant keep up
+        constexpr int num_cores = 9 * 12;
+
+        int total_bytes = 0;
+        for(const auto & t: input_tensors) {
+            total_bytes += t.volume() * t.element_size();
+        }
+        int ideal_eltwise_cycles = total_bytes / 80 / num_cores;
+
+        operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_eltwise_cycles);
+#if 0
+        tt::log_info(tt::LogOp, "Eltwise PerfModel:");
+        tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
+        tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
+#endif
+        return result;
+    }
     static constexpr auto attribute_names =
         std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype");
     const auto attribute_values() const {

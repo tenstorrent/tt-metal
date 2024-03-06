@@ -202,5 +202,39 @@ Tensor max_pool2d_v2(const Tensor &input,
                                              {input, reader_indices}).at(0);
 }
 
+operation::OpPerformanceModel MaxPool::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
+    const auto& input = input_tensors.at(0);
+    const auto input_shape = input.get_legacy_shape();
+    uint32_t batch_size = this->in_n_;
+    uint32_t conv_activation_h = this->in_h_;
+    uint32_t conv_activation_w = this->in_w_;
+    uint32_t conv_activation_c = input_shape[3];
+    uint32_t output_channels = input_shape[3];
+
+    uint32_t filter_h = (uint32_t) this->kernel_size_h_;
+    uint32_t filter_w = (uint32_t) this->kernel_size_w_;
+    uint32_t stride_h = (uint32_t) this->stride_h_;
+    uint32_t stride_w = (uint32_t) this->stride_w_;
+    uint32_t pad_h = (uint32_t) this->pad_h_;
+    uint32_t pad_w = (uint32_t) this->pad_w_;
+
+    // GS specific parameters
+    int num_cores = 9 * 12;
+    int tensix_mul_adds_per_cycle_lofi = 2048;
+
+    // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
+    int output_height = std::floor((conv_activation_h - filter_h + 2 * pad_h) / stride_h + 1);
+    int output_width = std::floor((conv_activation_w - filter_w + 2 * pad_w) / stride_w + 1);
+
+    // Calculate number of mul/add / compare operations
+    int64_t num_mul_adds_per_elem = conv_activation_c * filter_h * filter_w; // 1 multiply and 1 add per element
+    int64_t num_mul_adds = num_mul_adds_per_elem * output_height * output_width * output_channels * batch_size;
+
+    int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
+
+    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
+
 } // namespace tt_metal
 } // namespace tt

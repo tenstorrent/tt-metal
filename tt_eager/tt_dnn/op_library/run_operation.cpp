@@ -130,12 +130,14 @@ std::vector<Tensor> run_host_operation(const HostOperation& operation, const std
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) {
-        detail::setup_profiler(operation, input_tensors);
-    }
 
     operation.validate(input_tensors);
     auto output_tensors = operation.compute_output_tensors(input_tensors);
+
+    if (do_profile) {
+        detail::setup_profiler(operation, input_tensors);
+        //op_profiler::set_perf_model(operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors));
+    }
 
     op_profiler::append_all_tensor_io_data(input_tensors, {}, output_tensors);
 
@@ -210,7 +212,7 @@ std::vector<Tensor> run_device_operation(
 
     // Enqueue or Launch Program
     std::visit(
-        [&operation, &input_tensors, &optional_input_tensors, queue](auto&& program) {
+        [&operation, &input_tensors, &optional_input_tensors, &output_tensors, queue](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
@@ -250,6 +252,7 @@ std::vector<Tensor> run_device_operation(
                     auto do_profile = op_profiler::get_profiler_flag();
                     if (do_profile) {
                         detail::setup_profiler(operation, input_tensors, program);
+                        op_profiler::set_perf_model(operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors));
                     }
                 }
             }
