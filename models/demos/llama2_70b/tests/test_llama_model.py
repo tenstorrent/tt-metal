@@ -121,7 +121,7 @@ def run_test_LlamaModel_inference(
         tt_lib.device.Synchronize(device)
 
     generation_start_pos = 1
-    generation_length = 1
+    generation_length = 20
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
