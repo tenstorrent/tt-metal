@@ -37,7 +37,7 @@
     DPRINT_PREFIX(DEC)               \
     DPRINT_PREFIX(TILESLICE)         \
     DPRINT_PREFIX(U32_ARRAY)         \
-    DPRINT_PREFIX(TYPED_U32_ARRAY)   // Same as U32_ARRAY, but with element[0] indicating what the rest of the array contains
+    DPRINT_PREFIX(TYPED_U32_ARRAY)   // Same as U32_ARRAY, but with the last element indicating the type of array elements
 
 enum DPrintTypeID : uint8_t {
 // clang-format off
