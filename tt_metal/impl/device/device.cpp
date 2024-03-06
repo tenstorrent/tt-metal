@@ -835,7 +835,7 @@ bool Device::close() {
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
 
     if (llrt::OptionsG.get_clear_l1()) {
-        // this->clear_l1_state();
+        this->clear_l1_state();
     }
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);

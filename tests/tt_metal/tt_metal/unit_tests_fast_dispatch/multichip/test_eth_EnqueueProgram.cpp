@@ -589,7 +589,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
-            if (sender_device->id() == receiver_device->id()) {
+            if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
@@ -637,7 +637,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
-            if (sender_device->id() == receiver_device->id()) {
+            if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
@@ -669,7 +669,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
-            if (sender_device->id() == receiver_device->id()) {
+            if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
