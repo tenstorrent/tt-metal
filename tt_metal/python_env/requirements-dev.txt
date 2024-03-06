@@ -29,7 +29,6 @@ tqdm==4.65.0
 sentencepiece==0.1.97
 timm==0.6.13
 diffusers==0.12.1
-accelerate==0.27.2
 # Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
 # transitive dep, which uses dill >=0.3.7, however many packages require
 # dill < 0.3.7
