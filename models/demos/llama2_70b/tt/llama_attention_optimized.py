@@ -95,7 +95,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 torch2tt_tensor(
                     lp,
                     self.devices[i],
-                    tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
                     tt_dtype=self.model_config["KV_CACHE_DTYPE"],
                 )
                 for lp in layer_past
@@ -123,14 +123,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             k_cache_tt = torch2tt_tensor(
                 k_cache,
                 None,
-                tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                tt_memory_config=self.model_config["DRAM_MEMCFG"],
                 tt_dtype=self.model_config["KV_CACHE_DTYPE"],
             )
 
             v_cache_tt = torch2tt_tensor(
                 v_cache,
                 None,
-                tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                tt_memory_config=self.model_config["DRAM_MEMCFG"],
                 tt_dtype=self.model_config["KV_CACHE_DTYPE"],
             )
 
@@ -160,12 +160,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 self.init_kv_cache()
                 return
 
-            k_cache = tt_lib.tensor.load_tensor(str(k_cache_path)).to(
-                self.devices[i], self.model_config["DEFAULT_MEMCFG"]
-            )
-            v_cache = tt_lib.tensor.load_tensor(str(v_cache_path)).to(
-                self.devices[i], self.model_config["DEFAULT_MEMCFG"]
-            )
+            k_cache = tt_lib.tensor.load_tensor(str(k_cache_path)).to(self.devices[i], self.model_config["DRAM_MEMCFG"])
+            v_cache = tt_lib.tensor.load_tensor(str(v_cache_path)).to(self.devices[i], self.model_config["DRAM_MEMCFG"])
 
             layer_past = [k_cache, v_cache]
 
@@ -199,14 +195,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
                 self.qkv_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)
                 self.wo_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DEFAULT_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
         else:
@@ -247,10 +243,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 qkv_host = torch2tt_tensor(
                     qkv,
                     None,
-                    tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]))
+                self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)), qkv_host
                 )
@@ -259,10 +255,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 wo_host = torch2tt_tensor(
                     w0_chunks[i],
                     None,
-                    tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
-                    tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["BFP8_DTYPE"],
                 )
-                self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DEFAULT_MEMCFG"]))
+                self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)), wo_host
                 )
@@ -369,9 +365,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
             for i in range(len(xs)):
-                xs[i] = tt_lib.tensor.sharded_to_interleaved(
-                    xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-                )
+                xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
             for i in range(len(xs)):
                 xs[i] = tt_lib.tensor.interleaved_to_sharded(
                     xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
@@ -384,12 +378,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 tt_lib.operations.primary.matmul_1d(
                     xs[i],
                     self.qkv_list[i],
-                    program_config=self.model_config["FP32_FUSED_QKV_MM_PROGCFG"],
+                    program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config[
-                        "COMPUTE_KERNEL_CONFIG"
-                    ],  # TODO: Need to pad & change PROCFG
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
             xs[i].deallocate(True)
@@ -397,7 +389,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
             for i in range(len(fused_query_key_value)):
                 fused_query_key_value[i] = tt_lib.tensor.sharded_to_interleaved(
-                    fused_query_key_value[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                    fused_query_key_value[i], output_mem_config=self.model_config["L1_MEMCFG"]
                 )
             for i in range(len(fused_query_key_value)):
                 fused_query_key_value[i] = tt_lib.tensor.interleaved_to_sharded(
@@ -416,7 +408,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
                 transpose_k_heads=False,
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             )
             query_layer.append(q_heads)
             key_layer.append(k_heads)
@@ -425,10 +417,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
         for i in range(len(query_layer)):
             query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-                query_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
+                query_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
             key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-                key_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
+                key_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
 
         # ROTARY EMBEDDINGS
@@ -439,28 +431,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             #     program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
             #     output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
             #     compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
-            #     # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            # )
-            # # TODO: matmul_1d is bugged for single core and causes hang.
-            # key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-            #     key_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
-            # )
-            query_layer[i] = tt_lib.operations.primary.matmul(
-                query_layer[i],
-                rot_mats[i],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-            key_layer[i] = tt_lib.operations.primary.matmul(
-                key_layer[i],
-                rot_mats[i],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-            # rot_mats[i].deallocate(True) # If rot_mat on L1, deallocate here
-            # TODO: Use matmul_1d for k_heads on L1 sharded single core
-            # rot_mat = tt_lib.tensor.interleaved_to_sharded(
-            #     rot_mat, sharded_mem_config=self.model_config["ROT_MAT_K_OUTPUT_MEMCFG"]
+            #     # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
             # )
             # k_heads = tt_lib.matmul(
             #     k_heads,
@@ -469,7 +440,20 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             #     output_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],
             #     # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             # )
-
+            query_layer[i] = tt_lib.operations.primary.matmul(
+                query_layer[i],
+                rot_mats[i],
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+                output_mem_config=self.model_config["L1_MEMCFG"]
+                # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
+            )
+            key_layer[i] = tt_lib.operations.primary.matmul(
+                key_layer[i],
+                rot_mats[i],
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+                output_mem_config=self.model_config["L1_MEMCFG"]
+                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            )
             # Pad and transpose Q for batched matmul
             if self.batched_attn:
                 query_layer[i] = tt_lib.tensor.pad(
@@ -489,6 +473,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
                 query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
                     query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
+                )
+            else:
+                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                    query_layer[i], sharded_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"]
                 )
 
         # K Cache Update
@@ -513,7 +501,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     padded_layer_past_len - 1,
                     self.head_dim - 1,
                 ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
         for i in range(len(key_layer)):
             key_layer[i] = tt_lib.tensor.interleaved_to_sharded(key_layer[i], sharded_mem_config=kv_cache_memcfg)
@@ -526,7 +514,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     key_layer[i],
                     -2,
                     -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                 )
             )
             key_layer[i].deallocate(True)
@@ -554,7 +542,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         query_layer[i],
                         key_layer_transposed[i],
                         compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                         output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
@@ -603,7 +591,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     padded_layer_past_len - 1,
                     self.head_dim - 1,
                 ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
         for i in range(len(value_layer)):
             value_layer[i] = tt_lib.tensor.interleaved_to_sharded(value_layer[i], sharded_mem_config=kv_cache_memcfg)
@@ -630,7 +618,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         attn_weights[i],
                         value_layer[i],
                         compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                        output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                         output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
@@ -678,7 +666,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
@@ -704,7 +692,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output[i],
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size

@@ -102,14 +102,14 @@ class TtLlamaDecoder_optimized:
                 tensor_cache_path = get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)
                 self.attn_norm_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)
                 self.ffn_norm_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"]
+                        self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
         else:
@@ -122,9 +122,7 @@ class TtLlamaDecoder_optimized:
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)), attn_norm_host
                 )
-                self.attn_norm_list.append(
-                    attn_norm_host.to(self.devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
-                )
+                self.attn_norm_list.append(attn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
                 ffn_norm_host = tt_lib.tensor.Tensor(
                     # Expand to size of input since we decomped norm
@@ -134,7 +132,7 @@ class TtLlamaDecoder_optimized:
                 tt_lib.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)), ffn_norm_host
                 )
-                self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"]))
+                self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
     def free_weights(self):
         for i in range(self.num_devices):
@@ -279,13 +277,12 @@ class TtLlamaDecoder_optimized:
                     output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                 )
             )  # attn_norm_replicated is sharded
-            # xs_replicated[i].deallocate(True)
+            # xs_replicated[i].deallocate(True) # !!! Cant deallocate here, will drop PCC
         # attn_outs is fractured
         attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
 
         ### Fractured residual add
         # Add attn output to residiual first in place to save memory
-        # Note that this is only correct in inference when dropout is disabled
         output = []
         residual = xs
         for i in range(self.num_devices):
@@ -293,7 +290,7 @@ class TtLlamaDecoder_optimized:
                 tt_lib.tensor.add_without_autoformat(
                     residual[i],
                     attn_outs[i],
-                    output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+                    output_mem_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
                     in_place=True,
                 )
             )
@@ -331,19 +328,19 @@ class TtLlamaDecoder_optimized:
                     self.norm_eps,
                     self.ffn_norm_list[i],
                     program_config=self.model_config["LN_MLP_PROGCFG"],
-                    output_mem_config=self.model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"],
+                    output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
                 )
             )  # ffn_norm_replicated is sharded
         # attn_resid_replicated[i].deallocate(True) # !!! Cant deallocate here, will drop PCC
 
         ffn_out = self.mlp(ffn_norm_replicated)
 
-        ### Dropout_add residual in place
+        ### residual in place
         for i in range(self.num_devices):
             output[i] = tt_lib.tensor.add_without_autoformat(
                 output[i],
                 ffn_out[i],
-                output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+                output_mem_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
                 in_place=True,
             )
             ffn_out[i].deallocate(True)
