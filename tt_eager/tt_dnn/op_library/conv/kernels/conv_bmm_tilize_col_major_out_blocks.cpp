@@ -376,7 +376,7 @@ void MAIN {
                         matmul_partials_cb,
                         out_cb_id);
                 }
-                pack_untilize_uninit(in1_cb_id);
+                pack_untilize_uninit(matmul_partials_cb);
             }
             if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                 #ifdef FUSE_BIAS

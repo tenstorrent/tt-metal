@@ -44,6 +44,7 @@ struct Matmul {
     const MemoryConfig output_mem_config;
     const DataType output_dtype; // TODO: Uplift output_dtype as an option for general matmul/bmm
     const DeviceComputeKernelConfig compute_kernel_config;
+    const bool untilize_out;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -52,20 +53,21 @@ struct Matmul {
     MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("bcast_batch", "output_mem_config", "output_dtype", "compute_kernel_config");
+        std::make_tuple("bcast_batch", "output_mem_config", "output_dtype", "compute_kernel_config", "untilize_out");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->bcast_batch),
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
-            std::cref(this->compute_kernel_config));
+            std::cref(this->compute_kernel_config),
+            std::cref(this->untilize_out));
     }
 };
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool untilize_out);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out);
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out);
 
 
 /**
@@ -277,6 +279,7 @@ struct Matmul {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
+    const bool untilize_out;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -294,13 +297,14 @@ struct Matmul {
     MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("program_config", "output_mem_config", "output_dtype", "compute_kernel_config");
+        std::make_tuple("program_config", "output_mem_config", "output_dtype", "compute_kernel_config", "untilize_out");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->program_config),
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
-            std::cref(this->compute_kernel_config));
+            std::cref(this->compute_kernel_config),
+            std::cref(this->untilize_out));
     }
 };
 
@@ -310,11 +314,12 @@ inline Tensor matmul(
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool untilize_out = false
 ) {
     auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 inline Tensor matmul(
@@ -324,13 +329,14 @@ inline Tensor matmul(
     const MatmulProgramConfig &program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool untilize_out = false) {
     auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false);
 
 }  // namespace primary
 
@@ -372,7 +378,7 @@ namespace tt {
 
 namespace tt_metal {
 
-inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false) {
     TT_FATAL(input_tensor_a.get_dtype() == input_tensor_b.get_dtype());
     TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_FATAL(input_tensor_b.get_legacy_shape()[0]*input_tensor_b.get_legacy_shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
@@ -387,14 +393,15 @@ inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b
             .program_config=matmul_program_config,
             .output_mem_config=mem_config,
             .output_dtype=input_tensor_a.get_dtype(),
-            .compute_kernel_config=kernel_config_val
+            .compute_kernel_config=kernel_config_val,
+            .untilize_out=untilize_out
         }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     } else {
-        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     }
 }
 // TODO: Should we merge this with matmul and expose an option (or infer it from shape) to bcast_batch
-inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false) {
     TT_FATAL(input_tensor_a.get_dtype() == input_tensor_b.get_dtype());
     TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_FATAL(input_tensor_a.get_legacy_shape()[1] == input_tensor_b.get_legacy_shape()[1] && input_tensor_a.get_legacy_shape()[0] == input_tensor_b.get_legacy_shape()[0]
@@ -409,10 +416,11 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
             .program_config=matmul_program_config,
             .output_mem_config=mem_config,
             .output_dtype=input_tensor_a.get_dtype(),
-            .compute_kernel_config=kernel_config_val
+            .compute_kernel_config=kernel_config_val,
+            .untilize_out=untilize_out
         }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     } else {
-        return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     }
 }
 

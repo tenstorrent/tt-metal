@@ -476,6 +476,10 @@ void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vecto
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+
+    if (this->untilize_out) {
+        TT_FATAL(this->output_dtype == DataType::BFLOAT16);
+    }
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -518,7 +522,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 // MathFidelity::HiFi4, false, true, false,
                 this->compute_kernel_config,
                 2, 4, 2,
-                16, 16, false, false, std::nullopt
+                16, 16, false, false, std::nullopt,
+                this->untilize_out
             );
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
             config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
@@ -529,7 +534,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 // MathFidelity::HiFi4, false, true, false,
                 this->compute_kernel_config,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
-                config.per_core_M, config.per_core_N, false, std::nullopt, true
+                config.per_core_M, config.per_core_N, false, std::nullopt, true,
+                this->untilize_out
             );
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
             config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, false, false);
@@ -540,7 +546,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 // MathFidelity::HiFi4, false, true, false,
                 this->compute_kernel_config,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
-                config.per_core_M, config.per_core_N, false, std::nullopt, false
+                config.per_core_M, config.per_core_N, false, std::nullopt, false,
+                this->untilize_out
             );
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
             return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
@@ -780,6 +787,10 @@ void Matmul::validate(
         TT_FATAL(bias.get_legacy_shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_b.get_legacy_shape()[3]}), "Unsupported bias shape");
     }
 
+    if (this->untilize_out) {
+        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
+    }
+
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -981,6 +992,7 @@ std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& inpu
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->output_mem_config.is_sharded()) {
         return std::visit(
             [&](const auto& program_config) -> std::vector<Tensor> {
@@ -1001,7 +1013,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>
                 ) {
@@ -1026,7 +1038,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>
                 ) {
@@ -1050,7 +1062,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else {
                     TT_FATAL(false, "Unsupported op for output sharding");
                     return {};
@@ -1096,7 +1108,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a.device()->compute_with_storage_grid_size(),
                             this->compute_kernel_config,
                             2, 4, 2,
-                            16, 16, false, false, std::nullopt
+                            16, 16, false, false, std::nullopt,
+                            this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
                         return matmul_multi_core_reuse_mcast_1d_optimized(
@@ -1105,7 +1118,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a.device()->compute_with_storage_grid_size(),
                             this->compute_kernel_config,
                             2, 4, 2,
-                            16, 16, false, std::nullopt, true
+                            16, 16, false, std::nullopt, true,
+                            this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
                         return matmul_multi_core_reuse_mcast_1d_optimized(
@@ -1114,7 +1128,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a.device()->compute_with_storage_grid_size(),
                             this->compute_kernel_config,
                             2, 4, 2,
-                            16, 16, false, std::nullopt, false
+                            16, 16, false, std::nullopt, false,
+                            this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
                         return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
@@ -1132,7 +1147,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     output_dtype,
                     this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, fuse_batch
+                    program_config.per_core_M, program_config.per_core_N, fuse_batch,
+                    this->untilize_out
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
@@ -1142,7 +1158,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation
+                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation,
+                    this->untilize_out
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
@@ -1153,7 +1170,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation,
-                    program_config.mcast_in0
+                    program_config.mcast_in0,
+                    this->untilize_out
                 );
             } else {
                 TT_THROW("Unrecognized Config");
@@ -1194,12 +1212,12 @@ MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::ve
     );
 }
 
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<const DeviceComputeKernelConfig> compute_kernel_config, bool untilize_out) {
     if (!program_config.has_value()) {
         program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
     }
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config);
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, kernel_config_val);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, kernel_config_val, untilize_out);
 }
 
 operation::OpPerformanceModel Matmul::create_op_performance_model(
