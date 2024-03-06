@@ -24,7 +24,6 @@ datasets==2.9.0
 torch==2.2.1.0+cpu
 networkx==3.1
 torchvision==0.17.1+cpu
-torch-fidelity==0.3.0
 transformers==4.37.2
 tqdm==4.65.0
 sentencepiece==0.1.97
