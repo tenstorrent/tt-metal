@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+from tqdm import tqdm
 import torch
 from torch import nn
 import tt_lib
@@ -71,6 +72,7 @@ class TtLlamaModel_optimized(nn.Module):
         kv_unique_dir = str(int(time.time()))
         kv_cache_path = cache_path / kv_unique_dir
         # Ensure kv_cache_path exists
+        print("Creating Layers", flush=True)
         kv_cache_path.mkdir(parents=True, exist_ok=True)
         self.layers = [
             TtLlamaDecoder_optimized(
@@ -85,8 +87,10 @@ class TtLlamaModel_optimized(nn.Module):
                 cache_path=cache_path,
                 kv_cache_dir=kv_unique_dir,
             )
-            for i in range(n_layers)
+            for i in tqdm(range(n_layers))
         ]
+
+        print("Done creating layers", flush=True)
 
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
@@ -312,7 +316,9 @@ class TtLlamaModel_optimized(nn.Module):
                     norm_out_replicated[i],
                     self.lm_head_list[i],
                     program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                    # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                    # output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
