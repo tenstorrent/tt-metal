@@ -7,10 +7,11 @@ import pytest
 from loguru import logger
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, get_devices_for_t3000
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_wormhole_b0("watcher error")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
