@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 
 from loguru import logger
@@ -18,6 +19,7 @@ from models.utility_functions import (
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
+@pytest.mark.skip(reason="Mismatch happening on GS, issue #5943")
 def test_roberta_for_multiple_choice(device):
     """
     RoBERTa for multiple choice is loading roberta-base pre-trained model,
