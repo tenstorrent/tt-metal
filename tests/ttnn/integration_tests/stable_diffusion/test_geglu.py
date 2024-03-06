@@ -13,8 +13,10 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_geglu im
 from models.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",
@@ -78,6 +80,7 @@ def test_geglu_256x256(device, model_name, N, C, H, W, index, reset_seeds):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.96)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",

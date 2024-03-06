@@ -18,6 +18,7 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_2d_
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
+from models.utility_functions import skip_for_grayskull
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -43,6 +44,7 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     return t_emb
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
@@ -107,6 +109,7 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [

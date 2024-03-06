@@ -13,8 +13,10 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import torch_random
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downsample_2d import downsample_2d
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",
@@ -60,6 +62,7 @@ def test_downsample_2d_256x256(device, model_name, batch_size, in_channels, inpu
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",

@@ -12,6 +12,7 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.utility_functions import skip_for_grayskull
 
 
 def ttnn_to_torch(input):
@@ -21,6 +22,7 @@ def ttnn_to_torch(input):
     return input
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [
@@ -103,6 +105,7 @@ def test_resnet_block_2d_256x256(
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [

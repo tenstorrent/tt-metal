@@ -10,8 +10,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 def test_embeddings(
     device,
 ):

@@ -14,8 +14,10 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_at
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, in_channels",
@@ -108,6 +110,7 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
     assert_with_pcc(torch_output, ttnn_output, 0.98)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, in_channels",

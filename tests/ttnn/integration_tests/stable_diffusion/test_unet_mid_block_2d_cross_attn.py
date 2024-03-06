@@ -14,8 +14,10 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn import (
     unet_mid_block_2d_cross_attn,
 )
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [
@@ -107,6 +109,7 @@ def test_unet_mid_block_2d_cross_attn_256x256(device, model_name, hidden_state_s
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [

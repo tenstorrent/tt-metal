@@ -13,8 +13,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 4, 4], [2, 1280, 4, 4], [2, 1280, 4, 4])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 4, 4]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
@@ -77,6 +79,7 @@ def test_upblock_256x256(reset_seeds, device, res_hidden_states_tuple, hidden_st
     assert_with_pcc(torch_output, op, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
