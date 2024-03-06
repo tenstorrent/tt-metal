@@ -58,7 +58,7 @@ class TTNNOperation(PClass):
 
 class TracedTTNNTensor(ttnn.Tensor, torchtrail.tracer.TracedTensor):
     def __init__(self, tensor: ttnn.Tensor, *, graph: MultiDiGraph, node: torchtrail.tracer.Node, output_index: int):
-        super().__init__(tensor.value)
+        super().__init__(tensor)
         self.graph: MultiDiGraph = graph
         self.node: torchtrail.tracer.Node = node
         self.output_index: int = output_index

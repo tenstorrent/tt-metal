@@ -349,12 +349,9 @@ def mul(
 
     original_shape = input_tensor_a.shape
     input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-    ttl_input_tensor_a = input_tensor_a.value
 
     if not isinstance(input_tensor_a, ttnn.Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-    ttl_input_tensor_a = input_tensor_a.value
 
     if not ttnn.has_storage_type_of(input_tensor_a, ttnn.experimental.tensor.StorageType.DEVICE):
         raise RuntimeError("input_tensor_a must be on device!")
@@ -362,7 +359,7 @@ def mul(
     if _is_scalar(input_tensor_b):
         return ttnn.reshape(
             ttnn.experimental.tensor.mul_unary(
-                ttl_input_tensor_a,
+                input_tensor_a,
                 input_tensor_b,
                 output_mem_config=memory_config,
             ),
@@ -380,13 +377,12 @@ def mul(
         *_, height_b, width_b = input_shape_b
 
     input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-    ttl_input_tensor_b = input_tensor_b.value
 
     if height_b == 1 and width_b == 1:
         return ttnn.reshape(
             ttnn.experimental.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
+                input_tensor_a,
+                input_tensor_b,
                 ttnn.experimental.tensor.BcastOpMath.MUL,
                 ttnn.experimental.tensor.BcastOpDim.HW,
                 output_mem_config=memory_config,
@@ -396,8 +392,8 @@ def mul(
     elif height_b == 1:
         return ttnn.reshape(
             ttnn.experimental.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
+                input_tensor_a,
+                input_tensor_b,
                 ttnn.experimental.tensor.BcastOpMath.MUL,
                 ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=memory_config,
@@ -407,8 +403,8 @@ def mul(
     elif width_b == 1:
         return ttnn.reshape(
             ttnn.experimental.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
+                input_tensor_a,
+                input_tensor_b,
                 ttnn.experimental.tensor.BcastOpMath.MUL,
                 ttnn.experimental.tensor.BcastOpDim.W,
                 output_mem_config=memory_config,
@@ -417,7 +413,7 @@ def mul(
         )
 
     return ttnn.reshape(
-        ttnn.experimental.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config),
+        ttnn.experimental.tensor.mul(input_tensor_a, input_tensor_b, output_mem_config=memory_config),
         original_shape,
     )
 
@@ -510,8 +506,6 @@ def add_and_apply_activation(
         }
         fused_activations = activations_map[activation]
 
-    input_tensor_a = input_tensor_a.value
-    input_tensor_b = input_tensor_b.value
     output = ttnn.experimental.tensor.add_without_autoformat(
         input_tensor_a,
         input_tensor_b,
@@ -651,18 +645,10 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         original_shape = input_tensor_a.shape
 
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        ttl_input_tensor_a = input_tensor_a.value
-
         input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-        ttl_input_tensor_b = input_tensor_b.value
 
-        ttl_output_tensor = ttl_elt_binary_function(
-            ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config
-        )
+        output_tensor = ttl_elt_binary_function(input_tensor_a, input_tensor_b, output_mem_config=memory_config)
 
-        ttl_input_tensor_a = input_tensor_a.value
-        ttl_input_tensor_b = input_tensor_b.value
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 

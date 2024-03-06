@@ -62,9 +62,9 @@ def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=Fal
     )
 
     parameters = {}
-    parameters["weight"] = ttnn.Tensor(conv.conv.weight)
+    parameters["weight"] = conv.conv.weight
     if bias is not None:
-        parameters["bias"] = ttnn.Tensor(conv.conv.bias)
+        parameters["bias"] = conv.conv.bias
     if return_parallel_config:
         return parameters, conv.get_parallel_config()
     else:
