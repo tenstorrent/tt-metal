@@ -1362,6 +1362,29 @@ std::vector<Tensor> trunc_bw(const Tensor& grad, const Tensor& input, const Memo
 {
     return operation::decorate_as_composite(__func__, _trunc_bw)(grad, input, output_mem_config);
 }
+
+// return: grad_output * (max_deriv - sign * (z / (1 + z)))
+// z = exp(-abs(input))
+std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor max_deriv = where(ltz(input, output_mem_config), 1, 0, output_mem_config);
+    Tensor in_sign = where(ltz(input, output_mem_config), 1, -1, output_mem_config);
+    Tensor in_abs = abs(input, output_mem_config);
+    Tensor z = exp(neg(in_abs, output_mem_config), output_mem_config);
+
+    Tensor mul_z = mul(z, recip((add1(z , output_mem_config)), output_mem_config), std::nullopt, output_mem_config);
+
+    Tensor mul_sign = mul(in_sign, mul_z, std::nullopt, output_mem_config);
+    Tensor sub_max = sub(max_deriv, mul_sign, std::nullopt, output_mem_config);
+
+    Tensor grad_result =  mul(grad, sub_max, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt

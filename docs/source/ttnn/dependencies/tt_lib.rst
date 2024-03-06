@@ -1016,6 +1016,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.frac_bw
 
+.. autofunction:: tt_lib.tensor.log_sigmoid_bw
+
 Loss Functions
 ==============
 
