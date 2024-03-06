@@ -44,7 +44,7 @@ extern uint8_t noc_index;
 #define DEBUG_VALID_L1_ADDR(a, l) ((a >= MEM_L1_BASE) && \
                                    (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && \
                                    ((a) + (l) > (a)) && \
-                                   ((a % 16) == 0))
+                                   ((a % NOC_L1_ALIGNMENT_BYTES) == 0))
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
 #define DEBUG_VALID_REG_ADDR(a)                                                        \
@@ -55,15 +55,15 @@ extern uint8_t noc_index;
 #define DEBUG_VALID_PCIE_ADDR(a, l) (((a) >= NOC_PCIE_ADDR_BASE) && \
                                      ((a) + (l) <= NOC_PCIE_ADDR_END) && \
                                      ((a) + (l) > (a)) && \
-                                     ((a % 32) == 0))
+                                     ((a % NOC_PCIE_ALIGNMENT_BYTES) == 0))
 #define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && \
                                      ((a) + (l) <= NOC_DRAM_ADDR_END) && \
                                      ((a) + (l) > (a)) && \
-                                     ((a % 32) == 0))
+                                     ((a % NOC_DRAM_ALIGNMENT_BYTES) == 0))
 
 #define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && \
                                     ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE) && \
-                                    ((a % 16) == 0))
+                                    ((a % NOC_L1_ALIGNMENT_BYTES) == 0))
 
 inline uint32_t debug_sanitize_get_which_riscv()
 {
