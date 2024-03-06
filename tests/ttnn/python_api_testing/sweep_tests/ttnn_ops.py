@@ -1996,8 +1996,6 @@ def clip(
 
     return ttnn_tensor_to_torch(t1)
 
-
-<<<<<<< HEAD
 def repeat_interleave(
     x,
     *args,
@@ -2075,6 +2073,7 @@ def groupnorm(
 
     return ttnn_tensor_to_torch(t3)
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 
 def eltwise_addcdiv(
