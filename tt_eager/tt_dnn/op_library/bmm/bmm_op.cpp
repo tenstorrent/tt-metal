@@ -1247,8 +1247,14 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
     const auto& out_shape = output_tensors.at(0).get_legacy_shape();
 
     // GS Specific parameters
-    int num_cores = 9 * 12;
-    int tensix_mul_adds_per_cycle_lofi = 2048;
+    const auto& t = output_tensors.at(0);
+    if(t.storage_type() != StorageType::DEVICE) {
+        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+    const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
+    const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
