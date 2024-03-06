@@ -16,7 +16,10 @@ const unordered_set<EnqueueCommandType> trace_supported_commands = {
     EnqueueCommandType::ENQUEUE_PROGRAM,
 };
 
-Trace::Trace() : trace_complete(false), num_data_bytes(0) {
+unordered_map<uint32_t, shared_ptr<Buffer>> Trace::buffer_pool;
+std::mutex Trace::pool_mutex;
+
+Trace::Trace() : capture_complete(false), num_data_bytes(0) {
     this->tq = std::make_unique<CommandQueue>(this);
 }
 
@@ -36,14 +39,14 @@ void Trace::validate() {
     }
 }
 
-uint32_t Trace::next_trace_id() {
+uint32_t Trace::next_id() {
     static uint32_t global_trace_id = 0;
     return global_trace_id++;
 }
 
 uint32_t Trace::instantiate(CommandQueue& cq) {
-    uint32_t trace_id = next_trace_id();
-    TT_FATAL(this->has_instance(trace_id) == false, "Trace ID " + std::to_string(trace_id) + " already exists");
+    uint32_t tid = next_id();
+    TT_FATAL(this->has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
 
     // Stage the trace commands into device DRAM that the command queue will read from
     // - flatten commands into tightly packed data structure
@@ -84,12 +87,32 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
         TensorMemoryLayout::INTERLEAVED);
 
     // Pin the trace buffer in memory through trace memory mgmt
-    trace_buffer_pool.insert({trace_id, trace_buffer});
+    this->add_instance(tid, trace_buffer);
 
     // Commit the trace buffer to device DRAM in a blocking fashion
     // Optional optimization: use a non-blocking enqueue WB command
     EnqueueWriteBuffer(cq, trace_buffer, trace_data, true);
-    return trace_id;
+    return tid;
 }
 
+bool Trace::has_instance(const uint32_t tid) {
+    return _safe_pool([&] {
+        return Trace::buffer_pool.find(tid) != Trace::buffer_pool.end();
+    });
 }
+
+void Trace::add_instance(const uint32_t tid, shared_ptr<Buffer> buffer) {
+    _safe_pool([&] {
+        TT_FATAL(Trace::buffer_pool.find(tid) == Trace::buffer_pool.end());
+        Trace::buffer_pool.insert({tid, buffer});
+    });
+}
+
+void Trace::remove_instance(const uint32_t tid) {
+    _safe_pool([&] {
+        TT_FATAL(Trace::buffer_pool.find(tid) != Trace::buffer_pool.end());
+        Trace::buffer_pool.erase(tid);
+    });
+}
+
+}  // namespace tt::tt_metal

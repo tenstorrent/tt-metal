@@ -1553,14 +1553,14 @@ void FinishImpl(CommandQueue& cq) {
 }
 
 CommandQueue& BeginTrace(Trace& trace) {
-    TT_ASSERT(not trace.trace_complete, "Already completed this trace");
+    TT_ASSERT(not trace.captured(), "Already completed this trace");
     TT_ASSERT(trace.queue().empty(), "Cannot begin trace on one that already captured commands");
     return trace.queue();
 }
 
 void EndTrace(Trace& trace) {
-    TT_ASSERT(not trace.trace_complete, "Already completed this trace");
-    trace.trace_complete = true;
+    TT_ASSERT(not trace.captured(), "Already completed this trace");
+    trace.captured(true);
     trace.validate();
 }
 
@@ -1618,11 +1618,7 @@ CommandQueue::~CommandQueue() {
     if (this->async_mode()) {
         this->stop_worker();
     }
-    if (this->trace_mode()) {
-        TT_ASSERT(this->trace()->trace_complete, "Trace capture must be complete before desctruction");
-    } else {
-        TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
-    }
+    TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
 }
 
 HWCommandQueue& CommandQueue::hw_command_queue() {

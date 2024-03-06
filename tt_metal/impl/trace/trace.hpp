@@ -33,9 +33,9 @@ using std::weak_ptr;
 class CommandQueue;
 enum class EnqueueCommandType;
 
-// Trace instance id to buffer mapping mananged via instantiate and release calls
-// a static map keeps trace buffers alive until explicitly released by the user
-static unordered_map<uint32_t, shared_ptr<Buffer>> trace_buffer_pool;
+// namespace trace {
+// static unordered_map<uint32_t, shared_ptr<Buffer>> buffer_pool;
+// }
 
 class Trace {
    // TODO: delete the extra bloat not needed once implementation is complete
@@ -47,29 +47,53 @@ class Trace {
         uint32_t num_data_bytes;
     };
 
-    bool trace_complete;
+    bool capture_complete;
     vector<TraceNode> history;
     uint32_t num_data_bytes;
 
     // Trace queue used to capture commands
     unique_ptr<CommandQueue> tq;
 
-    static uint32_t next_trace_id();
-    void record(const TraceNode& trace_node);
-    void validate();
+    // Trace instance id to buffer mapping mananged via instantiate and release calls
+    // a static map keeps trace buffers alive until explicitly released by the user
+    static unordered_map<uint32_t, shared_ptr<Buffer>> buffer_pool;
 
-    friend class CommandQueue;
+    // Thread safe accessor to trace::buffer_pool
+    static std::mutex pool_mutex;
+    template <typename Func>
+    static inline auto _safe_pool(Func func) {
+        std::lock_guard<std::mutex> lock(Trace::pool_mutex);
+        return func();
+    }
+
+    // Internal methods
+    void record(const TraceNode& trace_node);
+    static uint32_t next_id();
+
+    // Friends of trace class
     friend class EnqueueProgramCommand;
-    friend CommandQueue& BeginTrace(Trace& trace);
-    friend void EndTrace(Trace& trace);
-    friend void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
+    friend void EnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<reference_wrapper<Buffer>, shared_ptr<Buffer> > buffer, vector<uint32_t>& src, bool blocking);
 
    public :
     Trace();
+    ~Trace() { TT_FATAL(this->captured(), "Trace capture incomplete before destruction!"); }
+
+    // Return the captured trace queue
     CommandQueue& queue() const { return *tq; };
-    uint32_t instantiate(CommandQueue& tq);  // return a unique trace id
-    static bool has_instance(uint32_t trace_id) { return trace_buffer_pool.find(trace_id) != trace_buffer_pool.end(); }
+
+    // Stages a trace buffer into device DRAM via the CQ passed in and returns a unique trace id
+    uint32_t instantiate(CommandQueue& tq);
+
+    // Trace capture validation, completion query and setter
+    void validate();
+    bool captured() { return this->capture_complete; }
+    void captured(bool complete) { this->capture_complete = complete; }
+
+    // Thread-safe accessors to manage trace instances
+    static bool has_instance(const uint32_t tid);
+    static void add_instance(const uint32_t tid, shared_ptr<Buffer> buffer);
+    static void remove_instance(const uint32_t tid);
 };
 
-}
+}  // namespace tt::tt_metal

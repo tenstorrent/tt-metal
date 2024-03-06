@@ -576,7 +576,6 @@ class CommandQueue {
 
     friend class Trace;
     friend void EnqueueTraceImpl(CommandQueue& cq);
-    friend uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq);
 
     // Initialize Command Queue Mode based on the env-var. This will be default, unless the user excplictly sets the mode using set_mode.
     CommandQueueMode mode;
