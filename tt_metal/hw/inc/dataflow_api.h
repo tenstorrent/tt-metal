@@ -29,8 +29,6 @@
 
 extern uint8_t noc_index;
 
-#define FORCE_INLINE inline __attribute__((always_inline))
-
 /** @file */
 
 /**
