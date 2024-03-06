@@ -11,7 +11,6 @@ test-list:
         method: groupnorm
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: -10
           high: 10
@@ -35,7 +34,6 @@ test-list:
         method: groupnorm
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: -10
           high: 10
