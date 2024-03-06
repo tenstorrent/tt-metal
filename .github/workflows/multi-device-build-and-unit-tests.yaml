@@ -3,8 +3,7 @@ name: "[post-commit] Fast/Slow Dispatch multi-Nebula unit tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1,7,9,14,17,19,21 * * *"
-    - cron: "0 5 * * *"
+    - cron: "0 1,4,7,9,14,17,19,21 * * *"
 
 jobs:
   tests-multi-device:
@@ -28,24 +27,15 @@ jobs:
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
-      - id: get-continue-running
-        name: Deduce whether to continue running
-        run: |
-          echo "continue-running=${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 5 * * *' && matrix.runner-info.nightly || !matrix.runner-info.nightly }}" >> "$GITHUB_OUTPUT"
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
       - name: Set up dyanmic env vars for build
-        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: make build
       - name: Build tt-metal CPP tests
-        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: make tests
       - name: Run pre/post regression tests
-        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         timeout-minutes: 30
         run: |
           source build/python_env/bin/activate
