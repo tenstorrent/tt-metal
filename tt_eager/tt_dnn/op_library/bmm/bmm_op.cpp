@@ -1202,6 +1202,53 @@ Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, kernel_config_val);
 }
 
+operation::OpPerformanceModel Matmul::create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor> &output_tensors
+    ) const {
+
+    const auto& in_a_shape = input_tensors.at(0).get_legacy_shape();
+    const auto& in_b_shape = input_tensors.at(1).get_legacy_shape();
+    const auto& out_shape = output_tensors.at(0).get_legacy_shape();
+
+    // GS Specific parameters
+    int num_cores = 9 * 12;
+    int tensix_mul_adds_per_cycle_lofi = 2048;
+
+    // Calculate number of mul/add operations
+    // TODO: add bias modeling
+    int64_t num_mul_adds_per_elem = in_a_shape[3] * 2; // 1 multiply and 1 add per element
+    int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[2] * out_shape[3] * out_shape[1] * out_shape[0];
+
+    MathFidelity math_fidelity = MathFidelity::Invalid;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+    }, this->compute_kernel_config);
+
+
+    int ideal_dev_clock_cycles = std::ceil(((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) * (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+
+    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
+#if 0
+    tt::log_info(tt::LogOp, "Matmul PerfModel:");
+    tt::log_info(tt::LogOp, "\t Batch: ({}, {})", out_shape[0], out_shape[1]);
+    tt::log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[2], in_a_shape[3]);
+    tt::log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[2], in_b_shape[3]);
+    tt::log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[2], out_shape[3]);
+    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+#endif
+    return result;
+}
+
 }  // namespace primary
 
 }  // namespace operations

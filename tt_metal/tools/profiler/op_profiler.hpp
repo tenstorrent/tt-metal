@@ -120,6 +120,8 @@ namespace op_profiler {
             string parlStrategy = "";
             string preferredName = "";
 
+            operation::OpPerformanceModel perf_model;
+
             OpType type;
 
             OpData (string opName, int opCount, int globalCount, int stackSizeArg, OpType typeArg):
@@ -216,7 +218,11 @@ namespace op_profiler {
                     additionalFields.push_back({"Preferred Name", opData.preferredName});
                     additionalFields.push_back({"Meta Data", join_vector(opData.metaDataVector)});
                     additionalFields.push_back({"Type", fmt::format("{}",magic_enum::enum_name(opData.type))});
-
+                    additionalFields.push_back({"PM Ideal ns", fmt::format("{}", opData.perf_model.get_ideal_ns())});
+                    additionalFields.push_back({"PM Compute ns", fmt::format("{}", opData.perf_model.get_compute_ns())});
+                    additionalFields.push_back({"PM Bandwidth ns", fmt::format("{}", opData.perf_model.get_bandwidth_ns())});
+                    additionalFields.push_back({"PM Req I BW", fmt::format("{}",fmt::join(opData.perf_model.get_input_bws(), "|"))});
+                    additionalFields.push_back({"PM Req O BW", fmt::format("{}",fmt::join(opData.perf_model.get_output_bws(), "|"))});
                     return additionalFields;
                 }
 
@@ -339,6 +345,12 @@ namespace op_profiler {
                     string noDashMetaData = replace_comma(metaData);
                     std::replace( noDashMetaData.begin(), noDashMetaData.end(), '-', '_');
                     get_op_data().metaDataVector.push_back(noDashMetaData);
+#endif
+                }
+
+                void set_perf_model (const operation::OpPerformanceModel& m) {
+#if defined(PROFILER)
+                    get_op_data().perf_model = m;
 #endif
                 }
 
@@ -536,6 +548,12 @@ namespace op_profiler {
             auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
             detail::operationProfiler.append_kernel_info(kernel.get());
         }
+#endif
+    }
+
+    static void set_perf_model(const operation::OpPerformanceModel& m) {
+#if defined(PROFILER)
+        detail::operationProfiler.set_perf_model(m);
 #endif
     }
 
