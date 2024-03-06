@@ -13,16 +13,23 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 
+constexpr uint32_t DEFAULT_TEST_TYPE = 0;
+constexpr uint32_t WORKER_DATA_SIZE = 768 * 1024;
+constexpr uint32_t MAX_PAGE_SIZE = 64 * 1024;
+constexpr uint32_t MAX_DRAM_READ_SIZE = 256 * 1024;
+constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
+constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
+
 constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
 constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
 // 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
 constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
-constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024;
+constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HOST_Q_ENTRIES = 128;
 constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
-constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 64 * 1024;
-constexpr uint32_t DEFAULT_SCRATCH_CB_SIZE = 128 * 1024;
+constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024;
+constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
@@ -32,6 +39,10 @@ constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << HOST_Q_LOG_MINSIZE) > CQ_PREFETCH
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 constexpr uint32_t DRAM_HACKED_BASE_ADDR = 1024 * 1024;  // don't interfere w/ fast dispatch storing our kernels...
+constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
+
+constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
+
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -42,7 +53,6 @@ using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 bool warmup_g = false;
-uint32_t prefetcher_iterations_g = 1;
 bool debug_g;
 uint32_t max_prefetch_command_size_g;
 
@@ -50,11 +60,18 @@ uint32_t dispatch_buffer_page_size_g = 4096;
 uint32_t host_q_entries_g;
 uint32_t hugepage_buffer_size_g;
 uint32_t cmddat_q_size_g;
-uint32_t scratch_cb_size_g;
+uint32_t scratch_db_size_g;
 uint32_t num_dram_banks_g;
 bool use_coherent_data_g;
+uint32_t test_type_g;
+bool readback_every_iteration_g;
+uint32_t big_g;
+uint32_t pcie_transfer_size_g;
+uint32_t dram_page_size_g;
+uint32_t dram_pages_to_read_g;
 
-static bool initialize_device_g = true;
+uint32_t bytes_of_data_g = 0;
+bool initialize_device_g = true;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -64,13 +81,20 @@ void init(int argc, char **argv) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
+        log_info(LogTest, "  -t: test type: 0:Smoke 1:Random 2:PCIe, 3:DRAM (default {})", DEFAULT_TEST_TYPE);
+        log_info(LogTest, "  -b: run a \"big\" test (fills memory w/ fewer transactions) (default false)", DEFAULT_TEST_TYPE);
+        log_info(LogTest, "  -rb: gen data, readback and test every iteration (default false)");
         log_info(LogTest, "  -d: wrap all commands in debug commands (default disabled)");
         log_info(LogTest, "  -hp: host huge page buffer size (default {})", DEFAULT_HUGEPAGE_BUFFER_SIZE);
         log_info(LogTest, "  -hq: host queue entries (default {})", DEFAULT_HOST_Q_ENTRIES);
         log_info(LogTest, "  -cs: max cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_CB_SIZE);
+        log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
+        log_info(LogTest, "  -pcies: size of data to transfer in pcie bw test type (default )", PCIE_TRANSFER_SIZE_DEFAULT);
+        log_info(LogTest, "  -dpgs: dram page size in dram bw test type (default )", DRAM_PAGE_SIZE_DEFAULT);
+        log_info(LogTest, "  -dpgr: dram pages to read in dram bw test type (default )", DRAM_PAGES_TO_READ_DEFAULT);
         log_info(LogTest, "  -c: use coherent data as payload (default false)");
+        log_info(LogTest, "  -s: seed for randomized tests (default 1)");
         exit(0);
     }
 
@@ -79,10 +103,19 @@ void init(int argc, char **argv) {
     hugepage_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_BUFFER_SIZE);
     host_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_HOST_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    scratch_cb_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_CB_SIZE);
+    scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     max_prefetch_command_size_g = test_args::get_command_option_uint32(input_args, "-mc", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
+    readback_every_iteration_g = test_args::has_command_option(input_args, "-rb");
+    pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
+    pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
+    dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
+    dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
 
+    test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
+    uint32_t seed = test_args::get_command_option_uint32(input_args, "-s", 1);
+    std::srand(seed);
+    big_g = test_args::has_command_option(input_args, "-b");
     debug_g = test_args::has_command_option(input_args, "-d");
 }
 
@@ -261,15 +294,144 @@ void gen_dram_read_cmd(vector<uint32_t>& prefetch_cmds,
     add_dram_data_to_worker_data(dram_data, worker_data, start_page, base_addr, page_size, pages);
 }
 
-void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
-                         vector<uint16_t>& cmd_sizes,
-                         const vector<uint32_t>& dram_data,
-                         vector<uint32_t>& worker_data,
-                         CoreCoord worker_core,
-                         uint32_t dst_addr) {
+void gen_dram_test(vector<uint32_t>& prefetch_cmds,
+                   vector<uint16_t>& cmd_sizes,
+                   const vector<uint32_t>& dram_data,
+                   vector<uint32_t>& worker_data,
+                   CoreCoord worker_core,
+                   uint32_t dst_addr) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    while (worker_data.size() * sizeof(uint32_t) < WORKER_DATA_SIZE) {
+        dispatch_cmds.resize(0);
+        uint32_t start_page = 0;
+        uint32_t base_addr = 0;
+        gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+
+        bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
+    }
+}
+
+void gen_pcie_test(vector<uint32_t>& prefetch_cmds,
+                   vector<uint16_t>& cmd_sizes,
+                   const vector<uint32_t>& dram_data,
+                   vector<uint32_t>& worker_data,
+                   CoreCoord worker_core,
+                   uint32_t dst_addr) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    while (worker_data.size() * sizeof(uint32_t) < WORKER_DATA_SIZE) {
+        dispatch_cmds.resize(0);
+        gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, pcie_transfer_size_g);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        bytes_of_data_g += pcie_transfer_size_g;
+    }
+}
+
+void gen_rnd_dram_paged_cmd(vector<uint32_t>& prefetch_cmds,
+                            vector<uint16_t>& cmd_sizes,
+                            const vector<uint32_t>& dram_data,
+                            vector<uint32_t>& worker_data,
+                            CoreCoord worker_core,
+                            uint32_t dst_addr) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    uint32_t start_page = std::rand() % num_dram_banks_g;
+    uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
+    uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(DRAM_DATA_ALIGNMENT - 1);
+    if (page_size == 0) page_size = DRAM_DATA_ALIGNMENT;
+    uint32_t max_data = big_g ? WORKER_DATA_SIZE : WORKER_DATA_SIZE / 8;
+    uint32_t max = WORKER_DATA_SIZE - worker_data.size() * sizeof(uint32_t);
+    max = (max > max_data) ? max_data : max;
+    // start in bottom half of valid dram data to not worry about overflowing valid data
+    uint32_t base_addr = (std::rand() % (DRAM_DATA_SIZE_BYTES / 2)) & ~(DRAM_DATA_ALIGNMENT - 1);
+    uint32_t size = std::rand() % max;
+    if (size < page_size) size = page_size;
+    uint32_t pages = size / page_size;
+    TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      start_page, base_addr, page_size, pages);
+}
+
+void gen_rnd_inline_cmd(vector<uint32_t>& prefetch_cmds,
+                        vector<uint16_t>& cmd_sizes,
+                        vector<uint32_t>& worker_data,
+                        CoreCoord worker_core,
+                        uint32_t dst_addr) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    uint32_t cmd_size_bytes = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    if (debug_g) {
+        cmd_size_bytes += sizeof(CQDispatchCmd);
+    }
+    uint32_t max_size = big_g ? DEFAULT_MAX_PREFETCH_COMMAND_SIZE : DEFAULT_MAX_PREFETCH_COMMAND_SIZE / 16;
+    uint32_t max_xfer_size_16b = (max_size - cmd_size_bytes) >> 4;
+    uint32_t xfer_size_16B = (std::rand() & (max_xfer_size_16b - 1));
+    // Note: this may overflow the WORKER_DATA_SIZE, but by little enough that it won't overflow L1
+    uint32_t xfer_size_bytes = xfer_size_16B << 4;
+
+    gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core,
+                             dst_addr, xfer_size_bytes);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+}
+
+void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds,
+                       vector<uint16_t>& cmd_sizes,
+                       vector<uint32_t>& worker_data,
+                       CoreCoord worker_core,
+                       uint32_t dst_addr) {
+
+    vector<uint32_t> rnd_payload;
+    generate_random_payload(rnd_payload, std::rand() % (dispatch_buffer_page_size_g - sizeof(CQDispatchCmd)) + 1);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
+}
+
+void gen_rnd_test(vector<uint32_t>& prefetch_cmds,
+                  vector<uint16_t>& cmd_sizes,
+                  const vector<uint32_t>& dram_data,
+                  vector<uint32_t>& worker_data,
+                  CoreCoord worker_core,
+                  uint32_t dst_addr) {
+
+    while (worker_data.size() * sizeof(uint32_t) < WORKER_DATA_SIZE) {
+        // Assumes terminate is the last command...
+        uint32_t cmd = std::rand() % CQ_PREFETCH_CMD_TERMINATE;
+
+        switch (cmd) {
+        case CQ_PREFETCH_CMD_RELAY_PAGED:
+            gen_rnd_dram_paged_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr);
+            break;
+        case CQ_PREFETCH_CMD_RELAY_INLINE:
+            gen_rnd_inline_cmd(prefetch_cmds, cmd_sizes, worker_data, worker_core, dst_addr);
+            break;
+        case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
+            break;
+        case CQ_PREFETCH_CMD_STALL:
+            break;
+        case CQ_PREFETCH_CMD_DEBUG:
+            gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, worker_data, worker_core, dst_addr);
+            break;
+        }
+    }
+}
+
+void gen_smoke_test(vector<uint32_t>& prefetch_cmds,
+                    vector<uint16_t>& cmd_sizes,
+                    const vector<uint32_t>& dram_data,
+                    vector<uint32_t>& worker_data,
+                    CoreCoord worker_core,
+                    uint32_t dst_addr) {
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
+
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      2, 5722848, 53216, 1);
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
@@ -309,6 +471,29 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
                       5, 32, 2048, num_dram_banks_g * 8 + 1);
     gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       3, 128, 6144, num_dram_banks_g * 8 + 7);
+}
+
+void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
+                         vector<uint16_t>& cmd_sizes,
+                         const vector<uint32_t>& dram_data,
+                         vector<uint32_t>& worker_data,
+                         CoreCoord worker_core,
+                         uint32_t dst_addr) {
+
+    switch (test_type_g) {
+    case 0:
+        gen_smoke_test(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr);
+        break;
+    case 1:
+        gen_rnd_test(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr);
+        break;
+    case 2:
+        gen_pcie_test(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr);
+        break;
+    case 3:
+        gen_dram_test(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr);
+        break;
+    }
 }
 
 void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
@@ -384,6 +569,13 @@ void write_prefetcher_cmds(uint32_t iterations,
     static uint32_t host_q_dev_fence;
 
     if (initialize_device_g) {
+        vector<uint32_t> host_q(DEFAULT_HOST_Q_ENTRIES, 0);
+        vector<uint32_t> host_q_rd_ptr_addr_data;
+
+        host_q_rd_ptr_addr_data.push_back(host_q_base + host_q_entries_g * sizeof(uint16_t));
+        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q_rd_ptr_addr_data, host_q_rd_ptr_addr);
+        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q, host_q_base);
+
         host_mem_ptr = (uint32_t *)host_hugepage_base;
         host_q_dev_ptr = host_q_base;
         host_q_dev_fence = host_q_base + host_q_entries_g * sizeof(uint16_t);
@@ -424,7 +616,37 @@ void populate_dram(Device *device, vector<uint32_t>& dram_data)
     }
 }
 
+std::chrono::duration<double> run_test(uint32_t iterations,
+                                       Device *device,
+                                       Program& program,
+                                       vector<uint16_t>& cmd_sizes,
+                                       vector<uint16_t>& terminate_sizes,
+                                       vector<uint32_t>& cmds,
+                                       vector<uint32_t>& terminate_cmds,
+                                       void * host_hugepage_base,
+                                       uint32_t dev_hugepage_base,
+                                       uint32_t host_q_base,
+                                       uint32_t host_q_rd_ptr_addr,
+                                       CoreCoord phys_prefetch_core) {
+
+    auto start = std::chrono::system_clock::now();
+
+    std::thread t1 ([&]() {
+        write_prefetcher_cmds(iterations, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+    });
+    tt_metal::detail::LaunchProgram(device, program);
+    t1.join();
+
+    auto end = std::chrono::system_clock::now();
+
+    return end-start;
+}
+
 int main(int argc, char **argv) {
+    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+
     init(argc, argv);
 
     uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
@@ -433,8 +655,6 @@ int main(int argc, char **argv) {
     try {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-
-        CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -451,39 +671,32 @@ int main(int argc, char **argv) {
         TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
         uint32_t dispatch_buffer_base = l1_buf_base;
-        uint32_t dev_hugepage_base = 1 * 1024 * 1024 * 1024 - hugepage_buffer_size_g; // XXXXX HACK
+        uint32_t dev_hugepage_base = 0;
         uint32_t host_q_base = l1_buf_base;
         uint32_t host_q_rd_ptr_addr = l1_buf_base - 4; // XXXXX hacks and hacks and hacks
         uint32_t host_q_size = host_q_entries_g * sizeof(uint16_t);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = host_q_base + ((host_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        uint32_t scratch_cb_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_cb_base < 1024 * 1024); // L1 size
+        uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+        TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         // Implementation syncs w/ device on host_q but not on hugepage, ie, assumes we can't run
         // so far ahead in the hugepage that we overright un-read commands since we'll first
         // stall on the host_q
         TT_ASSERT(hugepage_buffer_size_g > host_q_entries_g * max_prefetch_command_size_g, "Shrink the max command size or grow the hugepage buffer size or shrink the host_q size");
-        TT_ASSERT(cmddat_q_size_g > 2 * max_prefetch_command_size_g);
+        TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
+        TT_ASSERT(scratch_db_size_g >= MAX_PAGE_SIZE);
 
+        // NOTE: this test hijacks hugepage
         void *host_hugepage_base;
-        {
-            // XXXXX HACKS - fix w/ allocator changes
-            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-            host_hugepage_base = (void*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-            host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base);
-        }
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        host_hugepage_base = (void*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
+        host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base);
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
         vector<uint32_t> worker_data;
-        vector<uint32_t> host_q(DEFAULT_HOST_Q_ENTRIES, 0);
-        vector<uint32_t> host_q_rd_ptr_addr_data;
-
-        host_q_rd_ptr_addr_data.push_back(host_q_base + host_q_entries_g * sizeof(uint16_t));
-        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q_rd_ptr_addr_data, host_q_rd_ptr_addr);
-        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q, host_q_base);
 
         vector<uint32_t> dram_data;
         populate_dram(device, dram_data);
@@ -524,8 +737,8 @@ int main(int argc, char **argv) {
              host_q_rd_ptr_addr,
              cmddat_q_base,
              cmddat_q_size_g,
-             scratch_cb_base,
-             scratch_cb_size_g
+             scratch_db_base,
+             scratch_db_size_g
         };
 
         auto sp1 = tt_metal::CreateKernel(
@@ -539,9 +752,6 @@ int main(int argc, char **argv) {
                 .defines = defines
             }
         );
-        vector<uint32_t> args;
-        args.push_back(prefetcher_iterations_g);
-        tt_metal::SetRuntimeArgs(program, sp1, prefetch_core, args);
 
         auto d1 = tt_metal::CreateKernel(
             program,
@@ -555,38 +765,63 @@ int main(int argc, char **argv) {
             }
         );
 
+        log_info(LogTest, "Huagepage buffer size {}", std::to_string(hugepage_buffer_size_g));
         log_info(LogTest, "Prefetch host_q entries {}", std::to_string(host_q_entries_g));
+        log_info(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
+        log_info(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));
+        log_info(LogTest, "Max command size {}", std::to_string(max_prefetch_command_size_g));
+        if (test_type_g == 2) {
+            log_info(LogTest, "PCIE transfer size {}", std::to_string(pcie_transfer_size_g));
+        }
+        if (test_type_g == 3) {
+            log_info(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
+            log_info(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
+        }
+        if (debug_g) {
+            log_info(LogTest, "Debug mode enabled");
+        }
+        log_info(LogTest, "Iterations: {}", iterations_g);
 
         // Cache stuff
         if (warmup_g) {
-            EnqueueProgram(cq, program, false);
-            write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
-            write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
-            Finish(cq);
+            std::thread t1 ([&]() {
+                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+            });
+            tt_metal::detail::LaunchProgram(device, program);
+            t1.join();
             initialize_device_g = true;
         }
 
-        auto start = std::chrono::system_clock::now();
-        EnqueueProgram(cq, program, false);
-        write_prefetcher_cmds(iterations_g, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
-        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
-        Finish(cq);
-
-        auto end = std::chrono::system_clock::now();
-
-        pass &= validate_results(device, phys_worker_core, worker_data, l1_buf_base);
-
-        std::chrono::duration<double> elapsed_seconds = (end-start);
-        log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-        log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
-        if (iterations_g == 1) {
-            float bw = (float)worker_data.size() * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
-            std::stringstream ss;
-            ss << std::fixed << std::setprecision(3) << bw;
-            log_info(LogTest, "BW: {} GB/s", ss.str());
+        if (readback_every_iteration_g) {
+            for (int i = 0; i < iterations_g; i++) {
+                log_info(LogTest, "Iteration: {}", std::to_string(i));
+                initialize_device_g = true;
+                cmds.resize(0);
+                cmd_sizes.resize(0);
+                worker_data.resize(0);
+                gen_prefetcher_cmds(cmds, cmd_sizes, dram_data, worker_data, phys_worker_core, l1_buf_base);
+                run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+                pass &= validate_results(device, phys_worker_core, worker_data, l1_buf_base);
+                if (!pass) {
+                    break;
+                }
+            }
         } else {
-            log_info(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
+            auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+
+            log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+            log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
+            if (test_type_g == 2 || test_type_g == 3) {
+                float bw = bytes_of_data_g * iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
+                std::stringstream ss;
+                ss << std::fixed << std::setprecision(3) << bw;
+                log_info(LogTest, "BW: {} GB/s", ss.str());
+            } else {
+                log_info(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
+            }
         }
+
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
