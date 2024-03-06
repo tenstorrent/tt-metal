@@ -679,17 +679,18 @@ ALWI void dbg_unhalt() {
  * Example usage:
  *            dbg_halt()
  *            MATH({
- *                uint32_t rd_data[17];        // 16 for data, 1 for array_type
- *                for (int row = 0; row < 32; row++) {
- *                    dbg_thread_dump_dest_acc_row(2*row, rd_data);
- *                    dbg_thread_dump_dest_acc_row(2*row+1, rd_data+8);
- *                    DPRINT_MATH(DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 16) << ENDL());
- *                }
- *            })
+ *               uint32_t rd_data[8+1]; // data + array_type
+ *               for (int row = 0; row < 64; row++) {
+ *                   // We read 8 dwords at the time, but the full row is 16 dwords
+ *                   dbg_read_dest_acc_row(row, rd_data);
+ *                   DPRINT_MATH(DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 8));
+ *                   if (row % 2 == 1) DPRINT_MATH(DPRINT << ENDL());
+ *               }
+*            })
  *            dbg_unhalt()
  * Return value: None
 */
-ALWI void dbg_thread_dump_dest_acc_row(int row_addr, uint32_t *rd_data) {
+ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t *rd_data) {
     MATH (( dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
 }
 
