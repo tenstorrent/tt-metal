@@ -111,14 +111,14 @@ def test_resnet_block_2d_256x256(
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [
-        # (2, 320, 64, 64, 0, 0, "down", None),
+        (2, 320, 64, 64, 0, 0, "down", None),
         # (2, 320, 32, 32, 0, 0, "down", None),
         # (2, 640, 32, 32, 1, 1, "down", None),
         # (2, 640, 16, 16, 1, 1, "down", None),
         # (2, 1280, 16, 16, 2, 1, "down", None),
         # (2, 1280, 8, 8, 2, 1, "down", None),
         # (2, 2560, 8, 8, 0, 0, "up", 1280),
-        (2, 2560, 16, 16, 0, 0, "up", 1280),
+        # (2, 2560, 16, 16, 0, 0, "up", 1280),
         # (2, 1920, 16, 16, 2, 0, "up", 1280),
         # (2, 1920, 32, 32, 2, 0, "up", 640),
         # (2, 1280, 32, 32, 3, 0, "down", None),
