@@ -12,8 +12,6 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetcher.hpp"
 
-#define FORCE_INLINE inline __attribute__((always_inline))
-
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t *ptr = (volatile uint32_t *)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;

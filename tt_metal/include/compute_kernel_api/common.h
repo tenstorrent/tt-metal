@@ -10,8 +10,6 @@
 #include "compute_kernel_api/unpack.h"
 #include "compute_kernel_api/cb_api.h"
 
-#define FORCE_INLINE inline __attribute__((always_inline))
-
 /**
  * Returns the address in L1 for a given runtime argument index
  *
