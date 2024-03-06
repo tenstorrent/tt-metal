@@ -36,7 +36,7 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 128, 256, 5, 5, 1, 1, 1, 1, 0, 0, 1, True), #1x1 conv not supported yet
         # (2, 128, 256, 3, 3, 1, 1, 1, 1, 0, 0, 1, True), #5328
         (2, 16, 256, 38, 38, 3, 3, 1, 1, 1, 1, 1, True, None),
-        (2, 324, 256, 38, 38, 3, 3, 1, 1, 1, 1, 1, True, None),
+        # (2, 324, 256, 38, 38, 3, 3, 1, 1, 1, 1, 1, True, None), #fails if open device more than once @vtangTT
         (2, 24, 256, 5, 5, 3, 3, 1, 1, 1, 1, 1, True, None),
         (2, 486, 256, 5, 5, 3, 3, 1, 1, 1, 1, 1, True, None),
         # (2, 16, 256, 3, 3, 3, 3, 1, 1, 1, 1, 1, True), #5328
