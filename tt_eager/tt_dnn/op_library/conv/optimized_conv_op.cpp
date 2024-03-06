@@ -134,24 +134,15 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
     uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
-    if (untilize_out) {
-        // RM output has unpadded output height and padded output width to 32.
-        // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-        // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
-        //assert(batch_size == 1); // batch size > 1 not tested with "untilize_out" (TODO)
-        auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-        Shape output_tensor_shape = {batch_size, conv_output_h, conv_output_w, output_channels};
-        return {output_tensor_shape};
-    } else {
-        // Tiled output shape is padded shape. Padded to tile shape.
-        auto shape_w = batch_size * conv_output_h * conv_output_w;
-        auto shape_c = output_channels;
-        auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
-        auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
-        auto output_padding = Padding({{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Any);
-        auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
-        return {output_tensor_shape};
-    }
+    // Tiled output shape is padded shape. Padded to tile shape.
+    auto shape_w = batch_size * conv_output_h * conv_output_w;
+    auto shape_c = output_channels;
+    auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
+    auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
+    auto output_padding = Padding(
+        {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
+    auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
+    return {output_tensor_shape};
 }
 
 std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
