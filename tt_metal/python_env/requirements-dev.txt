@@ -28,7 +28,6 @@ torch-fidelity==0.3.0
 transformers==4.37.2
 tqdm==4.65.0
 sentencepiece==0.1.97
-numba==0.58.1
 timm==0.6.13
 diffusers==0.12.1
 accelerate==0.27.2
