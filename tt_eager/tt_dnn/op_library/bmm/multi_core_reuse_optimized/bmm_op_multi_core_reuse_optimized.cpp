@@ -29,7 +29,9 @@ operation::ProgramWithCallbacks create_program(
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
     const Tensor& in0, const Tensor& in1, const Tensor& output,
-    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat output_data_format
+    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat output_data_format,
+    bool untilize_out
+
 ) {
 
     tt_metal::Program program{};
@@ -209,7 +211,9 @@ operation::ProgramWithCallbacks create_program(
         out_subblock_w, // out_subblock_w
         out_subblock_num_tiles, // out_subblock_num_tiles
         num_blocks_per_core_group_1, // batch
-        out_block_tiles
+        out_block_tiles,
+
+        untilize_out
     };
 
     std::map<string, string> mm_kernel_defines;
@@ -244,7 +248,9 @@ operation::ProgramWithCallbacks create_program(
             out_subblock_w, // out_subblock_w
             out_subblock_num_tiles, // out_subblock_num_tiles
             num_blocks_per_core_group_2, // batch
-            out_block_tiles
+            out_block_tiles,
+
+            untilize_out
         };
         auto mm_kernel_group_2_id = tt_metal::CreateKernel(
             program,
@@ -471,7 +477,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out) {
 
     // Pass in a and b shapes instead
 
@@ -569,13 +575,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
         out_subblock_h, out_subblock_w,
         per_core_M, per_core_N,
         a, b, output,
-        in0_data_format, in1_data_format, output_data_format
+        in0_data_format, in1_data_format, output_data_format,
+        untilize_out
     );
 }
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -583,7 +590,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, untilize_out);
 }
 
 }  // namespace tt_metal
