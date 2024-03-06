@@ -1540,4 +1540,12 @@ op_map = {
         "tt_lib_op": ttnn_ops.clip,
         "pytorch_op": pytorch_ops.clip,
     },
+    "ttnn-repeat_interleave": {
+        "tt_lib_op": ttnn_ops.repeat_interleave,
+        "pytorch_op": pytorch_ops.repeat_interleave,
+    },
+    "ttnn-addcmul": {
+        "tt_lib_op": ttnn_ops.addcmul,
+        "pytorch_op": pytorch_ops.addcmul,
+    },
 }

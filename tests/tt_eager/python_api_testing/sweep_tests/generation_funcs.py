@@ -1767,3 +1767,30 @@ def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
     res = torch.reshape(list_tensor, size)
 
     return res
+
+
+def gen_ttnn_repeat_interleave_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "repeat",
+        "dim",
+        low,
+        high,
+        dtype,
+    ):
+        shapes_size = len(input_shapes)
+        repeats = np.random.randint(1, 5)
+        dims = np.random.choice([0, shapes_size - 1])
+        input_info.update({"repeat": repeats, "dim": dims})
+        yield input_info
