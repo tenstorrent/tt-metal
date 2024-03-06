@@ -677,6 +677,7 @@ void watcher_attach(Device *device, const string& log_path) {
         watcher::logfile = watcher::create_file(log_path);
         watcher::watcher_killed_due_to_error = false;
 
+        watcher::kernel_names.clear();
         watcher::kernel_names.push_back("blank");
         watcher::enabled = true;
 
