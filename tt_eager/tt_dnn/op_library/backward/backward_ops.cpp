@@ -1403,6 +1403,43 @@ std::vector<Tensor> maximum_bw(const Tensor& grad, const Tensor& input, const Te
     return operation::decorate_as_composite(__func__, _maximum_bw)(grad, input, other, output_mem_config);
 }
 
+// tanhshrink
+// result:  torch.square(torch.tanh(input)) * grad_data
+std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor tanh_res = square(tanh(input, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(mul(grad, tanh_res, std::nullopt, output_mem_config));
+    return grad_tensor;
+}
+std::vector<Tensor> tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _tanhshrink_bw)(grad, input, output_mem_config);
+}
+
+//threshold
+//if input <= threshold = 0 else grad
+std::vector<Tensor> _threshold_bw(const Tensor& grad, const Tensor& input, float threshold, float value, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = where(gtz(add_unary(-threshold , input, output_mem_config), output_mem_config), grad, zeros_like( input, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> threshold_bw(const Tensor& grad, const Tensor& input, float threshold, float value, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _threshold_bw)(grad, input, threshold, value, output_mem_config);
+}
+
+std::vector<Tensor> _unary_eq_bw(const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_eq_bw(const Tensor& grad, const Tensor& input, float other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_eq_bw)(grad, input, other, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
