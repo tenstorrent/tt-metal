@@ -2,8 +2,6 @@ name: "[post-commit] Fast dispatch unit tests"
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
   workflow_call:
 
 jobs:
