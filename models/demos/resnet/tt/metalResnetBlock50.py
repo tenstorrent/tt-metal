@@ -1456,6 +1456,19 @@ class ResNet(nn.Module):
 
         self.first_conv_num_cores_nhw = 98
         if sharded:
+            self.fold_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(11, 7),
+                    ),
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 8),
+                        tt_lib.tensor.CoreCoord(3, 8),
+                    ),
+                }
+            )
+
             self.shard_grid = tt_lib.tensor.CoreRangeSet(
                 {
                     tt_lib.tensor.CoreRange(
@@ -2035,28 +2048,43 @@ class ResNet(nn.Module):
         C = _nearest_y(x.shape[3], 4)
         x = torch.nn.functional.pad(x, (0, C - x.shape[3], 3, 3, 3, 3))
 
-        # reshape to [1, 1, NHW / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
-        x = x.reshape(1, 1, x.shape[0] * x.shape[1] * x.shape[2] // stride_w, x.shape[3] * stride_w)
+        # reshape to [N, H, W / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
+        x = x.reshape(x.shape[0], x.shape[1], x.shape[2] // stride_w, x.shape[3] * stride_w)
 
-        NHW = x.shape[2] // stride_h
-        NHW_even = _nearest_y(NHW, self.first_conv_num_cores_nhw * 32)
+        NHW = x.shape[0] * x.shape[1] * x.shape[2]
+        NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
+        shard_spec = tt_lib.tensor.ShardSpec(
+            self.fold_grid, [NHW // 100, x.shape[3]], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+        )
         x = torch2tt_tensor(
             x,
             self.device,
             tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
             tt_memory_config=tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                shard_spec,
+            ),
+        )
+
+        # fold for unity stride on device
+        x = tt_lib.tensor.fold(x, stride_h=stride_h, stride_w=1)
+
+        # non-optimal resharding via the interleaved round trip, because
+        # direct resharding from 100 to 98 cores breaks the reshard op
+        x = tt_lib.tensor.sharded_to_interleaved(
+            x,
+            output_mem_config=tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             ),
         )
 
-        # fold and pad for unity stride on device
-        x = tt_lib.tensor.fold(x, width=115, stride_h=stride_h, stride_w=1, pad_rows=NHW_even - NHW)
         x = tt_lib.tensor.interleaved_to_sharded(
             x,
             self.shard_grid,
             [
-                x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
+                NHW_even // self.first_conv_num_cores_nhw,
                 x.get_legacy_shape()[3],
             ],
             tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,

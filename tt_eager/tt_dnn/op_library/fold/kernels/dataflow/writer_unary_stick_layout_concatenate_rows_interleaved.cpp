@@ -23,8 +23,6 @@ void kernel_main() {
     const uint32_t num_dst_rows = get_arg_val<uint32_t>(9);
     const uint32_t num_dst_cols = get_arg_val<uint32_t>(10);
     const uint32_t cb_pages_per_dst_row = get_arg_val<uint32_t>(11);
-    const uint32_t pad_rows = get_arg_val<uint32_t>(12);
-    const uint32_t scratch_elements = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
@@ -70,22 +68,5 @@ void kernel_main() {
 
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, cb_pages_per_dst_row);
-    }
-
-    if (pad_rows == 0) {
-        return;
-    }
-
-    // Fill scratch space with zeros
-    auto scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(scratch_addr);
-    for (uint32_t z = 0; z < scratch_elements; ++z) {
-        scratch_ptr[z] = 0;
-    }
-
-    // Write it out pad_rows times
-    for (uint32_t i = 0; i < pad_rows; ++i) {
-        uint64_t dst_addr = get_noc_addr(dst_page_id, s);
-        noc_async_write(scratch_addr, dst_addr, dst_page_size);
-        dst_page_id += 1;
     }
 }
