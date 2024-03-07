@@ -1568,6 +1568,7 @@ op_map = {
         "tt_lib_op": ttnn_ops.addcmul,
         "pytorch_op": pytorch_ops.addcmul,
     },
+<<<<<<< HEAD
     "ttnn-groupnorm_noweights": {
         "tt_lib_op": ttnn_ops.groupnorm_noweights,
         "pytorch_op": pytorch_ops.groupnorm_noweights,
@@ -1597,6 +1598,9 @@ op_map = {
         "pytorch_op": pytorch_ops.l1_loss_mean,
     },
    "ttnn-ldexp": {
+=======
+    "ttnn-ldexp": {
+>>>>>>> #5589: Linter applied
         "tt_lib_op": ttnn_ops.ldexp,
         "pytorch_op": pytorch_ops.ldexp,
     },
