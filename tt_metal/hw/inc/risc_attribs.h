@@ -37,4 +37,10 @@ inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t *
     return v.v;
 }
 
+#if not defined(WATCHER_ENABLED)
+    #define FORCE_INLINE inline __attribute__((always_inline))
+#else
+    #define FORCE_INLINE
+#endif
+
 #endif // _RISC_ATTRIBS_H_

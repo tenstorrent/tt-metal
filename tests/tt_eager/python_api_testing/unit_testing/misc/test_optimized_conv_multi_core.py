@@ -5,6 +5,7 @@
 import pytest
 from pathlib import Path
 import sys
+from loguru import logger
 
 import numpy as np
 
@@ -218,8 +219,8 @@ def test_run_optimized_conv(
         passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
             out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999
         )  # For LowFi we need 0.99976
-        print("Passing=", passing_allclose_and_pcc)
-        print("Output info=", output_info)
+        logger.debug(f"Passing={passing_allclose_and_pcc}")
+        logger.debug(f"Output info={output_info}")
         passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.9998)  # For LowFi we need 0.99976
         assert passing_pcc
         # assert passing_allclose_and_pcc

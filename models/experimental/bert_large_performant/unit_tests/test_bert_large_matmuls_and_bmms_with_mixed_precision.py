@@ -144,8 +144,8 @@ def run_bert_large_matmul_test(
         ref_bmm = torch.nn.functional.gelu(ref_bmm)
 
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 
@@ -234,8 +234,8 @@ def run_bert_large_bmm_test(
         ref_bmm = torch.matmul(A.reshape([a_shape[0], 16, 384, 384]), B)
 
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 

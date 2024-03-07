@@ -110,6 +110,7 @@ def determine_parallel_config(
     input_width = sliding_window_op_params.input_w
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
+
     # pad height to 32
     conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
     conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
@@ -156,6 +157,7 @@ def determine_parallel_config(
 
     def calculate_per_core_out_matrix_height_ntiles(logical_grid_x, override):
         round_up = 0 if is_1d_systolic else (logical_grid_x - 1)
+        # per_core_out_matrix_height_ntiles = _nearest_32(conv_out_2d_matrix_height / num_cores_nhw) // 32
         per_core_out_matrix_height_ntiles = (conv_out_2d_matrix_height_ntiles + round_up) // logical_grid_x
         if override is not None:
             assert override % 32 == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
@@ -187,6 +189,10 @@ def determine_parallel_config(
     per_core_out_matrix_width_ntiles = calculate_per_core_out_matrix_width_ntiles(
         logical_grid_y, config_override.get("per_core_out_matrix_width_ntiles", None)
     )
+
+    # print(
+    #     f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
+    # )
 
     return ttl.tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
@@ -385,7 +391,10 @@ class TTPyCompositeConv(TTPyOp):
         padded_input_channels=None,
         compute_kernel_config=None,
         output_layout=ttl.tensor.Layout.TILE,
+        use_dram_for_matmul=False,
     ):
+        self.use_dram_for_matmul = use_dram_for_matmul
+
         if padded_input_channels is None:
             self.padded_input_channels = _nearest_32(input_channels)
         else:
@@ -933,7 +942,6 @@ class TTPyCompositeConv(TTPyOp):
 
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation)
-            # conv1x1 stride 1 padding 0, use matmul op
             output = ttl.operations.primary.matmul(
                 activation,
                 weight_on_device,
@@ -961,10 +969,10 @@ class TTPyCompositeConv(TTPyOp):
     def __call__(self, activation):
         # print("Going to run conv with input shape-", self.input_tensor_shape)
         # print("with output shape = ", self.conv_output_shape)
-        if self.enable_auto_formatting:
+        if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
-        if self.enable_auto_formatting:
+        if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_output_sharded_to_interleaved(activation)
         return activation
 

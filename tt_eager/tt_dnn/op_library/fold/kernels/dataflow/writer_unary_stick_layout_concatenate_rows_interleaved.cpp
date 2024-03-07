@@ -23,6 +23,8 @@ void kernel_main() {
     const uint32_t num_dst_rows = get_arg_val<uint32_t>(9);
     const uint32_t num_dst_cols = get_arg_val<uint32_t>(10);
     const uint32_t cb_pages_per_dst_row = get_arg_val<uint32_t>(11);
+    const uint32_t pad_rows = get_arg_val<uint32_t>(12);
+    const uint32_t scratch_elements = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
@@ -40,34 +42,27 @@ void kernel_main() {
     };
 #endif
 
-    auto extract_next_dst_page = [&](uint32_t src_address) -> uint32_t {
-        // The src_address value has been offset so that it points to the start of the next output pixel.
-        auto src_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(src_address);
+    auto dst_noc_addr = NOC_XY_ADDR(NOC_X(my_x[0]), NOC_Y(my_y[0]), scratch_addr);
 
-        // scratch fits exactly stride_h * stride_w * C elements
-        auto scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(scratch_addr);
-
-        for (uint32_t row = 0; row < stride_h; ++row) {
-            uint32_t src_col_offset = 0;
-            for (uint32_t col = 0; col < stride_w; ++col) {
-                for (uint32_t i = 0; i < pixel_size; ++i) {
-                    scratch_ptr[i] = src_ptr[src_col_offset + i];
-                }
-                scratch_ptr += pixel_size;
-                src_col_offset += aligned_pixel_size;
+    auto extract_next_dst_page = [&](uint32_t src_address, uint64_t dst_noc_addr) -> uint32_t {
+        for (uint32_t row = 0, src_row_offset = 0; row < stride_h; ++row, src_row_offset += aligned_row_size) {
+            for (uint32_t col = 0, src_col_offset = 0; col < stride_w; ++col, src_col_offset += aligned_pixel_size) {
+                uint32_t src_offset = src_col_offset + src_row_offset;
+                noc_async_write(src_address + src_offset, dst_noc_addr, pixel_size);
+                dst_noc_addr += pixel_size;
             }
-            src_ptr += aligned_row_size;
         }
 
         return src_address + aligned_chunk_size;
     };
 
-    for (uint32_t i = 0, dst_page_id = 0; i < num_dst_rows; ++i) {
+    uint32_t dst_page_id = 0;
+    for (uint32_t i = 0; i < num_dst_rows; ++i) {
         cb_wait_front(cb_id_out0, cb_pages_per_dst_row);
         uint32_t src_addr = get_read_ptr(cb_id_out0);
 
         for (uint32_t j = 0; j < num_dst_cols; ++j) {
-            src_addr = extract_next_dst_page(src_addr);
+            src_addr = extract_next_dst_page(src_addr, dst_noc_addr);
             uint64_t dst_addr = get_noc_addr(dst_page_id, s);
             noc_async_write(scratch_addr, dst_addr, dst_page_size);
             dst_page_id += 1;
@@ -75,5 +70,22 @@ void kernel_main() {
 
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, cb_pages_per_dst_row);
+    }
+
+    if (pad_rows == 0) {
+        return;
+    }
+
+    // Fill scratch space with zeros
+    auto scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(scratch_addr);
+    for (uint32_t z = 0; z < scratch_elements; ++z) {
+        scratch_ptr[z] = 0;
+    }
+
+    // Write it out pad_rows times
+    for (uint32_t i = 0; i < pad_rows; ++i) {
+        uint64_t dst_addr = get_noc_addr(dst_page_id, s);
+        noc_async_write(scratch_addr, dst_addr, dst_page_size);
+        dst_page_id += 1;
     }
 }

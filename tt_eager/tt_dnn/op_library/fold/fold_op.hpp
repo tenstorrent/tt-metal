@@ -11,8 +11,10 @@
 
 namespace tt::tt_metal {
 struct Fold {
+    uint32_t width;
     uint8_t stride_h;
     uint8_t stride_w;
+    uint32_t pad_rows;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
 
@@ -23,13 +25,13 @@ struct Fold {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("stride_h", "stride_w");
+    static constexpr auto attribute_names = std::make_tuple("width", "stride_h", "stride_w", "pad_rows");
 
-    const auto attribute_values() const { return std::make_tuple(stride_h, stride_w); }
+    const auto attribute_values() const { return std::make_tuple(width, stride_h, stride_w, pad_rows); }
 };
 
 operation::ProgramWithCallbacks fold_single_core(
-    const Tensor &input, const Tensor &output, uint8_t stride_h, uint8_t stride_w);
+    const Tensor &input, const Tensor &output, uint32_t width, uint8_t stride_h, uint8_t stride_w, uint32_t pad_rows);
 
-Tensor fold(const Tensor &input_tensor_a, uint8_t stride_h, uint8_t stride_w);
+Tensor fold(const Tensor &input_tensor_a, uint32_t width, uint8_t stride_h, uint8_t stride_w, uint32_t pad_rows = 0);
 }  // namespace tt::tt_metal

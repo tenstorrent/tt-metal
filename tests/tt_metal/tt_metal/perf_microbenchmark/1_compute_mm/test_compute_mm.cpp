@@ -15,6 +15,19 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/df.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/common/constants.hpp"
+#include <optional>
+
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tests/tt_metal/test_utils/tilization.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
+
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow
@@ -49,6 +62,12 @@ using namespace tt;
 //     --m <size in elements>
 //     --n <size in elements>
 //     --k <size in elements>
+//     --dtype <data type for single core test, 0: bfp8_b, 1: fp16>
+//     --fidel <math fidelity for single core test, 0: LoFi, 1: HiFi2>
+//     --block <block version of matmul for single core test, 0: matmul_tiles, 1: matmul_block>
+//     --packer <packer l1 acc mode for single core test, 0: no enabled, 1: enable>
+//     --one-core <single core test, 0: multi-core test, 1: single-core test>
+//     --num-blocks <number of blocks to feed into compute kernel in single core test>
 //     --fast-dispatch (set to use fast dispatch mode)
 //     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
@@ -71,7 +90,7 @@ CoreCoord get_core_range(
 
 tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt);
+tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
 tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
     uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size);
@@ -103,8 +122,30 @@ void prepare_inputs(
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_cb_addr,
+    bool dtype,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
+
+tt_metal::Program create_program_single_core (
+    tt_metal::Device* device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    uint32_t single_tile_size,
+    CoreCoord core_range,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    std::shared_ptr<tt::tt_metal::Buffer> in0_cb_addr,
+    std::shared_ptr<tt::tt_metal::Buffer> in1_cb_addr,
+    std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
+    bool matmul_block,
+    bool packer_l1,
+    uint32_t num_blocks,
+    uint32_t interm_cb_dtype
+);
 
 tt_metal::Program create_program(
     tt_metal::Device* device,
@@ -127,7 +168,19 @@ tt_metal::Program create_program(
     uint32_t out_cb_addr,
     uint32_t in0_addr,
     uint32_t in1_addr,
-    uint32_t out_addr);
+    uint32_t out_addr,
+    bool matmul_block,
+    bool packer_l1_acc);
+
+bool validation_single_core(
+    tt::deprecated::Tensor<bfloat16> tensor_in0,
+    tt::deprecated::Tensor<bfloat16> tensor_in1,
+    uint32_t num_blocks,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+);
 
 bool validation(
     tt_metal::Device* device,
@@ -144,6 +197,31 @@ bool validation(
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
+bool validation_single_core_fp8(
+    tt::deprecated::Tensor<float> tensor_in0,
+    tt::deprecated::Tensor<float> tensor_in1,
+    uint32_t num_blocks,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+);
+
+std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
+    tt_metal::Device* device,
+    vector<uint32_t> activations,
+    uint32_t Mt,
+    uint32_t Nt
+);
+
+std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
+    tt_metal::Device* device,
+    vector<uint32_t> activations,
+    uint32_t Mt,
+    uint32_t Nt
+);
+
+
 ////////////////////////////////////////////////////////////////////////////
 //                      Main
 ////////////////////////////////////////////////////////////////////////////
@@ -158,12 +236,30 @@ int main(int argc, char** argv) {
         uint32_t M;
         uint32_t N;
         uint32_t K;
+        uint32_t dtype = 0; // bfp8
+        uint32_t fidel = 0; // lofi
         uint32_t num_tests = 10;
+        uint32_t num_blocks = 1;
+        bool matmul_block = 0;
+        bool packer_l1 = 0;
+        bool fp32 = 0;
+        uint32_t interm_cb_dtype = 0;
+        uint32_t subblock_choice = 0;
+        bool single_core = 0;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
             std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 768);
+            std::tie(dtype, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--dtype", 0);
+            std::tie(fidel, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--fidel", 0);
+            std::tie(matmul_block, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--block", 0);
+            std::tie(packer_l1, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--packer", 0);
+            std::tie(fp32, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--fp32", 0);
+            std::tie(interm_cb_dtype, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--interm-cb", 1);
+            std::tie(subblock_choice, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--subblock-index", 0);
+            std::tie(single_core, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--one-core", 0);
+            std::tie(num_blocks, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-blocks", 1);
             std::tie(num_tests, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
             std::tie(fast_dispatch_mode, input_args) =
@@ -177,10 +273,18 @@ int main(int argc, char** argv) {
             log_error(LogTest, "Command line arguments found exception", e.what());
         }
 
+        if (not single_core) {
+            TT_ASSERT(dtype == 0, "multi core test only supports bfp8_b");
+            TT_ASSERT(packer_l1 == 0, "multi core test does not support packer_l1 arg");
+        }
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Env and Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        if (fast_dispatch_mode == false) {
+        if (single_core) {
+            TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
+        }
+        else if (fast_dispatch_mode == false) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
 #if !defined(PROFILER)
@@ -210,10 +314,18 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Input M, N, K = {}, {}, {} / {}, {}, {} tile(s)", M, N, K, Mt, Nt, Kt);
 
         tt::DataFormat data_format = tt::DataFormat::Bfp8_b;
+        if (single_core){
+            data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+        }
         uint32_t single_tile_size = tt_metal::detail::TileSize(data_format);
-        TT_ASSERT(single_tile_size == (256 * 4) + (16 * 4));
+        TT_ASSERT(single_tile_size == dtype == 0 ? (256 * 4) + (16 * 4) : 2048);
 
         auto grid_size = device->compute_with_storage_grid_size();
+        if (single_core){
+            grid_size.x = 1;
+            grid_size.y = 1;
+        }
+
         uint32_t num_cores_y = grid_size.y;
         uint32_t num_cores_x = grid_size.x;
         uint32_t per_core_Mt = (Mt - 1) / num_cores_y + 1;
@@ -244,35 +356,138 @@ int main(int argc, char** argv) {
         }
 
         ////////////////////////////////////////////////////////////////////////////
+        //                      Tensor Setup
+        ////////////////////////////////////////////////////////////////////////////
+        std::shared_ptr<tt::tt_metal::Buffer> input_buffer0;
+        std::shared_ptr<tt::tt_metal::Buffer> input_buffer1;
+        std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
+        SHAPE shape_in0 = {1, 1, M, K};
+        tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+        tt::deprecated::Tensor<float> tensor_in0_fp8 = tt::deprecated::initialize_tensor<float>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+        SHAPE shape_in1 = {1, 1, K, N};
+        tt::deprecated::Tensor<bfloat16> tensor_in1_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+        tt::deprecated::Tensor<float> tensor_in1_fp8 = tt::deprecated::initialize_tensor<float>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+
+        if (single_core) {
+            if (dtype == 1) {
+                // in0
+                auto activations_tilized = tilize(tensor_in0_fp16.get_values(), M, K);
+                auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+                vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
+                input_buffer0 = create_and_transfer_data_sharded_cb(device, activations, Mt, Kt);
+
+                // in1
+                auto identity_tilized = tilize(tensor_in1_fp16.get_values(), K, N);
+                auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+                auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
+                input_buffer1 = create_and_transfer_data_sharded_cb(device, weights, Kt, Nt);
+
+                // output
+                SHAPE output_hsape = {1, 1, M, N};
+                tt::deprecated::Tensor<bfloat16> out_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+                vector<uint32_t> outputs = pack_bfloat16_vec_into_uint32_vec(out_tensor.get_values());
+                output_buffer = create_and_transfer_data_sharded_cb(device, outputs, Mt, Nt);
+
+            } else {
+                // in0
+                auto activations_tilized = tilize(tensor_in0_fp8.get_values(), M, K);
+                std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
+                input_buffer0 = create_and_transfer_data_sharded_cb_fp8(device, activations, Mt, Kt);
+
+                // in1
+                auto identity_tilized = tilize(tensor_in1_fp8.get_values(), K, N);
+                auto weights = pack_fp32_vec_as_bfp8_tiles(identity_tilized, true, false);
+                input_buffer1 = create_and_transfer_data_sharded_cb_fp8(device, weights, Kt, Nt);
+
+                // output
+                SHAPE output_hsape = {1, 1, M, N};
+                tt::deprecated::Tensor<float> out_tensor = tt::deprecated::initialize_tensor<float>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+                auto output_tilized = tilize(out_tensor.get_values(), M, N);
+                auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
+                output_buffer = create_and_transfer_data_sharded_cb_fp8(device, outputs, Mt, Nt);
+            }
+        }
+
+        ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
-        auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt);
+        if (single_core) {
+            math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+            fp32_dest_acc_en = fp32 == 0 ? false : true;
+        }
+        auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
             get_all_buffers_addresses(per_core_Mt, per_core_Nt, in0_block_w, single_tile_size);
 
-        auto program = create_program(
-            device,
-            data_format,
-            math_fidelity,
-            fp32_dest_acc_en,
-            single_tile_size,
-            core_range,
-            Mt,
-            Nt,
-            Kt,
-            in0_block_w,
-            out_subblock_h,
-            out_subblock_w,
-            per_core_Mt,
-            per_core_Nt,
-            in0_cb_addr,
-            in1_cb_addr,
-            in2_cb_addr,
-            out_cb_addr,
-            in0_addr,
-            in1_addr,
-            out_addr);
+        if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w > 4)) {
+            if (out_subblock_w >= 4) {
+                out_subblock_h = 1;
+                out_subblock_w = find_max_block_size(out_subblock_w, 4);
+            } else {
+                while (out_subblock_h * out_subblock_w > 4) {
+                    uint32_t div = find_max_divisor(out_subblock_h, out_subblock_h-1);
+                    out_subblock_h = find_max_block_size(out_subblock_h, div);
+                }
+            }
+        }
+
+        log_debug(LogTest, "grid_size.x {}", grid_size.x);
+        log_debug(LogTest, "grid_size.y {}", grid_size.y);
+        log_debug(LogTest, "per_core_Mt {}", per_core_Mt);
+        log_debug(LogTest, "per_core_Nt {}", per_core_Nt);
+        log_debug(LogTest, "in0_block_w {}", in0_block_w);
+        log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
+        log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
+
+        tt::tt_metal::Program program;
+        if (single_core) {
+            program = create_program_single_core(
+                device,
+                data_format,
+                math_fidelity,
+                fp32_dest_acc_en,
+                single_tile_size,
+                core_range,
+                Mt,
+                Nt,
+                Kt,
+                out_subblock_h,
+                out_subblock_w,
+                input_buffer0,
+                input_buffer1,
+                output_buffer,
+                matmul_block,
+                packer_l1,
+                num_blocks,
+                interm_cb_dtype);
+        } else {
+            program = create_program(
+                device,
+                data_format,
+                math_fidelity,
+                fp32_dest_acc_en,
+                single_tile_size,
+                core_range,
+                Mt,
+                Nt,
+                Kt,
+                in0_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                per_core_Mt,
+                per_core_Nt,
+                in0_cb_addr,
+                in1_cb_addr,
+                in2_cb_addr,
+                out_cb_addr,
+                in0_addr,
+                in1_addr,
+                out_addr,
+                matmul_block,
+                packer_l1);
+        }
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
@@ -280,21 +495,25 @@ int main(int argc, char** argv) {
         // for validation
         std::vector<std::vector<float>> in0_bfp8_unpack_slice;
         std::vector<std::vector<float>> in1_bfp8_unpack_slice;
-        prepare_inputs(
-            device,
-            core_range,
-            Mt,
-            Nt,
-            Kt,
-            per_core_Mt,
-            per_core_Nt,
-            in0_block_w,
-            single_tile_size,
-            in0_addr,
-            in1_addr,
-            in2_cb_addr,
-            in0_bfp8_unpack_slice,
-            in1_bfp8_unpack_slice);
+        if (not single_core) {
+            prepare_inputs(
+                device,
+                core_range,
+                Mt,
+                Nt,
+                Kt,
+                per_core_Mt,
+                per_core_Nt,
+                in0_block_w,
+                single_tile_size,
+                in0_addr,
+                in1_addr,
+                in2_cb_addr,
+                dtype,
+                in0_bfp8_unpack_slice,
+                in1_bfp8_unpack_slice);
+        }
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Kernel Execution and Perf Profiling
@@ -338,10 +557,34 @@ int main(int argc, char** argv) {
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
-                auto t_end = std::chrono::high_resolution_clock::now();
-                duration = t_end - t_begin;
-                rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / duration.count() / 1000);
-                log_info(LogTest, "time duration: {:.5} ns, rmax_tflops {:.2f}", duration.count(), rmax_tflops[i]);
+                tt_metal::DumpDeviceProfileResults(device, program);
+
+                if (single_core) {
+                    uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
+                    double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
+                    auto execution_time = t0_to_any_riscfw_end * cycle_time;
+                    rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
+
+                    log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
+                    log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
+                    log_info(
+                        LogTest,
+                        "time duration: {:.5}us ({}cycles) rmax_tflops {:.2f}",
+                        execution_time,
+                        t0_to_any_riscfw_end,
+                        rmax_tflops[i]);
+                } else {
+                    log_debug(LogTest, "calling EnqueueProgram");
+                    std::chrono::duration<double, std::nano> duration;
+                    auto t_begin = std::chrono::high_resolution_clock::now();
+                    EnqueueProgram(device->command_queue(), program, false);
+                    Finish(device->command_queue());
+                    log_debug(LogTest, "EnqueProgram done");
+                    auto t_end = std::chrono::high_resolution_clock::now();
+                    duration = t_end - t_begin;
+                    rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / duration.count() / 1000);
+                    log_info(LogTest, "time duration: {:.5} ns, rmax_tflops {:.2f}", duration.count(), rmax_tflops[i]);
+                }
             }
         }
 
@@ -361,20 +604,43 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        bool validation_result = validation(
-            device,
-            core_range,
-            Mt,
-            Nt,
-            Kt,
-            per_core_Mt,
-            per_core_Nt,
-            in0_block_w,
-            out_addr,
-            single_tile_size,
-            fp32_dest_acc_en,
-            in0_bfp8_unpack_slice,
-            in1_bfp8_unpack_slice);
+        bool validation_result = true;
+        if (single_core) {
+            if (dtype == 1) {
+                validation_result = validation_single_core(
+                    tensor_in0_fp16,
+                    tensor_in1_fp16,
+                    num_blocks,
+                    Mt,
+                    Nt,
+                    Kt,
+                    output_buffer);
+            } else {
+                validation_result = validation_single_core_fp8(
+                    tensor_in0_fp8,
+                    tensor_in1_fp8,
+                    num_blocks,
+                    Mt,
+                    Nt,
+                    Kt,
+                    output_buffer);
+            }
+        } else {
+            validation_result = validation(
+                device,
+                core_range,
+                Mt,
+                Nt,
+                Kt,
+                per_core_Mt,
+                per_core_Nt,
+                in0_block_w,
+                out_addr,
+                single_tile_size,
+                fp32_dest_acc_en,
+                in0_bfp8_unpack_slice,
+                in1_bfp8_unpack_slice);
+        }
 
         if ((validation_result == false || performance_result == false) && bypass_check == false) {
             log_error(
@@ -521,17 +787,24 @@ tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     return {math_fidelity, fp32_dest_acc_en};
 }
 
-tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt) {
+tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice = 0) {
     constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
         {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},
         {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
     }};
 
+    uint32_t index = 0;
     for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         auto subblock_h = std::get<0>(subblock_hw);
         auto subblock_w = std::get<1>(subblock_hw);
-        if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0)
-            return {subblock_h, subblock_w};
+        if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
+            if (index >= choice) {
+                return {subblock_h, subblock_w};
+            } else {
+                index++;
+            }
+        }
+
     }
 
     return {1, 1};
@@ -559,6 +832,214 @@ tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_
     return {in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr};
 }
 
+tt_metal::Program create_program_single_core (
+    tt_metal::Device* device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    uint32_t single_tile_size,
+    CoreCoord core_range,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    std::shared_ptr<tt::tt_metal::Buffer> in0_cb_addr,
+    std::shared_ptr<tt::tt_metal::Buffer> in1_cb_addr,
+    std::shared_ptr<tt::tt_metal::Buffer> out_cb_addr,
+    bool matmul_block,
+    bool packer_l1,
+    uint32_t num_blocks,
+    uint32_t interm_cb_dtype
+) {
+    tt_metal::Program program{};
+
+    log_debug("cb_data_format: {} ", cb_data_format);
+    log_debug("math_fidelity: {} ", math_fidelity);
+    log_debug("single_tile_size: {} ", single_tile_size);
+    log_debug("fp32_dest_acc_en: {} ", fp32_dest_acc_en);
+
+    uint32_t num_buffer = 1;  // No double buffer
+    uint32_t in0_block_tiles = Mt * Kt;
+    uint32_t in0_CB_tiles = in0_block_tiles * num_buffer;
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
+    uint32_t in1_block_tiles = Nt * Kt;
+    uint32_t in1_CB_tiles = in1_block_tiles * num_buffer;
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = Mt * Nt;
+    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_CB_size = out_CB_tiles * single_tile_size;
+
+    uint32_t in0_num_subblocks = (Mt / out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h * Kt * in0_num_subblocks;
+    uint32_t in0_subblock_num_tiles = out_subblock_h * Kt;
+
+    uint32_t in1_num_subblocks = (Nt / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * Kt * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    vector<uint32_t> compute_kernel_args = {
+        Kt,             // in0_block_w
+        in0_num_subblocks,       // in0_num_subblocks
+        in0_block_num_tiles,     // in0_block_num_tiles
+        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+
+        in1_num_subblocks,    // in1_num_subblocks
+        in1_block_num_tiles,  // in1_block_num_tiles
+        in1_per_core_w,       // in1_per_core_w
+
+        num_blocks,  // num_blocks
+
+        out_subblock_h,          // out_subblock_h
+        out_subblock_w,          // out_subblock_w
+        out_subblock_num_tiles,  // out_subblock_num_tiles
+        1,                        // batch
+        Mt*Nt
+    };
+
+    vector<uint32_t> reader_kernel_args = {
+        Mt*Kt,
+        num_blocks,
+    };
+    vector<uint32_t> writer_kernel_args = {
+        Nt*Kt,
+        num_blocks,
+    };
+
+    log_debug("in0_cb_addr: {}", (*in0_cb_addr).address());
+    log_debug("in1_cb_addr: {}", (*in1_cb_addr).address());
+    log_debug("out_cb_addr: {}", (*out_cb_addr).address());
+    log_debug("cb_data_format: {}", cb_data_format);
+    log_debug("single_tile_size: {}", single_tile_size);
+    if (matmul_block) {
+        log_debug("matmul_block");
+    } else {
+        log_debug("matmul_tiles");
+    }
+    if (packer_l1) {
+        log_debug("packer_l1");
+    } else {
+        log_debug("no packer_l1");
+    }
+
+    CoreRange all_cores(
+        {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
+
+    // Create circular buffers
+    uint32_t src0_cb_index = 0;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, single_tile_size)
+            .set_globally_allocated_address(*in0_cb_addr);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    uint32_t src1_cb_index = 1;
+    tt_metal::CircularBufferConfig cb_src1_config =
+        tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, single_tile_size)
+            .set_globally_allocated_address(*in1_cb_addr);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+
+    uint32_t out_cb_index = 16;  // output operands start at index 16
+    uint32_t interm0_cb_index = 24;
+
+    if (fp32_dest_acc_en) {
+        if (interm_cb_dtype == 1) {
+            tt_metal::CircularBufferConfig cb_interm_config =
+                tt_metal::CircularBufferConfig(out_CB_tiles * 4096, {{interm0_cb_index, tt::DataFormat::Float32}})
+                    .set_page_size(interm0_cb_index, 4096);
+            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        } else  {
+            tt_metal::CircularBufferConfig cb_interm_config =
+                tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
+                    .set_page_size(interm0_cb_index, 2048);
+            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        }
+
+        tt_metal::CircularBufferConfig cb_out_config =
+            tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
+                .set_page_size(out_cb_index, single_tile_size)
+                .set_globally_allocated_address(*out_cb_addr);
+        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    }
+    else if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
+        tt_metal::CircularBufferConfig cb_interm_config =
+            tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(interm0_cb_index, 2048);
+        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+
+        tt_metal::CircularBufferConfig cb_out_config =
+            tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
+                .set_page_size(out_cb_index, single_tile_size)
+                .set_globally_allocated_address(*out_cb_addr);
+        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    } else {
+        std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
+            {out_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
+        tt_metal::CircularBufferConfig cb_out_config =
+            tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
+                .set_page_size(interm0_cb_index, single_tile_size)
+                .set_page_size(out_cb_index, single_tile_size)
+                .set_globally_allocated_address(*out_cb_addr);
+        auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
+    }
+
+    log_debug("in0_CB_size: {}", in0_CB_tiles * single_tile_size);
+    log_debug("in1_CB_size: {}", in1_CB_tiles * single_tile_size);
+    log_debug("interm_CB_size: {}", out_CB_tiles * 4096);
+    log_debug("out_CB_size: {}", out_CB_size);
+    log_debug("total_CB_size: {}", in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
+
+    // Create reader and writer kernels per core
+    auto mm_in0_reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
+        "in0_reader_bmm_single_core.cpp",
+        all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_kernel_args});
+
+    auto mm_in1_reader_writer_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
+        "in1_reader_writer_bmm_single_core.cpp",
+        all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_kernel_args});
+
+    // Create compute kernel
+    // Gelu currently has better accuracy when run in approx mode
+    std::map<string, string> mm_kernel_defines;
+    if (packer_l1) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    bool math_approx_mode = false;
+    auto mm_kernel_id = tt_metal::CreateKernel(
+        program,
+        matmul_block ?
+        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" :
+        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation.cpp",
+        all_cores,
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = mm_kernel_defines});
+
+    return std::move(program);
+}
+
+
 tt_metal::Program create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
@@ -580,7 +1061,9 @@ tt_metal::Program create_program(
     uint32_t out_cb_addr,
     uint32_t in0_addr,
     uint32_t in1_addr,
-    uint32_t out_addr) {
+    uint32_t out_addr,
+    bool matmul_block,
+    bool packer_l1) {
     tt_metal::Program program{};
 
     uint32_t num_buffer = 2;  // double buffer
@@ -622,7 +1105,8 @@ tt_metal::Program create_program(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        1                        // batch
+        1,                        // batch
+        per_core_Mt*per_core_Nt
     };
 
     CoreRange all_cores(
@@ -685,17 +1169,22 @@ tt_metal::Program create_program(
 
     // Create compute kernel
     // Gelu currently has better accuracy when run in approx mode
+    std::map<string, string> mm_kernel_defines;
+    if (packer_l1) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
     bool math_approx_mode = false;
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
-        "bmm_large_block_zm_fused_bias_activation.cpp",
+        matmul_block ? "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_block.cpp" :
+                        "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args});
+            .compile_args = compute_kernel_args,
+            .defines = mm_kernel_defines});
 
     // Parameters for last row, col, or block
     uint32_t last_block_h = Mt % per_core_Mt == 0 ? per_core_Mt : Mt % per_core_Mt;
@@ -937,8 +1426,10 @@ void prepare_inputs(
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_cb_addr,
+    bool dtype,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+
     bool pass = true;
     auto in0_vec = generate_fp32_random(Mt * Kt * constants::TILE_HW);
     std::vector<uint32_t> in2(single_tile_size / sizeof(uint32_t), 0);
@@ -986,6 +1477,103 @@ void prepare_inputs(
             TT_ASSERT(pass);
         }
     }
+}
+
+float to_float(bfloat16 bfloat16_num) {
+    uint16_t uint16_data = *reinterpret_cast<uint16_t*>(&bfloat16_num);
+    uint32_t uint32_data = (uint16_data << 16);
+    float float_data = *reinterpret_cast<float*>(&uint32_data);
+    return float_data;
+}
+
+bool validation_single_core(
+    tt::deprecated::Tensor<bfloat16> tensor_in0,
+    tt::deprecated::Tensor<bfloat16> tensor_in1,
+    uint32_t num_blocks,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+) {
+    bool pass = true;
+
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+
+    auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
+    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+    auto result_untilized = test_utils::untilize(result_flat_layout, Mt*32, Nt*32);
+
+    std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0); // Initialize with zeros
+    const auto& values0 = tensor_in0.get_values();
+    const auto& values1 = tensor_in1.get_values();
+
+    for (size_t i = 0; i < Mt * 32; ++i) {
+        for (size_t j = 0; j < Nt * 32; ++j) {
+            float sum = 0;
+            for (size_t k = 0; k < Kt * 32; ++k) {
+                sum += to_float(values0[i * Kt * 32 + k]) * to_float(values1[k * Nt * 32 + j]);
+            }
+            golden_vec[i * Nt * 32 + j] = sum * num_blocks;
+        }
+    }
+
+    std::vector<float> result_vec;
+    for (int i=0; i<result_untilized.size(); ++i) {
+        result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
+    }
+
+    // for (int i=0; i<result_vec.size(); ++i) {
+    //     std::cout << "index: " << i << " " << golden_vec[i] << " " << result_vec[i] << std::endl;
+    // }
+
+    pass &= (golden_vec == result_vec);
+    if (!pass) {
+        log_error(LogTest, "validation single core failed");
+    }
+    return pass;
+}
+
+bool validation_single_core_fp8(
+    tt::deprecated::Tensor<float> tensor_in0,
+    tt::deprecated::Tensor<float> tensor_in1,
+    uint32_t num_blocks,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    std::shared_ptr<tt::tt_metal::Buffer> out_buffer
+) {
+    bool pass = true;
+
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+
+    auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
+    auto result_untilized = untilize(result_bfp8, Mt*32, Nt*32);
+
+    std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0); // Initialize with zeros
+    const auto& values0 = tensor_in0.get_values();
+    const auto& values1 = tensor_in1.get_values();
+
+    for (size_t i = 0; i < Mt * 32; ++i) {
+        for (size_t j = 0; j < Nt * 32; ++j) {
+            float sum = 0;
+            for (size_t k = 0; k < Kt * 32; ++k) {
+                sum += values0[i * Kt * 32 + k] * values1[k * Nt * 32 + j];
+            }
+            golden_vec[i * Nt * 32 + j] = sum * num_blocks;
+        }
+    }
+
+    // for (int i=0; i<tensor_in0.get_values().size(); ++i) {
+    //     std::cout << golden_vec[i] << " " << result_untilized[i] << std::endl;
+    // }
+
+    pass &= (result_untilized == golden_vec);
+    if (!pass) {
+        log_error(LogTest, "validation single core failed");
+    }
+    return pass;
 }
 
 bool validation(
@@ -1057,4 +1645,67 @@ bool validation(
         log_error(LogTest, "validation failed : {}/{} elements are not matched with golden", diff_count, total_count);
     }
     return pass;
+}
+
+std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
+    tt_metal::Device* device,
+    vector<uint32_t> activations,
+    uint32_t Mt,
+    uint32_t Nt
+) {
+    uint32_t size_bytes = Mt * tt::constants::TILE_HEIGHT * Nt * tt::constants::TILE_WIDTH * 2;
+    uint32_t page_size_bytes = tt::constants::TILE_HW * 2;
+
+    ShardSpecBuffer shard_spec = ShardSpecBuffer(
+                CoreRangeSet(std::set<CoreRange>({ CoreRange(CoreCoord(0,0))})),
+                {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
+                ShardOrientation::ROW_MAJOR,
+                false,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                {Mt, Nt});
+
+    log_debug("size_bytes: {}", size_bytes);
+    log_debug("page_size_bytes: {}", page_size_bytes);
+
+    auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                                        .device = device,
+                                        .size = size_bytes,
+                                        .page_size = page_size_bytes,
+                                        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                                        .shard_parameters = shard_spec});
+    tt::tt_metal::detail::WriteToBuffer(input_buffer, activations);
+
+    return input_buffer;
+}
+
+
+std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
+    tt_metal::Device* device,
+    vector<uint32_t> activations,
+    uint32_t Mt,
+    uint32_t Nt
+) {
+    uint32_t size_bytes = Mt * Nt * 1088;
+    uint32_t page_size_bytes = 1088;
+
+    ShardSpecBuffer shard_spec = ShardSpecBuffer(
+                CoreRangeSet(std::set<CoreRange>({ CoreRange(CoreCoord(0,0))})),
+                {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
+                ShardOrientation::ROW_MAJOR,
+                false,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                {Mt, Nt});
+
+    log_debug("size_bytes: {}", size_bytes);
+    log_debug("page_size_bytes: {}", page_size_bytes);
+
+    auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                                        .device = device,
+                                        .size = size_bytes,
+                                        .page_size = page_size_bytes,
+                                        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                                        .shard_parameters = shard_spec});
+    tt::tt_metal::detail::WriteToBuffer(input_buffer, activations);
+
+    return input_buffer;
 }

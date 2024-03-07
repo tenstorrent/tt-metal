@@ -15,10 +15,10 @@ from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
     "num_devices, num_links",
     [
         (2, 1),
-        (2, 2),
         (4, 1),
         (4, 2),
-        (8, 1),  # Not all connections support two links for 8 chips
+        (4, 1),
+        (8, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -45,12 +45,12 @@ from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 @pytest.mark.parametrize(
     "mem_config",
     [
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-def test_all_gather(
-    pcie_devices,
+def test_all_gather_on_t3000(
+    all_devices,
     num_devices,
     input_shape,
     dim,
@@ -60,20 +60,13 @@ def test_all_gather(
     use_program_cache,
     function_level_defaults,
 ):
-    # TODO: Switch to all_devices once we figure out what works on pipelines
-    devices = pcie_devices
-
-    if num_devices == 8:
-        pytest.skip("All gather on 8 chips requires tunnelling! Re-enable once that's merged in.")
-
-    if num_devices > len(devices):
-        pytest.skip("Not enough devices detected!")
+    if len(all_devices) != 8:
+        pytest.skip("Not T3000!")
 
     if mem_config == ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM):
         pytest.skip("Disabling input in DRAM for all gather tests!")
 
-    devices = get_devices_for_t3000(devices, num_devices)
-
+    devices = get_devices_for_t3000(all_devices, num_devices)
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
     if (

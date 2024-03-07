@@ -428,13 +428,13 @@ FreeList::~FreeList() {
 
 void FreeList::dump_block(const Block *block, std::ofstream &out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
-    out << ",,,Address (KB):," << (block->address + this->offset_bytes_) / 1024 << "\n"
-        << ",,,Size (KB):," << (block->size) / 1024 << "\n"
-        << ",,,Allocated (Y/N):," << alloc_status << "\n";
+    out << ",,," << (block->address + this->offset_bytes_)
+        << "," << (block->size)
+        << "," << alloc_status << "\n";
 }
 
 void FreeList::dump_blocks(std::ofstream &out) const {
-    out << ",,Blocks:\n";
+    out << ",,Blocks:,Address (B),Size (B),Allocated (Y/N)\n";
     Block *curr_block = this->block_head_;
     while (curr_block != nullptr) {
         this->dump_block(curr_block, out);

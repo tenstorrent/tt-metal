@@ -120,7 +120,7 @@ def test_conv2d_fallback(
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
-    logger.info(comp_out)
+    logger.debug(comp_out)
 
 
 @pytest.mark.parametrize(
@@ -279,5 +279,5 @@ def test_Conv2d_fallback(
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
-    logger.info(comp_out)
+    logger.debug(comp_out)
     assert comp_pass

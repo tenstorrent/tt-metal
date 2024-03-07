@@ -109,8 +109,8 @@ def test_run_downsample(
     input_shard_height = (int)(input_2d_height_padded / num_cores_height_slices)
     output_2d_height_padded = _nearest_y(batch_size * output_height * output_width, num_cores_height_slices * 32)
     output_shard_height = (int)(output_2d_height_padded / num_cores_height_slices)
-    logger.info(f"input_2d_height={input_2d_height}")
-    logger.info(f"input_2d_width={input_2d_width}")
+    logger.debug(f"input_2d_height={input_2d_height}")
+    logger.debug(f"input_2d_width={input_2d_width}")
     sharded_memory_layout = (
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if height_sharded else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
     )
@@ -118,9 +118,9 @@ def test_run_downsample(
         ttl.tensor.ShardOrientation.ROW_MAJOR if height_sharded else ttl.tensor.ShardOrientation.COL_MAJOR
     )
     input_shard_width = input_2d_width if height_sharded else ((int)(input_2d_width / grid_size[1]))
-    logger.info(f"grid_size={grid_size}")
-    logger.info(f"shard_memory_layout={sharded_memory_layout}")
-    logger.info(f"input_shard_height={input_shard_height}, input_shard_width={input_shard_width}")
+    logger.debug(f"grid_size={grid_size}")
+    logger.debug(f"shard_memory_layout={sharded_memory_layout}")
+    logger.debug(f"input_shard_height={input_shard_height}, input_shard_width={input_shard_width}")
 
     A_sharded = ttl.tensor.interleaved_to_sharded(
         A_interleaved,
@@ -211,6 +211,4 @@ def test_run_downsample(
         )  # For LowFi we need 0.99976
     else:
         passing, output_info = comp_equal(out_golden, out_result)
-    logger.info(f"Passing={passing}")
-    logger.info(f"Output info={output_info}")
     assert passing

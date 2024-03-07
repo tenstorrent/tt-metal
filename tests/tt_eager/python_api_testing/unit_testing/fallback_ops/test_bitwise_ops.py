@@ -52,7 +52,7 @@ class TestBitwiseOps:
         output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass
 
     @pytest.mark.parametrize("op_kind", ["or", "and", "xor"])
@@ -88,5 +88,5 @@ class TestBitwiseOps:
         output = tout.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass

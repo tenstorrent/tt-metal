@@ -131,6 +131,10 @@ void MAIN {
                               SFPU_OP_FUNC_ACTIVATION
                             }
                         #endif
+
+                        #if defined FP32_DEST_ACC_EN
+                            PACK((  pack_reconfig_data_format(out_cb_id) ));
+                        #endif
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -143,6 +147,9 @@ void MAIN {
                             cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
                             out_num_tiles_to_wait += out_subblock_num_tiles;
                         }
+                        #if defined FP32_DEST_ACC_EN
+                            PACK((  pack_reconfig_data_format(mm_partials_cb_id) ));
+                        #endif
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
