@@ -178,6 +178,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/upsample/upsample_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/fold_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/single_core/fold_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/fold/multi_core/fold_op_multi_core.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =
