@@ -54,14 +54,18 @@ def register_ttl_relational_function_zero(name, ttl_relational_function, op_func
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
 
-        output_tensor = ttl_relational_function(input_tensor, output_mem_config=memory_config)
+        ttl_output_tensor = ttl_relational_function(ttl_input_tensor, output_mem_config=memory_config)
+
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -189,9 +193,18 @@ def register_ttl_relational_function(name, ttl_relational_function, op_name):
                 original_shape = input_tensor_b.shape
 
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_a = input_tensor_a.value
 
-        output_tensor = ttl_relational_function(input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        ttl_output_tensor = ttl_relational_function(
+            ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config
+        )
+
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -332,12 +345,18 @@ def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, p
         original_shape = input_tensor_a.shape
 
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_a = input_tensor_a.value
 
-        output_tensor = ttl_isclose_function(
-            input_tensor_a, input_tensor_b, rtol, atol, equal_nan, output_mem_config=memory_config
+        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        ttl_output_tensor = ttl_isclose_function(
+            ttl_input_tensor_a, ttl_input_tensor_b, rtol, atol, equal_nan, output_mem_config=memory_config
         )
 
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
