@@ -1,4 +1,4 @@
-name: "[post-commit] Fast dispatch unit tests impl"
+name: "[internal] Fast dispatch unit tests impl"
 
 on:
   workflow_call:
