@@ -705,6 +705,21 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 start_shape, end_shape, interval, _gen_ttnn_rmsnorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
+        elif method == "ttnn-groupnorm":
+            assert len(start_shape) == 2
+            assert len(end_shape) == 2
+
+            def _gen_ttnn_rmsnorm_shapes(shape):
+                input_shape = [shape[0], shape[1]]
+                weights_shape = [shape[1]]
+                bias_shape = [shape[1]]
+
+                return [input_shape, weights_shape, bias_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_ttnn_rmsnorm_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
 
