@@ -172,10 +172,7 @@ Basic Examples
     export TT_METAL_LOGGER_TYPES=Op
     export TT_METAL_LOGGER_LEVEL=Debug
 
-
-Logging will print out the time it took for the operation to execute. It also prints out the execution time of the program.
-
-Logging cannot provide duration because of Fast Dispatch
+Logging cannot provide duration because the operations run asynchronously.
 Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
@@ -234,4 +231,19 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
     import ttnn
 
+    # Profile can be set to "empty", "short" or "full"
+
     ttnn.set_printoptions(profile="full")
+
+
+
+11. Speeding up ttnn calls
+--------------------------
+
+ttnn has a python decorator that optionally enables features during run-time. The features are related to validation and debugging of the operations.
+
+The following environment variable can be set in order to completely disable these features.
+
+.. code-block:: bash
+
+    export TTNN_ENABLE_FAST_RUNTIME_MODE=True
