@@ -190,8 +190,11 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
     weight = ttnn.unsqueeze_to_4D(weight)
 
-    output_tensor = ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
+    ttl_input_tensor = input_tensor.value
+    ttl_weight = weight.value
+    ttl_output_tensor = ttl.tensor.rmsnorm(ttl_input_tensor, epsilon, ttl_weight)
 
+    output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(output_tensor, original_shape)
 
     return output_tensor
@@ -257,7 +260,6 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
     name="ttnn.group_norm",
     validate_input_tensors=_group_norm_validate_input_tensors,
     torch_function=_torch_group_norm,
-    # TODO(arakhmati): add proper fallback
 )
 def group_norm(
     input_tensor: ttnn.Tensor,
@@ -320,9 +322,7 @@ def group_norm(
 
     else:
         output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
-        return ttnn.from_torch(
-            output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device()
-        )
+        return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
 
 
 __all__ = []

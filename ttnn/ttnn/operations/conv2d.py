@@ -94,6 +94,9 @@ class Conv2d:
             activation = activation.lower()
             assert activation == "relu", f"Only support relu fusion with conv. Got activation={activation}."
             fuse_relu = True
+        if bias is not None:
+            bias = bias.value
+        weight = weight.value
         self.conv = TTPyCompositeConv(
             sliding_window_op_params,
             weight,
@@ -129,19 +132,19 @@ class Conv2d:
 
     @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
     def __call__(self, activation: ttnn.Tensor):
-        return self.conv(activation)
+        return ttnn.Tensor(self.conv(activation.value))
 
     @ttnn.register_operation(
         name="ttnn.Conv2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: True
     )
     def copy_input_to_device(self, input: ttnn.Tensor):
-        return self.conv.copy_input_to_device(input)
+        return ttnn.Tensor(self.conv.copy_input_to_device(input.value))
 
     @ttnn.register_operation(
         name="ttnn.Conv2d.copy_output_from_device", validate_input_tensors=lambda *args, **kwargs: True
     )
     def copy_output_from_device(self, output: ttnn.Tensor):
-        return self.conv.copy_output_from_device(output)
+        return ttnn.Tensor(self.conv.copy_output_from_device(output.value))
 
     def get_parallel_config(self):
         return self.conv.get_parallel_config()

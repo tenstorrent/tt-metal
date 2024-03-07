@@ -63,7 +63,7 @@ def validate_input_tensor(
     else:
         raise RuntimeError(f"{operation_name}: Tensor must be on host or device!")
 
-    if not tensor.is_allocated():
+    if not tensor.value.is_allocated():
         raise RuntimeError(f"{operation_name}: Tensor must be allocated!")
 
 

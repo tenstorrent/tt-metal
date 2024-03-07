@@ -91,7 +91,9 @@ def embedding(
     input_tensor = ttnn.reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
 
     tilized = layout == ttnn.TILE_LAYOUT
-    embeddings = ttl.tensor.embeddings(input_tensor, weight, tilized, output_mem_config=memory_config)
+    embeddings = ttnn.Tensor(
+        ttl.tensor.embeddings(input_tensor.value, weight.value, tilized, output_mem_config=memory_config)
+    )
     embeddings = ttnn.reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
 
     return embeddings
@@ -148,8 +150,11 @@ def rotary_embedding(
     input_tensor = ttnn.reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
 
     tilized = layout == ttnn.TILE_LAYOUT
-    embeddings = ttl.tensor.embeddings(input_tensor, weight, tilized, output_mem_config=memory_config)
+    embeddings = ttnn.Tensor(
+        ttl.tensor.embeddings(input_tensor.value, weight.value, tilized, output_mem_config=memory_config)
+    )
     embeddings = ttnn.reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
+
     return embeddings
 
 
@@ -208,13 +213,22 @@ def softmax(
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
 
-    is_tile_padded = list(input_tensor.shape)[-2:] != list(input_tensor.shape.with_tile_padding())[-2:]
-    if not is_tile_padded and dim == rank - 1:
+    is_padded_and_using_tile = (
+        input_tensor.layout == ttnn.TILE_LAYOUT
+        and list(input_tensor.shape)[-2:] != list(input_tensor.shape.with_tile_padding())[-2:]
+    )
+    if not is_padded_and_using_tile and dim == rank - 1:
+        ttl_input_tensor = input_tensor.value
         # TODO: #4599 Research why softmax appears to not be stable when using a padded ttnn.TILE_LAYOUT
-        output_tensor = ttl.tensor.softmax(input_tensor, output_mem_config=memory_config)
+        ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
     else:
         dim_4D = dim + 4 - rank
-        output_tensor = ttl.operations.primary.moreh_softmax(input_tensor, dim=dim_4D)
+
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        ttl_input_tensor = input_tensor.value
+
+        ttl_output_tensor = ttl.operations.primary.moreh_softmax(ttl_input_tensor, dim=dim_4D)
+    output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(output_tensor, input_shape)
     return output_tensor
 
@@ -285,9 +299,17 @@ def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool =
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
-    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    ttl_input_tensor = input_tensor.value
+    ttl_output_tensor = ttl.tensor.reduce(
+        ttl_input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
+    )
+    ttl_output_tensor = ttl.tensor.reduce(
+        ttl_input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
+    )
+
+    output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
+
     return output_tensor
 
 
@@ -467,7 +489,9 @@ def upsample(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
 
-    output_tensor = ttl.tensor.upsample(input_tensor, int(scale_h), int(scale_w), output_mem_config=memory_config)
+    output_tensor = ttl.tensor.upsample(input_tensor.value, int(scale_h), int(scale_w), output_mem_config=memory_config)
+    output_tensor = ttnn.Tensor(output_tensor)
+
     return output_tensor
 
 

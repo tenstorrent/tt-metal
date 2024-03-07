@@ -60,6 +60,8 @@ def register_ttl_loss_function(name, ttl_loss_function):
     ) -> ttnn.Tensor:
         input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
         input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
 
         if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
             raise TypeError("Expected both arguments to be a ttnn.Tensor")
@@ -76,8 +78,11 @@ def register_ttl_loss_function(name, ttl_loss_function):
         if loss_mode == "mean":
             mode = ttl.tensor.LossReductionMode.MEAN
 
-        output_tensor = ttl_loss_function(input_tensor_a, input_tensor_b, mode, output_mem_config=memory_config)
+        ttl_output_tensor = ttl_loss_function(
+            ttl_input_tensor_a, ttl_input_tensor_b, mode, output_mem_config=memory_config
+        )
 
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.unsqueeze_to_4D(output_tensor)
         return output_tensor
 

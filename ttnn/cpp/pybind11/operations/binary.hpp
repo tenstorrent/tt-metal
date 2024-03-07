@@ -19,11 +19,12 @@ namespace binary {
 void py_module(py::module& module) {
     module.def(
         "add",
-        [](const ttnn::Tensor& input_tensor_a,
+        [](const ttnn::TensorWrapper& input_tensor_a,
            const float scalar,
            const ttnn::MemoryConfig& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::operations::binary::add(input_tensor_a, scalar, memory_config, dtype);
+           const std::optional<const DataType> dtype) {
+            return ttnn::TensorWrapper{
+                ttnn::operations::binary::add(input_tensor_a.value, scalar, memory_config, dtype)};
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -33,11 +34,12 @@ void py_module(py::module& module) {
 
     module.def(
         "add",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
+        [](const ttnn::TensorWrapper& input_tensor_a,
+           const ttnn::TensorWrapper& input_tensor_b,
            const ttnn::MemoryConfig& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-             return ttnn::operations::binary::add(input_tensor_a, input_tensor_b, memory_config, dtype);
+           const std::optional<const DataType> dtype) {
+            return ttnn::TensorWrapper{
+                ttnn::operations::binary::add(input_tensor_a.value, input_tensor_b.value, memory_config, dtype)};
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),

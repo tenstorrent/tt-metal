@@ -27,7 +27,7 @@ def callable_decorator(parentObj):
         for name in dir(parentObj):
             obj = getattr(parentObj, name)
             # TODO: Improve finding objects , __ search is a very bad idea
-            if not isinstance(obj, type) and callable(obj) and "__" not in name:
+            if callable(obj) and "__" not in name:
                 setattr(parentObj, name, decorator(obj, name))
                 callable_decorator(obj)
     except Exception as e:

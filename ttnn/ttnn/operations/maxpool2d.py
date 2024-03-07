@@ -91,13 +91,13 @@ class MaxPool2d:
         )
 
     def __call__(self, activation: ttnn.Tensor):
-        return self.max_pool(activation)
+        return ttnn.Tensor(self.max_pool(activation.value))
 
     def copy_input_to_device(self, input: ttnn.Tensor):
-        return self.max_pool.copy_input_to_device(input)
+        return ttnn.Tensor(self.max_pool.copy_input_to_device(input.value))
 
     def copy_output_from_device(self, output: ttnn.Tensor):
-        return self.max_pool.copy_output_from_device(output)
+        return ttnn.Tensor(self.max_pool.copy_output_from_device(output.value))
 
 
 ## Average Pooling
@@ -138,5 +138,5 @@ def global_avg_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     Arguments:
         * :attr: input_tensor: the input tensor
     """
-    output = ttl.tensor.average_pool_2d(input_tensor)
-    return output
+    output = ttl.tensor.average_pool_2d(input_tensor.value)
+    return ttnn.Tensor(output)
