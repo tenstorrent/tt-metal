@@ -57,17 +57,12 @@ std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomp
     return std::make_tuple(all_cores, core_range, core_range_cliff, out_h_per_core, out_h_per_core_cliff);
 }
 
-uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch) {
+// uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch) {
+uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) {
+    auto grid_size = device->compute_with_storage_grid_size();
     uint32_t avail_ncores = grid_size.x * grid_size.y;
-    uint32_t ncores;
-    // if (out_nhw % 660 == 0) {
-    //     // other shapes
-    //     if (nbatch <= 8) {
-    //         ncores = 66;
-    //     } else {
-    //         ncores = 96;
-    //     }
-    // } else {
+    uint32_t ncores = 0;
+    if (device->arch() == ARCH::GRAYSKULL) {
         // resnet50 shapes
         switch (out_nhw) {
             case 1024:  // test case
@@ -105,21 +100,36 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch) {
                 ncores = std::max(avail_ncores, (uint32_t) 1);
                 break;
         }
-    // }
+    } else if (device->arch() == ARCH::WORMHOLE_B0) {
+        uint32_t out_nhw_per_core = (uint32_t) ceil((float) out_nhw / avail_ncores);
+        ncores = out_nhw / out_nhw_per_core;
+        while (avail_ncores > 0) {
+            if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
+                ncores = avail_ncores;
+                break;
+            }
+            --avail_ncores;
+        }
+        ncores = std::max(avail_ncores, (uint32_t) 1);
+    } else {
+        TT_THROW("Unsupported device arch: {}", device->arch());
+    }
+    if (ncores == 0) TT_THROW("ncores = 0!");
     return ncores;
 }
 
 // decompose along height = N * H * W
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
-get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw, uint32_t nbatch) {
+get_decomposition_nhw(const Device* device, uint32_t in_nhw, uint32_t out_nhw, uint32_t nbatch) {
     std::set<CoreRange> all_cores, core_range, core_range_cliff;
+    auto grid_size = device->compute_with_storage_grid_size();
     uint32_t avail_ncores = grid_size.x * grid_size.y;
     // // generic decomposition:
     // uint32_t ncores = out_nhw / out_nhw_per_core;
 
     // hardcoded for resnet shapes:
     uint32_t ncores = 0, out_nhw_per_core = 0, in_nhw_per_core = 0;
-    ncores = get_num_cores(grid_size, out_nhw, nbatch);
+    ncores = get_num_cores(device, out_nhw, nbatch);
 
     out_nhw_per_core = out_nhw / ncores;
     in_nhw_per_core = in_nhw / ncores;
@@ -199,7 +209,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw, nbatch);
+    auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(device, in_nhw, out_nhw, nbatch);
     if (input.memory_config().is_sharded()) {
         all_cores = input.shard_spec().value().grid;
         uint32_t ncores = all_cores.num_cores();
@@ -701,6 +711,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                                     {{in_scalar_cb_id, in_df}})
 		                                        .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
     auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -713,11 +724,13 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
                                             .set_globally_allocated_address(*input.buffer());
     auto raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
     // reader indices
     auto in_reader_indices_cb_id = CB::c_in3;
-    uint32_t in_reader_indices_cb_pagesize = out_nhw_per_core * indices_nbytes;
+    uint32_t in_reader_indices_cb_pagesize = round_up(out_nhw_per_core * indices_nbytes, 4);    // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_reader_indices_cb_id, in_reader_indices_cb_pagesize, in_reader_indices_cb_npages);
     CircularBufferConfig in_reader_indices_cb_config = CircularBufferConfig(
                                                             in_reader_indices_cb_npages * in_reader_indices_cb_pagesize,
                                                             {{in_reader_indices_cb_id, indices_df}})
@@ -733,6 +746,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
 		.set_page_size(in_cb_id, in_cb_pagesize);
     auto in_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id, in_cb_pagesize, in_cb_npages);
 
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
@@ -741,6 +755,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
 		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
     auto in_tiled_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
@@ -749,6 +764,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     TT_FATAL(output.memory_config().is_sharded());
     auto shard_shape = output.shard_spec().value().shape;
@@ -758,6 +774,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
         .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
     auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", sharded_out_cb_id, sharded_out_cb_page_size, sharded_out_num_pages);
 
     #if 1
     {   // debug

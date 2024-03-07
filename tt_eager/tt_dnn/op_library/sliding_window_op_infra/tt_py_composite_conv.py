@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 from typing import List, Union
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_op import TTPyOp
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
@@ -101,6 +102,7 @@ def determine_parallel_config(
     sliding_window_op_params,
     device,
     config_override=None,
+    is_out_tiled=True,
 ):
     if config_override is None:
         config_override = {}
@@ -113,8 +115,13 @@ def determine_parallel_config(
 
     # pad height to 32
     conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
-    conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
-    conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
+    if is_out_tiled:
+        conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
+        conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
+    else:
+        conv_out_2d_matrix_height_ntiles = conv_out_2d_matrix_height
+        conv_out_2d_matrix_width_ntiles = output_channels
+
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
     device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
     max_num_cores = device_grid_size[0] * device_grid_size[1]
@@ -190,7 +197,7 @@ def determine_parallel_config(
         logical_grid_y, config_override.get("per_core_out_matrix_width_ntiles", None)
     )
 
-    # print(
+    # logger.debug(
     #     f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
     # )
 
