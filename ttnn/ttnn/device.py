@@ -17,8 +17,6 @@ def get_device_core_grid(device):
 Device = ttl.device.Device
 Device.core_grid = property(get_device_core_grid)
 
-DEVICES = {}
-
 
 def open_device(*, device_id: int):
     """

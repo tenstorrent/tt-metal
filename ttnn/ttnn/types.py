@@ -52,6 +52,19 @@ class CoreRange:
     end: CoreGrid
 
 
+@dataclasses.dataclass
+class DeviceGrid:
+    y: int
+    x: int
+
+    @property
+    def num_devices(self):
+        return self.y * self.x
+
+    def as_tuple(self):
+        return (self.y, self.x)
+
+
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2

@@ -40,6 +40,19 @@ void dump_borrowed_storage(ofstream& output_stream, const BorrowedStorage& stora
     );
 }
 
+void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHostStorage& storage) {
+    for (const auto& buffer : storage.buffers) {
+        std::visit(
+            [&output_stream]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
+                const auto buffer = owned_buffer::get_as<T>(generic_buffer);
+                auto size = buffer.size();
+                output_stream.write(reinterpret_cast<const char*>(&size), sizeof(size));
+                output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
+            }, buffer
+        );
+    }
+}
+
 template<typename T>
 OwnedStorage load_owned_storage(ifstream& input_stream) {
     std::size_t size = 0;
@@ -96,6 +109,12 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
+            }
+            else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            }
+            else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                detail::dump_multi_device_host_storage(output_stream, storage);
             }
             else {
                 raise_unsupported_storage<StorageType>();

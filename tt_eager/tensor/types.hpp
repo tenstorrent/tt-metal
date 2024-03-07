@@ -35,6 +35,8 @@ enum class StorageType {
     OWNED,
     DEVICE,
     BORROWED,  // for storing torch/numpy/etc tensors
+    MULTI_DEVICE,  // on-device storage for multi-device context
+    MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -298,7 +300,22 @@ struct BorrowedStorage {
     const auto attribute_values() const { return std::make_tuple(); }
 };
 
-using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage>;
+struct MultiDeviceHostStorage {
+    std::vector<OwnedBuffer> buffers;
+    std::vector<Shape> shapes;
+
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
+};
+
+struct MultiDeviceStorage {
+    std::vector<DeviceBuffer> buffers;
+    std::vector<Shape> shapes;
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
+};
+
+using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
 
 template <typename T>
 constexpr void raise_unsupported_storage() {

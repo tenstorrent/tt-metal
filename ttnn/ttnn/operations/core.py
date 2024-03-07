@@ -264,6 +264,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
+    mesh_mapper: Optional[ttnn.TensorToMeshMapper] = None,
 ) -> ttnn.Tensor:
     """
     from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None, layout: Optional[Layout] = ROW_MAJOR_LAYOUT, device: Optional[Device] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
@@ -301,10 +302,14 @@ def from_torch(
         if device is None:
             raise RuntimeError("device must be specified when memory_config is specified")
 
-    def impl(tensor, dtype):
+    def impl(tensor, dtype, mesh_mapper):
+        if mesh_mapper:
+            device_id_to_shard_ranges = mesh_mapper.map(tensor)
+            shards = list(device_id_to_shard_ranges.values())
+            return ttl.tensor.Tensor(shards, dtype)
         return ttl.tensor.Tensor(tensor, dtype)
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype, mesh_mapper)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout)
@@ -343,7 +348,9 @@ class TorchTensor(torch.Tensor):
 
 
 @ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
-def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch.Tensor":
+def to_torch(
+    tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensorComposer] = None
+) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
 
@@ -360,6 +367,8 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    if mesh_composer:
+        return mesh_composer.compose(tensor)
 
     if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE):
         tensor = ttnn.from_device(tensor)
@@ -427,7 +436,10 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     """
 
     def impl(tensor, device, *, memory_config):
-        return tensor.to(device, memory_config)
+        if isinstance(device, ttnn.DeviceMesh):
+            return ttnn.to_device_mesh(tensor, device, memory_config=memory_config)
+        else:
+            return tensor.to(device, memory_config)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
         tensor, device, memory_config=memory_config
@@ -466,6 +478,8 @@ def from_device(tensor):
     """
 
     def impl(tensor):
+        if ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.MULTI_DEVICE):
+            return ttnn.from_device_mesh(tensor)
         return tensor.cpu()
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)

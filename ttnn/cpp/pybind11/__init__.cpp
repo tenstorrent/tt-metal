@@ -10,6 +10,7 @@
 
 #include "core.hpp"
 #include "device.hpp"
+#include "multi_device.hpp"
 #include "types.hpp"
 
 namespace py = pybind11;
@@ -26,6 +27,9 @@ PYBIND11_MODULE(_ttnn, m_ttnn) {
 
     auto m_device = m_ttnn.def_submodule("device", "ttnn devices");
     ttnn::device::py_module(m_device);
+
+    auto m_multi_device = m_ttnn.def_submodule("multi_device", "ttnn multi_device");
+    ttnn::multi_device::py_module(m_multi_device);
 
     auto m_operations = m_ttnn.def_submodule("operations", "ttnn Operations");
     ttnn::operations::py_module(m_operations);
