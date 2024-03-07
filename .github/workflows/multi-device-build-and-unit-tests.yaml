@@ -1,4 +1,4 @@
-name: "[post-commit] Fast/Slow Dispatch multi-Nebula unit tests"
+name: "Multi-Nebula unit tests"
 
 on:
   workflow_dispatch:
