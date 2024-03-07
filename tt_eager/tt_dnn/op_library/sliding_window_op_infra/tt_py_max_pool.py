@@ -40,6 +40,7 @@ class TTPyMaxPool(TTPyOp):
         parallel_config_override=None,
         output_mem_config=None,
         deallocate_activation=True,
+        act_dtype=None,
     ):
         if parallel_config_override is None:
             parallel_config_override = {}
@@ -60,6 +61,7 @@ class TTPyMaxPool(TTPyOp):
             sliding_window_op_params,
             device,
             config_override=parallel_config_override,
+            is_out_tiled=True if act_dtype is not None and act_dtype == ttl.tensor.DataType.BFLOAT8_B else False,
         )
         self.grid_size = (conv_parallel_config.grid_size.x, conv_parallel_config.grid_size.y)
         self.ncores_nhw = conv_parallel_config.num_cores_nhw

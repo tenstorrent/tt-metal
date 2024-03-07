@@ -61,11 +61,10 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
     identity = x
     conv1 = parameters.conv1(x)
 
-    if layer >= 3:
-        conv1 = do_reshard(conv1, parameters.conv2.conv.input_sharded_memory_config)
+    conv1 = do_reshard(conv1, parameters.conv2.conv.input_sharded_memory_config)
 
     conv2 = parameters.conv2(conv1)
-    if conv1.value.is_allocated():
+    if conv1.is_allocated():
         ttnn.deallocate(conv1)
     conv3 = parameters.conv3(conv2)
     ttnn.deallocate(conv2)
@@ -76,8 +75,11 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
 
     if "downsample" in parameters and parameters.downsample is not None:
         identity = do_reshard(identity, parameters.downsample.conv.input_sharded_memory_config)
-        if layer >= 2:
+        if layer == 2:
             identity = ttnn.experimental.tensor.move_sharded(identity)
+            if x.is_allocated():
+                ttnn.deallocate(x)
+        ttnn.dump_device_memory_state(device)
         identity = parameters.downsample(identity)
 
     if layer >= 3:
