@@ -20,7 +20,7 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
     environment: dev
-    runs-on: ["model-runner-${{ matrix.arch }}", "fw-date-2024-03-05"]
+    runs-on: ["arch-${{ matrix.arch }}", "fw-date-2024-03-05"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active

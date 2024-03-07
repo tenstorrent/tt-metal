@@ -62,7 +62,7 @@ jobs:
         runner-hw-info: [
           {arch: wormhole_b0},
         ]
-    runs-on: ["Linux", "arch-${{ matrix.runner-hw-info.arch }}", "fw-date-2023-03-05"]
+    runs-on: ["Linux", "arch-${{ matrix.runner-hw-info.arch }}", "fw-date-2024-03-05"]
     environment: production
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
