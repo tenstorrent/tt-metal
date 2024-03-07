@@ -180,7 +180,8 @@ def test_resnet_block_2d_512x512(
     resnet_block = resnetBlock2D(
         device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=True
     )
-
+    
+    input = torch.permute(input, (0, 2, 3, 1))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
