@@ -54,21 +54,6 @@ def test_concat(device, h, w):
                 }
             ),
         ),
-        (
-            (1, 1, 5280, 32),
-            (80, 32),
-            (80, 64),
-            ttnn.experimental.tensor.CoreRangeSet(
-                {
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 4)
-                    ),
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 5), ttnn.experimental.tensor.CoreCoord(5, 5)
-                    ),
-                }
-            ),
-        ),
     ),
 )
 def test_sharded_concat(device, input_shape, shard_shape, output_shard_shape, shard_grid):

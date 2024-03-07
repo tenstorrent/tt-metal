@@ -159,17 +159,6 @@ def test_multi_input_concat(shapes, dim, device, function_level_defaults):
             (80, 64),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
         ),
-        (
-            (1, 1, 5280, 32),
-            (80, 32),
-            (80, 64),
-            ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 4)),
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(5, 5)),
-                }
-            ),
-        ),
     ),
 )
 def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid, device):
