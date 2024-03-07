@@ -153,9 +153,10 @@ void py_module(py::module& m_primary) {
            const MatmulDefaultProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
            ) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config);
+            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -164,6 +165,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -184,9 +186,10 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
            ) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config);
+            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -195,6 +198,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -216,10 +220,11 @@ void py_module(py::module& m_primary) {
            const MatmulDefaultProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
            ) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -229,6 +234,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -251,7 +257,9 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
+           ) {
             return matmul(
                 input_tensor_a,
                 input_tensor_b,
@@ -259,7 +267,9 @@ void py_module(py::module& m_primary) {
                 program_config,
                 out_mem_config,
                 output_dtype,
-                compute_kernel_config);
+                compute_kernel_config,
+                untilize_out
+                );
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -269,6 +279,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -291,10 +302,11 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseMultiCastProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
            ) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -304,6 +316,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -326,10 +339,11 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out
            ) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -339,6 +353,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 

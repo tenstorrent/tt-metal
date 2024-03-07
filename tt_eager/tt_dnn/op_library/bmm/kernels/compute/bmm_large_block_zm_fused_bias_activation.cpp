@@ -298,7 +298,7 @@ void MAIN {
                 cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    pack_tile(i, out_cb_id);
+                    pack_tile(i, untilize_mode_out_cb_id);
                 }
                 tile_regs_release();
                 cb_push_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
@@ -306,14 +306,20 @@ void MAIN {
                 in1_index_subblock_offset += out_subblock_w;
             }
         }
-        #endif
+        #endif // FUSE_BIAS
         if constexpr(untilize_out) {
             #ifdef PACK_RELU
             PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
-            #endif
+            #endif // PACK_RELU
             #ifndef FUSE_BIAS
             unpack_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+            #ifdef PACKER_L1_ACC
+                PACK((  llk_pack_reconfig_l1_acc(0) ));
             #endif
+            #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+                PACK((  pack_reconfig_data_format(out_cb_id) ));
+            #endif
+            #endif // FUSE_BIAS
             pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
             copy_tile_to_dst_init_short();
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
