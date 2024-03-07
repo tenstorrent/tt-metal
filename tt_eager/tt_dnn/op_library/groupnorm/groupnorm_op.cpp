@@ -162,12 +162,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t per_core_M = a.shard_spec().value().shape[0];
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
-    uint32_t per_core_Nt = per_core_N / TILE_WIDTH;
-    uint32_t per_core_N_padded = per_core_N;
-    auto shard_spec = a.shard_spec().value();
-
-    // uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
-    uint32_t per_core_Nt_padded = per_core_N_padded / TILE_WIDTH;
+    uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
+    uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t H = shape[2] * num_batches;
@@ -179,7 +175,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t num_cores_c = grid_size.x;
     uint32_t num_cores_r = grid_size.y;
     // uint32_t num_cores = num_cores_c * num_cores_r;
-    auto all_cores = shard_spec.grid;
+    auto all_cores = a.shard_spec().value().grid;
     uint32_t num_cores = all_cores.num_cores();
     auto shard_orientation = a.shard_spec().value().orientation;
     // split each batch into multiple cores
@@ -193,14 +189,31 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
 
     TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
     TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
-    if (shard_orientation == ShardOrientation::COL_MAJOR) {
-        TT_ASSERT(per_core_N * num_cores_r == W);
-        TT_ASSERT(per_core_M * num_cores_c == H);
-    } else {
-        TT_ASSERT(per_core_N * num_cores_c == W);
-        TT_ASSERT(per_core_M * num_cores_r == H);
+    if (per_core_N != W) {
+        if (shard_orientation == ShardOrientation::COL_MAJOR) {
+            TT_ASSERT(per_core_N * num_cores_r == W);
+            TT_ASSERT(per_core_M * num_cores_c == H);
+        } else {
+            TT_ASSERT(per_core_N * num_cores_c == W);
+            TT_ASSERT(per_core_M * num_cores_r == H);
+        }
     }
 
+    TT_ASSERT(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+
+    TT_ASSERT(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
+    TT_ASSERT(H % per_core_M == 0 && "H dim must be divisible by per_core_M");
+    TT_ASSERT(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
+    if (num_batches >= num_shards_r) {
+        TT_ASSERT(num_batches % num_shards_r == 0 && "num_batches must be divisible by number of cores in a full column");
+    } else {
+        TT_ASSERT(num_shards_r % num_batches == 0 && "number of cores in a full column must be divisible by num_batches");
+    }
+    if (num_groups >= num_shards_c) {
+        TT_ASSERT(num_groups % num_shards_c == 0 && "num_groups must be divisible by number of cores in a full row");
+    } else {
+        TT_ASSERT(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
+    }
 
     // subblock
     bool is_channel_divisible_by_tile = true;
@@ -229,8 +242,6 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     log_debug(tt::LogOp, "num_nz_rows_per_tile: {}", num_nz_rows_per_tile);
     log_debug(tt::LogOp, "per_core_M: {}", per_core_M);
     log_debug(tt::LogOp, "per_core_N: {}", per_core_N);
-    log_debug(tt::LogOp, "per_core_N_padded: {}", per_core_N_padded);
-    log_debug(tt::LogOp, "per_core_Nt_padded: {}", per_core_Nt_padded);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
@@ -288,7 +299,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles = per_core_Nt_padded * per_core_Mt;
+    uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t interm_block_tiles = block_ht * block_wt;
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -316,7 +327,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
 
-    log_debug(tt::LogOp, "per_core_Nt_padded: {}", per_core_Nt_padded);
+    log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt: {}", per_core_Mt);
     log_debug(tt::LogOp, "in0_CB_tiles: {}", in0_CB_tiles);
     log_debug(tt::LogOp, "in0_CB_size: {}", in0_CB_size);
