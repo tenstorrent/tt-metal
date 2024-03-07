@@ -7,9 +7,6 @@ on:
 jobs:
   build-artifact:
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
       matrix:
         arch: ["grayskull", "wormhole_b0"]
     env:
