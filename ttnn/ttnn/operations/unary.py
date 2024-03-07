@@ -65,14 +65,18 @@ def register_ttl_unary_function(name, ttl_unary_function):
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
 
-        output_tensor = ttl_unary_function(input_tensor, output_mem_config=memory_config)
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, output_mem_config=memory_config)
+
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -163,6 +167,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
 
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
@@ -172,8 +177,11 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
 
         if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
 
-        output_tensor = ttl_unary_function(input_tensor, parameter, output_mem_config=memory_config)
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
+
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 

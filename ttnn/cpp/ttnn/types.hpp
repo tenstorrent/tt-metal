@@ -38,6 +38,11 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
 
+// Tensor wrapper class for hiding the internal implementation from python
+struct TensorWrapper {
+    ttnn::Tensor value;
+};
+
 struct TensorSchema {
     const std::size_t min_rank;
     const std::size_t max_rank;

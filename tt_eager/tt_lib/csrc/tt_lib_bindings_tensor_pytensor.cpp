@@ -519,7 +519,8 @@ Tensor convert_python_tensor_to_tt_tensor(
 
         )doc");
 
-        pyTensor.def(py::init<ttnn::Tensor&>()).def(
+        pyTensor
+            .def(
                 py::init<>([](std::vector<float> &&data,
                               const std::array<uint32_t, 4> &shape,
                               DataType data_type,
@@ -712,9 +713,6 @@ Tensor convert_python_tensor_to_tt_tensor(
                         py_tensor = np.zeros((1, 1, 32, 32))
                         tt_lib.tensor.Tensor(py_tensor)
                 )doc")
-            .def_property_readonly("shape", [](const Tensor& self) { return self.ttnn_shape(); })
-            .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
-            .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
             .def(
                 "deallocate",
                 [](Tensor &self, bool force) { return self.deallocate(force); },
@@ -1226,7 +1224,6 @@ Tensor convert_python_tensor_to_tt_tensor(
                     is_sharded = tt_tensor.is_sharded()
 
             )doc")
-            .def("is_contiguous", [](const Tensor& self) -> bool { return self.is_contiguous(); })
             .def(
                 "is_sharded", [](const Tensor &self) { return self.is_sharded(); }, R"doc(
                 Check if TT Tensor is sharded.
