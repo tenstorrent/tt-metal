@@ -264,6 +264,27 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
+    m_profiler.def(
+        "tracy_message",
+        &op_profiler::tracy_message,
+        py::arg("message"),
+        py::arg("color") = 0xf0f8ff,
+        R"doc(
+        Emit a message signpost into the tracy profile.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | message          | Message description for this signpost.         | string                |             | Yes      |
+        | color            | Zone color                                     | int                   |             | No       |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_profiler.def(
+        "tracy_frame",
+        &op_profiler::tracy_frame,
+        R"doc(
+        Emit a tracy frame signpost.
+    )doc");
 }
 
 void DTXModule(py::module &m_dtx) {

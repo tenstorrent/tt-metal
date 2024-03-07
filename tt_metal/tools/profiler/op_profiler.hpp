@@ -447,6 +447,18 @@ namespace op_profiler {
 
     }
 
+    static void tracy_message(const string& source, uint32_t color = 0xf0f8ff) {
+#if defined(TRACY_ENABLE)
+        TracyMessageC(source.c_str(), source.size(), color);
+#endif
+    }
+
+    static void tracy_frame() {
+#if defined(TRACY_ENABLE)
+        FrameMark;
+#endif
+    }
+
     static bool get_profiler_flag ()
     {
         return getHostProfilerState();
