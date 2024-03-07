@@ -26,19 +26,23 @@ jobs:
       CONFIG: ci
       TT_METAL_SLOW_DISPATCH_MODE: 1
       LOGURU_LEVEL: INFO
-    environment: dev
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Build tt-metal CPP tests
         run: make tests
       - name: Run pre/post regression tests
         timeout-minutes: 15
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
