@@ -1,6 +1,8 @@
 name: Docs - Build latest docs and deploy to GitHub pages on main
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
