@@ -324,6 +324,10 @@ inline DeviceBuffer to_device_buffer(
                 } else {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("MultiHostStorage storage doesn't support to_device_buffer");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_THROW("MultiDeviceStorage doesn't support to_device_buffer");
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -432,25 +436,49 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         }
     };
 
-    auto output_data = std::visit(
-        [&convert](auto&& storage) -> std::vector<T> {
+    auto output_storage = std::visit(
+        [&convert](auto&& storage) -> std::variant<OwnedStorage, MultiDeviceHostStorage> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 const auto input_data = owned_buffer::get_as<T>(storage.buffer);
-                return convert(input_data);
+                auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
+                return OwnedStorage{output_buffer};
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
-                return convert(input_data);
+                auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
+                return OwnedStorage{output_buffer};
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                std::vector<OwnedBuffer> output_buffers;
+                std::vector<Shape> output_shapes;
+                for (int i = 0; i < storage.buffers.size(); i++) {
+                    const auto input_data = owned_buffer::get_as<T>(storage.buffers[i]);
+                    auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
+                    output_buffers.push_back(output_buffer);
+                    output_shapes.push_back(storage.shapes[i]);
+                }
+                return MultiDeviceHostStorage{output_buffers, output_shapes};
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("On-device layout conversion for tensor with MultiDeviceStorage is not supported.");
             } else {
                 raise_unsupported_storage<StorageType>();
             }
         },
         tensor.storage());
 
-    auto output_buffer = owned_buffer::create<T>(std::move(output_data));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
+
+    return std::visit(
+        [&tensor, &target_layout](auto&& storage) -> Tensor {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        }, output_storage);
 }
 
 Tensor to_layout_bfloat8_b(const Tensor& tensor, Layout target_layout);
@@ -542,6 +570,10 @@ inline Tensor pad(
                 return pad(input_data);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_THROW("Device storage isn't supported");
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -611,6 +643,10 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
                 const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
                 return unpad(input_data);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else {
                 raise_unsupported_storage<StorageType>();
@@ -836,6 +872,10 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Cannot print a device tensor!");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_THROW("Device storage isn't supported");
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -879,6 +919,10 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else {
                 raise_unsupported_storage<StorageType>();
