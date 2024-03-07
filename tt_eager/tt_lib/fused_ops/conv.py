@@ -169,6 +169,7 @@ def resnet50_optimized_conv(
     output_dtype=None,
     math_fidelity=None,
     act_c_num_blocks=1,
+    compute_kernel_config=None,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
@@ -269,6 +270,7 @@ def resnet50_optimized_conv(
             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
             output_dtype=output_dtype,
             input_tensor_shape=input_tensor_shape,
+            compute_kernel_config=compute_kernel_config,
         )
         # assert(output.storage_type() == tensor.StorageType.DEVICE)
         return output
