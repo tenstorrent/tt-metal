@@ -88,6 +88,7 @@ class MaxPool2d:
             pad_val=0xF7FF,
             parallel_config_override=parallel_config_override,
             deallocate_activation=deallocate_activation,
+            act_dtype=dtype,
         )
 
     def __call__(self, activation: ttnn.Tensor):

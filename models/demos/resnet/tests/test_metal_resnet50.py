@@ -8,7 +8,7 @@ from torchvision import models
 import pytest
 import tt_lib
 
-from models.utility_functions import is_e75
+from models.utility_functions import is_e75, skip_for_wormhole_b0
 
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -117,6 +117,7 @@ golden_pcc = {
 }
 
 
+@skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
 @pytest.mark.parametrize("batch_size", [1, 2, 8, 16, 20], ids=["batch_1", "batch_2", "batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",

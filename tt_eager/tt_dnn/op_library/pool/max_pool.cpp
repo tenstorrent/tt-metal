@@ -84,7 +84,7 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         if (input.shard_spec().has_value() && input.shard_spec().value().halo) {
             ncores = input.shard_spec().value().num_cores();
         } else {
-            ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
+            ncores = max_pool_helpers::get_num_cores(input.device(), out_nhw, nbatch);
         }
         // uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
         // uint32_t ncores = input.shard_spec().value().num_cores();

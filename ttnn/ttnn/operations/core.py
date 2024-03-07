@@ -767,7 +767,7 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         pad_w = (ttnn.TILE_SIZE - width % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
         padded_height = height + pad_h
         padded_width = width + pad_w
-        tensor = ttnn.unsqueeze_to_4D(tensor)
+        tensor = ttnn.unsqueeze_to_4D(input_tensor)
         *batch_sizes, _, _ = tensor.shape
 
         if is_on_device:
