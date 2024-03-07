@@ -12,7 +12,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class ConcatOpParallelizationStrategy {
-    SINGLE_CORE = 0, MULTI_CORE = 1
+    SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE = 2
 };
 
 struct Concat {
@@ -31,6 +31,7 @@ struct Concat {
     }
 };
 
+operation::ProgramWithCallbacks sharded_concat_multi_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
 operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
 operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
 
