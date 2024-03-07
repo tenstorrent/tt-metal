@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
@@ -189,7 +189,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     program_config = ttnn.create_matmul_1d_systolic_array_program_config(
         input_shape_a=input_tensor_a.shape,
         input_shape_b=input_tensor_b.shape,
-        core_grid=input_tensor_a.device().core_grid,
+        core_grid=device.core_grid,
         activation=activation,
     )
 
@@ -197,6 +197,44 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         input_tensor_a,
         input_tensor_b,
         program_config=program_config,
+    )
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.parametrize("m_size", [32, 512])
+@pytest.mark.parametrize("k_size", [1024, 2048])
+@pytest.mark.parametrize("n_size", [1024, 2048])
+def test_linear_fp32_acc(device, m_size, k_size, n_size):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((1, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if is_wormhole_b0():
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    else:
+        # Grayskull doesn't support fp32 but test passing a GS config is ok
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+        )
+
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        core_grid=device.core_grid,
+        compute_kernel_config=compute_kernel_config,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
