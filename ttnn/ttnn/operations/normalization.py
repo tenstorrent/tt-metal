@@ -221,6 +221,15 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 
+def _fallback_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
+    output_tensor = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
+    output_tensor = ttnn.from_torch(
+        output_tensor, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device()
+    )
+    output_tensor = ttnn.reshape(output_tensor, input_tensor.shape)
+    return output_tensor
+
+
 def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weight=None, bias=None, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -257,7 +266,7 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
     name="ttnn.group_norm",
     validate_input_tensors=_group_norm_validate_input_tensors,
     torch_function=_torch_group_norm,
-    # TODO(arakhmati): add proper fallback
+    fallback=_fallback_group_norm,
 )
 def group_norm(
     input_tensor: ttnn.Tensor,
@@ -319,10 +328,7 @@ def group_norm(
         return output_tensor
 
     else:
-        output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
-        return ttnn.from_torch(
-            output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device()
-        )
+        raise NotImplementedError
 
 
 __all__ = []
