@@ -50,7 +50,7 @@ def _fallback_pad(input_tensor: ttnn.Tensor, padding, value):
 
     output_tensor = _torch_pad(input_tensor, padding, value)
     output_tensor = ttnn.from_torch(
-        output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
+        output_tensor, dtype=input_tensor.dtype, device=input_tensor.device(), layout=input_tensor.layout
     )
 
     # Padding always turn the intended shape to the shape with tile padding. For simplicity of the operation
@@ -131,12 +131,10 @@ def pad(
 
     padded_shape = tuple(dim + end for dim, end in zip(input_shape_with_tile_padding, pad_end))
 
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.pad(
-        ttl_input_tensor, padded_shape, pad_start, value, output_mem_config=memory_config, use_multicore=True
+    output_tensor = ttl.tensor.pad(
+        input_tensor, padded_shape, pad_start, value, output_mem_config=memory_config, use_multicore=True
     )
 
-    output_tensor = ttnn.Tensor(ttl_output_tensor)
     while len(output_tensor.shape) > original_rank:
         output_tensor = ttnn.squeeze(output_tensor, dim=0)
 
@@ -172,6 +170,7 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
     torch_function=_torch_permute,
+    # TODO(arakhmati): add proper fallback
 )
 def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     r"""
@@ -200,14 +199,13 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         )
 
     on_device = ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
-    device = input_tensor.device
+    device = input_tensor.device()
     layout = input_tensor.layout
     dtype = input_tensor.dtype
     rank = len(input_tensor.shape)
 
     if len(input_tensor.shape) < 4:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
         adjusted_order_for_4D_tensor = order
         while len(adjusted_order_for_4D_tensor) < 4:
             adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
@@ -216,10 +214,8 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     if ttnn.has_tile_padding(input_tensor):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
-    ttl_input_tensor = input_tensor.value
-
     if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
-        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+        output_tensor = ttl.tensor.permute(input_tensor, order)
         output_tensor = ttnn.to_layout(output_tensor, layout)
         rank_should_be_updated = len(output_tensor.shape) > rank
         while rank_should_be_updated:
@@ -265,6 +261,7 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
     torch_function=_torch_concat,
+    # TODO(arakhmati): add proper fallback
 )
 def concat(
     tensors: List[ttnn.Tensor],
@@ -317,7 +314,7 @@ def concat(
     rank = len(tensors[0].shape)
 
     dtype = tensors[0].dtype
-    device = tensors[0].device
+    device = tensors[0].device()
     layout = tensors[0].layout
     rank = len(tensors[0].shape)
 
@@ -326,14 +323,7 @@ def concat(
     )
 
     if rank < 4 and all_tensors_are_tile_layout_without_padding:
-        any_tensor_has_tile_padding = any(ttnn.has_tile_padding(tensor) for tensor in tensors)
-
-        def convert_to_ttl_tensor(tensor):
-            if any_tensor_has_tile_padding:
-                tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-            return ttnn.unsqueeze_to_4D(tensor).value
-
-        ttl_tensors = [convert_to_ttl_tensor(tensor) for tensor in tensors]
+        ttl_tensors = [ttnn.unsqueeze_to_4D(tensor) for tensor in tensors]
         dim = dim + 4 - rank
         output_tensor = ttnn.Tensor(ttl.tensor.concat(ttl_tensors, dim=dim, output_mem_config=memory_config))
         output_tensor = ttnn.to_layout(output_tensor, layout)
@@ -375,6 +365,7 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
     torch_function=_torch_split,
+    # TODO(arakhmati): add proper fallback
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
@@ -390,7 +381,9 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
 
     output_tensors = _torch_split(input_tensor, split_size, dim)
     output_tensors = tuple(
-        ttnn.from_torch(output_tensor, device=input_tensor.device, dtype=input_tensor.dtype, layout=input_tensor.layout)
+        ttnn.from_torch(
+            output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
+        )
         for output_tensor in output_tensors
     )
     return output_tensors
@@ -421,6 +414,7 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
     torch_function=_torch_repeat_interleave,
+    # TODO(arakhmati): add proper fallback
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
@@ -467,12 +461,11 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
             raise RuntimeError("ttnn: repeats must be 0-dim or 1-dim tensor")
 
     dtype = input_tensor.dtype
-    device = input_tensor.device
+    device = input_tensor.device()
     layout = input_tensor.layout
     rank = len(input_tensor.shape)
     if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
-        ttl_input_tensor = input_tensor.value
-        output_tensor = ttnn.Tensor(ttl.tensor.repeat_interleave(ttl_input_tensor, repeats, dim=dim))
+        output_tensor = ttl.tensor.repeat_interleave(input_tensor, repeats, dim=dim)
         *batch, _, _ = output_tensor.shape
         *_, h, w = input_tensor.shape
         *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
@@ -517,6 +510,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
     torch_function=_torch_repeat,
+    # TODO(arakhmati): add proper fallback
 )
 def repeat(
     input_tensor: ttnn.Tensor,
@@ -547,12 +541,11 @@ def repeat(
         raise RuntimeError("ttnn: Expected shape to be a ttnn.Shape")
 
     dtype = input_tensor.dtype
-    device = input_tensor.device
+    device = input_tensor.device()
     layout = input_tensor.layout
     rank = len(input_tensor.shape)
     if dtype == ttnn.bfloat16 and rank == 4:
-        ttl_input_tensor = input_tensor.value
-        output_tensor = ttnn.Tensor(ttl.tensor.repeat(ttl_input_tensor, shape))
+        output_tensor = ttl.tensor.repeat(input_tensor, shape)
         *batch, _, _ = output_tensor.shape
         *_, h, w = input_tensor.shape
         *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()

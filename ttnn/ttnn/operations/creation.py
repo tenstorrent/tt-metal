@@ -327,6 +327,9 @@ def arange(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    arange(start: int, end: int, step: int, device, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step.
 
     Args:
@@ -367,6 +370,9 @@ def empty(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    empty(input_shape: ttnn.Shape, device: ttnn.Device, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new empty tensor by taking input shape as reference.
 
     Args:

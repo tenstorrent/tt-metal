@@ -79,15 +79,12 @@ def std(
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor.value
 
-    mean_tensor = ttl.tensor.reduce(ttl_input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    mean_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
     mean_square_tensor = ttl.tensor.reduce(
-        ttl.tensor.pow(ttl_input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
+        ttl.tensor.pow(input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
     )
-    std_tensor = ttl.tensor.sqrt(ttl.tensor.sub(mean_square_tensor, (ttl.tensor.pow(mean_tensor, 2.0))))
-
-    output_tensor = ttnn.Tensor(std_tensor)
+    output_tensor = ttl.tensor.sqrt(ttl.tensor.sub(mean_square_tensor, (ttl.tensor.pow(mean_tensor, 2.0))))
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
 
     return output_tensor
@@ -162,17 +159,13 @@ def var(
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor.value
 
-    mean_tensor = ttl.tensor.reduce(ttl_input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    mean_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
     mean_square_tensor = ttl.tensor.reduce(
-        ttl.tensor.pow(ttl_input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
+        ttl.tensor.pow(input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
     )
-    variance_tensor = ttl.tensor.sub(mean_square_tensor, ttl.tensor.pow(mean_tensor, 2.0))
-
-    output_tensor = ttnn.Tensor(variance_tensor)
+    output_tensor = ttl.tensor.sub(mean_square_tensor, ttl.tensor.pow(mean_tensor, 2.0))
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
-
     return output_tensor
 
 
@@ -220,9 +213,7 @@ def max(
 
     if dim == None:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.global_max(ttl_input_tensor)
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl.tensor.global_max(input_tensor)
         return output_tensor
 
     if isinstance(dim, int):
@@ -255,10 +246,7 @@ def max(
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.reduce(ttl_input_tensor, ttl.tensor.ReduceOpMath.MAX, reduce_op_dim, 1.0)
-
-    output_tensor = ttnn.Tensor(ttl_output_tensor)
+    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.MAX, reduce_op_dim, 1.0)
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
 
     return output_tensor
@@ -308,9 +296,7 @@ def min(
 
     if dim == None:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.global_min(ttl_input_tensor)
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl.tensor.global_min(input_tensor)
         return output_tensor
 
     if isinstance(dim, int):
@@ -343,10 +329,7 @@ def min(
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.reduce(ttl_input_tensor, ttl.tensor.ReduceOpMath.MIN, reduce_op_dim, 1.0)
-
-    output_tensor = ttnn.Tensor(ttl_output_tensor)
+    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.MIN, reduce_op_dim, 1.0)
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
 
     return output_tensor
@@ -395,9 +378,7 @@ def sum(
 
     if dim == None:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.global_sum(ttl_input_tensor)
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl.tensor.global_sum(input_tensor)
         return output_tensor
 
     if isinstance(dim, int):
@@ -430,10 +411,7 @@ def sum(
     padded_output_shape = tuple(padded_output_shape)
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.reduce(ttl_input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1.0)
-
-    output_tensor = ttnn.Tensor(ttl_output_tensor)
+    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1.0)
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
 
     return output_tensor
