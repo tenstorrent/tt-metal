@@ -942,6 +942,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.hardswish_bw
 
+.. autofunction:: tt_lib.tensor.softplus_bw
+
 .. autofunction:: tt_lib.tensor.polygamma_bw
 
 .. autofunction:: tt_lib.tensor.atan_bw
