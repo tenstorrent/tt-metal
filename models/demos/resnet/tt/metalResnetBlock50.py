@@ -1217,6 +1217,7 @@ class Bottleneck:
                 math_fidelity=model_config["MATH_FIDELITY"],
                 move_utwh_output=move_utwh_output,
                 deallocate_activation=True,
+                compute_kernel_config=compute_kernel_config,
             )
         else:
             self.conv2 = resnet50_optimized_conv(
@@ -1238,6 +1239,7 @@ class Bottleneck:
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
                 act_c_num_blocks=1,
+                compute_kernel_config=compute_kernel_config,
             )
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
@@ -1537,6 +1539,18 @@ class ResNet(nn.Module):
                 else tt_lib.tensor.DataType.FLOAT32,
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
+            if is_grayskull():
+                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                    math_fidelity=model_config["MATH_FIDELITY"],
+                    math_approx_mode=True,
+                )
+            else:
+                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                    math_fidelity=model_config["MATH_FIDELITY"],
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=False,
+                )
             self.conv1 = TTPyCompositeConv(
                 sliding_window_op_params,
                 tt_tensor_conv_weight,
@@ -1554,6 +1568,7 @@ class ResNet(nn.Module):
                 use_shallow_conv_variant=True,
                 deallocate_activation=True,
                 padded_input_channels=16,
+                compute_kernel_config=compute_kernel_config,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:
@@ -1823,6 +1838,20 @@ class ResNet(nn.Module):
                 * self.downsample_conv_output_shape[2]
             )
             matmul_config = None
+
+            if is_grayskull():
+                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                    math_fidelity=model_config["MATH_FIDELITY"],
+                    math_approx_mode=True,
+                )
+            else:
+                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                    math_fidelity=model_config["MATH_FIDELITY"],
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=False,
+                )
+
             if is_downsample_1x1_conv:
                 assert (
                     downsample_output_padded_face_size,
@@ -1833,19 +1862,6 @@ class ResNet(nn.Module):
                 matmul_config = hardcoded_matmul_config_conv[batch_size][
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
-                if is_grayskull():
-                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
-                        math_fidelity=model_config["MATH_FIDELITY"],
-                        math_approx_mode=True,
-                    )
-                else:
-                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-                        math_fidelity=model_config["MATH_FIDELITY"],
-                        math_approx_mode=True,
-                        fp32_dest_acc_en=False,
-                        packer_l1_acc=False,
-                    )
-
                 self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
@@ -1869,18 +1885,6 @@ class ResNet(nn.Module):
                 assert stride == 2
                 downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
                 # logger.info("Calling ds op and matmul op, input shape - ", layer_input_shape)
-                if is_grayskull():
-                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
-                        math_fidelity=model_config["MATH_FIDELITY"],
-                        math_approx_mode=True,
-                    )
-                else:
-                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-                        math_fidelity=model_config["MATH_FIDELITY"],
-                        math_approx_mode=True,
-                        fp32_dest_acc_en=False,
-                        packer_l1_acc=False,
-                    )
 
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
@@ -1933,6 +1937,7 @@ class ResNet(nn.Module):
                     weights_dtype=model_config["WEIGHTS_DTYPE"],
                     output_dtype=model_config["ACTIVATIONS_DTYPE"],
                     math_fidelity=model_config["MATH_FIDELITY"],
+                    compute_kernel_config=compute_kernel_config,
                 )
             self.norm_layer_after_downsample_conv_on_tt = nl
 
@@ -2088,7 +2093,6 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             )
             x = x.to(self.device, mem_config)
-
 
         x = self.conv1(x)
         # Relu is fused with conv1
