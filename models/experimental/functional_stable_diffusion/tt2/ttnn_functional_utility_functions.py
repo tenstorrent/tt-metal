@@ -23,12 +23,10 @@ def pre_process_input_new(device, tensor):
     input_channels = tensor.shape[1]
     input_height = tensor.shape[2]
     input_width = tensor.shape[3]
-    tensor = fallback_ops.permute(
-        tensor.value, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False
-    )
+    tensor = fallback_ops.permute(tensor, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
     import math
 
-    assert input_channels == tensor.shape()[3]
+    assert input_channels == tensor.shape[3]
     padded_input_channels = math.ceil(input_channels / 16) * 16
     if padded_input_channels != input_channels:
         tensor = fallback_ops.pad(
@@ -62,10 +60,9 @@ def pad_encoder_hidden_states(device, tensor, required_sequence_length):
     if sequence_length < required_sequence_length:
         assert (required_sequence_length % batch_size) == 0
         sequence_length = required_sequence_length
-        breakpoint()
         tensor = ttnn.Tensor(
             fallback_ops.pad(
-                tensor.value,
+                tensor,
                 (0, 0, 0, sequence_length - tensor.shape[2]),
                 output_layout=ttnn.ROW_MAJOR_LAYOUT,
                 output_on_device=False,
@@ -162,7 +159,7 @@ def ttnn_to_torch(input):
 
 
 def weight_to_bfp8(weight):
-    device = weight.device
+    device = weight.device()
     memory_config = ttnn.get_memory_config(weight)
     weight = ttnn_to_torch(weight)
     weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
@@ -171,7 +168,7 @@ def weight_to_bfp8(weight):
 
 
 def pad_group_norm_weight(weight, groups, channels):
-    device = weight.device
+    device = weight.device()
     memory_config = ttnn.get_memory_config(weight)
     weight = ttnn_to_torch(weight)
     elems_per_group = channels // groups

@@ -68,12 +68,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
     auto all_cores = shard_spec.grid;
-
-    uint32_t num_cores_x = grid_size.x;
-    uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores = all_cores.num_cores();
-
-    std::cout << num_cores_x << " " << num_cores_y << " " << num_cores << std::endl;
     uint32_t input_cb_index = CB::c_in0;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;

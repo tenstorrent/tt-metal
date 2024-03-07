@@ -15,7 +15,7 @@ def ttnn_to_torch(input):
 
 def split_linear_params(params):
     dim = -1
-    device = params.proj.weight.device
+    device = params.proj.weight.device()
     memory_config = ttnn.get_memory_config(params.proj.weight)
 
     weight = ttnn_to_torch(params.proj.weight)

@@ -21,7 +21,7 @@ def ttnn_to_torch(input):
 
 
 def pad_heads(tensor, num_heads=8, dim=-1):
-    device = tensor.device
+    device = tensor.device()
     memory_config = ttnn.get_memory_config(tensor)
 
     padding_needed = not is_tile_dim_alligned(tensor.shape[dim] // num_heads)
@@ -48,7 +48,7 @@ def pad_heads(tensor, num_heads=8, dim=-1):
 
 def concatenate_qkv(q, k, v):
     dim = -1
-    device = k.device
+    device = k.device()
     memory_config = ttnn.get_memory_config(k)
 
     if q is not None:
@@ -72,7 +72,7 @@ def concatenate_qkv(q, k, v):
 
 
 def weight_to_bfp8(weight):
-    device = weight.device
+    device = weight.device()
     memory_config = ttnn.get_memory_config(weight)
     weight = ttnn_to_torch(weight)
     weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
@@ -228,7 +228,7 @@ class cross_attention:
                 hidden_states,
                 self.parameters.qkv.weight,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=hidden_states.device.core_grid,
+                core_grid=hidden_states.device().core_grid,
                 dtype=ttnn.bfloat8_b,
             )
             ttnn.deallocate(hidden_states)
@@ -247,7 +247,7 @@ class cross_attention:
             q_proj = ttnn.linear(
                 hidden_states,
                 self.parameters.to_q.weight,
-                core_grid=hidden_states.device.core_grid,
+                core_grid=hidden_states.device().core_grid,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
@@ -260,7 +260,7 @@ class cross_attention:
             kv_proj = ttnn.linear(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
-                core_grid=encoder_hidden_states.device.core_grid,
+                core_grid=encoder_hidden_states.device().core_grid,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
@@ -313,7 +313,7 @@ class cross_attention:
             hidden_states,
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
-            core_grid=hidden_states.device.core_grid,
+            core_grid=hidden_states.device().core_grid,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
         )

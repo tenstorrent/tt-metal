@@ -863,7 +863,7 @@ class TTPyCompositeConv(TTPyOp):
                 bias_untiled = bias_untiled.to_torch()
                 bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
                 # bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
-                bias_on_device = bias_.value.to(device) if move_weights_to_device else bias_
+                bias_on_device = bias_.to(device) if move_weights_to_device else bias_
             self.bias = bias_on_device
         else:
             self.weight = weight

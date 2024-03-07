@@ -310,7 +310,7 @@ class resnetBlock2D:
             assert False, "Down block within residual block is not implemented"
 
         if not self.group_norm_on_device:
-            hidden_states = pre_process_input(self.device, hidden_states)
+            hidden_states = pre_process_input(self.device(), hidden_states)
 
         conv1_split_chunks = len(self.conv1s)
         if conv1_split_chunks > 1:
@@ -365,7 +365,7 @@ class resnetBlock2D:
                     temb,
                     self.parameters.time_emb_proj.weight,
                     bias=self.parameters.time_emb_proj.bias,
-                    core_grid=temb.device.core_grid,
+                    core_grid=temb.device().core_grid,
                 )
 
             temb = ttnn.permute(temb, (2, 0, 1, 3))

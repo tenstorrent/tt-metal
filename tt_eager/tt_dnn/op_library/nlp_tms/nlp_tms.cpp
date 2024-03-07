@@ -125,7 +125,7 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
 std::vector<Shape> NlpCreateHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
 
     auto sequence_length = input_shape[2];
     auto head_dim = this->head_dim;
@@ -221,8 +221,12 @@ std::vector<Shape> NlpConcatHeads::compute_output_shapes(const std::vector<Tenso
     const auto input_shape = input_tensor.get_legacy_shape();
     output_shape_vec = {(Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
 
+    auto num_heads = input_shape[1];
     auto sequence_length = input_shape[2];
     auto head_dim = input_shape[3];
+
+    auto hidden_dim = num_heads * head_dim;
+
     const Shape output_shape = {input_shape[0], 1, sequence_length, hidden_dim};
     return {output_shape};
 }
