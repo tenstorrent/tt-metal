@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
+    // uint32_t per_core_N = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
     // tensor shape
     const auto shape = a.shape();
     uint32_t H = shape[2] * num_batches;
@@ -464,15 +464,15 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) num_cores_per_mcast_group,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_last_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
         (std::uint32_t) TILE_WIDTH
     };
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
@@ -480,15 +480,15 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) reduce_sender_semaphore,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_per_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
         (std::uint32_t) TILE_WIDTH
     };
     tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -520,17 +520,17 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) is_dram(gamma),
         (std::uint32_t) is_dram(beta),
         (std::uint32_t) gamma_beta_num_cols_tile_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_per_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
         (std::uint32_t) TILE_WIDTH
     };
 
