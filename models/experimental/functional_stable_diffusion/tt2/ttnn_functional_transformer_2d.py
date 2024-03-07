@@ -73,10 +73,15 @@ class transformer_2d_model:
             deallocate_activation=True,
         )
 
-        self.group_norm_grid_size = list(self.proj_in.conv.grid_size)
-        self.gn_expected_input_sharded_memory_config = self.proj_in.conv.input_sharded_memory_config
-        self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(
-            self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, 32, in_channels
+        (
+            self.gn_expected_input_sharded_memory_config,
+            self.group_norm_core_grid,
+        ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+            device=self.device,
+            num_channels=in_channels,
+            num_groups=32,
+            input_nhw=batch_size * input_height * input_width,
+            is_height_sharded=False,
         )
 
         parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
@@ -217,7 +222,7 @@ class transformer_2d_model:
                 weight=self.parameters.norm.weight,
                 bias=self.parameters.norm.bias,
                 memory_config=ttnn.get_memory_config(hidden_states),
-                core_grid=ttnn.CoreGrid(self.group_norm_grid_size[1], self.group_norm_grid_size[0]),
+                core_grid=self.group_norm_core_grid,
             )
         hidden_states = ttnn.to_memory_config(
             hidden_states, ttnn.L1_MEMORY_CONFIG

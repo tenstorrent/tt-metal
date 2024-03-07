@@ -283,7 +283,13 @@ from ttnn.operations.math import (
     triu,
 )
 
-from ttnn.operations.normalization import layer_norm, rms_norm, group_norm, create_group_norm_weight_bias_rm
+from ttnn.operations.normalization import (
+    layer_norm,
+    rms_norm,
+    group_norm,
+    create_group_norm_weight_bias_rm,
+    determine_expected_group_norm_sharded_config_and_grid_size,
+)
 
 from ttnn.operations import transformer
 from ttnn.operations import kv_cache

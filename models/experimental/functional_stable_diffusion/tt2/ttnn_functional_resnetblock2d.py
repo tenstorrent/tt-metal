@@ -213,34 +213,26 @@ class resnetBlock2D:
 
         self.groups = 32
         if use_in_shortcut:
-            # if self.conv2.conv.output_sharded_memory_config != self.conv_shortcut.conv.output_sharded_memory_config:
-            # breakpoint()
             assert self.conv2.conv.output_sharded_memory_config == self.conv_shortcut.conv.output_sharded_memory_config
-            self.first_gn_expected_input_sharded_memory_config = self.conv_shortcut.conv.input_sharded_memory_config
-            self.first_group_norm_grid_size = list(self.conv_shortcut.conv.grid_size)
-        else:
-            self.first_group_norm_grid_size = list(self.conv2.conv.grid_size)
-            self.first_gn_expected_input_sharded_memory_config = self.conv2.conv.output_sharded_memory_config
-        # breakpoint()
-        self.first_gn_expected_input_sharded_memory_config = (
-            update_gn_expected_input_sharded_memory_config_and_grid_size(
-                self.first_gn_expected_input_sharded_memory_config,
-                self.first_group_norm_grid_size,
-                self.groups,
-                in_channels,
-            )
+        (
+            self.first_gn_expected_input_sharded_memory_config,
+            self.first_group_norm_core_grid,
+        ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+            device=self.device,
+            num_channels=in_channels,
+            num_groups=self.groups,
+            input_nhw=batch_size * input_height * input_width,
+            is_height_sharded=False,
         )
-        # breakpoint()
-
-        self.second_group_norm_grid_size = list(self.conv2.conv.grid_size)
-        self.second_gn_expected_input_sharded_memory_config = self.conv2.conv.input_sharded_memory_config
-        self.second_gn_expected_input_sharded_memory_config = (
-            update_gn_expected_input_sharded_memory_config_and_grid_size(
-                self.second_gn_expected_input_sharded_memory_config,
-                self.second_group_norm_grid_size,
-                self.groups,
-                out_channels,
-            )
+        (
+            self.second_gn_expected_input_sharded_memory_config,
+            self.second_group_norm_core_grid,
+        ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+            device=self.device,
+            num_channels=out_channels,
+            num_groups=self.groups,
+            input_nhw=batch_size * input_height * input_width,
+            is_height_sharded=False,
         )
 
         self.output_height = self.conv2.output_height
@@ -314,7 +306,7 @@ class resnetBlock2D:
                 bias=self.parameters.norm1.bias,
                 epsilon=eps,
                 memory_config=ttnn.get_memory_config(hidden_states),
-                core_grid=ttnn.CoreGrid(self.first_group_norm_grid_size[1], self.first_group_norm_grid_size[0]),
+                core_grid=self.first_group_norm_core_grid,
             )
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
@@ -425,7 +417,7 @@ class resnetBlock2D:
                 bias=self.parameters.norm2.bias,
                 epsilon=eps,
                 memory_config=self.second_gn_expected_input_sharded_memory_config,
-                core_grid=ttnn.CoreGrid(self.second_group_norm_grid_size[1], self.second_group_norm_grid_size[0]),
+                core_grid=self.second_group_norm_core_grid,
             )
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)

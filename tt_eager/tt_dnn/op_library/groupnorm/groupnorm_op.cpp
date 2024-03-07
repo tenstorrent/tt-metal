@@ -193,12 +193,14 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
 
     TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
     TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
-    if (shard_orientation == ShardOrientation::COL_MAJOR) {
-        TT_ASSERT(per_core_N * num_cores_r == W);
-        TT_ASSERT(per_core_M * num_cores_c == H);
-    } else {
-        TT_ASSERT(per_core_N * num_cores_c == W);
-        TT_ASSERT(per_core_M * num_cores_r == H);
+    if (per_core_N != W) {
+        if (shard_orientation == ShardOrientation::COL_MAJOR) {
+            TT_ASSERT(per_core_N * num_cores_r == W);
+            TT_ASSERT(per_core_M * num_cores_c == H);
+        } else {
+            TT_ASSERT(per_core_N * num_cores_c == W);
+            TT_ASSERT(per_core_M * num_cores_r == H);
+        }
     }
 
 
