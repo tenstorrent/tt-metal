@@ -48,17 +48,17 @@ def get_atol_rtol_pcc(golden, calculated):
         if torch.any(torch.isnan(golden)):
             logger.warning(f"Tensor golden has NaNs")
 
-        if torch.any(torch.isnan(calculated)):
-            logger.warning(f"Tensor calculated has NaNs")
-
         if torch.any(torch.isposinf(golden)):
             logger.warning(f"Tensor golden has infinity values")
 
-        if torch.any(torch.isposinf(calculated)):
-            logger.warning(f"Tensor calculated has infinity values")
-
         if torch.any(torch.isneginf(golden)):
             logger.warning(f"Tensor golden has negative infinity values")
+
+        if torch.any(torch.isnan(calculated)):
+            logger.warning(f"Tensor calculated has NaNs")
+
+        if torch.any(torch.isposinf(calculated)):
+            logger.warning(f"Tensor calculated has infinity values")
 
         if torch.any(torch.isneginf(calculated)):
             logger.warning(f"Tensor calculated has negative infinity values")
