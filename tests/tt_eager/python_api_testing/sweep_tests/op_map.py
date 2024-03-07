@@ -1556,4 +1556,12 @@ op_map = {
         "tt_lib_op": ttnn_ops.addcmul,
         "pytorch_op": pytorch_ops.addcmul,
     },
+    "ttnn-groupnorm_noweights": {
+        "tt_lib_op": ttnn_ops.groupnorm_noweights,
+        "pytorch_op": pytorch_ops.groupnorm_noweights,
+    },
+    "ttnn-groupnorm": {
+        "tt_lib_op": ttnn_ops.groupnorm,
+        "pytorch_op": pytorch_ops.ttnn_groupnorm,
+    },
 }

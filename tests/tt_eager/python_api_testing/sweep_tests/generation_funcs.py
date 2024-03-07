@@ -1848,3 +1848,12 @@ def gen_ttnn_repeat_interleave_args(
         dims = np.random.choice([0, shapes_size - 1])
         input_info.update({"repeat": repeats, "dim": dims})
         yield input_info
+
+
+def gen_ttnn_groupnorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
