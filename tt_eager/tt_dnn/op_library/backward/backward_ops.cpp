@@ -1528,6 +1528,29 @@ std::vector<Tensor> log2_bw(const Tensor& grad, const Tensor& input, const Memor
 {
     return operation::decorate_as_composite(__func__, _log2_bw)(grad, input, output_mem_config);
 }
+std::vector<Tensor> _ge_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> ge_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _ge_bw)(grad, output_mem_config);
+}
+
+
+std::vector<Tensor> _le_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> le_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _le_bw)(grad, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
