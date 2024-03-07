@@ -1778,3 +1778,8 @@ def transformer_concatenate_heads(x, *args, **kwargs):
     torch_output_tensor = ttnn.transformer._torch_concatenate_heads(x)
 
     return torch_output_tensor
+
+
+def ttnn_groupnorm(x, y, z, *args, **kwargs):
+    torch_output_tensor = torch.nn.functional.group_norm(x, num_groups=1, weight=y, bias=z)
+    return torch_output_tensor
