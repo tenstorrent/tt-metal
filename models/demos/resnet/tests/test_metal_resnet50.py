@@ -181,7 +181,7 @@ def test_run_resnet50_inference(
         )
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
-        tt_image = tt_resnet50.preprocessing_with_fold(image)
+        tt_image = tt_resnet50.preprocessing(image)
         tt_output = tt_resnet50(tt_image)
         tt_output = tt_output.cpu().to_torch().to(torch.float)
 
