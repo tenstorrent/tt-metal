@@ -212,13 +212,6 @@ Memory Config
 APIs
 ****
 
-.. autoclass:: ttnn.Tensor
-    :members:
-    :undoc-members:
-    :show-inheritance:
-    :inherited-members:
-    :exclude-members: value
-
 .. autoclass:: ttnn.Shape
     :members:
     :undoc-members:
