@@ -8,12 +8,11 @@ from loguru import logger
 
 
 def get_atol_rtol_pcc(golden, calculated):
-    is_calculate_float = calculated.is_floating_point()
-
     if golden.dtype != calculated.dtype:
         logger.warning(f"Converting calculated to golden.dtype {golden.dtype}")
         calculated = calculated.type(golden.dtype)
 
+    is_calculate_float = calculated.is_floating_point()
     calculated_dtype = calculated.dtype
 
     if golden.is_complex() and calculated.is_complex():
