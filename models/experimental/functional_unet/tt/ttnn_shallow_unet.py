@@ -67,17 +67,7 @@ class UNet:
         self.c8_3 = parameters.c8_3
         self.output_layer = parameters.output_layer
 
-    def torch_call(self, torch_input_tensor):
-        device_id = 0
-        device = ttnn.open_device(device_id=device_id)
-        input_shape = torch_input_tensor.shape
-        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        input_tensor = input_tensor.reshape(
-            input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
-        )
-        # Pad to 16
-        input_tensor = torch.nn.functional.pad(input_tensor, (0, 16 - input_tensor.shape[-1]))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+    def __call__(self, device, input_tensor):
         input_tensor = input_tensor.to(device, self.c1.conv.input_sharded_memory_config)
 
         output_tensor = self.c1(input_tensor)
@@ -161,13 +151,4 @@ class UNet:
         output_tensor = self.c8_2(output_tensor)
         output_tensor = self.c8_3(output_tensor)
         output_tensor = self.output_layer(output_tensor)
-        output_tensor = ttnn.from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        # unpad to 3
-        output_tensor = output_tensor[:, :, :, :3]
-        output_tensor = output_tensor.reshape(input_shape[0], input_shape[2], input_shape[3], input_shape[1])
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
-        ttnn.close_device(device)
-        return output_tensor
+        return ttnn.from_device(output_tensor)

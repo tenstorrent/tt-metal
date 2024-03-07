@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import argparse
 
 import torch
 import torch.nn as nn
@@ -13,6 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 from models.experimental.functional_unet.tt import ttnn_shallow_unet
+
+import time
 
 import ttnn
 
@@ -486,6 +489,10 @@ class UNet(nn.Module):
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--loop", default=0, type=int)
+    args = ap.parse_args()
+
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
 
@@ -515,7 +522,44 @@ if __name__ == "__main__":
     )
 
     ttnn_model = ttnn_shallow_unet.UNet(parameters)
-    output_tensor = ttnn_model.torch_call(torch_input_tensor)
+
+    #
+    # Tensor Preprocessing
+    #
+    input_shape = torch_input_tensor.shape
+    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    input_tensor = input_tensor.reshape(
+        input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
+    )
+    # Pad to 16
+    input_tensor = torch.nn.functional.pad(input_tensor, (0, 16 - input_tensor.shape[-1]))
+    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+
+    warmup = 1
+    start = None
+    for i in range(args.loop + warmup):
+        if i == warmup:
+            start = time.perf_counter()
+        output_tensor = ttnn_model(device, input_tensor)
+    if start is not None:
+        stop = time.perf_counter()
+        total_time = stop - start
+        batch = input_shape[0]
+        total_frame_count = batch * args.loop
+        print(f"Elapsed host time (sec): {total_time}")
+        print(f"Frames processed: {total_frame_count}")
+        print(f"Host perf (fps): {total_frame_count / total_time}")
+
+    #
+    # Tensor Postprocessing
+    #
+    output_tensor = ttnn.to_torch(output_tensor)
+    # unpad to 3
+    output_tensor = output_tensor[:, :, :, :3]
+    output_tensor = output_tensor.reshape(input_shape[0], input_shape[2], input_shape[3], input_shape[1])
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+    output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
     output_tensor = output_tensor[:, 0, :, :]
     output_tensor = torch.reshape(
         output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
