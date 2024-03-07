@@ -14,11 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["grayskull"]},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
-          # N300
-          # {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "fw-date-2024-03-05"]},
+          # N300 is not used
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

@@ -13,14 +13,14 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull, wormhole_b0]
+        arch: [wormhole_b0]
         frequent-type: [models, api]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
     environment: dev
-    runs-on: model-runner-${{ matrix.arch }}
+    runs-on: ["model-runner-${{ matrix.arch }}", "fw-date-2024-03-05"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
