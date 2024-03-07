@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "tt_eager/tt_dnn/op_library/moreh_sgd/kernels/common_ckernels.hpp"
+#include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 
