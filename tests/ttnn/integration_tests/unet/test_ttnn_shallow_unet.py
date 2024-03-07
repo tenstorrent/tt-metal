@@ -16,6 +16,7 @@ from models.utility_functions import skip_for_wormhole_b0
 from models.experimental.functional_unet.tt import ttnn_shallow_unet
 
 import time
+import tt_lib.profiler as profiler
 
 import ttnn
 
@@ -540,6 +541,7 @@ if __name__ == "__main__":
     for i in range(args.loop + warmup):
         if i == warmup:
             start = time.perf_counter()
+        profiler.tracy_frame()
         output_tensor = ttnn_model(device, input_tensor)
     if start is not None:
         stop = time.perf_counter()
