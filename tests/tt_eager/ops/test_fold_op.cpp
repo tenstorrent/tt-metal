@@ -19,7 +19,7 @@ void run_fold(Device *device, Shape shape) {
     Tensor input_tensor = tt::numpy::random::random(shape).to(Layout::ROW_MAJOR).to(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
-    Tensor device_output_tensor = fold(input_tensor, shape[2], stride_h, stride_w);
+    Tensor device_output_tensor = fold(input_tensor, stride_h, stride_w);
     Tensor output_tensor = device_output_tensor.cpu();
 }
 
