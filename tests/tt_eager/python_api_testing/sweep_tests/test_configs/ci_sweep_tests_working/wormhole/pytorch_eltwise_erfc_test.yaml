@@ -10,7 +10,6 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: -100
           high: 100
@@ -35,7 +34,6 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
           low: -100
           high: 100

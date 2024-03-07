@@ -910,6 +910,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.hypot_bw
 
+.. autofunction:: tt_lib.tensor.maximum_bw
+
 .. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_bw
@@ -1015,6 +1017,14 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.trunc_bw
 
 .. autofunction:: tt_lib.tensor.frac_bw
+
+.. autofunction:: tt_lib.tensor.log_sigmoid_bw
+
+.. autofunction:: tt_lib.tensor.tanhshrink_bw
+
+.. autofunction:: tt_lib.tensor.threshold_bw
+
+.. autofunction:: tt_lib.tensor.unary_eq_bw
 
 Loss Functions
 ==============

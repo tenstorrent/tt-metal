@@ -14,7 +14,6 @@ test-list:
         args:
           low: 1
           high: 10
-        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_polygamma_args
@@ -38,7 +37,6 @@ test-list:
         args:
           low: 1
           high: 10
-        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_polygamma_args

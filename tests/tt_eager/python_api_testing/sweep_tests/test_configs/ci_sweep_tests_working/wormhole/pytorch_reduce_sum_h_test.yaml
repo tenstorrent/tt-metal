@@ -10,7 +10,6 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_checkerboard
-        dtype: bfloat16
         args:
           low: 0
           high: 100
@@ -38,7 +37,6 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_checkerboard
-        dtype: bfloat16
         args:
           low: 0
           high: 100

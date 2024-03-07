@@ -16,7 +16,6 @@ test-list:
         args:
           low: -10
           high: 10
-        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_add_layernorm_args

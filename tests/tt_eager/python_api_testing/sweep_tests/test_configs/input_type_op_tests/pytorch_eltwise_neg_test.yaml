@@ -12,7 +12,6 @@ test-list:
       args:
         low: -10
         high: 10
-      dtype: bfloat16
     comparison:
       function: comp_equal
     args-gen: gen_dtype_layout_device
