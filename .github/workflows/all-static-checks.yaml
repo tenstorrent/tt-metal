@@ -2,8 +2,6 @@ name: "[post-commit] all - Static checks, linters etc."
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
   workflow_call:
   pull_request:
     branches:

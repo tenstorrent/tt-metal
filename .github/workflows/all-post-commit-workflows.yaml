@@ -2,6 +2,8 @@ name: "All post-commit tests"
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["main"]
 
 jobs:
   static-checks:
@@ -26,6 +28,9 @@ jobs:
     secrets: inherit
   eager-package-main:
     uses: ./.github/workflows/eager-package-main.yaml
+    secrets: inherit
+  build-docs:
+    uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

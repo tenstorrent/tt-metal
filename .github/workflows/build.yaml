@@ -1,8 +1,6 @@
 name: "[post-commit] Build C++ binaries with all configs"
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
   workflow_call:
 
