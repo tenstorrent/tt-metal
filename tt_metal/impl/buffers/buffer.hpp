@@ -134,8 +134,6 @@ struct ShardedBufferConfig {
 
 bool is_sharded(const TensorMemoryLayout & layout);
 
-
-
 class Buffer {
    public:
     Buffer() :
@@ -306,6 +304,12 @@ class Buffer {
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
     std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
 };
+
+namespace detail {
+using PageAddress = uint32_t;
+using Deviceid = uint32_t;
+inline std::map<std::tuple<Deviceid, PageAddress>, Buffer *> BUFFER_MAP;
+}  // namespace detail
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint16_t>>,

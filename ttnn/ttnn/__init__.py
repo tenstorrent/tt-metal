@@ -330,3 +330,5 @@ from ttnn.operations.maxpool2d import (
     MaxPool2d,
     global_avg_pool2d,
 )
+
+from ttnn._ttnn.reports import print_l1_buffers

@@ -7,15 +7,15 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/core.hpp"
+#include "ttnn/reports.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
-namespace core {
+namespace reports {
 void py_module(py::module& module) {
-    module.def("set_printoptions", &ttnn::set_printoptions, py::kw_only(), py::arg("profile"));
+    module.def("print_l1_buffers", &print_l1_buffers, py::arg("file_name") = std::nullopt);
 }
 
-}  // namespace core
+}  // namespace reports
 }  // namespace ttnn
