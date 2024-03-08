@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    // uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
+    uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
     // tensor shape
     const auto shape = a.shape();
     uint32_t H = shape[2] * num_batches;
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t num_cores_c = grid_size.x;
     uint32_t num_cores_r = grid_size.y;
     // uint32_t num_cores = num_cores_c * num_cores_r;
-    auto all_cores = shard_spec.grid;
+    auto all_cores = a.shard_spec().value().grid;
     uint32_t num_cores = all_cores.num_cores();
     auto shard_orientation = a.shard_spec().value().orientation;
     // split each batch into multiple cores

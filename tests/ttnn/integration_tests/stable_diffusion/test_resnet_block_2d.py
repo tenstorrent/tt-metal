@@ -112,19 +112,19 @@ def test_resnet_block_2d_256x256(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [
         (2, 320, 64, 64, 0, 0, "down", None),
-        # (2, 320, 32, 32, 0, 0, "down", None),
-        # (2, 640, 32, 32, 1, 1, "down", None),
-        # (2, 640, 16, 16, 1, 1, "down", None),
-        # (2, 1280, 16, 16, 2, 1, "down", None),
-        # (2, 1280, 8, 8, 2, 1, "down", None),
-        # (2, 2560, 8, 8, 0, 0, "up", 1280),
-        # (2, 2560, 16, 16, 0, 0, "up", 1280),
-        # (2, 1920, 16, 16, 2, 0, "up", 1280),
-        # (2, 1920, 32, 32, 2, 0, "up", 640),
-        # (2, 1280, 32, 32, 3, 0, "down", None),
-        # (2, 960, 32, 32, 3, 0, "up", 640),
-        # (2, 960, 64, 64, 3, 0, "up", 320),
-        # (2, 640, 64, 64, 3, 1, "up", 320),
+        (2, 320, 32, 32, 0, 0, "down", None),
+        (2, 640, 32, 32, 1, 1, "down", None),
+        (2, 640, 16, 16, 1, 1, "down", None),
+        (2, 1280, 16, 16, 2, 1, "down", None),
+        (2, 1280, 8, 8, 2, 1, "down", None),
+        (2, 2560, 8, 8, 0, 0, "up", 1280),
+        (2, 2560, 16, 16, 0, 0, "up", 1280),
+        (2, 1920, 16, 16, 2, 0, "up", 1280),
+        (2, 1920, 32, 32, 2, 0, "up", 640),
+        (2, 1280, 32, 32, 3, 0, "down", None),
+        (2, 960, 32, 32, 3, 0, "up", 640),
+        (2, 960, 64, 64, 3, 0, "up", 320),
+        (2, 640, 64, 64, 3, 1, "up", 320),
     ],
 )
 def test_resnet_block_2d_512x512(
@@ -180,7 +180,7 @@ def test_resnet_block_2d_512x512(
     resnet_block = resnetBlock2D(
         device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=True
     )
-    
+
     input = torch.permute(input, (0, 2, 3, 1))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
