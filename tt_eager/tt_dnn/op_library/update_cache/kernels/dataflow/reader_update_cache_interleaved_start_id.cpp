@@ -49,6 +49,7 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
+    uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         #ifndef INPUT_SHARDED
@@ -62,7 +63,7 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
         #endif
-        for (uint32_t u = 0; u < 32; ++u) {
+        for (uint32_t u = 0; u < u_range; ++u) {
             cb_reserve_back(cache_cb_id, Wt);
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {

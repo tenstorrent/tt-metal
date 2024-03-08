@@ -36,7 +36,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.get_legacy_shape()[1];
 
+    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+
     uint32_t B = input_tensor.get_legacy_shape()[-2];
+    uint32_t Bcache = cache_tensor.get_legacy_shape()[0];
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     tt_metal::Device *device = input_tensor.device();
@@ -145,6 +148,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
     vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
@@ -153,7 +157,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         interm2_cb_index,
         output_cb_index,
         num_batched_heads_per_core_group_1,
-        Wt
+        Wt,
+        u_range,
     };
 
     auto compute_kernel_group_1_id = tt_metal::CreateKernel(
@@ -206,7 +211,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             {
                 dst_buffer->address(),
                 src_buffer->address(),
-                Wt, B, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, input_start_id, batch_start_id
+                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, input_start_id, batch_start_id
             }
         );
 
@@ -216,7 +221,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             core,
             {
                 dst_buffer->address(),
-                Wt, B, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset
+                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset
             }
         );
         total_batched_heads += num_batched_heads_per_core;

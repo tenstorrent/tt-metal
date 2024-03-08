@@ -62,7 +62,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         } else {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
-        TT_FATAL(cache_tensor.get_legacy_shape()[0] == input_tensor.get_legacy_shape()[-2]);
+        TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-2]);
     }
 }
 
