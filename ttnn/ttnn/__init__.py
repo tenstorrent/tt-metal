@@ -76,12 +76,12 @@ from ttnn.multi_device import (
     get_pcie_device_ids,
     get_device_ids,
     create_device_mesh,
-    TensorToMeshMapper,
-    ShardTensorToMeshMapper,
-    ReplicateTensorToMeshMapper,
-    MeshToTensorComposer,
-    ConcatMeshToTensorComposer,
-    ListMeshToTensorComposer,
+    TensorToMesh,
+    ShardTensorToMesh,
+    ReplicateTensorToMesh,
+    MeshToTensor,
+    ConcatMeshToTensor,
+    ListMeshToTensor,
 )
 
 from ttnn.core import (

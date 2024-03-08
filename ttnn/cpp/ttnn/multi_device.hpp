@@ -164,7 +164,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             shapes.push_back(shard.get_legacy_shape());
         }
         auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
+        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
         std::vector<DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
@@ -172,7 +172,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             shapes.push_back(shard.get_legacy_shape());
         }
         auto storage = MultiDeviceStorage{std::move(device_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
+        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     }
 }
 

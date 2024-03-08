@@ -264,7 +264,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[ttnn.TensorToMeshMapper] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
     from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None, layout: Optional[Layout] = ROW_MAJOR_LAYOUT, device: Optional[Device] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
@@ -349,7 +349,7 @@ class TorchTensor(torch.Tensor):
 
 @ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
 def to_torch(
-    tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensorComposer] = None
+    tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensor] = None
 ) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
