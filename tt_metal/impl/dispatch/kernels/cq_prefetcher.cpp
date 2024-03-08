@@ -184,6 +184,7 @@ void kernel_main() {
         uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
         bool is_program = header->is_program_buffer;
         bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
+        bool is_event_sync = header->is_event_sync;
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t completion_data_size = header->completion_data_size;
         DeviceCommand::WrapRegion wrap = (DeviceCommand::WrapRegion)header->wrap;
@@ -210,6 +211,7 @@ void kernel_main() {
                 notify_host_of_completion_queue_write_pointer(host_completion_queue_write_ptr_addr);
                 noc_async_write_barrier();
                 completion_queue_push_back(completion_data_size, completion_queue_start_addr, host_completion_queue_write_ptr_addr);
+                record_last_completed_event(header->event);
                 issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + issue_data_size);
                 continue;
             }
@@ -292,7 +294,11 @@ void kernel_main() {
                     noc_async_write_barrier(); // Barrier for now
                 }
 
+                if (is_event_sync) {
+                    wait_for_event(header->event_sync_event_id, header->event_sync_core_x, header->event_sync_core_y);
+                }
                 completion_queue_push_back(completion_data_size, completion_queue_start_addr, host_completion_queue_write_ptr_addr);
+                record_last_completed_event(header->event);
             }
 
             issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + issue_data_size);
@@ -596,7 +602,11 @@ void kernel_main() {
                 pull_and_relay<PullAndRelayType::CIRCULAR_BUFFER, PullAndRelayType::BUFFER, write_to_completion_queue>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer); // write data to sysmem buffer
             }
 
+            if (is_event_sync) {
+                wait_for_event(header->event_sync_event_id, header->event_sync_core_x, header->event_sync_core_y);
+            }
             completion_queue_push_back(completion_data_size, completion_queue_start_addr, host_completion_queue_write_ptr_addr);
+            record_last_completed_event(header->event);
             continue;
         }
     }
