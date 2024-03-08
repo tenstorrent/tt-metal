@@ -8,8 +8,8 @@ import tt_lib
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 
-def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices):
-    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}.bin"
+def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices, cache_id=None):
+    return base_cache_path / f"{tensor_str}{'' if cache_id is None else cache_id}_{device_idx}_{num_devices}.bin"
 
 
 def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_devices, x, y):
