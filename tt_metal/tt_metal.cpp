@@ -485,7 +485,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         std::unordered_set<CoreCoord> not_done_cores;
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
+                launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
@@ -517,7 +517,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
-                KernelGroup *kernel_group = program.kernels_on_core(logical_core);
+                KernelGroup *kernel_group = program.kernels_on_core(logical_core, core_type);
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
                 ConfigureKernelGroup(
@@ -660,13 +660,15 @@ KernelHandle CreateKernel(
                             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                                 detail::CheckDataMovementConfig(program, file_name, core_ranges);
                                 kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::WORKER);
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
                                 kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::WORKER);
                             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
                                 kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::ETH);
                             }
-                            return detail::AddKernel(program, kernel);
                         },
                         config
                     );

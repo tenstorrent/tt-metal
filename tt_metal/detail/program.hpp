@@ -14,13 +14,13 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal::detail{
 
-    inline KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel)
+    inline KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type)
     {
-        return program.add_kernel(kernel);
+        return program.add_kernel(kernel, core_type);
     }
 
     inline std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
-        return program.kernels_.at(kernel_id);
+        return program.get_kernel(kernel_id);
     }
 
     inline std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {
