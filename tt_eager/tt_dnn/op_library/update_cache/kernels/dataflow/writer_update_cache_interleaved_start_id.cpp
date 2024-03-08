@@ -37,12 +37,13 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
+    uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(untilized_input_cb_id, Wt);
         uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id));
 
-        for (uint32_t u = 0; u < 32; ++u) {
+        for (uint32_t u = 0; u < u_range; ++u) {
             cb_wait_front(untilized_cache_cb_id, Wt);
             cb_reserve_back(untilized_cache2_cb_id, Wt);
             uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + offset;
