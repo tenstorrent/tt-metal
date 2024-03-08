@@ -53,17 +53,17 @@ def test_multi_device_open_close_using_context_manager():
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_ttnn_to_and_from_multi_device_shard(layout, memory_config):
     """Shard a tensor across devices, compose it back and verify loopback tensor is same as the original tensor"""
-    from ttnn import ShardTensorToMeshMapper, ConcatMeshToTensorComposer
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
     torch_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
 
     with ttnn.create_device_mesh(ttnn.DeviceGrid(1, 4), ttnn.get_pcie_device_ids()) as device_mesh:
-        ttnn_tensor = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMeshMapper(device_mesh, dim=3))
+        ttnn_tensor = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMesh(device_mesh, dim=3))
         ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=layout)
         ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh, memory_config=memory_config)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
         torch_loop_back_tensor = ttnn.to_torch(
-            ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensorComposer(device_mesh, dim=3)
+            ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3)
         )
 
         assert torch.all(torch_tensor == torch_loop_back_tensor)
@@ -74,12 +74,12 @@ def test_ttnn_to_and_from_multi_device_shard(layout, memory_config):
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_check_per_device_shard(layout, memory_config):
     """This test checks if the tensor is correctly sharded across devices"""
-    from ttnn import ShardTensorToMeshMapper, ConcatMeshToTensorComposer
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
     torch_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
 
     with ttnn.create_device_mesh(ttnn.DeviceGrid(1, 4), ttnn.get_pcie_device_ids()) as device_mesh:
-        ttnn_tensor = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMeshMapper(device_mesh, dim=3))
+        ttnn_tensor = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMesh(device_mesh, dim=3))
         ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=layout)
         ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh, memory_config=memory_config)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
@@ -92,28 +92,26 @@ def test_multi_device_check_per_device_shard(layout, memory_config):
 
 
 def test_multi_device_replicate(pcie_device_mesh):
-    """Test ReplicateTensorToMeshMapper to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMeshMapper, ListMeshToTensorComposer
+    """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
+    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
 
     full_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ReplicateTensorToMeshMapper(pcie_device_mesh))
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ReplicateTensorToMesh(pcie_device_mesh))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    loopback_replicated_tensors = ttnn.to_torch(
-        ttnn_loop_back_tensor, mesh_composer=ListMeshToTensorComposer(pcie_device_mesh)
-    )
+    loopback_replicated_tensors = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(pcie_device_mesh))
     for loopback_replicated_tensor in loopback_replicated_tensors:
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
 
 def test_ttnn_multi_device_all_gather(pcie_device_mesh):
     """Multidevice API test for ttnn.all_gather CCL operation"""
-    from ttnn import ShardTensorToMeshMapper
+    from ttnn import ShardTensorToMesh
 
     full_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMeshMapper(pcie_device_mesh, dim=3))
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
     ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
