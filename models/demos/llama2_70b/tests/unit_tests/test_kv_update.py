@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
 class TtLlamaKVUpdate(torch.nn.Module):
@@ -72,7 +72,7 @@ class PytorchLlamaKVUpdateModel(torch.nn.Module):
         key_past[:, :, layer_past_len : layer_past_len + seqlen, :] = xk
         value_past[:, :, layer_past_len : layer_past_len + seqlen, :] = xv
 
-        return self.layer_past
+        return [tensor.clone() for tensor in self.layer_past]
 
 
 def run_test_LlamaKVUpdate(
@@ -103,11 +103,17 @@ def run_test_LlamaKVUpdate(
 
     state_dict = hugging_face_reference_model.state_dict()
 
+    num_iterations = 20
+    n_kv_heads = 1
+
     # Prepare input
     torch.manual_seed(0)
-    kv_inp = [
-        (torch.rand(seq_len, n_kv_heads, batch, head_dim) * 100) - 50,
-        (torch.rand(seq_len, n_kv_heads, batch, head_dim) * 100) - 50,
+    kv_inps = [
+        [
+            (torch.rand(seq_len, n_kv_heads, batch, head_dim) * 100) - 50,
+            (torch.rand(seq_len, n_kv_heads, batch, head_dim) * 100) - 50,
+        ]
+        for i in range(num_iterations)
     ]
 
     layer_past_pytorch = (
@@ -123,11 +129,11 @@ def run_test_LlamaKVUpdate(
 
     base_url = "layers"
 
-    layer_past_len = 469
+    layer_past_len = 120
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_model = PytorchLlamaKVUpdateModel(hugging_face_reference_model, layer_past_pytorch)
-    pytorch_out = pytorch_model(*kv_inp, layer_past_len)
+    pytorch_outs = [pytorch_model(*kv_inp, layer_past_len + i) for i, kv_inp in enumerate(kv_inps)]
 
     # TT hardware execution -------------------------------------------------------------
     tt_model = TtLlamaKVUpdate(
@@ -143,34 +149,45 @@ def run_test_LlamaKVUpdate(
         layer_past=layer_past_tt,
     )
 
-    tt_inp = [torch2tt_tensor(i, device) for i in kv_inp]
+    tt_outs = []
 
-    tt_out = tt_model(*tt_inp, layer_past_len)
-    tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
+    for i, kv_inp in enumerate(kv_inps):
+        if batch < 32:
+            tt_inp = [pad_by_zero(i, device)[0] for i in kv_inp]
+        else:
+            tt_inp = [torch2tt_tensor(i, device) for i in kv_inp]
+
+        tt_out = tt_model(*tt_inp, layer_past_len + i)
+        tt_out = [tt2torch_tensor(tt_out_tensor).clone() for tt_out_tensor in tt_out]
+        tt_outs.append(tt_out)
 
     # check outputs ----------------------------------------------------------------------
 
-    for i in range(len(pytorch_out)):
-        logger.info(comp_allclose(pytorch_out[i], tt_out[i]))
+    for pytorch_out, tt_out in zip(pytorch_outs, tt_outs):
+        for i in range(len(pytorch_out)):
+            logger.info(comp_allclose(pytorch_out[i], tt_out[i]))
 
-    does_pass = True
-    for i in range(len(pytorch_out)):
-        out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
-        # Check each shape matches
-        assert pytorch_out[i].shape == tt_out[i].shape
-        logger.info(f"PCC value: {output_pcc}")
-        does_pass = does_pass and out_pass
+        all_tests_pass = True
+        for i in range(len(pytorch_out)):
+            out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
+            # Check each shape matches
+            assert pytorch_out[i].shape == tt_out[i].shape
+            if out_pass:
+                logger.info(f"PCC value: {output_pcc}")
+            else:
+                logger.warning(f"PCC value {output_pcc} is lower than {pcc}")
+                all_tests_pass = False
 
-        mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"MAE: {mae}")
+            mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
+            logger.info(f"MAE: {mae}")
 
-        max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"Max incorrect: {max_incorrect}")
+            max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
+            logger.info(f"Max incorrect: {max_incorrect}")
 
-        max_gt = torch.max(torch.abs(pytorch_out[i]))
-        logger.info(f"Max ground truth: {max_gt}")
+            max_gt = torch.max(torch.abs(pytorch_out[i]))
+            logger.info(f"Max ground truth: {max_gt}")
 
-    if does_pass:
+    if all_tests_pass:
         logger.info("Llama QKV output Passed!")
     else:
         logger.warning("Llama QKV output Failed!")
@@ -183,6 +200,12 @@ def run_test_LlamaKVUpdate(
         (
             "llama-2-70B",
             32,
+            1,
+            0.98,
+        ),
+        (
+            "llama-2-70B",
+            8,
             1,
             0.98,
         ),
