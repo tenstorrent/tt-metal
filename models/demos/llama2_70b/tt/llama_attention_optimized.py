@@ -30,6 +30,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         load_weights=True,
         cache_path=None,
         kv_cache_dir=None,
+        batch_size=None,
+        cache_id=None,
     ):
         super().__init__()
 
@@ -44,7 +46,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.n_heads = configuration.n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
-        self.max_batch_size = configuration.max_batch_size
+        self.max_batch_size = configuration.max_batch_size if batch_size is None else batch_size
         self.n_kv_heads = configuration.n_kv_heads
         self.scale = 1 / math.sqrt(self.head_dim)
 
@@ -60,6 +62,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.layer_name = f"{base_url}.{layer_num}"
 
         self.cache_path = cache_path
+        self.cache_id = cache_id
         self.kv_cache_dir = kv_cache_dir
         self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
@@ -191,17 +194,21 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.qkv_list = []
         self.wo_list = []
 
-        test_cache_path = get_weight_cache_path(self.cache_path, wo_str, self.num_devices - 1, self.num_devices)
+        test_cache_path = get_weight_cache_path(
+            self.cache_path, wo_str, self.num_devices - 1, self.num_devices, self.cache_id
+        )
         if test_cache_path.exists():
             for i in range(self.num_devices):
-                tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
+                tensor_cache_path = get_weight_cache_path(
+                    self.cache_path, wqkv_cache_str, i, self.num_devices, self.cache_id
+                )
                 self.qkv_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
-                tensor_cache_path = get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)
+                tensor_cache_path = get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices, self.cache_id)
                 self.wo_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
@@ -250,7 +257,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
                 self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)), qkv_host
+                    str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices, self.cache_id)),
+                    qkv_host,
                 )
 
                 ### WO Weights
@@ -262,7 +270,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
                 self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)), wo_host
+                    str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices, self.cache_id)), wo_host
                 )
 
     def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
@@ -305,7 +313,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # x: (seq_len, 1, batch, hidden_dim)
         # start_pos: int
         # rot_mat: [1, 1, head_dim, head_dim]
-        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
+        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len] or [batch, seq_len, n_heads, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
         assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
         # assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
@@ -362,7 +370,20 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         start_pos: int,
         attn_masks: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
+        attn_outputs = self.attn_qkv_mqa(xs, rot_mats, start_pos, attn_masks)
+        return self.attn_selfout(attn_outputs)
+
+    def attn_qkv_mqa(
+        self,
+        xs: tt_lib.tensor.Tensor,
+        rot_mats: tt_lib.tensor.Tensor,
+        start_pos: int,
+        attn_masks: tt_lib.tensor.Tensor,
+    ) -> tt_lib.tensor.Tensor:
         padded_layer_past_len = nearest_32(start_pos + 1)
+
+        # Assume input is already padded to 32, even if the batch size is not 32. Batch size is in self.max_batch_size.
+        assert xs[0].shape()[2] == 32, "Input tensor must be padded to 32"
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
@@ -370,7 +391,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
             for i in range(len(xs)):
                 xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
+                    xs[i], sharded_mem_config=self.model_config[f"FUSED_QKV_MM_INPUT_MEMCFG"]
                 )
 
         # Fused QKV
@@ -478,6 +499,19 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     self.padded_local_heads,
                     self.head_dim,  # Batch must be in dim 0 to match K cache
                 )
+                # Unpad the batch dimension to original batch if the original batch is not 32
+                if self.max_batch_size != 32:
+                    query_layer[i] = tt_lib.tensor.unpad(
+                        query_layer[i],
+                        [0, 0, 0, 0],
+                        [
+                            self.max_batch_size - 1,
+                            0,
+                            self.padded_local_heads - 1,
+                            self.head_dim - 1,
+                        ],
+                        output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                    )
                 query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
                     query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
                 )
@@ -635,11 +669,27 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
             if self.batched_attn:
                 # TRANSPOSE
-                attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
-                    attn_output[i],
-                    output_mem_config=self.model_config["L1_MEMCFG"],
-                )
+                if self.emulated:
+                    attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+                        attn_output[i],
+                        output_mem_config=self.model_config["DRAM_MEMCFG"],
+                    )
+                else:
+                    attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+                        attn_output[i],
+                        output_mem_config=self.model_config["L1_MEMCFG"],
+                    )
 
+        return attn_output
+
+    def attn_selfout(
+        self,
+        attn_output: tt_lib.tensor.Tensor,
+    ) -> tt_lib.tensor.Tensor:
+        # ATTENTION SELFOUT
+        for i in range(len(attn_output)):
+            if self.batched_attn:
+                # TRANSPOSE
                 # Get batch in dim 1
                 attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, 32, 32, 128)
 
@@ -669,7 +719,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     attn_output[i], sharded_mem_config=self.model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"]
                 )
 
-        # ATTENTION SELFOUT
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.nlp_concat_heads(
                 attn_output[i],

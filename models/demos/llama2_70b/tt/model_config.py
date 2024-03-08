@@ -247,6 +247,28 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
+    elif num_devices == 32:
+        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    1,  # Dynamic - must set before using this config
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
 
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
 
@@ -416,7 +438,7 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-    elif num_devices == 8:
+    elif num_devices == 8 or num_devices == 32:
         model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
@@ -468,7 +490,7 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-    elif num_devices == 8:
+    elif num_devices == 8 or num_devices == 32:
         model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
@@ -525,7 +547,7 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-    elif num_devices == 8:
+    elif num_devices == 8 or num_devices == 32:
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=4,
@@ -574,20 +596,41 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
-
-    model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                1,  # Dynamic
-                head_dim,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+    if num_devices == 4 or num_devices == 8:
+        model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    1,  # Dynamic
+                    head_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    elif num_devices == 32:
+        model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    1,
+                    128,  # Dynamic
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
     if num_devices == 8:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -666,6 +709,116 @@ def get_model_config(model_config_str, num_devices=8):
                 False,
             ),
         )
+    elif num_devices == 32:
+        model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 padded heads
+                    128,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config[
+            "ATTN_BATCHED_MM_PROGCFG_LAMBDA"
+        ] = lambda n: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 1],
+            in0_block_w=128 // 32,  # HEAD_DIM // TILE_DIM
+            out_subblock_h=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
+            per_core_N=n,  # SEQ_LEN // TILE_SIZE (dynamic)
+        )
+
+        model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 1),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    1,  # Dynamic (padded seqlen)
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config[
+            "SCORES_BATCHED_MM_PROGCFG_LAMBDA"
+        ] = lambda in0_block_w: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 1],
+            in0_block_w=in0_block_w,  # SEQ_LEN // TILE_DIM (dynamic)
+            out_subblock_h=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
+            per_core_N=128 // 32,  # HEAD_DIM // TILE_SIZE (dynamic)
+        )
+
+        model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    128,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,  # Each core has 32 users
+                    128,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
     if num_devices == 4:
         model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 2),
@@ -680,6 +833,17 @@ def get_model_config(model_config_str, num_devices=8):
             "BATCHED_SOFTMAX_PROGCFG"
         ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 4),  # In-place softmax on 32 cores sharded on batch dim
+            subblock_w=1,
+            block_h=1,
+            block_w=1,  # Dynamic
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+        )
+    elif num_devices == 32:
+        model_config[
+            "BATCHED_SOFTMAX_PROGCFG"
+        ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 1),
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
@@ -711,7 +875,7 @@ def get_model_config(model_config_str, num_devices=8):
             fused_activation=None,
             mcast_in0=True,
         )
-    elif num_devices == 8:
+    elif num_devices == 8 or num_devices == 32:
         model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
