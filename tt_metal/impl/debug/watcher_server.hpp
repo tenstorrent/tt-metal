@@ -19,10 +19,10 @@ int watcher_register_kernel(const string& name);
 
 // Check whether the watcher server has been killed due to an error detected.
 bool watcher_server_killed_due_to_error();
-// Function to clear this flag, so that non-watcher runs can continue as normal.
+// Function to set this flag to true/false, so that non-watcher runs can continue as normal when set to false.
 // TODO(dma): this doesn't currently clear the actual error codes on the device. Once watcher is
 // moved out of llrt we can change this to watcher_clear_errors().
-void watcher_server_clear_error_flag();
+void watcher_server_set_error_flag(bool val);
 
 // Helper function to clear the watcher log file
 void watcher_clear_log();

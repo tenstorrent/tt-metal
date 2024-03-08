@@ -648,8 +648,8 @@ bool watcher_server_killed_due_to_error() {
     return watcher::watcher_killed_due_to_error;
 }
 
-void watcher_server_clear_error_flag() {
-    watcher::watcher_killed_due_to_error = false;
+void watcher_server_set_error_flag(bool val) {
+    watcher::watcher_killed_due_to_error = val;
 }
 
 void watcher_clear_log() {
