@@ -25,5 +25,4 @@ void py_module(py::module& module) {
 }
 
 }  // namespace device
-using namespace device;
 }  // namespace ttnn
