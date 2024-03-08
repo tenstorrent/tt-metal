@@ -66,10 +66,10 @@ def create_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]):
         close_device_mesh(device_mesh)
 
 
-class TensorToMeshMapper:
+class TensorToMesh:
     """
     Defines the mapping of a torch.Tensor to a device mesh: e.g. Shard/Replicate.
-    You can also "Bring your own TensorToMeshMapper" based on your custom mapping.
+    You can also "Bring your own TensorToMesh" based on your custom mapping.
     """
 
     def __init__(self, device_mesh):
@@ -80,20 +80,20 @@ class TensorToMeshMapper:
         raise NotImplementedError("Subclasses must implement this method")
 
 
-class MeshToTensorComposer:
+class MeshToTensor:
     """
-    Defines the inverse operation of TensorToMeshMapper. Given a set of per-device
+    Defines the inverse operation of TensorToMesh. Given a set of per-device
     ttnn.Tensor objects (aggregated into a single ttnn.Tensor), this class defines
     the mapping back to one or many torch.Tensor objects.
 
-    You can also "Bring your own MeshToTensorComposer" based on your custom mapping.
+    You can also "Bring your own MeshToTensor" based on your custom mapping.
     """
 
     def compose(self, tensor: ttnn.Tensor):
         raise NotImplementedError("Subclasses must implement this method")
 
 
-class ShardTensorToMeshMapper(TensorToMeshMapper):
+class ShardTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh, dim):
         super().__init__(device_mesh)
         self.shard_dim = dim
@@ -104,7 +104,7 @@ class ShardTensorToMeshMapper(TensorToMeshMapper):
         return self.device_id_to_tensor
 
 
-class ReplicateTensorToMeshMapper(TensorToMeshMapper):
+class ReplicateTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh: DeviceMesh):
         super().__init__(device_mesh)
 
@@ -113,7 +113,7 @@ class ReplicateTensorToMeshMapper(TensorToMeshMapper):
         return self.device_id_to_tensor
 
 
-class ConcatMeshToTensorComposer(MeshToTensorComposer):
+class ConcatMeshToTensor(MeshToTensor):
     def __init__(self, device_mesh: DeviceMesh, dim: int):
         self.concat_dim = dim
         self.device_mesh = device_mesh
@@ -125,7 +125,7 @@ class ConcatMeshToTensorComposer(MeshToTensorComposer):
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
 
-class ListMeshToTensorComposer(MeshToTensorComposer):
+class ListMeshToTensor(MeshToTensor):
     def __init__(self, device_mesh: DeviceMesh):
         self.device_mesh = device_mesh
 
