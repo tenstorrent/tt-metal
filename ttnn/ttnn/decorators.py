@@ -70,7 +70,7 @@ def override_pcc_of_debug_decorator(value):
 
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
-    if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
+    if ttnn.is_tensor_storage_on_device(output):
         torch_output = ttnn.to_device(torch_output, output.device())
     return torch_output
 

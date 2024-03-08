@@ -28,7 +28,7 @@ def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
 
     if on_device:
         input_tensor = ttnn.to_device(input_tensor, device)
-        assert ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(input_tensor)
 
     if batch_sizes:
         output_tensor = input_tensor[:1, :32, :32]
@@ -37,9 +37,9 @@ def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
     assert output_tensor.layout == input_layout
 
     if on_device:
-        assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(output_tensor)
         output_tensor = ttnn.from_device(output_tensor)
-        assert not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert not ttnn.is_tensor_storage_on_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -60,15 +60,15 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
 
     if on_device:
         input_tensor = ttnn.to_device(input_tensor, device)
-        assert ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(input_tensor)
 
     output_tensor = input_tensor[:32]
     assert output_tensor.layout == input_layout
 
     if on_device:
-        assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(output_tensor)
         output_tensor = ttnn.from_device(output_tensor)
-        assert not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert not ttnn.is_tensor_storage_on_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 

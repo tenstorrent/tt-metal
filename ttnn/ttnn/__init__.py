@@ -87,6 +87,7 @@ from ttnn.multi_device import (
 from ttnn.core import (
     set_printoptions,
     has_storage_type_of,
+    is_tensor_storage_on_device,
     has_tile_padding,
     is_sharded,
     get_memory_config,

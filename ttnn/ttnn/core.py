@@ -9,6 +9,7 @@ import ttnn
 
 from ttnn.types import (
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     MemoryConfig,
     ShardStrategy,
     ShardOrientation,
@@ -23,12 +24,16 @@ def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
     return tensor.storage_type() == storage_type
 
 
+def is_tensor_storage_on_device(tensor: "ttnn.Tensor") -> bool:
+    return tensor.storage_type() in (DEVICE_STORAGE_TYPE, MULTI_DEVICE_STORAGE_TYPE)
+
+
 def is_sharded(tensor) -> bool:
     return tensor.is_sharded()
 
 
 def get_memory_config(tensor) -> ttnn.MemoryConfig:
-    if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+    if is_tensor_storage_on_device(tensor):
         return tensor.memory_config()
     else:
         raise RuntimeError("Tensor is not on device!")

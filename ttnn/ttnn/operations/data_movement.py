@@ -198,7 +198,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             "The number of dimensions in the tensor input does not match the length of the desired ordering"
         )
 
-    on_device = ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    on_device = ttnn.is_tensor_storage_on_device(input_tensor)
     device = input_tensor.device()
     layout = input_tensor.layout
     dtype = input_tensor.dtype
@@ -214,7 +214,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     if ttnn.has_tile_padding(input_tensor):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
-    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
+    if ttnn.is_tensor_storage_on_device(input_tensor) and len(input_tensor.shape) == 4:
         output_tensor = ttl.tensor.permute(input_tensor, order)
         output_tensor = ttnn.to_layout(output_tensor, layout)
         rank_should_be_updated = len(output_tensor.shape) > rank
@@ -223,7 +223,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             output_tensor = ttnn.squeeze(output_tensor, dim=0)
             rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
 
-        if on_device and not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if on_device and not ttnn.is_tensor_storage_on_device(output_tensor):
             output_tensor = ttnn.to_device(output_tensor, device)
         return output_tensor
     else:

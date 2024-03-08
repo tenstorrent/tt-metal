@@ -69,7 +69,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_unary_function(input_tensor, output_mem_config=memory_config)
@@ -170,7 +170,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         if not _is_scalar(parameter):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_unary_function(input_tensor, parameter, output_mem_config=memory_config)

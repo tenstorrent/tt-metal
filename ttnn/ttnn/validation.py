@@ -8,9 +8,9 @@ from ttnn.types import (
     DataType,
     Layout,
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     Tensor,
 )
-from ttnn.core import has_storage_type_of
 
 
 def validate_input_tensor(
@@ -55,10 +55,10 @@ def validate_input_tensor(
     if can_be_on_device and can_be_on_cpu:
         pass
     elif can_be_on_device:
-        if not has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+        if tensor.storage_type() not in (DEVICE_STORAGE_TYPE, MULTI_DEVICE_STORAGE_TYPE):
             raise RuntimeError(f"{operation_name}: Tensor must be on device!")
     elif can_be_on_cpu:
-        if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+        if tensor.storage_type() in (DEVICE_STORAGE_TYPE, MULTI_DEVICE_STORAGE_TYPE):
             raise RuntimeError(f"{operation_name}: Tensor must be on host!")
     else:
         raise RuntimeError(f"{operation_name}: Tensor must be on host or device!")
