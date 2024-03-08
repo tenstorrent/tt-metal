@@ -189,10 +189,12 @@ FORCE_INLINE void write_and_launch_program(
                 break;
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_MULTICAST:
                 num_pages_in_transfer = header->num_go_signal_multicast_pages;
+                noc_async_write_barrier();
                 break;
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_UNICAST:
                 multicast = false;
                 num_pages_in_transfer = header->num_go_signal_unicast_pages;
+                noc_async_write_barrier();
                 break;
             default:
                 continue;
