@@ -201,7 +201,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
 // Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
 // Assumes the following order of bits in the input data:
 //   [sign bit][mantissa bits][exponent bits]
-float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
     int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
     const int exp_mask = (1 << (exp_bit_count)) - 1;
     int exp_bias = (1 << (exp_bit_count - 1)) - 1;
