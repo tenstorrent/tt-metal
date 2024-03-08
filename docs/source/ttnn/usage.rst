@@ -139,8 +139,10 @@ Basic Examples
     ttnn.close_device(device)
 
 
-7. Using ttl operation in ttnn
+7. Using tt_lib operation in ttnn
 ------------------------------
+
+`tt_lib` operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call `tt_lib` operations that enabled the missing features.
 
 .. code-block:: python
 
@@ -153,7 +155,7 @@ Basic Examples
 
     torch_input_tensor = torch.rand(1, 1, 2, 4, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.experimental.tensor.exp(input_tensor) # equivalent to ttnn.Tensor(ttl.tensor.exp(input_tensor.value))
+    output_tensor = ttnn.experimental.tensor.exp(input_tensor) # equivalent to tt_lib.tensor.exp(input_tensor)
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
     ttnn.close_device(device)
@@ -247,3 +249,29 @@ The following environment variable can be set in order to completely disable the
 .. code-block:: bash
 
     export TTNN_ENABLE_FAST_RUNTIME_MODE=True
+
+
+
+12. Print L1 Buffers
+--------------------
+
+ttnn has a python decorator that optionally enables features during run-time. The features are related to validation and debugging of the operations.
+
+The following environment variable can be set in order to completely disable these features.
+
+.. code-block:: bash
+
+    import torch
+    import ttnn
+
+
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+
+    torch_input_tensor = torch.rand(1, 1, 2, 4, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.exp(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output_tensor = ttnn.to_torch(output_tensor)
+    ttnn.print_l1_buffers()
+
+    ttnn.close_device(device)

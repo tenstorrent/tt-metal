@@ -44,6 +44,7 @@ void close_device(Device &device) {
 
     size_t offset = device.id();
     if (device_pool::devices[offset] != nullptr) {
+        tt::tt_metal::detail::DeallocateBuffers(device_pool::devices[offset]);
         device_pool::devices[offset]->close();
         delete device_pool::devices[offset];
         device_pool::devices[offset] = nullptr;
