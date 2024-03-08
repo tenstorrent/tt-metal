@@ -1563,6 +1563,7 @@ def eltwise_ne(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
