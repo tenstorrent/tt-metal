@@ -1031,7 +1031,7 @@ void HWCommandQueue::enqueue_program(
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
     ProgramDeviceMap& program_device_map = program.program_device_map;
-    uint32_t host_data_num_pages = program_device_map.runtime_arg_page_transfers.size() + program_device_map.cb_config_page_transfers.size();
+    uint32_t host_data_num_pages = program_device_map.num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST).size() + program_device_map.num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST).size();
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
 
@@ -1201,7 +1201,7 @@ void HWCommandQueue::issue_wrap() {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap for channel {}", this->id);
     EnqueueIssueWrapCommand command(this->id, this->device, this->manager);
-    command.process();
+    command.process(); // Not increasing num issued commands
 }
 
 void HWCommandQueue::completion_wrap(uint32_t event) {
