@@ -91,8 +91,52 @@ void eth_send_bytes(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
-    erisc_info->user_buffer_bytes_sent += num_bytes;
+    erisc_info->channels[0].bytes_sent += num_bytes;
 }
+
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the local ethernet core to L1 of the connected
+ * remote ethernet core. Also, see \a eth_is_receiver_channel_send_done and \a eth_bytes_are_available_on_channel.
+ *
+ * Non-blocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | src_addr                    | Source address in local eth core L1 memory              | uint32_t | 0..256kB    | True     |
+ * | dst_addr                    | Destination address in remote eth core L1 memory        | uint32_t | 0..256kB    | True     |
+ * | num_bytes                   | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB    | True     |
+ * | channel                     | Which transaction channel to use. Corresponds to        | uint32_t | 0..7        | True     |
+ * |                             | per_channel_user_bytes_send in erisc_info_t             |          |             |          |
+ * | num_bytes_per_send          | Number of bytes to send per packet                      | uint32_t | 16..1MB     | False    |
+*  | num_bytes_per_send_word_size| num_bytes_per_send shifted right 4                      | uint32_t | 1..256kB    | False    |
+ */
+FORCE_INLINE
+void eth_send_bytes_over_channel(
+    uint32_t src_addr,
+    uint32_t dst_addr,
+    uint32_t num_bytes,
+    uint32_t channel,
+    uint32_t num_bytes_per_send = 16,
+    uint32_t num_bytes_per_send_word_size = 1) {
+    // assert(channel < 4);
+    uint32_t num_bytes_sent = 0;
+    while (num_bytes_sent < num_bytes) {
+        internal_::eth_send_packet(
+            0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
+        num_bytes_sent += num_bytes_per_send;
+    }
+    erisc_info->channels[channel].bytes_sent = num_bytes;
+    erisc_info->channels[channel].receiver_ack = 0;
+    uint32_t addr = ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
+    internal_::eth_send_packet(
+        0,
+        addr,
+        addr,
+    1);
+}
+
 
 /**
  * A blocking call that waits for receiver to acknowledge that all data sent with eth_send_bytes since the last
@@ -107,11 +151,79 @@ FORCE_INLINE
 void eth_wait_for_receiver_done() {
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         1);
-    while (erisc_info->user_buffer_bytes_sent != 0) {
+    while (erisc_info->channels[0].bytes_sent != 0) {
         run_routing();
+    }
+}
+
+/**
+ * Caller is expected to be sender side. Indicates to caller that the receiver has received the last payload sent, and
+ * that the local sender buffer can be cleared safely
+ *
+ * Non-blocking
+ *
+ * Return value: bool: true if the receiver has acked
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to check. Corresponds to      | uint32_t | 0..7        | True     |
+ * |                             | per_channel_user_bytes_send in erisc_info_t             |          |             |          |
+ */
+FORCE_INLINE
+bool eth_is_receiver_channel_send_acked(uint32_t channel) {
+    return erisc_info->channels[channel].receiver_ack != 0;
+}
+
+/**
+ * Caller is expected to be sender side. Tells caller that the receiver has both received the last payload sent, and
+ * also that it has cleared it to its consumers. If true, indicates that caller (sender) send safely send more data.
+ *
+ * Non-blocking
+ *
+ * Return value: bool: true if the receiver has acked and forwarded the payload.
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to check. Corresponds to      | uint32_t | 0..7        | True     |
+ * |                             | per_channel_user_bytes_send in erisc_info_t             |          |             |          |
+ */
+FORCE_INLINE
+bool eth_is_receiver_channel_send_done(uint32_t channel) {
+    return erisc_info->channels[channel].bytes_sent == 0;
+}
+
+/**
+ * Caller is expected to be sender side. This call will block until receiver sends both levels of ack
+ *
+ * Blocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to block on                   | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+void eth_wait_for_receiver_channel_done(uint32_t channel) {
+
+    // assert(channel < 4);
+    // internal_::eth_send_packet(
+    //     0,
+    //     ((uint32_t)(&(erisc_info->per_channel_user_bytes_send[channel].bytes_sent))) >> 4,
+    //     ((uint32_t)(&(erisc_info->per_channel_user_bytes_send[channel].bytes_sent))) >> 4,
+    //     1);
+    uint32_t count = 0;
+    uint32_t max = 100000;
+
+    while (!eth_is_receiver_channel_send_done(channel)) {
+        count++;
+        if (count > max) {
+            count = 0;
+            run_routing();
+        }
     }
 }
 
@@ -141,8 +253,8 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
 ) {
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         1);
     eth_noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
     noc_async_read(receiver_data_noc_addr, local_eth_l1_curr_src_addr, size);
@@ -152,8 +264,9 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
         eth_noc_async_write_barrier();
     }
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
-    while (erisc_info->user_buffer_bytes_sent != 0) {
+    while (erisc_info->channels[0].bytes_sent != 0) {
         run_routing();
+        internal_::risc_context_switch();
     }
 }
 /**
@@ -170,8 +283,60 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
  */
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes) {
-    while (erisc_info->user_buffer_bytes_sent != num_bytes) {
+    while (erisc_info->channels[0].bytes_sent != num_bytes) {
         run_routing();
+    }
+}
+
+/**
+ * Caller is expected to be receiver side. This call will tell the receiver whether or not there is payload data to in the
+ * local buffer
+ *
+ * Non-blocking
+ *
+ * Return value: bool: True if payload data was sent (and not yet cleared) on the channel
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to check                      | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+bool eth_bytes_are_available_on_channel(uint8_t channel) {
+    return erisc_info->channels[channel].bytes_sent != 0;
+}
+
+/**
+ * Caller is expected to be receiver side. This call block until there is payload data in the local buffer associated with
+ * the channel
+ *
+ * Blocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | num_bytes                   | Number of bytes to receive before returning to caller   | uint32_t | 0..1MB      | True     |
+ * | channel                     | Which transaction channel to check                      | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+void eth_wait_for_bytes_on_channel(uint32_t num_bytes, uint8_t channel) {
+    // assert(channel < 4);
+    uint32_t count = 0;
+    uint32_t poll_count = 1000000;
+    uint32_t num_bytes_sent = erisc_info->channels[channel].bytes_sent;
+    while (num_bytes_sent == 0) {
+        uint32_t received_this_iter = erisc_info->channels[channel].bytes_sent;
+        if (received_this_iter != num_bytes_sent) {
+            // We are currently in the process of receiving data on this channel, so we just just wait a
+            // bit longer instead of initiating a context switch
+            num_bytes_sent = received_this_iter;
+        } else {
+            count++;
+            if (count > poll_count) {
+                count = 0;
+                run_routing();
+            }
+        }
     }
 }
 
@@ -186,10 +351,75 @@ void eth_wait_for_bytes(uint32_t num_bytes) {
  */
 FORCE_INLINE
 void eth_receiver_done() {
-    erisc_info->user_buffer_bytes_sent = 0;
+    erisc_info->channels[0].bytes_sent = 0;
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        1);
+}
+
+/**
+ * Caller is expected to be receiver side. This call sends the second (and first) level ack to sender, indicating that the
+ * receiver flushed its buffer and is able to accept more data
+ *
+ * Non-nlocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to ack                        | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+void eth_receiver_channel_done(uint32_t channel) {
+    // assert(channel < 4);
+    erisc_info->channels[channel].bytes_sent = 0;
+    erisc_info->channels[channel].receiver_ack = 0;
+    internal_::eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
+        1);
+}
+
+/**
+ * Caller is expected to be sender side. This clears the local first level ack field. Useful when resetting on sender side in
+ * preparation for next send
+ *
+ * Non-blocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to check                      | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+void eth_clear_sender_channel_ack(uint32_t channel) {
+    // assert(channel < 4);
+    erisc_info->channels[channel].receiver_ack = 0;
+}
+
+/**
+ * Caller is expected to be receiver side. This sends the first level ack to sender, indicating that the last payload sent
+ * on the channel was received and that sender is free to clear its buffer
+ *
+ * Non-blocking
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                             | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                     | Which transaction channel to ack                        | uint32_t | 0..7        | True     |
+ */
+FORCE_INLINE
+void eth_receiver_channel_ack(uint32_t channel) {
+    // assert(channel < 4);
+    erisc_info->channels[channel].receiver_ack = 1;
+    internal_::eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4,
+        ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4,
         1);
 }

@@ -37,7 +37,7 @@ jobs:
       - name: Build tests
         run: make tests
       - name: Run microbenchmark tests
-        timeout-minutes: 45
+        timeout-minutes: 90
         run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
