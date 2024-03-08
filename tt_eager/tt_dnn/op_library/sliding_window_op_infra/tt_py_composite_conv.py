@@ -1056,7 +1056,7 @@ class TTPyCompositeConv(TTPyOp):
 
         return conv_input_on_device
 
-    def copy_input_to_device(self, conv_input: ttl.tensor.Tensor):
+    def copy_input_to_device(self, conv_input: ttl.tensor.Tensor, layout=ttl.tensor.Layout.TILE):
         interleaved_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
         )
