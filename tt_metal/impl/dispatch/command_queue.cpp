@@ -726,6 +726,9 @@ const DeviceCommand EnqueueRecordEventCommand::assemble_device_command(uint32_t)
     command.set_issue_data_size(0); // No extra data just CMD.
     command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
     command.set_event(this->event);
+    if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+        command.set_stall(); // Ensure ordering w/ programs in FD1.3+ prefetcher.
+    }
     return command;
 }
 
@@ -752,7 +755,9 @@ const DeviceCommand EnqueueWaitForEventCommand::assemble_device_command(uint32_t
     command.set_issue_data_size(0); // No extra data just CMD.
     command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
     command.set_event(this->event);
-
+    if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+        command.set_stall(); // Ensure ordering w/ programs in FD1.3+ prefetcher.
+    }
     // #5529 - Cross chip sync needs to be implemented. Currently, we only support sync on the same chip.
     TT_ASSERT(this->sync_event.device == this->device,
             "EnqueueWaitForEvent() cross-chip sync not yet supported. Sync event device: {} this device: {}",
