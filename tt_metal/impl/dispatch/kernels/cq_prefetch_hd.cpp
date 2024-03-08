@@ -18,9 +18,9 @@ constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
 constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t pcie_base = get_compile_time_arg_val(4);
 constexpr uint32_t pcie_size = get_compile_time_arg_val(5);
-constexpr uint32_t host_q_base = get_compile_time_arg_val(6);
-constexpr uint32_t host_q_size = get_compile_time_arg_val(7);
-constexpr uint32_t host_q_rd_ptr_addr = get_compile_time_arg_val(8);;
+constexpr uint32_t prefetch_q_base = get_compile_time_arg_val(6);
+constexpr uint32_t prefetch_q_size = get_compile_time_arg_val(7);
+constexpr uint32_t prefetch_q_rd_ptr_addr = get_compile_time_arg_val(8);;
 constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(9);
 constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(10);
 constexpr uint32_t scratch_db_base = get_compile_time_arg_val(11);
@@ -30,7 +30,7 @@ constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PR
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + (1 << dispatch_cb_log_page_size) * dispatch_cb_pages;
-constexpr uint32_t host_q_end = host_q_base + host_q_size;
+constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
@@ -40,7 +40,7 @@ constexpr uint32_t scratch_db_base1 = scratch_db_base + scratch_db_half_size;
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t dispatch_data_ptr = dispatch_cb_base;
 
-static uint32_t host_q_log_minsize = 4;
+static uint32_t prefetch_q_log_minsize = 4;
 
 static uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
@@ -68,7 +68,7 @@ void dispatch_cb_release_pages(uint32_t n) {
 }
 
 FORCE_INLINE
-void read_from_pcie(volatile tt_l1_ptr uint16_t *& host_q_rd_ptr,
+void read_from_pcie(volatile tt_l1_ptr uint16_t *& prefetch_q_rd_ptr,
                     uint32_t& pending_read_size,
                     uint32_t& fence,
                     uint32_t cmd_ptr,
@@ -93,44 +93,44 @@ void read_from_pcie(volatile tt_l1_ptr uint16_t *& host_q_rd_ptr,
     pending_read_size = size;
     pcie_read_ptr += size;
 
-    *host_q_rd_ptr = 0;
+    *prefetch_q_rd_ptr = 0;
 
     // Tell host we read
-    *(volatile tt_l1_ptr uint32_t *) host_q_rd_ptr_addr = (uint32_t)host_q_rd_ptr;
+    *(volatile tt_l1_ptr uint32_t *) prefetch_q_rd_ptr_addr = (uint32_t)prefetch_q_rd_ptr;
 
-    host_q_rd_ptr++;
+    prefetch_q_rd_ptr++;
 
-    // Wrap host_q
-    if ((uint32_t)host_q_rd_ptr == host_q_end) {
-        host_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)host_q_base;
+    // Wrap prefetch_q
+    if ((uint32_t)prefetch_q_rd_ptr == prefetch_q_end) {
+        prefetch_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)prefetch_q_base;
     }
 }
 
 
-// This routine can be called in 8 states based on the boolean values cmd_ready, host_q_ready, read_pending:
-//  - !cmd_ready, !host_q_ready, !read_pending: stall on host_q, issue read, read barrier
-//  - !cmd_ready, !host_q_ready,  read pending: read barrier (and re-evaluate host_q_ready)
-//  - !cmd_ready,  host_q_ready, !read_pending: issue read, read barrier (XXXX +issue read after?)
-//  - !cmd_ready,  host_q_ready,  read_pending: read barrier, issue read
-//  -  cmd_ready, !host_q_ready, !read_pending: exit
-//  -  cmd_ready, !host_q_ready,  read_pending: exit (no barrier yet)
-//  -  cmd_ready,  host_q_ready, !read_pending: issue read
-//  -  cmd_ready,  host_q_ready,  read_pending: exit (don't add latency to the in flight request)
+// This routine can be called in 8 states based on the boolean values cmd_ready, prefetch_q_ready, read_pending:
+//  - !cmd_ready, !prefetch_q_ready, !read_pending: stall on prefetch_q, issue read, read barrier
+//  - !cmd_ready, !prefetch_q_ready,  read pending: read barrier (and re-evaluate prefetch_q_ready)
+//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier (XXXX +issue read after?)
+//  - !cmd_ready,  prefetch_q_ready,  read_pending: read barrier, issue read
+//  -  cmd_ready, !prefetch_q_ready, !read_pending: exit
+//  -  cmd_ready, !prefetch_q_ready,  read_pending: exit (no barrier yet)
+//  -  cmd_ready,  prefetch_q_ready, !read_pending: issue read
+//  -  cmd_ready,  prefetch_q_ready,  read_pending: exit (don't add latency to the in flight request)
 //
 // With WH tagging of reads:
-// open question: should fetcher loop on host_q_ready issuing reads until !host_q_ready
-//  - !cmd_ready, !host_q_ready, !read_pending: stall on host_q, issue read, read barrier
-//  - !cmd_ready, !host_q_ready,  read pending: read barrier on oldest tag
-//  - !cmd_ready,  host_q_ready, !read_pending: issue read, read barrier (XXXX +retry after?)
-//  - !cmd_ready,  host_q_ready,  read_pending: issue read, read barrier on oldest tag
-//  -  cmd_ready, !host_q_ready, !read_pending: exit
-//  -  cmd_ready, !host_q_ready,  read_pending: exit (no barrier yet)
-//  -  cmd_ready,  host_q_ready, !read_pending: issue and tag read
-//  -  cmd_ready,  host_q_ready,  read_pending: issue and tag read
+// open question: should fetcher loop on prefetch_q_ready issuing reads until !prefetch_q_ready
+//  - !cmd_ready, !prefetch_q_ready, !read_pending: stall on prefetch_q, issue read, read barrier
+//  - !cmd_ready, !prefetch_q_ready,  read pending: read barrier on oldest tag
+//  - !cmd_ready,  prefetch_q_ready, !read_pending: issue read, read barrier (XXXX +retry after?)
+//  - !cmd_ready,  prefetch_q_ready,  read_pending: issue read, read barrier on oldest tag
+//  -  cmd_ready, !prefetch_q_ready, !read_pending: exit
+//  -  cmd_ready, !prefetch_q_ready,  read_pending: exit (no barrier yet)
+//  -  cmd_ready,  prefetch_q_ready, !read_pending: issue and tag read
+//  -  cmd_ready,  prefetch_q_ready,  read_pending: issue and tag read
 static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
 
     static uint32_t pending_read_size = 0;
-    static volatile tt_l1_ptr uint16_t* host_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)host_q_base;
+    static volatile tt_l1_ptr uint16_t* prefetch_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)prefetch_q_base;
 
     if (fence < cmd_ptr) {
         DPRINT << "wrap cmd ptr1 " << fence << " " << cmd_ptr << ENDL();
@@ -138,11 +138,11 @@ static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
     }
 
     bool cmd_ready = (cmd_ptr != fence);
-    uint32_t fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
+    uint32_t fetch_size = (uint32_t)*prefetch_q_rd_ptr << prefetch_q_log_minsize;
 
     if (fetch_size != 0 && pending_read_size == 0) {
-        DPRINT << "read1: " << (uint32_t)host_q_rd_ptr << " " << " " << fence << " " << fetch_size << ENDL();
-        read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
+        DPRINT << "read1: " << (uint32_t)prefetch_q_rd_ptr << " " << " " << fence << " " << fetch_size << ENDL();
+        read_from_pcie(prefetch_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
     }
     if (!cmd_ready) {
         if (pending_read_size != 0) {
@@ -157,17 +157,17 @@ static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
             fence += pending_read_size;
             pending_read_size = 0;
             // After the stall, re-check the host
-            fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
+            fetch_size = (uint32_t)*prefetch_q_rd_ptr << prefetch_q_log_minsize;
             if (fetch_size != 0) {
-                DPRINT << "read2: " << (uint32_t)host_q_rd_ptr << " " << fetch_size << ENDL();
-                read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
+                DPRINT << "read2: " << (uint32_t)prefetch_q_rd_ptr << " " << fetch_size << ENDL();
+                read_from_pcie(prefetch_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
             }
         } else {
-            // By here, host_q_ready must be false
+            // By here, prefetch_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
             DEBUG_STATUS('H', 'Q', 'W');
             DPRINT << "prefetcher stall" << ENDL();
-            while ((fetch_size = *host_q_rd_ptr) == 0);
+            while ((fetch_size = *prefetch_q_rd_ptr) == 0);
             DPRINT << "recurse" << ENDL();
             get_cmds(fence, cmd_ptr);
             DEBUG_STATUS('H', 'Q', 'D');
@@ -431,7 +431,7 @@ void kernel_main() {
             break;
 
         default:
-            DPRINT << "prefetcher invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << fence << " " << host_q_end << ENDL();
+            DPRINT << "prefetcher invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << fence << " " << prefetch_q_end << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
