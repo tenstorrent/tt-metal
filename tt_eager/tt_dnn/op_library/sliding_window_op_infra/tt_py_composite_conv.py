@@ -972,7 +972,7 @@ class TTPyCompositeConv(TTPyOp):
         if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
-        if self.enable_auto_formatting and not activation.is_sharded():
+        if self.enable_auto_formatting and activation.is_sharded():
             activation = self.conv_output_sharded_to_interleaved(activation)
         return activation
 
