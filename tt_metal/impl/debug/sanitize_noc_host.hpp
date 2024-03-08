@@ -9,6 +9,7 @@
 
 namespace tt {
 
+// Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
 
 // what's the size of the NOC<n> address space?  using 0x1000 for now

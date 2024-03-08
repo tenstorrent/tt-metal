@@ -1026,6 +1026,12 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_eq_bw
 
+.. autofunction:: tt_lib.tensor.logit_bw
+
+.. autofunction:: tt_lib.tensor.logiteps_bw
+
+.. autofunction:: tt_lib.tensor.log2_bw
+
 Loss Functions
 ==============
 

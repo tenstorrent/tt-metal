@@ -1,7 +1,10 @@
 name: "All post-commit tests"
 
 on:
+  workflow_call:
   workflow_dispatch:
+  push:
+    branches: ["main"]
 
 jobs:
   static-checks:
@@ -10,10 +13,15 @@ jobs:
   build:
     uses: ./.github/workflows/build.yaml
     secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
   sd-unit-tests:
+    needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
   fd-unit-tests:
+    needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
   profiler-regression:

@@ -1,0 +1,13 @@
+name: "[post-commit] Slow Dispatch unit tests"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  sd-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit

@@ -330,7 +330,9 @@ void TensorModule(py::module &m_tensor) {
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
             py::arg("math_approx_mode") = true
-        );
+        )
+        .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
 
     py::class_<WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
         .def(
@@ -340,7 +342,11 @@ void TensorModule(py::module &m_tensor) {
             py::arg("math_approx_mode") = true,
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false
-        );
+        )
+        .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
+        .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
+        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 
     detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
     detail::bind_unary_op(m_tensor, "global_mean", tt::tt_metal::global_mean, R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");

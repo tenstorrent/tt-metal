@@ -1,9 +1,6 @@
-name: "[post-commit] Fast dispatch unit tests"
+name: "[internal] Fast dispatch unit tests impl"
 
 on:
-  workflow_dispatch:
-  push:
-    branches: ["main"]
   workflow_call:
 
 jobs:
@@ -26,40 +23,44 @@ jobs:
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       CONFIG: ci
       LOGURU_LEVEL: INFO
-    environment: dev
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: fallback-ops tests
         timeout-minutes: 120
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_fallback_ops.sh
       - name: backward-ops tests
         timeout-minutes: 120
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_backward_ops.sh
       - name: loss-ops tests
         timeout-minutes: 120
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_loss_ops.sh
       - name: moreh tests
         timeout-minutes: 120
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_moreh.sh
@@ -82,19 +83,23 @@ jobs:
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       CONFIG: ci
       LOGURU_LEVEL: INFO
-    environment: dev
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: misc tests
         timeout-minutes: 120
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_misc.sh
@@ -116,19 +121,23 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LOGURU_LEVEL: INFO
-    environment: dev
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Run API Model tests
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_model_tests.sh
@@ -150,28 +159,32 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LOGURU_LEVEL: INFO
-    environment: dev
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Build tt-metal CPP tests
         run: make tests
       - name: Run API Sweep tests
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_sweep_tests.sh
       - name: Run tt-metal and tt-eager tests
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           env python tests/scripts/run_tt_metal.py --dispatch-mode fast
@@ -179,14 +192,14 @@ jobs:
       - name: Run pre/post C++ regression tests
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./build/test/tt_metal/unit_tests_fast_dispatch
       - name: Build Docs
         timeout-minutes: 15
         run: |
-          source build/python_env/bin/activate
+          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_build_docs.sh

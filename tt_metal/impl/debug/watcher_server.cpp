@@ -178,7 +178,7 @@ static void dump_noc_sanity_status(FILE *f,
         fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_sanity_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
         fflush(f);
         log_running_kernels(launch_msg);
-        log_info("Watcher stopped the device due to bad NOC L1/reg address");
+        log_warning("Watcher stopped the device due to bad NOC L1/reg address");
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d reading L1[addr=0x%08lx,len=%d]",
                  core.str().c_str(), get_sanity_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
@@ -192,7 +192,7 @@ static void dump_noc_sanity_status(FILE *f,
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
-        log_info("Watcher stopped the device due to bad NOC unicast transaction");
+        log_warning("Watcher stopped the device due to bad NOC unicast transaction");
         log_running_kernels(launch_msg);
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to accesss core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]",
@@ -214,7 +214,7 @@ static void dump_noc_sanity_status(FILE *f,
                 NOC_MCAST_ADDR_END_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
-        log_info("Watcher stopped the device due to bad NOC multicast transaction");
+        log_warning("Watcher stopped the device due to bad NOC multicast transaction");
         log_running_kernels(launch_msg);
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]}",
@@ -648,8 +648,8 @@ bool watcher_server_killed_due_to_error() {
     return watcher::watcher_killed_due_to_error;
 }
 
-void watcher_server_clear_error_flag() {
-    watcher::watcher_killed_due_to_error = false;
+void watcher_server_set_error_flag(bool val) {
+    watcher::watcher_killed_due_to_error = val;
 }
 
 void watcher_clear_log() {

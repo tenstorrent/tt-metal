@@ -43,12 +43,17 @@ _DST_SUB_BLOCKS = [
     (1, 1),
 ]
 
+_FP32_DST_SUB_BLOCKS = [x for x in _DST_SUB_BLOCKS if x[0] * x[1] <= 4]
 
-def _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core):
-    for m_subblock_size, n_subblock_size in _DST_SUB_BLOCKS:
+
+def _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dst):
+    candidate_sub_blocks = _FP32_DST_SUB_BLOCKS if fp32_dst else _DST_SUB_BLOCKS
+    for m_subblock_size, n_subblock_size in candidate_sub_blocks:
         if m_tiles_per_core % m_subblock_size == 0 and n_tiles_per_core % n_subblock_size == 0:
             return m_subblock_size, n_subblock_size
-    raise RuntimeError(f"Unable to find subblock sizes for m_size={m_tiles_per_core} and n_size={n_tiles_per_core}")
+    raise RuntimeError(
+        f"Unable to find subblock sizes for m_size={m_tiles_per_core} and n_size={n_tiles_per_core} (fp32_dst={fp32_dst})"
+    )
 
 
 _ACTIVATION_TO_FUSED_ACTIVATION = {
@@ -80,6 +85,7 @@ def create_matmul_1d_systolic_array_program_config(
     input_shape_b: Tuple[int, ...],
     core_grid: Optional[ttnn.CoreGrid] = None,
     activation: Optional[str] = None,
+    fp32_dst: Optional[bool] = False,
 ):
     """
 
@@ -139,7 +145,7 @@ def create_matmul_1d_systolic_array_program_config(
     while k_tiles % k_tiles_per_core != 0:
         k_tiles_per_core -= 1
 
-    m_subblock_size, n_subblock_size = _get_subblock_sizes(batch_and_m_tiles_per_core, n_tiles_per_core)
+    m_subblock_size, n_subblock_size = _get_subblock_sizes(batch_and_m_tiles_per_core, n_tiles_per_core, fp32_dst)
 
     return MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -154,7 +160,9 @@ def create_matmul_1d_systolic_array_program_config(
     )
 
 
-def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array):
+def create_matmul_program_config(
+    *, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array, compute_kernel_config
+):
     *batch_shape_a, m_size, k_size = input_tensor_a.shape.with_tile_padding()
     *batch_shape_b, _, n_size = input_tensor_b.shape.with_tile_padding()
     *_, intended_k_size_of_a = input_tensor_a.shape
@@ -168,6 +176,13 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
 
     input_tensor_a_memory_config = ttnn.get_memory_config(input_tensor_a)
     input_tensor_b_memory_config = ttnn.get_memory_config(input_tensor_b)
+
+    # Determine how many subblock tiles we can use based on dest register data format
+    fp32_dst = (
+        compute_kernel_config
+        and isinstance(compute_kernel_config, ttnn.WormholeComputeKernelConfig)
+        and compute_kernel_config.fp32_dest_acc_en
+    )
 
     if use_1d_systolic_array is None and not input_b_is_batched:
         # Infer use_1d_systolic_array based on how rectangular the output matrix
@@ -186,6 +201,7 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
             input_shape_b=input_tensor_b.shape,
             core_grid=core_grid,
             activation=activation,
+            fp32_dst=fp32_dst,
         )
 
     # TODO: clean up the code below by mvoing it to separate create_*_config functions
@@ -218,7 +234,7 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
             n_tiles_per_core = shard_shape[1] // ttnn.TILE_SIZE
             k_tiles_per_core = 1
 
-        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
+        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dst)
 
         program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -248,7 +264,7 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
             n_tiles_per_core = (N * shard_shape[1]) // (K * ttnn.TILE_SIZE)
             k_tiles_per_core = 1
 
-        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
+        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dst)
 
         program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -378,6 +394,7 @@ def matmul(
             core_grid=core_grid or input_tensor_a.device().core_grid,
             activation=None,
             use_1d_systolic_array=use_1d_systolic_array,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if program_config is not None:
@@ -480,6 +497,7 @@ def linear(
             core_grid=core_grid or input_tensor_a.device().core_grid,
             activation=activation,
             use_1d_systolic_array=use_1d_systolic_array,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if program_config is not None:
@@ -493,6 +511,7 @@ def linear(
             compute_kernel_config=compute_kernel_config,
         )
 
+    # FIXME: passing an fp32 compute_kernel_config will cause the underlying C++ function to fail
     return ttnn._ttnn.operations.matmul.linear(
         input_tensor_a,
         input_tensor_b,

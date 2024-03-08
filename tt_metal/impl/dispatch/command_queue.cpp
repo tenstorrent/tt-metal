@@ -726,6 +726,9 @@ const DeviceCommand EnqueueRecordEventCommand::assemble_device_command(uint32_t)
     command.set_issue_data_size(0); // No extra data just CMD.
     command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
     command.set_event(this->event);
+    if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+        command.set_stall(); // Ensure ordering w/ programs in FD1.3+ prefetcher.
+    }
     return command;
 }
 
@@ -752,7 +755,9 @@ const DeviceCommand EnqueueWaitForEventCommand::assemble_device_command(uint32_t
     command.set_issue_data_size(0); // No extra data just CMD.
     command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
     command.set_event(this->event);
-
+    if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+        command.set_stall(); // Ensure ordering w/ programs in FD1.3+ prefetcher.
+    }
     // #5529 - Cross chip sync needs to be implemented. Currently, we only support sync on the same chip.
     TT_ASSERT(this->sync_event.device == this->device,
             "EnqueueWaitForEvent() cross-chip sync not yet supported. Sync event device: {} this device: {}",
@@ -1031,7 +1036,7 @@ void HWCommandQueue::enqueue_program(
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
     ProgramDeviceMap& program_device_map = program.program_device_map;
-    uint32_t host_data_num_pages = program_device_map.runtime_arg_page_transfers.size() + program_device_map.cb_config_page_transfers.size();
+    uint32_t host_data_num_pages = program_device_map.num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST).size() + program_device_map.num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST).size();
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
 
@@ -1186,7 +1191,7 @@ void HWCommandQueue::finish() {
                 this->dprint_server_hang = true;
                 return;
             } else if (tt::watcher_server_killed_due_to_error()) {
-                // Illegal NOC txn killed wathcer. Mark state and early exit. Assert in main thread.
+                // Illegal NOC txn killed watcher. Mark state and early exit. Assert in main thread.
                 this->exit_condition = true;
                 this->illegal_noc_txn_hang = true;
                 return;
@@ -1201,7 +1206,7 @@ void HWCommandQueue::issue_wrap() {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap for channel {}", this->id);
     EnqueueIssueWrapCommand command(this->id, this->device, this->manager);
-    command.process();
+    command.process(); // Not increasing num issued commands
 }
 
 void HWCommandQueue::completion_wrap(uint32_t event) {
@@ -1512,7 +1517,11 @@ void EventSynchronize(std::shared_ptr<Event> event) {
     log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event->device->id(), event->cq_id, event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        if (tt::llrt::OptionsG.get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
+            TT_ASSERT(false, "Command Queue could not complete EventSynchronize. See {} for details.", tt::watcher_get_log_file_name());
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(5));
     }
 }
 

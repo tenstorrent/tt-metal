@@ -39,8 +39,14 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 // do nothing
-            }
-            else {
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                for (const auto& buffer : storage.buffers) {
+                    TT_ASSERT(buffer->device() != nullptr);
+                    tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), dtype, layout);
+                }
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                // do nothing
+            }else {
                 raise_unsupported_storage<StorageType>();
             }
         },
@@ -70,6 +76,17 @@ void Tensor::deallocate(bool force) {
             } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 if (force) {
                     TT_THROW("Cannot deallocate tensor with borrowed storage!");
+                }
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                for (auto& buffer : storage.buffers) {
+                    if (buffer.use_count() == 1 or force) {
+                        DeallocateBuffer(*buffer);
+                    }
+                    buffer.reset();
+                }
+            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                for (auto& current_buffer : storage.buffers) {
+                    std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
                 }
             } else {
                 raise_unsupported_storage<T>();
@@ -228,6 +245,20 @@ bool Tensor::is_allocated() const {
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return true;
             }
+            else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                bool is_allocated = true;
+                for (const auto& buffer : storage.buffers) {
+                    is_allocated &= std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
+                }
+                return is_allocated;
+            }
+            else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                bool is_allocated = true;
+                for (const auto& buffer : storage.buffers) {
+                    is_allocated &= bool(buffer) and buffer->size() > 0;
+                }
+                return is_allocated;
+            }
             else {
                 raise_unsupported_storage<T>();
             }
@@ -262,6 +293,12 @@ StorageType Tensor::storage_type() const {
             }
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return StorageType::BORROWED;
+            }
+            else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                return StorageType::MULTI_DEVICE;
+            }
+            else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                return StorageType::MULTI_DEVICE_HOST;
             }
             else {
                 raise_unsupported_storage<T>();

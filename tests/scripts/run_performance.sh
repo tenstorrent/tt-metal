@@ -57,6 +57,10 @@ run_device_perf_models() {
 
     env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
 
+    env pytest models/demos/ttnn_falcon7b/tests -m $pipeline_type
+
+    env pytest models/demos/bert/tests -m $pipeline_type
+
     ## Merge all the generated reports
     env python models/perf/merge_device_perf_results.py
 }

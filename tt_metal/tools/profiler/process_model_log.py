@@ -17,14 +17,15 @@ def post_process_ops_log(output_logs_subdir, columns):
     )
     results = {}
     for col in columns:
-        results[col] = df[col].sum()
+        df_filtered = df[df[col] != "-"]
+        results[col] = df_filtered[col].astype(float).sum()
     return results
 
 
 def run_device_profiler(command, output_logs_subdir):
     output_logs_dir = PROFILER_OUTPUT_DIR / output_logs_subdir
     profiler_cmd = PROFILER_SCRIPTS_ROOT / f'profile_this.py -d -o {output_logs_dir} -c "{command}"'
-    subprocess.run([profiler_cmd], shell=True, check=True)
+    subprocess.run([f"{profiler_cmd}"], shell=True, check=True, stderr=subprocess.STDOUT)
 
 
 def get_samples_per_s(time_ns, num_samples):

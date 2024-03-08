@@ -429,7 +429,7 @@ def test_perf_bare_metal(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
+    # tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_end_to_end(
         device,

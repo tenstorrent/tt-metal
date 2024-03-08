@@ -4,8 +4,6 @@ name: "[post-commit] eager - Package on main"
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: ["main"]
 
 # TODO: RK - need to change this to every push later once
 # we go public
