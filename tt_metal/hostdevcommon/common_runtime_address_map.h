@@ -91,8 +91,8 @@ constexpr static uint32_t CQ_ISSUE_WRITE_PTR = CQ_ISSUE_READ_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_WRITE_PTR = CQ_ISSUE_WRITE_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_READ_PTR = CQ_COMPLETION_WRITE_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_LAST_EVENT = CQ_COMPLETION_READ_PTR + L1_ALIGNMENT;
-constexpr static uint32_t CQ_COMPLETION_16B_SCRATCH = CQ_ISSUE_READ_PTR; // 16B unused in consumer core.
-constexpr static uint32_t EVENT_PTR = CQ_COMPLETION_LAST_EVENT + L1_ALIGNMENT;
+constexpr static uint32_t CQ_COMPLETION_16B_SCRATCH = CQ_COMPLETION_LAST_EVENT + L1_ALIGNMENT;
+constexpr static uint32_t EVENT_PTR = CQ_COMPLETION_16B_SCRATCH + L1_ALIGNMENT;
 
 // Host addresses for dispatch
 static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0;

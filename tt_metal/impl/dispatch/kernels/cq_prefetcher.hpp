@@ -338,6 +338,7 @@ class ProgramEventBuffer {
                 completion_queue_reserve_back(32); // Need to clean up
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
                 write_event(event_addr);
+                record_last_completed_event(event);
                 completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
             } else {
                 uint64_t my_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
