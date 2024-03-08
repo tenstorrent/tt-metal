@@ -100,20 +100,36 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
+    std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
+    for (const auto& core_type : supported_core_types) {
+        kernels_.insert({core_type, {}});
+        grid_extent_.insert({core_type, {}});
+        kernel_groups_.insert({core_type, {}});
+        core_to_kernel_group_index_table_.insert({core_type, {}});
+    }
 }
 
-KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel) {
+KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type) {
     this->invalidate_compile();
-    KernelHandle id = kernels_.size();
-    kernels_.push_back(kernel);
-    kernel_groups_.resize(0);
-    core_to_kernel_group_index_table_.clear();
+    // Id is unique across all kernels on all core types
+    KernelHandle id = this->num_kernels();
+    kernels_[core_type].insert({id, kernel});
+    kernel_groups_[core_type].resize(0);
+    core_to_kernel_group_index_table_[core_type].clear();
     return id;
 }
 
 std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const {
     //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
-    return this->kernels_.at(kernel_id);
+    // find coretype based on kernel_id
+    for (const auto &[core_type, kernels] : this->kernels_) {
+        if (kernels.find(kernel_id) != kernels.end()) {
+            return kernels.at(kernel_id);
+        }
+    }
+
+    TT_ASSERT(false, "Did not find kernel id across all core types!");
+    return nullptr;
 }
 
 KernelGroup::KernelGroup() : core_ranges({}) {
@@ -190,16 +206,16 @@ CoreType KernelGroup::get_core_type() const {
     }
 };
 
-std::vector<KernelGroup>& Program::get_kernel_groups() {
-    update_kernel_groups();
-    return kernel_groups_;
+std::vector<KernelGroup>& Program::get_kernel_groups(const CoreType &core_type) {
+    update_kernel_groups(core_type);
+    return kernel_groups_[core_type];
 }
 
-KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
-    update_kernel_groups();
-    if (core.x >= grid_extent_.x || core.y >= grid_extent_.y) return nullptr;
-    uint8_t index = core_to_kernel_group_index_table_.at(core.y * grid_extent_.x + core.x);
-    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_.at(index);
+KernelGroup * Program::kernels_on_core(const CoreCoord &core, const CoreType &core_type) {
+    update_kernel_groups(core_type);
+    if (core.x >= grid_extent_[core_type].x || core.y >= grid_extent_[core_type].y) return nullptr;
+    uint8_t index = core_to_kernel_group_index_table_[core_type].at(core.y * grid_extent_[core_type].x + core.x);
+    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_[core_type].at(index);
 }
 
 struct KernelGroupInt {
@@ -241,40 +257,39 @@ struct KernelGroupIntHasher {
     }
 };
 
-void Program::update_kernel_groups() {
-    if (core_to_kernel_group_index_table_.size() == 0) {
+void Program::update_kernel_groups(const CoreType &core_type) {
+    if (core_to_kernel_group_index_table_[core_type].size() == 0) {
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
                           std::numeric_limits<decltype(base.y)>::max()};
-        grid_extent_ = {0, 0};
-        for (auto kernel : kernels_) {
+        grid_extent_[core_type] = {0, 0};
+        for (auto [id, kernel] : kernels_[core_type]) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_.x) grid_extent_.x = core.x;
-                if (core.y > grid_extent_.y) grid_extent_.y = core.y;
+                if (core.x > grid_extent_[core_type].x) grid_extent_[core_type].x = core.x;
+                if (core.y > grid_extent_[core_type].y) grid_extent_[core_type].y = core.y;
                 if (core.x < base.x) base.x = core.x;
                 if (core.y < base.y) base.y = core.y;
             }
         }
-        grid_extent_.x++;
-        grid_extent_.y++;
+        grid_extent_[core_type].x++;
+        grid_extent_[core_type].y++;
 
         // grid maps cores to sets-of-kernels running on that core
         std::vector<KernelGroupInt> grid;
-        grid.resize(grid_extent_.x * grid_extent_.y);
-        for (size_t kidx = 0; kidx < this->num_kernels(); kidx++) {
-            auto kernel = kernels_[kidx];
+        grid.resize(grid_extent_[core_type].x * grid_extent_[core_type].y);
+        for (auto [id, kernel]: kernels_[core_type]) {
             for (auto core : kernel->logical_cores()) {
-                int core_index = core.y * grid_extent_.x + core.x;
+                int core_index = core.y * grid_extent_[core_type].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel->processor(), kidx);
+                grid[core_index].update(kernel->processor(), id);
             }
         }
 
         // Flip the mapping to get sets-of-kernels to cores
         std::unordered_map<KernelGroupInt, std::set<CoreRange>, KernelGroupIntHasher> map;
-        for (auto y = base.y; y < grid_extent_.y; y++) {
-            for (auto x = base.x; x < grid_extent_.x; x++) {
-                int index = y * grid_extent_.x + x;
+        for (auto y = base.y; y < grid_extent_[core_type].y; y++) {
+            for (auto x = base.x; x < grid_extent_[core_type].x; x++) {
+                int index = y * grid_extent_[core_type].x + x;
                 if (grid[index].valid) {
                     std::set<CoreRange>& set = map[grid[index]];
                     set.insert(CoreRange({x, y}, {x, y}));
@@ -287,7 +302,7 @@ void Program::update_kernel_groups() {
         TT_ASSERT(map.size() < core_to_kernel_group_invalid_index);
         kernel_groups_.reserve(map.size());
         int index = 0;
-        core_to_kernel_group_index_table_.resize(grid_extent_.x * grid_extent_.y, core_to_kernel_group_invalid_index);
+        core_to_kernel_group_index_table_[core_type].resize(grid_extent_[core_type].x * grid_extent_[core_type].y, core_to_kernel_group_invalid_index);
         for (auto& kg_to_cores : map) {
 
             int last_cb_index = -1;
@@ -296,7 +311,7 @@ void Program::update_kernel_groups() {
             for (CoreRange range : kg_to_cores.second) {
                 for (auto y = range.start.y; y <= range.end.y; y++) {
                     for (auto x = range.start.x; x <= range.end.x; x++) {
-                        core_to_kernel_group_index_table_[y * grid_extent_.x + x] = index;
+                        core_to_kernel_group_index_table_[core_type][y * grid_extent_[core_type].x + x] = index;
 
                         auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
                         if (val != per_core_cb_indices_.end()) {
@@ -312,7 +327,7 @@ void Program::update_kernel_groups() {
                 }
             }
 
-            kernel_groups_.push_back(KernelGroup(
+            kernel_groups_[core_type].push_back(KernelGroup(
                 *this,
                 kg_to_cores.first.brisc_id,
                 kg_to_cores.first.ncrisc_id,
@@ -323,22 +338,6 @@ void Program::update_kernel_groups() {
             index++;
         }
     }
-}
-
-std::vector<std::string> Program::cores_to_ops() const {
-    std::vector<std::string> ops;
-    for (const auto &[core_type, cores_of_type] : this->logical_cores()) {
-        for (const auto &core : cores_of_type) {
-            for (auto kernel : kernels_) {
-                if ( kernel->get_kernel_core_type() !=  core_type ) continue;
-                auto cores = kernel->logical_cores();
-                if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
-                    ops.push_back(kernel->name());
-                }
-            }
-        }
-    }
-    return ops;
 }
 
 void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
@@ -521,20 +520,21 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
     std::unordered_map<CoreType, std::vector<CoreCoord>> cores_in_program;
     std::unordered_map<CoreType, std::set<CoreCoord>> unique_cores;
-    for (auto kernel : kernels_){
-        const auto &core_type = kernel->get_kernel_core_type();
+    for (auto [core_type, kernels] : kernels_){
         if (cores_in_program.find(core_type) == cores_in_program.end()) {
             cores_in_program.insert({core_type, {}});
         }
         if (unique_cores.find(core_type) == unique_cores.end()) {
             unique_cores.insert({core_type, {}});
         }
-        for (auto core : kernel->logical_cores()) {
-            if (unique_cores.at(core_type).find(core) != unique_cores.at(core_type).end()) {
-                continue;
+        for (auto [id, kernel] : kernels) {
+            for (auto core : kernel->logical_cores()) {
+                if (unique_cores.at(core_type).find(core) != unique_cores.at(core_type).end()) {
+                    continue;
+                }
+                unique_cores.at(core_type).insert(core);
+                cores_in_program.at(core_type).push_back(core);
             }
-            unique_cores.at(core_type).insert(core);
-            cores_in_program.at(core_type).push_back(core);
         }
     }
     return cores_in_program;
@@ -542,7 +542,7 @@ std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() co
 
 void Program::construct_core_range_set_for_worker_cores() {
     bool found_kernels = false;
-    for (auto kernel : kernels_){
+    for (auto [id, kernel] : kernels_[CoreType::WORKER]){
         this->worker_crs_ = this->worker_crs_.merge ( kernel->core_range_set() );
         found_kernels = true;
     }
@@ -836,14 +836,11 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     // Split kernel groups by multicast/unicast, program multicast transfers first then unicast
     std::vector<KernelGroup> kernel_group_multicast;
     std::vector<KernelGroup> kernel_group_unicast;
-    for (const KernelGroup& kernel_group : program.get_kernel_groups()) {
-        if (kernel_group.get_core_type() == CoreType::WORKER) {
-            kernel_group_multicast.emplace_back(kernel_group);
-        } else if (kernel_group.get_core_type() == CoreType::ETH) {
-            kernel_group_unicast.emplace_back(kernel_group);
-        } else {
-            TT_ASSERT(false, "Constructing command for unsupported core type");
-        }
+    for (const KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
+        kernel_group_multicast.emplace_back(kernel_group);
+    }
+    for (const KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
+        kernel_group_unicast.emplace_back(kernel_group);
     }
     // Enqueue program binaries and go siggals in this order:
     // - Multicast Program Binaries
@@ -987,11 +984,8 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
     uint32_t num_workers = 0;
     // Explicitly sum the worker and eth cores, since we don't have support for all core types
-    if (program.logical_cores().find(CoreType::WORKER) != program.logical_cores().end()) {
-        num_workers += program.logical_cores().at(CoreType::WORKER).size();
-    } else if (program.logical_cores().find(CoreType::ETH) != program.logical_cores().end()) {
-        num_workers += program.logical_cores().at(CoreType::ETH).size();
-    }
+    num_workers += program.logical_cores().at(CoreType::WORKER).size();
+    num_workers += program.logical_cores().at(CoreType::ETH).size();
     return {
         .num_workers = num_workers,
         .program_pages = std::move(program_pages),
@@ -1026,40 +1020,44 @@ void Program::compile( Device * device )
     DprintServerSetProfilerState(profile_kernel);
 
     // compile all kernels in parallel
-    for (auto kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device, this] {
-            ZoneScoped;
+    for (auto &[core_type, kernels] : kernels_) {
+       for (auto &[id, kernel]: kernels) {
+            events.emplace_back ( detail::async ( [kernel, device, this] {
+                ZoneScoped;
 
-            JitBuildOptions build_options(device->build_env());
-            kernel->set_build_options(build_options);
-            this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+                JitBuildOptions build_options(device->build_env());
+                kernel->set_build_options(build_options);
+                this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
-            auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
-            std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-            kernel->set_full_name(kernel_path_suffix);
-            build_options.set_name(kernel_path_suffix);
+                auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
+                std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                kernel->set_full_name(kernel_path_suffix);
+                build_options.set_name(kernel_path_suffix);
 
-            bool cache_hit = true;
-            bool path_exists = std::filesystem::exists(build_options.path);
-            if ( enable_persistent_kernel_cache && path_exists ) {
-                if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
-            } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
-                cache_hit = false;
-                GenerateBinaries(device, build_options, kernel);
-            }
-            if (detail::CompilationReporter::enabled()) {
-                detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
-            }
+                bool cache_hit = true;
+                bool path_exists = std::filesystem::exists(build_options.path);
+                if ( enable_persistent_kernel_cache && path_exists ) {
+                    if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
+                } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
+                    cache_hit = false;
+                    GenerateBinaries(device, build_options, kernel);
+                }
+                if (detail::CompilationReporter::enabled()) {
+                    detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
+                }
 
-            kernel->set_binary_path(build_options.path);
+                kernel->set_binary_path(build_options.path);
         } ) );
+       }
     }
 
     for (auto & f : events)
         f.get();
 
-    for (auto kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
+    for (auto &[core_type, kernels] : kernels_) {
+        for (auto &[id, kernel] : kernels) {
+            events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
+        }
     }
 
     for (auto & f : events)

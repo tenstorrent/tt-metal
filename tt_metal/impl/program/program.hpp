@@ -26,7 +26,7 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel);
+    KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
 }
@@ -70,14 +70,20 @@ class Program {
 
     const uint64_t get_id() const { return this->id; }
 
-    size_t num_kernels() const { return kernels_.size(); }
+    size_t num_kernels() const {
+      size_t count = 0;
+      for (const auto& [core_type, kernels] : kernels_) {
+        count += kernels.size();
+      }
+      return count;
+    }
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const { return circular_buffers_; }
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
-    KernelGroup * kernels_on_core(const CoreCoord &core);
-    std::vector<KernelGroup>& get_kernel_groups();
+    KernelGroup * kernels_on_core(const CoreCoord &core, const CoreType &core_type);
+    std::vector<KernelGroup>& get_kernel_groups(const CoreType &core_type);
     inline void add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(buf); }
     inline void release_buffers() { owned_buffer_pool = {}; }
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
@@ -92,9 +98,8 @@ class Program {
     void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
     std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
 
+    // Is worker_crs_ used anywhere?
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
-
-    std::vector<std::string> cores_to_ops() const;
 
     void compile(Device * device);
 
@@ -142,8 +147,8 @@ class Program {
 
     uint64_t id; // Need to make non-const due to move constructor
     static std::atomic<uint64_t> program_counter;
-    std::vector< std::shared_ptr<Kernel> > kernels_;
-    CoreCoord grid_extent_;
+    std::unordered_map<CoreType, std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
+    std::unordered_map<CoreType, CoreCoord> grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
     std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
@@ -159,18 +164,18 @@ class Program {
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
-    std::vector<KernelGroup> kernel_groups_;
-    std::vector<uint8_t> core_to_kernel_group_index_table_;
+    std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
+    std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel);
+    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel);
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
@@ -183,7 +188,7 @@ class Program {
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
-    void update_kernel_groups();
+    void update_kernel_groups(const CoreType &core_type);
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

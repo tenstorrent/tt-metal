@@ -146,7 +146,6 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
-        // tt::tt_metal::tt_gdb(device, 0, program->logical_cores(), program->cores_to_ops());
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;

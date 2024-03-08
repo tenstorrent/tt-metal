@@ -758,7 +758,7 @@ void Device::initialize_command_queue() {
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
             for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core)->launch_msg;
+                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
                 tt::llrt::write_launch_msg_to_core(this->id(), this->physical_core_from_logical_core(logical_dispatch_core, core_type), &msg);
             }
         }
