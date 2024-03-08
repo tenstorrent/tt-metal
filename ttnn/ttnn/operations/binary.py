@@ -353,7 +353,7 @@ def mul(
     if not isinstance(input_tensor_a, ttnn.Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-    if not ttnn.has_storage_type_of(input_tensor_a, ttnn.experimental.tensor.StorageType.DEVICE):
+    if not ttnn.is_tensor_storage_on_device(input_tensor_a):
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
@@ -637,9 +637,7 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
             raise TypeError("Expected both arguments to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor_a, ttnn.DEVICE_STORAGE_TYPE) or not ttnn.has_storage_type_of(
-            input_tensor_b, ttnn.DEVICE_STORAGE_TYPE
-        ):
+        if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
             raise RuntimeError("input_tensors must be on device!")
 
         original_shape = input_tensor_a.shape

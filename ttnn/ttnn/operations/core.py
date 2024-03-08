@@ -32,7 +32,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
     input_dtype = input_tensor.dtype
     input_layout = input_tensor.layout
-    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+    if ttnn.is_tensor_storage_on_device(input_tensor):
         input_device = input_tensor.device()
     else:
         input_device = None
@@ -83,7 +83,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 
     # TODO(arakhmati): add support for running ROW_MAJOR_LAYOUT slicing on device. The underlying op already supports it.
     if (
-        ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        ttnn.is_tensor_storage_on_device(input_tensor)
         and input_layout == ttnn.TILE_LAYOUT
         and input_rank <= 4
         and are_valid_device_slices(slices)
@@ -102,7 +102,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         output_shape = tuple(output.shape)[-input_rank:]
         return ttnn.reshape(output, shape=output_shape)
     """
-    elif not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+    elif not ttnn.is_tensor_storage_on_device(input_tensor):
         logger.debug(
             "ttnn.Tensor.__getitem__: using torch because the tensor is on device and the slicing using unpad is not supported!"
         )
@@ -171,7 +171,7 @@ def _reshape_fallback(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
     layout = input_tensor.layout
 
     device = None
-    if ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+    if ttnn.is_tensor_storage_on_device(input_tensor):
         device = input_tensor.device()
 
     tensor = input_tensor
@@ -370,7 +370,7 @@ def to_torch(
     if mesh_composer:
         return mesh_composer.compose(tensor)
 
-    if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE):
+    if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -642,7 +642,7 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
     if layout not in supported_layouts:
         raise RuntimeError(f"Unsupported layout conversion from {tensor.layout} to {layout}")
 
-    is_on_device = ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
+    is_on_device = ttnn.is_tensor_storage_on_device(tensor)
     if is_on_device and tensor.dtype not in {ttnn.bfloat16, ttnn.bfloat8_b}:
         raise RuntimeError("ttnn.to_layout: Only bfloat16 and bfloat8_b are supported on device")
 

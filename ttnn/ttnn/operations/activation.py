@@ -64,7 +64,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, output_mem_config=memory_config)
@@ -154,7 +154,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         if not _is_scalar(parameter):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, parameter, output_mem_config=memory_config)
@@ -224,7 +224,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         if not _is_scalar(parameter1) or not _is_scalar(parameter2):
             raise TypeError("Expected parameters to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, parameter1, parameter2, output_mem_config=memory_config)
@@ -319,7 +319,7 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
         if not _is_scalar(dim):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, dim, output_mem_config=memory_config)

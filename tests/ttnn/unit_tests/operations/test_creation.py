@@ -24,7 +24,7 @@ def test_zeros_like(device, input_shape):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
     output_tensor = ttnn.zeros_like(input_tensor)
-    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -46,7 +46,7 @@ def test_ones_like(device, input_shape):
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.ones_like(input_tensor)
-    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -72,7 +72,7 @@ def test_full_like(device, input_shape, fill_value):
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.full_like(input_tensor, fill_value=fill_value)
-    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -91,7 +91,7 @@ def test_ones(device, input_shape):
     torch_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
 
     tensor = ttnn.ones(input_shape, device=device)
-    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
     assert_with_pcc(torch_tensor, tensor, 0.9999)
@@ -109,7 +109,7 @@ def test_zeros(device, input_shape):
     torch_tensor = torch.zeros(input_shape, dtype=torch.bfloat16)
 
     tensor = ttnn.zeros(input_shape, device=device)
-    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
     assert_with_pcc(torch_tensor, tensor, 0.9999)
@@ -131,7 +131,7 @@ def test_full(device, input_shape, fill_value):
     torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
 
     tensor = ttnn.full(input_shape, device=device, fill_value=fill_value)
-    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
     assert_with_pcc(torch_tensor, tensor, 0.9999)

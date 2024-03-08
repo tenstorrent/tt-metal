@@ -78,7 +78,7 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_math_op_function(input_tensor, output_mem_config=memory_config)
@@ -216,9 +216,7 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
         if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
             raise TypeError("Expected both arguments to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor_a, ttnn.DEVICE_STORAGE_TYPE) or not ttnn.has_storage_type_of(
-            input_tensor_b, ttnn.DEVICE_STORAGE_TYPE
-        ):
+        if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
             raise RuntimeError("input_tensors must be on device!")
 
         original_shape = input_tensor_a.shape
@@ -340,15 +338,13 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
         if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
             raise TypeError("Expected both arguments to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor_a, ttnn.DEVICE_STORAGE_TYPE) or not ttnn.has_storage_type_of(
-            input_tensor_b, ttnn.DEVICE_STORAGE_TYPE
-        ):
+        if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
             raise RuntimeError("input_tensors must be on device!")
 
         if isinstance(weight, ttnn.Tensor) and not (input_tensor_a.shape == weight.shape):
             raise RuntimeError("weight tensor must be of same size!")
 
-        if isinstance(weight, ttnn.Tensor) and not ttnn.has_storage_type_of(weight, ttnn.DEVICE_STORAGE_TYPE):
+        if isinstance(weight, ttnn.Tensor) and not ttnn.is_tensor_storage_on_device(weight):
             raise RuntimeError("weight tensor must be on device!")
 
         original_shape = input_tensor_a.shape
@@ -441,7 +437,7 @@ def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, o
         if not _is_scalar(parameter):
             raise TypeError("Expected second argument to be a scalar")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_math_unary_function(input_tensor, parameter, output_mem_config=memory_config)

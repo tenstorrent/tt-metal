@@ -183,7 +183,7 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
 
     """
 
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+    if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise RuntimeError("rms_norm only supports device storage type")
 
     original_shape = input_tensor.shape

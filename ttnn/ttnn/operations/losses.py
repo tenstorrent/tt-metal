@@ -64,9 +64,7 @@ def register_ttl_loss_function(name, ttl_loss_function):
         if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
             raise TypeError("Expected both arguments to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor_a, ttnn.DEVICE_STORAGE_TYPE) or not ttnn.has_storage_type_of(
-            input_tensor_b, ttnn.DEVICE_STORAGE_TYPE
-        ):
+        if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
             raise RuntimeError("Both input_tensor must be on device!")
 
         if loss_mode == "none":
