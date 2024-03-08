@@ -683,8 +683,8 @@ ALWI void dbg_unhalt() {
  *               for (int row = 0; row < 64; row++) {
  *                   // We read 8 dwords at the time, but the full row is 16 dwords
  *                   dbg_read_dest_acc_row(row, rd_data);
- *                   DPRINT_MATH(DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 8));
- *                   if (row % 2 == 1) DPRINT_MATH(DPRINT << ENDL());
+ *                   DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 8)
+ *                   if (row % 2 == 1) DPRINT << ENDL()
  *               }
 *            })
  *            dbg_unhalt()
