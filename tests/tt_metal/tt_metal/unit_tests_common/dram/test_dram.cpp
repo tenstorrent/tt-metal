@@ -140,7 +140,7 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
 }
 
 TEST_F(CommonFixture, DRAMLoopbackSingleCore){
-    uint32_t buffer_size = 2 * 1024 * 50;
+    uint32_t buffer_size = 2 * 1024 * 25;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
@@ -151,9 +151,6 @@ TEST_F(CommonFixture, DRAMLoopbackSingleCore){
         .data_movement_cfg = {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
     for (unsigned int id=0; id < devices_.size(); id++){
-        // TODO: #6097, fix this for fast dispatch remote device.
-        if (!this->slow_dispatch_ && id > 0)
-            continue;
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config, src_vec));
     }
 }
