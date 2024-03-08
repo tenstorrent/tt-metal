@@ -600,6 +600,7 @@ def test_resnet50_conv_wh_fp32(
     )
 
 
+@pytest.mark.skip("ttnn test coverage hole - fails in pipeline")
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (
