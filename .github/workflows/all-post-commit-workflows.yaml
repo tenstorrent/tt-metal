@@ -1,6 +1,7 @@
 name: "All post-commit tests"
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: ["main"]
