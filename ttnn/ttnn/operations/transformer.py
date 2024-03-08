@@ -158,7 +158,7 @@ def split_query_key_value_and_split_heads(
     if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+    if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise RuntimeError("input_tensor must be on device!")
 
     if num_kv_heads is not None:

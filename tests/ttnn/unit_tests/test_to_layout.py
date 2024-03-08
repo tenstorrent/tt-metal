@@ -39,15 +39,15 @@ def test_to_layout_2D(device, h, w, on_device, from_layout, to_layout, start_wit
 
     if on_device:
         input_tensor = ttnn.to_device(input_tensor, device)
-        assert ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(input_tensor)
 
     output_tensor = ttnn.to_layout(input_tensor, to_layout)
     assert output_tensor.layout == to_layout
 
     if on_device:
-        assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert ttnn.is_tensor_storage_on_device(output_tensor)
         output_tensor = ttnn.from_device(output_tensor)
-        assert not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        assert not ttnn.is_tensor_storage_on_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
