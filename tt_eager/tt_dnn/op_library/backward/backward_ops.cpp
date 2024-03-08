@@ -1516,6 +1516,40 @@ std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _logit_bw)(grad, input, output_mem_config);
 }
 
+// softsign
+// result = grad_data / torch.square(1 + torch.abs(input))
+std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor temp = square( add1( abs(input, output_mem_config), output_mem_config), output_mem_config);
+    grad_tensor.emplace_back( mul(recip(temp,output_mem_config), grad, std::nullopt, output_mem_config) );
+    return grad_tensor;
+}
+std::vector<Tensor> softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _softsign_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+std::vector<Tensor> sign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _sign_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
+std::vector<Tensor> ceil_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _ceil_bw)(grad, input, output_mem_config);
+}
 
 // bw(log2(in)) = grad/(in * 0.69314718055994530942)
 std::vector<Tensor> _log2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
