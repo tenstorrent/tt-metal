@@ -59,7 +59,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_dump_all(watcher_previous_dump_all);
         tt::llrt::OptionsG.set_watcher_append(watcher_previous_append);
         tt::llrt::OptionsG.set_test_mode_enabled(test_mode_previous);
-        tt::watcher_server_clear_error_flag();
+        tt::watcher_server_set_error_flag(false);
     }
 
     void RunTestOnDevice(

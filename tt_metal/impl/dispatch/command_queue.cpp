@@ -1191,7 +1191,7 @@ void HWCommandQueue::finish() {
                 this->dprint_server_hang = true;
                 return;
             } else if (tt::watcher_server_killed_due_to_error()) {
-                // Illegal NOC txn killed wathcer. Mark state and early exit. Assert in main thread.
+                // Illegal NOC txn killed watcher. Mark state and early exit. Assert in main thread.
                 this->exit_condition = true;
                 this->illegal_noc_txn_hang = true;
                 return;
@@ -1517,7 +1517,11 @@ void EventSynchronize(std::shared_ptr<Event> event) {
     log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event->device->id(), event->cq_id, event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        if (tt::llrt::OptionsG.get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
+            TT_ASSERT(false, "Command Queue could not complete EventSynchronize. See {} for details.", tt::watcher_get_log_file_name());
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(5));
     }
 }
 

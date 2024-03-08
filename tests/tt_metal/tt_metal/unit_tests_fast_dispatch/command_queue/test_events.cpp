@@ -8,6 +8,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "impl/debug/watcher_server.hpp"
 
 using namespace tt::tt_metal;
 
@@ -110,18 +111,65 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronize) {
         EventSynchronize(sync_events.at(sync_events.size() - 2));
         EventSynchronize(sync_events.at(5));
 
-        // Uncomment this to confirm future events not yet seen would hang.
-        // log_debug(tt::LogTest, "The next event is not yet seen, would hang");
-        // auto future_event = sync_events.at(0);
-        // future_event->event_id = num_events + 2;
-        // EventSynchronize(future_event);
-
         Finish(this->device_->command_queue());
 
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
         tt::log_info(tt::LogTest, "Test with CQ Mode: {} Finished in {:.2f} us", mode, elapsed_seconds.count() * 1000 * 1000);
     }
     this->device_->command_queue().set_mode(current_mode);
+}
+// Negative test. Host syncing on a future event that isn't actually issued.
+// Ensure that expected hang is seen, which indicates event sync feature is working properly.
+TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
+    tt::llrt::OptionsG.set_test_mode_enabled(true); // Required for finish hang breakout.
+
+    auto future_event = std::make_shared<Event>();
+    EnqueueRecordEvent(this->device_->command_queue(), future_event);
+    future_event->wait_until_ready();   // in case async used, must block until async cq populated event.
+    future_event->event_id = 0xFFFF;    // Modify event_id to be a future event that isn't issued yet.
+
+    // Launch Host Sync in an async thread, expected to hang, with timeout and kill signal.
+    auto future = std::async(std::launch::async, [this, future_event]() {
+        return EventSynchronize(future_event);
+    });
+
+    bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
+    tt::watcher_server_set_error_flag(seen_expected_hang); // Signal to terminate thread. Don't care about it's exception.
+
+    // Briefly wait before clearing error flag, and wrapping up via finish.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    tt::watcher_server_set_error_flag(false);
+    Finish(this->device_->command_queue());
+
+    log_info(tt::LogTest, "Note: Test expects to see a hang if events feature is working. seen_expected_hang: {}", seen_expected_hang);
+    EXPECT_TRUE(seen_expected_hang);
+}
+
+// Negative test. Device sync. Single CQ here syncing on a future event that isn't actually issued.
+// Ensure that expected hang is seen, which indicates event sync feature is working properly.
+TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventHang) {
+    tt::llrt::OptionsG.set_test_mode_enabled(true); // Required for finish hang breakout.
+
+    auto future_event = std::make_shared<Event>();
+    EnqueueRecordEvent(this->device_->command_queue(), future_event);
+    future_event->wait_until_ready();   // in case async used, must block until async cq populated event.
+    future_event->event_id = 0xFFFF;    // Modify event_id to be a future event that isn't issued yet.
+    EnqueueWaitForEvent(this->device_->command_queue(), future_event);
+
+    // Launch Finish in an async thread, expected to hang, with timeout and kill signal.
+    auto future = std::async(std::launch::async, [this]() {
+        return Finish(this->device_->command_queue());
+    });
+
+    bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
+    tt::watcher_server_set_error_flag(seen_expected_hang); // Signal to terminate thread. Don't care about it's exception.
+
+    // Clear error flag before exiting to restore state for next test.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    tt::watcher_server_set_error_flag(false);
+
+    log_info(tt::LogTest, "Note: Test expects to see a hang if events feature is working. seen_expected_hang: {}", seen_expected_hang);
+    EXPECT_TRUE(seen_expected_hang);
 }
 
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
@@ -153,12 +201,7 @@ TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventBasic) {
         EnqueueWaitForEvent(this->device_->command_queue(), sync_events.at(0));
         EnqueueWaitForEvent(this->device_->command_queue(), sync_events.at(sync_events.size() - 5));
         EnqueueWaitForEvent(this->device_->command_queue(), sync_events.at(4));
-
-        // Uncomment this to confirm future events not yet seen would hang.
-        // auto future_event = sync_events.at(0);
-        // future_event->event_id = (num_events * 2) + 2;
-        // log_debug(tt::LogTest, "The next event (event_id: {}) is not yet seen, would hang", future_event->event_id);
-        // EnqueueWaitForEvent(this->device_->command_queue(), future_event);
+        Finish(this->device_->command_queue());
 
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
         tt::log_info(tt::LogTest, "Test with CQ Mode: {} Finished in {:.2f} us", mode, elapsed_seconds.count() * 1000 * 1000);
