@@ -33,7 +33,8 @@ def test_multi_device_open_close_full_device_mesh_fixture(pcie_device_mesh):
     """Using `pcie_device_mesh` pytest fixture defined in conftest.py"""
     pass
 
-@pytest.mark.skip("ttnn fails in pipeline")
+
+@pytest.mark.skip("ttnn test coverage hole - fails in pipeline")
 def test_multi_device_open_close_using_context_manager():
     """Using context manager to open and close multi-device"""
     device_grid, device_ids = ttnn.DeviceGrid(2, 2), ttnn.get_device_ids()
@@ -47,6 +48,7 @@ def test_multi_device_open_close_using_context_manager():
 #######
 
 
+@pytest.mark.skip("ttnn test coverage hole - fails in pipeline")
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_ttnn_to_and_from_multi_device_shard(layout, memory_config):
