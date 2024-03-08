@@ -50,7 +50,7 @@ def test_multi_device_open_close_using_context_manager():
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_ttnn_to_and_from_multi_device_shard(layout, memory_config):
-    """MultiDevice APIs: APIs to map tensors onto device-mesh and loopback"""
+    """Shard a tensor across devices, compose it back and verify loopback tensor is same as the original tensor"""
     from ttnn import ShardTensorToMeshMapper, ConcatMeshToTensorComposer
 
     torch_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
@@ -67,8 +67,29 @@ def test_ttnn_to_and_from_multi_device_shard(layout, memory_config):
         assert torch.all(torch_tensor == torch_loop_back_tensor)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_multi_device_check_per_device_shard(layout, memory_config):
+    """This test checks if the tensor is correctly sharded across devices"""
+    from ttnn import ShardTensorToMeshMapper, ConcatMeshToTensorComposer
+
+    torch_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
+
+    with ttnn.create_device_mesh(ttnn.DeviceGrid(1, 4), ttnn.get_pcie_device_ids()) as device_mesh:
+        ttnn_tensor = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMeshMapper(device_mesh, dim=3))
+        ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=layout)
+        ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh, memory_config=memory_config)
+        ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
+
+        shard_offset, shard_size = 0, 64
+        for device_tensor in ttnn.get_device_tensors(ttnn_loop_back_tensor):
+            device_tensor_torch = ttnn.to_torch(device_tensor)
+            assert torch.all(device_tensor_torch == torch_tensor[..., shard_offset : shard_offset + shard_size])
+            shard_offset += shard_size
+
+
 def test_multi_device_replicate(pcie_device_mesh):
-    """MultiDevice APIs: APIs to map tensors onto device-mesh and loopback"""
+    """Test ReplicateTensorToMeshMapper to broadcast a tensor across multiple devices"""
     from ttnn import ReplicateTensorToMeshMapper, ListMeshToTensorComposer
 
     full_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
@@ -84,7 +105,7 @@ def test_multi_device_replicate(pcie_device_mesh):
 
 
 def test_ttnn_multi_device_all_gather(pcie_device_mesh):
-    """MultiDevice APIs: APIs to map tensors onto device-mesh and loopback"""
+    """Multidevice API test for ttnn.all_gather CCL operation"""
     from ttnn import ShardTensorToMeshMapper
 
     full_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
