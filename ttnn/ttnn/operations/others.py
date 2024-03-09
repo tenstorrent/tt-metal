@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Tuple, Union, Optional
-
+import os
 
 import tt_lib as ttl
 
@@ -255,8 +255,8 @@ def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool =
 
 
 ## helper function for upsample. currently only supports HEIGHT sharding
-def _get_upsample_shard_grid_from_num_shards(ncores: int):
-    max_grid_size = (9, 12)  ## (y, x)
+def _get_upsample_shard_grid_from_num_shards(ncores: int, device):
+    max_grid_size = (8, 8) if device.arch() == ttl.device.Arch.WORMHOLE_B0 else (9, 12)  ## (y, x)
     if ncores % max_grid_size[1] == 0:
         core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
         grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
@@ -286,9 +286,11 @@ def _get_upsample_shard_grid_from_num_shards(ncores: int):
 
 
 ## helper function for upsample
-def _get_upsample_num_shards(batch_size: int, height: int, num_channels: int, shard_strategy: ttnn.ShardStrategy):
+def _get_upsample_num_shards(
+    batch_size: int, height: int, num_channels: int, shard_strategy: ttnn.ShardStrategy, device
+):
     ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
-    max_grid_size = (9, 12)  ## (y, x)
+    max_grid_size = (8, 8) if device.arch() == ttl.device.Arch.WORMHOLE_B0 else (9, 12)  ## (y, x)
     if shard_strategy == ttnn.ShardStrategy.HEIGHT:
         ## nsticks per shard should be divisible by in_w
         max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
@@ -400,8 +402,10 @@ def upsample(
         if shard_shape[0] % input_w != 0:
             ## perform a resharding operation:
             ## calculate ideal shard_grid
-            nshards = _get_upsample_num_shards(batch_size, input_h, num_channels, ttnn.ShardStrategy.HEIGHT)
-            shard_grid = _get_upsample_shard_grid_from_num_shards(nshards)
+            nshards = _get_upsample_num_shards(
+                batch_size, input_h, num_channels, ttnn.ShardStrategy.HEIGHT, input_tensor.device()
+            )
+            shard_grid = _get_upsample_shard_grid_from_num_shards(nshards, input_tensor.device())
 
             print(f"Resharding input tensor to {nshards} shards with HEIGHT sharding")
 

@@ -14,6 +14,7 @@ fi
 
 if [[ $ARCH_NAME == "wormhole" ]]; then
   env pytest tests/ttnn/integration_tests/stable_diffusion
+  env pytest tests/ttnn/integration_tests/unet
 fi
 
 env pytest models/experimental/whisper -k whisper_attention
