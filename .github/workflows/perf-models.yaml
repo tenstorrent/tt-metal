@@ -16,6 +16,7 @@ jobs:
         runner-info: [
           # {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
           {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"], machine-type: "bare_metal"},
+          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

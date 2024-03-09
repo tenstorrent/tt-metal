@@ -37,6 +37,8 @@ from models.utility_functions import (
     disable_compilation_reports,
     is_e75,
     is_wormhole_b0,
+    skip_for_grayskull,
+    skip_for_wormhole_b0
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -355,23 +357,6 @@ def run_test_FalconCausalLM_end_to_end(
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
-    (
-        ("prefill", 1, 128, 0, 0.30),
-        ("prefill", 1, 256, 0, 0.44),
-        ("decode", 32, 1, 128, 0.27),
-        ("decode", 32, 1, 1024, 0.35),
-        ("decode", 32, 1, 2047, 0.48),
-    ),
-    ids=[
-        "prefill_seq128",
-        "prefill_seq256",
-        "decode_batch32",
-        "decode_batch32_1024",
-        "decode_batch32_2047",
-    ],
-)
-@pytest.mark.parametrize(
     "num_layers, pcc",
     ((32, 0.89),),
     ids=["layers_32"],
@@ -382,47 +367,121 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
-def test_perf_bare_metal(
-    use_program_cache,
-    model_version,
-    llm_mode,
-    batch,
-    seq_len,
-    kv_cache_len,
-    expected_inference_time,
-    num_layers,
-    pcc,
-    request,
-    model_config_str,
-    model_location_generator,
-    device,
-):
-    if is_e75(device) and batch == 32:
-        pytest.skip("Falcon batch 32 is not supported on E75")
-
-    model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
-
-    disable_persistent_kernel_cache()
-    disable_compilation_reports()
-
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
-
-    run_test_FalconCausalLM_end_to_end(
-        device,
+class TestParametrized:
+    @pytest.mark.parametrize(
+        "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
+        (
+            ("prefill", 1, 128, 0, 0.30),
+            ("prefill", 1, 256, 0, 0.44),
+            ("decode", 32, 1, 128, 0.27),
+            ("decode", 32, 1, 1024, 0.35),
+            ("decode", 32, 1, 2047, 0.48),
+        ),
+        ids=[
+            "prefill_seq128",
+            "prefill_seq256",
+            "decode_batch32",
+            "decode_batch32_1024",
+            "decode_batch32_2047",
+        ],
+    )
+    @skip_for_wormhole_b0()
+    def test_perf_gs_bare_metal(
+        use_program_cache,
         model_version,
         llm_mode,
         batch,
         seq_len,
         kv_cache_len,
+        expected_inference_time,
         num_layers,
         pcc,
-        model_config,
-        tt_cache_path,
+        request,
+        model_config_str,
         model_location_generator,
-        expected_inference_time,
-    )
+        device,
+    ):
+        if is_e75(device) and batch == 32:
+            pytest.skip("Falcon batch 32 is not supported on E75")
 
+        model_config = get_model_config(model_config_str)
+        tt_cache_path = get_tt_cache_path(model_version)
+
+        disable_persistent_kernel_cache()
+        disable_compilation_reports()
+
+        tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
+
+        run_test_FalconCausalLM_end_to_end(
+            device,
+            model_version,
+            llm_mode,
+            batch,
+            seq_len,
+            kv_cache_len,
+            num_layers,
+            pcc,
+            model_config,
+            tt_cache_path,
+            model_location_generator,
+            expected_inference_time,
+        )
+
+    @pytest.mark.parametrize(
+        "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
+        (
+            ("prefill", 1, 128, 0, 0.4),
+            ("prefill", 1, 256, 0, 0.6),
+            ("decode", 32, 1, 128, 0.4),
+            ("decode", 32, 1, 1024, 0.5),
+            ("decode", 32, 1, 2047, 0.8),
+        ),
+        ids=[
+            "prefill_seq128",
+            "prefill_seq256",
+            "decode_batch32",
+            "decode_batch32_1024",
+            "decode_batch32_2047",
+        ],
+    )
+    @skip_for_grayskull()
+    def test_perf_wh_bare_metal(
+        use_program_cache,
+        model_version,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        expected_inference_time,
+        num_layers,
+        pcc,
+        request,
+        model_config_str,
+        model_location_generator,
+        device,
+    ):
+        model_config = get_model_config(model_config_str)
+        tt_cache_path = get_tt_cache_path(model_version)
+
+        disable_persistent_kernel_cache()
+        disable_compilation_reports()
+
+        tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
+
+        run_test_FalconCausalLM_end_to_end(
+            device,
+            model_version,
+            llm_mode,
+            batch,
+            seq_len,
+            kv_cache_len,
+            num_layers,
+            pcc,
+            model_config,
+            tt_cache_path,
+            model_location_generator,
+            expected_inference_time,
+        )
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(

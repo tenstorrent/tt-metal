@@ -10,41 +10,45 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
-    env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $pipeline_type
+    if [ "$ARCH_NAME" == "grayskull" ]; then
+        env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $pipeline_type
 
-    env pytest "tests/ttnn/integration_tests/bloom/test_performance.py" -m $pipeline_type
+        env pytest "tests/ttnn/integration_tests/bloom/test_performance.py" -m $pipeline_type
 
-    env pytest "tests/ttnn/integration_tests/t5/test_performance.py" -m $pipeline_type
+        env pytest "tests/ttnn/integration_tests/t5/test_performance.py" -m $pipeline_type
+    fi
 
     env pytest models/demos/falcon7b/tests -m $pipeline_type
 
-    env pytest models/demos/ttnn_falcon7b/tests -m $pipeline_type
+    if [ "$ARCH_NAME" == "grayskull" ]; then
+        env pytest models/demos/ttnn_falcon7b/tests -m $pipeline_type
 
-    env pytest models/experimental/vgg/tests -m $pipeline_type
+        env pytest models/experimental/vgg/tests -m $pipeline_type
 
-    env pytest models/experimental/vit/tests -m $pipeline_type
+        env pytest models/experimental/vit/tests -m $pipeline_type
 
-    env pytest models/experimental/llama_old/tests -m $pipeline_type
+        env pytest models/experimental/llama_old/tests -m $pipeline_type
 
-    env pytest models/experimental/roberta/tests -m $pipeline_type
+        env pytest models/experimental/roberta/tests -m $pipeline_type
 
-    env pytest models/experimental/t5/tests -m $pipeline_type
+        env pytest models/experimental/t5/tests -m $pipeline_type
 
-    env pytest models/demos/resnet/tests -m $pipeline_type
+        env pytest models/demos/resnet/tests -m $pipeline_type
 
-    env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
+        env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
 
-    env pytest models/experimental/deit/tests -m $pipeline_type
+        env pytest models/experimental/deit/tests -m $pipeline_type
 
-    env pytest models/experimental/stable_diffusion/tests -m $pipeline_type
+        env pytest models/experimental/stable_diffusion/tests -m $pipeline_type
 
-    env pytest models/experimental/whisper/tests -m $pipeline_type
+        env pytest models/experimental/whisper/tests -m $pipeline_type
 
-    env pytest models/experimental/bloom/tests -m $pipeline_type
+        env pytest models/experimental/bloom/tests -m $pipeline_type
 
-    env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $pipeline_type
+        env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $pipeline_type
 
-    env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $pipeline_type
+        env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $pipeline_type
+    fi
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
