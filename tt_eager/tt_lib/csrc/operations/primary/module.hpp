@@ -37,6 +37,7 @@
 #include "tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
 #include "tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_getitem/moreh_getitem_op.hpp"
 
 namespace py = pybind11;
 
@@ -905,6 +906,16 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input_grad").noconvert(),
         "Performs mean backward operation. Returns an input_grad tensor.");
+
+    m_primary.def(
+        "moreh_getitem",
+        &moreh_getitem,
+        py::arg("input_tensor").noconvert(),
+        py::arg("index_tensors").noconvert(),
+        py::arg("index_dims").noconvert(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a getitem operation. Returns an output tensor.");
 }
 
 }  // namespace
