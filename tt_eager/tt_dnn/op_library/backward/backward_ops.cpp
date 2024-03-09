@@ -151,30 +151,45 @@ std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& input, const Memor
 }
 
 
-std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float inv_scalar = 1.0f/scalar;
-    Tensor result = mul_unary(grad, inv_scalar, output_mem_config);
-    grad_tensor.emplace_back(result);
+    if (round_mode=="None"){
+        Tensor result = mul_unary(grad, inv_scalar, output_mem_config);
+        grad_tensor.emplace_back(result);
+    }
+    else{
+        Tensor result = zeros_like(grad, output_mem_config);
+        grad_tensor.emplace_back(result);
+    }
     return grad_tensor;
 }
-std::vector<Tensor> unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+std::vector<Tensor> unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _unary_div_bw)(grad, input, scalar, output_mem_config);
+    return operation::decorate_as_composite(__func__, _unary_div_bw)(grad, input, scalar, round_mode, output_mem_config);
 }
 
 
-std::vector<Tensor> _div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = mul(mul(neg(grad, output_mem_config), input, std::nullopt, output_mem_config), recip(square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
+    if (round_mode=="None"){
+        Tensor grad_a = mul(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_a);
+        Tensor grad_b = mul(neg(grad, output_mem_config) , (mul(input, recip(square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_b);
+    }
+    else{
+        Tensor grad_a = zeros_like(grad, output_mem_config);
+        grad_tensor.emplace_back(grad_a);
+        Tensor grad_b = zeros_like(grad, output_mem_config);
+        grad_tensor.emplace_back(grad_b);
+    }
+
     return grad_tensor;
 }
-std::vector<Tensor> div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+std::vector<Tensor> div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _div_bw)(grad, input, other, output_mem_config);
+    return operation::decorate_as_composite(__func__, _div_bw)(grad, input, other, round_mode, output_mem_config);
 }
 
 
