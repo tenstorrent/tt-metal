@@ -12,14 +12,14 @@ expected_cols = [
     "Second Run (sec)",
     "Compile Time (sec)",
     "Expected Compile Time (sec)",
-    "Inference Time GS (sec)",
-    "Expected Inference Time GS (sec)",
-    "Throughput GS (Batch*inf/sec)",
+    "Inference Time (sec)",
+    "Expected Inference Time (sec)",
+    "Throughput (Batch*inf/sec)",
     "Inference Time CPU (sec)",
     "Throughput CPU (Batch*inf/sec)",
 ]
 
-check_cols = ["Inference Time GS (sec)", "Compile Time (sec)"]
+check_cols = ["Inference Time (sec)", "Compile Time (sec)"]
 
 if __name__ == "__main__":
     fname = f"Models_Perf_{today}.csv"
