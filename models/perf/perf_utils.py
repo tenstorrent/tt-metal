@@ -110,7 +110,7 @@ def prep_perf_report(
             csvfile.write(values)
 
     compile_time = inference_and_compile_time - inference_time
-    gs_throughput = "{:.4f}".format(batch_size * (1 / inference_time))
+    device_throughput = "{:.4f}".format(batch_size * (1 / inference_time))
     cpu_throughput = batch_size * (1 / inference_time_cpu) if inference_time_cpu else "unknown"
     cpu_throughput = "{:.4f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
     dict_res = {
@@ -121,9 +121,9 @@ def prep_perf_report(
         "Second Run (sec)": "{:.2f}".format(inference_time),
         "Compile Time (sec)": "{:.2f}".format(compile_time),
         "Expected Compile Time (sec)": "{:.2f}".format(expected_compile_time),
-        "Inference Time GS (sec)": "{:.4f}".format(inference_time),
-        "Expected Inference Time GS (sec)": "{:.4f}".format(expected_inference_time),
-        "Throughput GS (batch*inf/sec)": gs_throughput,
+        "Inference Time (sec)": "{:.4f}".format(inference_time),
+        "Expected Inference Time (sec)": "{:.4f}".format(expected_inference_time),
+        "Throughput (batch*inf/sec)": device_throughput,
         "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu),
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
