@@ -47,6 +47,13 @@ bool debug_g;
 bool lazy_g;
 bool fire_once_g;
 bool use_coherent_data_g;
+bool test_type_g;
+
+CoreCoord first_worker_g = { 0, 1 };
+CoreRange all_workers_g = {
+    first_worker_g,
+    {first_worker_g.x + 2, first_worker_g.y + 2},
+};
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -54,26 +61,33 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
-        log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
-        log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -pi: prefetcher iterations (looping on device) (default {})", 1);
+        log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
+        log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
+        log_info(LogTest, "    -t: test type, 0:uni_write 1:packed_write (default {})", 0);
+        log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end.x);
+        log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
+        log_info(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
+        log_info(LogTest, "   -pi: prefetcher iterations (looping on device) (default {})", 1);
         log_info(LogTest, "  -lps: log of page size of prefetch/dispatch buffer (default {})", DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        log_info(LogTest, "  -bs: dispatcher block size in pages (default {})", DEFAULT_DISPATCH_BUFFER_BLOCK_SIZE_PAGES);
-        log_info(LogTest, "  -b: dispatcher buffer size in blocks (default {})", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
+        log_info(LogTest, "   -bs: dispatcher block size in pages (default {})", DEFAULT_DISPATCH_BUFFER_BLOCK_SIZE_PAGES);
+        log_info(LogTest, "    -b: dispatcher buffer size in blocks (default {})", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
         log_info(LogTest, "  -pbs: prefetcher buffer size pages (default {})", DEFAULT_PREFETCHER_BUFFER_SIZE_PAGES);
-        log_info(LogTest, "  -ppbs: prefetcher page batch size (process pages in batches of N to reduce overhead) (default {})", DEFAULT_PREFETCHER_PAGE_BATCH_SIZE);
+        log_info(LogTest, " -ppbs: prefetcher page batch size (process pages in batches of N to reduce overhead) (default {})", DEFAULT_PREFETCHER_PAGE_BATCH_SIZE);
         log_info(LogTest, "  -max: max transfer size (default {})", MAX_XFER_SIZE_16B << 4);
         log_info(LogTest, "  -min: min transfer size (default {})", MIN_XFER_SIZE_16B << 4);
-        log_info(LogTest, "  -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default disabled)");
-        log_info(LogTest, "  -d: wrap all commands in debug commands (default disabled)");
-        log_info(LogTest, "  -c: use coherent data as payload (default false)");
-        log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
+        log_info(LogTest, "    -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default disabled)");
+        log_info(LogTest, "    -d: wrap all commands in debug commands (default disabled)");
+        log_info(LogTest, "    -c: use coherent data as payload (default false)");
+        log_info(LogTest, "    -z: enable dispatch lazy mode (default disabled)");
         exit(0);
     }
 
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     prefetcher_iterations_g = test_args::get_command_option_uint32(input_args, "-pi", 1);
+    test_type_g = test_args::get_command_option_uint32(input_args, "-t", 0);
+    all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
+    all_workers_g.end.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end.y);
 
     log_dispatch_buffer_page_size_g = test_args::get_command_option_uint32(input_args, "-lps", DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE);
     dispatch_buffer_page_size_g = 1 << log_dispatch_buffer_page_size_g;
@@ -108,10 +122,11 @@ void init(int argc, char **argv) {
     lazy_g = test_args::has_command_option(input_args, "-z");
 }
 
-void gen_cmds(vector<uint32_t>& dispatch_cmds,
-              CoreCoord worker_core,
-              vector<uint32_t>& worker_data,
-              uint32_t scratch_addr,
+void gen_cmds(Device *device,
+              vector<uint32_t>& dispatch_cmds,
+              CoreRange worker_cores,
+              worker_data_t& worker_data,
+              uint32_t worker_data_addr,
               uint32_t page_size) {
 
     uint32_t total_size_bytes = 0;
@@ -132,8 +147,15 @@ void gen_cmds(vector<uint32_t>& dispatch_cmds,
         if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
         if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
 
-        gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core,
-                                 scratch_addr, xfer_size_bytes);
+        switch (test_type_g) {
+        case 0:
+            gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, worker_data,
+                                             worker_data_addr, xfer_size_bytes);
+            break;
+        case 1:
+            break;
+        }
+
         uint32_t page_size_words = page_size / sizeof(uint32_t);
         dispatch_cmds.resize((dispatch_cmds.size() + page_size_words - 1) / page_size_words * page_size_words);    // pad to page
 
@@ -165,12 +187,10 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord spoof_prefetch_core = {0, 0};
-        CoreCoord dispatch_core = {0, 1};
-        CoreCoord worker_core = {0, 2};
+        CoreCoord dispatch_core = {4, 0};
 
         CoreCoord phys_spoof_prefetch_core = device->worker_core_from_logical_core(spoof_prefetch_core);
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
-        CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t l1_buf_base = L1_UNRESERVED_BASE;
@@ -183,8 +203,14 @@ int main(int argc, char **argv) {
         Buffer l1_buf(device, prefetcher_buffer_size_g, prefetcher_buffer_size_g, BufferType::L1, TensorMemoryLayout::SINGLE_BANK);
 #endif
         vector<uint32_t> cmds;
-        vector<uint32_t> worker_data;
-        gen_cmds(cmds, phys_worker_core, worker_data, l1_buf_base, dispatch_buffer_page_size_g);
+        worker_data_t worker_data;
+        for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
+            for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
+                one_worker_data_t one;
+                worker_data.insert({CoreCoord(x, y), one});
+            }
+        }
+        gen_cmds(device, cmds, all_workers_g, worker_data, l1_buf_base, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         std::map<string, string> defines = {
@@ -245,6 +271,7 @@ int main(int argc, char **argv) {
             }
         );
 
+        log_info(LogTest, "Worker grid {}", all_workers_g.str());
         log_info(LogTest, "Dispatch buffer size blocks {}", std::to_string(dispatch_buffer_size_blocks_g));
         log_info(LogTest, "Dispatch buffer block size pages {}", std::to_string(dispatch_buffer_block_size_pages_g));
         log_info(LogTest, "Dispatch buffer page size {}", std::to_string(dispatch_buffer_page_size_g));
@@ -253,7 +280,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Dispatch buffer base {}", std::to_string(l1_buf_base));
         log_info(LogTest, "Dispatch buffer end {}", std::to_string(l1_buf_base + dispatch_buffer_page_size_g * dispatch_buffer_pages));
         log_info(LogTest, "Prefetcher CMD Buffer size {}", std::to_string(prefetcher_buffer_size_g));
-        log_info(LogTest, "Worker result data size {} bytes", std::to_string(worker_data.size() * sizeof(uint32_t)));
+        log_info(LogTest, "Worker result data size {} bytes", std::to_string(worker_data[first_worker_g].data.size() * sizeof(uint32_t)));
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
@@ -275,13 +302,12 @@ int main(int argc, char **argv) {
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
-        pass &= validate_results(device, phys_worker_core, worker_data, l1_buf_base);
-
+        pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base);
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
         if (iterations_g == 1) {
-            float bw = (float)worker_data.size() * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
+            float bw = (float)worker_data_size(worker_data) * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());
