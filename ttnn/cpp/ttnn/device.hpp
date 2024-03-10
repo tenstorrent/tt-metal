@@ -14,6 +14,8 @@ namespace device {
 
 Device &open_device(int device_id);
 void close_device(Device &device);
+void enable_program_cache(Device &device);
+void disable_and_clear_program_cache(Device &device);
 
 }  // namespace device
 

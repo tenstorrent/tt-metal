@@ -160,11 +160,10 @@ const operation::Hash Transpose::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
     auto input_mem_config = input_tensor.memory_config();
-    auto input_device_id = input_tensor.device()->id();
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.get_dtype();
     return operation::hash_operation<Transpose>(
-        input_mem_config, input_device_id, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
+        input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
 }
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {

@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -64,7 +63,7 @@ int main () {
         run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>( device);
     }
 
-    tt::tt_metal::program_cache::enable();
+    device->enable_program_cache();
 
     auto run_reduce_ops = [&] {
         {
@@ -101,13 +100,13 @@ int main () {
     run_reduce_ops();
 
     TT_FATAL(
-        tt::tt_metal::program_cache::num_entries() == 6,
+        device->num_program_cache_entries() == 6,
         "There are {} entries",
-        tt::tt_metal::program_cache::num_entries());
+        device->num_program_cache_entries());
 
-    tt::tt_metal::program_cache::disable_and_clear();
+    device->disable_and_clear_program_cache();
 
-    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 0);
+    TT_FATAL(device->num_program_cache_entries() == 0);
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
 

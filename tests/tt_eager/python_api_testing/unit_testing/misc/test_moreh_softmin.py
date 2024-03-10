@@ -25,7 +25,7 @@ import torch.nn.functional as F
     ),
 )
 def test_softmin_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -59,7 +59,7 @@ def test_softmin_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -100,7 +100,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -143,7 +143,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_for_dim_nc(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -185,7 +185,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
     ),
 )
 def test_softmin_backward_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -227,7 +227,7 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -276,7 +276,7 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -333,7 +333,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmin_backward_for_dim_nc(shape_dim, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -386,7 +386,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
     (True, False),
 )
 def test_softmin_optional_output_tensor(shape_dim, optional_output_tensor, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -428,7 +428,7 @@ def test_softmin_optional_output_tensor(shape_dim, optional_output_tensor, devic
     (True, False),
 )
 def test_softmin_backward_optional_output_tensor(shape_dim, optional_output_tensor, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 

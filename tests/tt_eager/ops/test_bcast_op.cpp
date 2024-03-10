@@ -5,7 +5,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include <tt_numpy/functions.hpp>
@@ -101,11 +100,11 @@ int main(int argc, char **argv) {
         };
         run_operations();
 
-        program_cache::enable();
+        device->enable_program_cache();
         run_operations();
         run_operations();
         run_operations();
-        program_cache::disable_and_clear();
+        device->disable_and_clear_program_cache();
 
         pass &= CloseDevice(device);
 
