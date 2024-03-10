@@ -105,10 +105,9 @@ struct CQDispatchWritePagedCmd {
 
 struct CQDispatchWritePackedCmd {
     uint8_t is_multicast;
-    uint16_t pad1;
-    uint32_t count;           // number of sub-cmds
-    uint32_t size;            // size of each packet, stride is padded to L1 alignment
+    uint16_t count;           // number of sub-cmds (max 1020)
     uint32_t addr;            // common memory address across all packed SubCmds
+    uint16_t size;            // size of each packet, stride is padded to L1 alignment and less than dispatch_cb_page_size
 } __attribute__((packed));
 
 struct CQDispatchWritePackedSubCmd {

@@ -79,6 +79,12 @@ CoreRange all_workers_g = {
     {first_worker_g.x + 2, first_worker_g.y + 2},
 };
 
+bool send_to_all_g = false;
+bool perf_test_g = false;
+
+uint32_t max_xfer_size_bytes_g = 0xFFFFFFFF;
+uint32_t min_xfer_size_bytes_g = 0;
+
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
@@ -388,18 +394,34 @@ void gen_rnd_inline_cmd(Device *device,
 
     vector<uint32_t> dispatch_cmds;
 
-    uint32_t cmd_size_bytes = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    if (debug_g) {
-        cmd_size_bytes += sizeof(CQDispatchCmd);
-    }
-    uint32_t max_size = big_g ? DEFAULT_MAX_PREFETCH_COMMAND_SIZE : DEFAULT_MAX_PREFETCH_COMMAND_SIZE / 16;
-    uint32_t max_xfer_size_16b = (max_size - cmd_size_bytes) >> 4;
-    uint32_t xfer_size_16B = (std::rand() & (max_xfer_size_16b - 1));
-    // Note: this may overflow the WORKER_DATA_SIZE, but by little enough that it won't overflow L1
-    uint32_t xfer_size_bytes = xfer_size_16B << 4;
+    // Randomize the dispatcher command we choose to relay
+    // XXXX revisit the randomness of this, these commands get under-weighted
 
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data,
-                                     dst_addr, xfer_size_bytes);
+    uint32_t which_cmd = std::rand() % 2;
+    switch (which_cmd) {
+    case 0:
+        // unicast write
+        {
+            uint32_t cmd_size_bytes = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+            if (debug_g) {
+                cmd_size_bytes += sizeof(CQDispatchCmd);
+            }
+            uint32_t max_size = big_g ? DEFAULT_MAX_PREFETCH_COMMAND_SIZE : DEFAULT_MAX_PREFETCH_COMMAND_SIZE / 16;
+            uint32_t max_xfer_size_16b = (max_size - cmd_size_bytes) >> 4;
+            uint32_t xfer_size_16B = (std::rand() & (max_xfer_size_16b - 1));
+            // Note: this may overflow the WORKER_DATA_SIZE, but by little enough that it won't overflow L1
+            uint32_t xfer_size_bytes = xfer_size_16B << 4;
+
+            gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data,
+                                             dst_addr, xfer_size_bytes);
+        }
+        break;
+    case 1:
+        // packed unicast write
+        gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_data, dst_addr);
+        break;
+    }
+
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 }
 
@@ -498,6 +520,29 @@ void gen_smoke_test(Device *device,
                       5, 32, 2048, num_dram_banks_g * 8 + 1);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       3, 128, 6144, num_dram_banks_g * 8 + 7);
+
+    // Send inline data to (maybe) multiple cores
+    dispatch_cmds.resize(0);
+    vector<CoreCoord> worker_cores;
+    worker_cores.push_back(first_worker_g);
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 4);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
+    worker_cores.resize(0);
+    worker_cores.push_back(first_worker_g);
+    worker_cores.push_back({first_worker_g.x + 1, first_worker_g.y});
+    worker_cores.push_back({first_worker_g.x + 2, first_worker_g.y});
+    worker_cores.push_back({first_worker_g.x + 3, first_worker_g.y});
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 12);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
+    worker_cores.resize(0);
+    worker_cores.push_back(first_worker_g);
+    worker_cores.push_back({first_worker_g.x + 3, first_worker_g.y});
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 156);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 }
 
 void gen_prefetcher_cmds(Device *device,
@@ -801,10 +846,15 @@ int main(int argc, char **argv) {
         log_info(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
         log_info(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));
         log_info(LogTest, "Max command size {}", std::to_string(max_prefetch_command_size_g));
+        if (test_type_g >= 2) {
+            perf_test_g = true;
+        }
         if (test_type_g == 2) {
+            perf_test_g = true;
             log_info(LogTest, "PCIE transfer size {}", std::to_string(pcie_transfer_size_g));
         }
         if (test_type_g == 3) {
+            perf_test_g = true;
             log_info(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
             log_info(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
         }

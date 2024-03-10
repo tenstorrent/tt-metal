@@ -41,6 +41,9 @@ static uint32_t cb_fence; // walks through cb page by page
 static uint32_t cmd_ptr;  // walks through pages in cb cmd by cmd
 
 
+#define L1_ALIGNMENT 16 // XXXXX is the defined elsewhere?
+
+
 FORCE_INLINE
 uint32_t dispatch_cb_acquire_pages() {
 
@@ -177,6 +180,91 @@ void dispatch_write() {
     cmd_ptr = data_ptr;
 }
 
+// Packed write command
+// Layout looks like:
+//   - CQDispatchCmd struct
+//   - count CQDispatchWritePackedSubCmd structs (max 1020)
+//   - pad to L1 alignment
+//   - count data packets of size size, each L1 aligned
+//
+// Note that there are multiple size restrictions on this cmd:
+//  - all sub_cmds fit in one page
+//  - size fits in one page
+//
+// Since all subcmds all appear in the first page and given the size restrictions
+// this command can't be too many pages.  All pages are released at the end
+void dispatch_write_packed() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+
+    uint32_t count = cmd->write_packed.count;
+    uint32_t xfer_size = cmd->write_packed.size;
+    uint32_t dst_addr = cmd->write_packed.addr;
+
+    volatile CQDispatchWritePackedSubCmd tt_l1_ptr *sub_cmd_ptr = (volatile CQDispatchWritePackedSubCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd));
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedSubCmd);
+    data_ptr = (data_ptr + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1);
+    uint32_t stride = (xfer_size + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1);
+
+    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << ENDL();
+    while (count != 0) {
+        uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+        sub_cmd_ptr++;
+        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
+
+        // Get a page if needed
+        if (data_ptr + xfer_size > cb_fence) {
+            // Check for block completion
+            uint32_t remainder_xfer_size = 0;
+            uint32_t remainder_dst_addr;
+            uint32_t orphan_size;
+            if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                // Check for dispatch_cb wrap
+                if (rd_block_idx == dispatch_cb_blocks - 1) {
+                    orphan_size = dispatch_cb_end - data_ptr;
+                    if (orphan_size != 0) {
+                        noc_async_write(data_ptr, dst, orphan_size);
+                        block_noc_writes_to_clear[rd_block_idx]++;
+                        remainder_xfer_size = xfer_size - orphan_size;
+                        remainder_dst_addr = dst_addr + orphan_size;
+                    }
+                    cb_fence = dispatch_cb_base;
+                    data_ptr = dispatch_cb_base;
+                }
+
+                move_rd_to_next_block();
+            }
+
+            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+            uint32_t n_pages = dispatch_cb_acquire_pages();
+            cb_fence += n_pages * dispatch_cb_page_size;
+
+            // This is done here so the common case doesn't have to restore the pointers
+            if (remainder_xfer_size != 0) {
+                uint64_t dst = get_noc_addr_helper(dst_noc, remainder_dst_addr);
+                noc_async_write(data_ptr, dst, remainder_xfer_size);
+                block_noc_writes_to_clear[rd_block_idx]++;
+
+                count--;
+                data_ptr += stride - orphan_size;
+
+                continue;
+            }
+        }
+
+        noc_async_write(data_ptr, dst, xfer_size);
+        block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
+
+        count--;
+        data_ptr += stride;
+    }
+
+    // Release pages for prefetcher
+    // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
+    dispatch_cb_block_release_pages();
+
+    cmd_ptr = data_ptr;
+}
+
 static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
 
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
@@ -235,6 +323,11 @@ void kernel_main() {
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
             DPRINT << "cmd_write_paged" << ENDL();
+            break;
+
+        case CQ_DISPATCH_CMD_WRITE_PACKED:
+            DPRINT << "cmd_write_packed" << ENDL();
+            dispatch_write_packed();
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
