@@ -27,13 +27,14 @@ enum CQPrefetchCmdId : uint8_t {
 enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_ILLEGAL = 0,            // common error value
     CQ_DISPATCH_CMD_WRITE = 1,              // write data from dispatcher to dst_noc
-    CQ_DISPATCH_CMD_WRITE_PAGED = 2,        // write banked/paged data from dispatcher to dst_noc
-    CQ_DISPATCH_CMD_WRITE_PACKED = 3,       // write to multiple noc addresses with packed data
-    CQ_DISPATCH_CMD_WAIT = 4,               // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 5,                 // send go message
-    CQ_DISPATCH_CMD_SINK = 6,               // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 7,              // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_TERMINATE = 8,          // quit
+    CQ_DISPATCH_CMD_WRITE_HOST = 2,         // like write, dedicated to writing to host
+    CQ_DISPATCH_CMD_WRITE_PAGED = 3,        // write banked/paged data from dispatcher to dst_noc
+    CQ_DISPATCH_CMD_WRITE_PACKED = 4,       // write to multiple noc addresses with packed data
+    CQ_DISPATCH_CMD_WAIT = 5,               // wait until workers are done
+    CQ_DISPATCH_CMD_GO = 6,                 // send go message
+    CQ_DISPATCH_CMD_SINK = 7,               // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 8,              // log waypoint data to watcher, checksum
+    CQ_DISPATCH_CMD_TERMINATE = 9,          // quit
 };
 
 //////////////////////////////////////////////////////////////////////////////
