@@ -63,7 +63,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     return False, ""
 
 
-def test_all_gather_on_t3000_impl(
+def run_all_gather_on_t3000_impl(
     all_devices,
     num_devices,
     input_shape,
@@ -189,7 +189,7 @@ def test_all_gather_on_t3000_post_commit(
     use_program_cache,
     function_level_defaults,
 ):
-    test_all_gather_on_t3000_impl(
+    run_all_gather_on_t3000_impl(
         all_devices,
         num_devices,
         input_shape,
@@ -324,7 +324,7 @@ def test_all_gather_on_t3000_nightly(
     use_program_cache,
     function_level_defaults,
 ):
-    test_all_gather_on_t3000_impl(
+    run_all_gather_on_t3000_impl(
         all_devices,
         num_devices,
         input_shape,
