@@ -48,6 +48,8 @@ bool lazy_g;
 bool fire_once_g;
 bool use_coherent_data_g;
 bool test_type_g;
+bool send_to_all_g;
+bool perf_test_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -73,8 +75,8 @@ void init(int argc, char **argv) {
         log_info(LogTest, "    -b: dispatcher buffer size in blocks (default {})", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
         log_info(LogTest, "  -pbs: prefetcher buffer size pages (default {})", DEFAULT_PREFETCHER_BUFFER_SIZE_PAGES);
         log_info(LogTest, " -ppbs: prefetcher page batch size (process pages in batches of N to reduce overhead) (default {})", DEFAULT_PREFETCHER_PAGE_BATCH_SIZE);
-        log_info(LogTest, "  -max: max transfer size (default {})", MAX_XFER_SIZE_16B << 4);
-        log_info(LogTest, "  -min: min transfer size (default {})", MIN_XFER_SIZE_16B << 4);
+        log_info(LogTest, "  -max: max transfer size bytes (default {})", MAX_XFER_SIZE_16B << 4);
+        log_info(LogTest, "  -min: min transfer size bytes (default {})", MIN_XFER_SIZE_16B << 4);
         log_info(LogTest, "    -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default disabled)");
         log_info(LogTest, "    -d: wrap all commands in debug commands (default disabled)");
         log_info(LogTest, "    -c: use coherent data as payload (default false)");
@@ -105,8 +107,8 @@ void init(int argc, char **argv) {
 
     max_xfer_size_bytes_g = test_args::get_command_option_uint32(input_args, "-max", MAX_XFER_SIZE_16B << 4);
     min_xfer_size_bytes_g = test_args::get_command_option_uint32(input_args, "-min", MIN_XFER_SIZE_16B << 4);
-    max_xfer_size_bytes_g = (max_xfer_size_bytes_g >> 4) << 4;
-    min_xfer_size_bytes_g = (min_xfer_size_bytes_g >> 4) << 4;
+
+    send_to_all_g = test_args::has_command_option(input_args, "-a");
 
     fire_once_g = test_args::has_command_option(input_args, "-f");
     if (fire_once_g) {
@@ -120,6 +122,8 @@ void init(int argc, char **argv) {
 
     debug_g = test_args::has_command_option(input_args, "-d");
     lazy_g = test_args::has_command_option(input_args, "-z");
+
+    perf_test_g = (send_to_all_g && iterations_g == 1); // XXXX find a better way?
 }
 
 void gen_cmds(Device *device,
@@ -139,20 +143,25 @@ void gen_cmds(Device *device,
         if (debug_g) {
             total_size_bytes += sizeof(CQDispatchCmd);
         }
-        uint32_t xfer_size_16B = (std::rand() & (MAX_XFER_SIZE_16B - 1));
-        if (total_size_bytes + (xfer_size_16B << 4) > buffer_size) {
-            xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
-        }
-        uint32_t xfer_size_bytes = xfer_size_16B << 4;
-        if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
-        if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
+
+        uint32_t xfer_size_bytes = 0;
 
         switch (test_type_g) {
         case 0:
-            gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, worker_data,
-                                             worker_data_addr, xfer_size_bytes);
+            {
+                uint32_t xfer_size_16B = (std::rand() & (MAX_XFER_SIZE_16B - 1));
+                if (total_size_bytes + (xfer_size_16B << 4) > buffer_size) {
+                    xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
+                }
+                xfer_size_bytes = xfer_size_16B << 4;
+                if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
+                if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
+                gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, worker_data,
+                                                 worker_data_addr, xfer_size_bytes);
+            }
             break;
         case 1:
+            xfer_size_bytes = gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_data, worker_data_addr);
             break;
         }
 
@@ -307,7 +316,24 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
         if (iterations_g == 1) {
-            float bw = (float)worker_data_size(worker_data) * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
+            float total_words;
+            if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
+                log_fatal("Set max/min xfer size to match for reliable perf data");
+            }
+            switch (test_type_g) {
+            case 0:
+                total_words = worker_data_size(worker_data);
+                break;
+            case 1:
+                if (!send_to_all_g) {
+                    log_fatal("Set send_to_all to true for reliable perf data");
+                }
+                total_words = worker_data_size(worker_data) *
+                    (all_workers_g.end.x - all_workers_g.start.x) * (all_workers_g.end.y - all_workers_g.start.y);
+                break;
+            }
+
+            float bw = total_words * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());

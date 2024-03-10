@@ -15,6 +15,10 @@ extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;
 extern CoreCoord first_worker_g;
 extern CoreRange all_workers_g;
+extern uint32_t min_xfer_size_bytes_g;
+extern uint32_t max_xfer_size_bytes_g;
+extern bool send_to_all_g;
+extern bool perf_test_g;
 
 struct one_worker_data_t {
     vector<bool> valid;
@@ -23,16 +27,20 @@ struct one_worker_data_t {
 
 typedef unordered_map<CoreCoord, one_worker_data_t> worker_data_t;
 
-void reset_worker_data(worker_data_t& awd) {
+inline void reset_worker_data(worker_data_t& awd) {
     for (auto& wd : awd) {
         wd.second.valid.resize(0);
         wd.second.data.resize(0);
     }
 }
 
-uint32_t worker_data_size(worker_data_t& awd) {
+inline uint32_t worker_data_size(worker_data_t& awd) {
     return awd[first_worker_g].data.size();
 
+}
+
+inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
+    return (size + alignment - 1) / alignment * alignment;
 }
 
 inline void generate_random_payload(vector<uint32_t>& cmds,
@@ -49,9 +57,11 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
                                     worker_data_t& data,
                                     uint32_t length_words) {
 
+    static uint32_t coherent_count = 0;
+
     // Note: the dst address marches in unison regardless of weather or not a core is written to
     for (uint32_t i = 0; i < length_words; i++) {
-        uint32_t datum = (use_coherent_data_g) ? i : std::rand();
+        uint32_t datum = (use_coherent_data_g) ? coherent_count++ : std::rand();
         cmds.push_back(datum);
         for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
             for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
@@ -59,6 +69,44 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
                 data[core].data.push_back(datum);
                 data[core].valid.push_back(workers.contains(core));
             }
+        }
+    }
+}
+
+inline void generate_random_packed_payload(vector<uint32_t>& cmds,
+                                           vector<CoreCoord>& worker_cores,
+                                           worker_data_t& data,
+                                           uint32_t size_words) {
+
+    static uint32_t coherent_count = 0;
+
+    // Note: the dst address marches in unison regardless of weather or not a core is written to
+    for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
+        for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
+            CoreCoord core(x, y);
+            for (uint32_t i = 0; i < size_words; i++) {
+                bool contains = false;
+                for (CoreCoord worker_core : worker_cores) {
+                    if (core == worker_core) {
+                        contains = true;
+                        break;
+                    }
+                }
+                if (contains) {
+                    uint32_t datum = (use_coherent_data_g) ? ((x << 16) | (y << 24) | coherent_count++) : std::rand();
+
+                    cmds.push_back(datum);
+                    data[core].data.push_back(datum);
+                    data[core].valid.push_back(true);
+                } else {
+                    data[core].data.push_back(0xbaadf00d);
+                    data[core].valid.push_back(false);
+                }
+            }
+
+            cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
+            data[core].data.resize(padded_size(data[core].data.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
+            data[core].valid.resize(padded_size(data[core].valid.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
         }
     }
 }
@@ -72,13 +120,8 @@ inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
-inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
-                               const CoreRange& workers,
-                               worker_data_t& worker_data,
-                               CQDispatchCmd cmd,
-                               uint32_t length) {
-
-    auto prior_end = cmds.size();
+inline size_t debug_prologue(vector<uint32_t>& cmds) {
+    size_t prior = cmds.size();
 
     if (debug_g) {
         CQDispatchCmd debug_cmd;
@@ -86,10 +129,11 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
         add_bare_dispatcher_cmd(cmds, debug_cmd);
     }
 
-    add_bare_dispatcher_cmd(cmds, cmd);
-    uint32_t length_words = length / sizeof(uint32_t);
-    generate_random_payload(cmds, workers, worker_data, length_words);
+    return prior;
+}
 
+inline void debug_epilogue(vector<uint32_t>& cmds,
+                           size_t prior_end) {
     if (debug_g) {
         // Doing a checksum on the full command length is problematic in the kernel
         // as it requires the debug code to pull all the pages in before the actual
@@ -112,6 +156,42 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
+inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
+                               const CoreRange& workers,
+                               worker_data_t& worker_data,
+                               CQDispatchCmd cmd,
+                               uint32_t length) {
+
+    size_t prior_end = debug_prologue(cmds);
+
+    add_bare_dispatcher_cmd(cmds, cmd);
+    uint32_t length_words = length / sizeof(uint32_t);
+    generate_random_payload(cmds, workers, worker_data, length_words);
+
+    debug_epilogue(cmds, prior_end);
+}
+
+inline void add_dispatcher_packed_cmd(Device *device,
+                                      vector<uint32_t>& cmds,
+                                      vector<CoreCoord>& worker_cores,
+                                      worker_data_t& worker_data,
+                                      CQDispatchCmd cmd,
+                                      uint32_t size_words) {
+
+    size_t prior_end = debug_prologue(cmds);
+
+    add_bare_dispatcher_cmd(cmds, cmd);
+    for (CoreCoord core : worker_cores) {
+        CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
+        cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
+    }
+    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
+
+    generate_random_packed_payload(cmds, worker_cores, worker_data, size_words);
+
+    debug_epilogue(cmds, prior_end);
+}
+
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
                                                   vector<uint32_t>& cmds,
@@ -126,7 +206,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
     cmd.write.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
-    cmd.write.addr = dst_addr + worker_data[worker_core].data.size() * sizeof(uint32_t);
+    cmd.write.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
     cmd.write.length = length;
 
     add_bare_dispatcher_cmd(cmds, cmd);
@@ -149,6 +229,56 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
     cmd.write.length = length;
 
     add_dispatcher_cmd(cmds, worker_core, worker_data, cmd, length);
+}
+
+inline void gen_dispatcher_packed_write_cmd(Device *device,
+                                            vector<uint32_t>& cmds,
+                                            vector<CoreCoord>& worker_cores,
+                                            worker_data_t& worker_data,
+                                            uint32_t dst_addr,
+                                            uint32_t size_words) {
+
+    CQDispatchCmd cmd;
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+    cmd.write_packed.count = worker_cores.size();
+    cmd.write_packed.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
+    cmd.write_packed.size = size_words * sizeof(uint32_t);
+
+    add_dispatcher_packed_cmd(device, cmds, worker_cores, worker_data, cmd, size_words);
+}
+
+inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
+                                                    vector<uint32_t>& cmds,
+                                                    worker_data_t& worker_data,
+                                                    uint32_t dst_addr) {
+
+    // Note: this cmd doesn't clamp to a max size which means it can overflow L1 buffer
+    // However, this cmd doesn't send much data and the L1 buffer is < L1 limit, so...
+
+    uint32_t xfer_size_words = (std::rand() % (dispatch_buffer_page_size_g >> sizeof(uint32_t))) + 1;
+    uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
+    if (perf_test_g) {
+        if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
+        if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
+    }
+
+    vector<CoreCoord> gets_data;
+    for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
+        for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
+            if (send_to_all_g || std::rand() % 2) {
+                gets_data.push_back({x, y});
+            }
+        }
+    }
+    if (gets_data.size() == 0) {
+        gets_data.push_back({all_workers_g.start.x, all_workers_g.start.y});
+    }
+
+    gen_dispatcher_packed_write_cmd(device, cmds, gets_data, worker_data,
+                                    dst_addr, xfer_size_bytes * sizeof(uint32_t));
+
+    return xfer_size_bytes;
 }
 
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
@@ -181,7 +311,7 @@ inline bool validate_results(Device *device, CoreRange workers, const worker_dat
                 if (dev_valid[i] && results[i] != dev_data[i]) {
                     if (!failed) {
                         tt::log_fatal("Data mismatch");
-                        fprintf(stderr, "First 10 failures for each core: [idx] expected->read\n");
+                        fprintf(stderr, "First 20 failures for each core: [idx] expected->read\n");
                     }
                     if (fail_count == 0) {
                         fprintf(stderr, "Failures logical core: (%ld,%ld)\n", worker.x, worker.y);
@@ -191,7 +321,7 @@ inline bool validate_results(Device *device, CoreRange workers, const worker_dat
 
                     failed = true;
                     fail_count++;
-                    if (fail_count > 10) {
+                    if (fail_count > 20) {
                         break;
                     }
                 }
