@@ -315,6 +315,7 @@ void kernel_main() {
 
         switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE:
+        case CQ_DISPATCH_CMD_WRITE_HOST:
             DEBUG_STATUS('D', 'W', 'B');
             DPRINT << "cmd_write\n";
             dispatch_write();
