@@ -36,6 +36,14 @@ def close_device(device):
     ttnn._ttnn.device.close_device(device)
 
 
+def enable_program_cache(device):
+    ttnn._ttnn.device.enable_program_cache(device)
+
+
+def disable_and_clear_program_cache(device):
+    ttnn._ttnn.device.disable_and_clear_program_cache(device)
+
+
 def synchronize_device(device):
     """
     synchronize_device(device: ttnn.Device) -> None:

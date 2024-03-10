@@ -38,7 +38,7 @@ import tt_lib as ttl
         ttl.tensor.Layout.TILE,
     ),
 )
-def test_min_max_for_dim_hw(use_program_cache, shape_dim, device, kind, layout):
+def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
     shape, dim = shape_dim
     torch.manual_seed(0)
 

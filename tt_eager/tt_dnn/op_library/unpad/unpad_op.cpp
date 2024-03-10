@@ -179,9 +179,7 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
 const operation::Hash Unpad::compute_program_hash (
     const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
-    tt_metal::Device *device = input_tensor.device();
     auto input_mem_config = input_tensor.memory_config();
-    auto input_device_id = input_tensor.device()->id();
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.get_dtype();
     auto num_dims = input_tensor.get_legacy_shape().rank();
@@ -197,7 +195,6 @@ const operation::Hash Unpad::compute_program_hash (
         input_tensor.get_layout(),
         input_mem_config.memory_layout,
         input_mem_config.buffer_type,
-        input_device_id,
         output_mem_config.memory_layout,
         output_mem_config.buffer_type,
         dtype,

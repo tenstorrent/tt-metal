@@ -25,6 +25,20 @@ Device &open_device(int device_id) {
     return *device_pool::devices[device_id];
 }
 
+void enable_program_cache(Device &device) {
+    TT_ASSERT(device.id() < device_pool::devices.size());
+    TT_ASSERT(device_pool::devices[device.id()] != nullptr);
+
+    device_pool::devices[device.id()]->enable_program_cache();
+}
+
+void disable_and_clear_program_cache(Device &device) {
+    TT_ASSERT(device.id() < device_pool::devices.size());
+    TT_ASSERT(device_pool::devices[device.id()] != nullptr);
+
+    device_pool::devices[device.id()]->disable_and_clear_program_cache();
+}
+
 void close_device(Device &device) {
     TT_ASSERT(device.id() < device_pool::devices.size());
 

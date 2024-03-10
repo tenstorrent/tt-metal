@@ -14,7 +14,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "dev_msgs.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-
+#include "program_cache.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -227,6 +227,16 @@ class Device {
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
     bool using_fast_dispatch = false;
+    program_cache::detail::ProgramCache program_cache;
+
+    void enable_program_cache() { program_cache.enable(); }
+    void disable_and_clear_program_cache() {
+        if (this->program_cache.is_enabled()) {
+            program_cache.clear();
+            program_cache.disable();
+        }
+    }
+    std::size_t num_program_cache_entries() { return program_cache.num_entries(); }
 };
 
 }  // namespace tt_metal

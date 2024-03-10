@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <memory>
 
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/owned_buffer.hpp"
@@ -537,7 +538,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
         // For additional info see: https://pybind11.readthedocs.io/en/stable/advanced/functions.html#keep-alive
         auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
-
 
             Class constructor supports tensors of rank 4.
             The constructor takes following arguments:

@@ -10,7 +10,6 @@
 #include "tt_numpy/functions.hpp"
 
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
@@ -254,11 +253,10 @@ void test_bert() {
         tt::log_info(tt::LogTest, "average duration: {} average_duration", total_duration);
         tt::log_info(tt::LogTest, "samples per second: {}", num_samples_per_second);
     };
-
-    tt::tt_metal::program_cache::enable();
+    device->enable_program_cache();
     run_bert();
     run_loop();
-    tt::tt_metal::program_cache::disable_and_clear();
+    device->disable_and_clear_program_cache();
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
 }

@@ -9,12 +9,17 @@ import tt_lib
 
 @pytest.mark.eager_host_side
 @pytest.mark.post_commit
-def test_program_cache():
-    tt_lib.program_cache.disable_and_clear()
-    tt_lib.program_cache.enable()
-    assert tt_lib.program_cache.num_entries() == 0, f"Unused program cache has non-zero entries?"
-    tt_lib.program_cache.disable_and_clear()
-    pass
+def test_global_var_toggle_and_device_eps():
+    # Check that APIs modifying global vars work
+    tt_lib.device.EnablePersistentKernelCache()
+    tt_lib.device.DisablePersistentKernelCache()
+    tt_lib.device.EnableCompilationReports()
+    tt_lib.device.DisableCompilationReports()
+    # Check that the tt_lib bindings take the correct path
+    # to device epsilon constants
+    assert tt_lib.device.EPS_GS == 0.001953125
+    assert tt_lib.device.EPS_WHB0 == 1.1920899822825959e-07
+
 
 @pytest.mark.eager_host_side
 @pytest.mark.post_commit

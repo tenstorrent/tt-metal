@@ -346,14 +346,6 @@ def pcie_device_mesh(request):
     ttnn.close_device_mesh(device_mesh)
 
 
-@pytest.fixture(autouse=True)
-def clear_program_cache():
-    yield
-    import tt_lib as ttl
-
-    ttl.program_cache.disable_and_clear()
-
-
 @pytest.fixture()
 def clear_compile_cache():
     yield
@@ -372,10 +364,16 @@ def reset_default_device():
 
 
 @pytest.fixture(scope="function")
-def use_program_cache(clear_program_cache):
+def use_program_cache(request):
     import tt_lib as ttl
 
-    ttl.program_cache.enable()
+    if "device" in request.fixturenames:
+        dev = ttl.device.GetDefaultDevice()
+        dev.enable_program_cache()
+    elif "all_devices" in request.fixturenames:
+        devices = request.getfixturevalue("all_devices")
+        for dev in devices:
+            dev.enable_program_cache()
     yield
 
 

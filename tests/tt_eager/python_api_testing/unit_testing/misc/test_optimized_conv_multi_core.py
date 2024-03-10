@@ -69,6 +69,7 @@ import torch
     ),
 )
 def test_run_optimized_conv(
+    device,
     use_program_cache,
     N,
     K,
@@ -89,7 +90,6 @@ def test_run_optimized_conv(
     untilize_out,
     has_bias,
     fuse_relu,
-    device,
 ):
     if has_bias and untilize_out:
         ## bias is only supported without untilize out

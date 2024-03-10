@@ -41,9 +41,9 @@ import torch
     (8,),
 )
 def test_resnet50_first_conv(
+    device,
     use_program_cache,
     N,
-    device,
     has_bias,
     fuse_relu,
 ):

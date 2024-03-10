@@ -9,7 +9,6 @@
 #include "operations/module.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
@@ -40,8 +39,10 @@ void DeviceModule(py::module &m_device) {
         .def(
             "worker_core_from_logical_core",
             &Device::worker_core_from_logical_core,
-            "Convert a logical core coordinate into a physical worker core coordinate");
-
+            "Convert a logical core coordinate into a physical worker core coordinate")
+        .def("enable_program_cache", &Device::enable_program_cache, "Enable caching for all programs sent to this device")
+        .def("disable_and_clear_program_cache", &Device::disable_and_clear_program_cache, "Disable and clear program cache for this device")
+        .def("num_program_cache_entries", &Device::num_program_cache_entries, "Number of entries in the program cache for this device");
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;
@@ -315,14 +316,6 @@ void DTXModule(py::module &m_dtx) {
     });
 }
 
-
-
-void ProgramCacheModule(py::module &m_program_cache) {
-   m_program_cache.def("enable", &tt::tt_metal::program_cache::enable);
-   m_program_cache.def("disable_and_clear", &tt::tt_metal::program_cache::disable_and_clear);
-   m_program_cache.def("num_entries", &tt::tt_metal::program_cache::num_entries);
-}
-
 } // end namespace tt_metal
 
 } // end namespace tt
@@ -345,9 +338,6 @@ PYBIND11_MODULE(_C, m) {
     py::module_ m_dtx = m.def_submodule("dtx", "Submodule defining data transformation engine");
     tt::tt_metal::DTXModule(m_dtx);
 
-    py::module_ m_program_cache = m.def_submodule("program_cache", "Submodule for caching operations");
-    tt::tt_metal::ProgramCacheModule(m_program_cache);
-
     py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
     tt::operations::py_module(m_operations);
 
@@ -358,7 +348,6 @@ PYBIND11_MODULE(_C, m) {
     tracy_decorator(m_device);
     tracy_decorator(m_tensor);
     tracy_decorator(m_dtx);
-    tracy_decorator(m_program_cache);
     tracy_decorator(m_operations);
 #endif
 }

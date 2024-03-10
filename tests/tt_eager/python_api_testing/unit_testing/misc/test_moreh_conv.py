@@ -236,8 +236,8 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 def test_moreh_conv(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,

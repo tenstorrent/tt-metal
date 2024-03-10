@@ -841,7 +841,7 @@ bool Device::close() {
     allocator::clear(*this->allocator_);
 
     this->active_devices_.deactivate_device(this->id_);
-
+    this->disable_and_clear_program_cache();
     this->initialized_ = false;
     return true;
 }

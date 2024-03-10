@@ -92,7 +92,7 @@ def run_falcon_demo_kv(
 ):
     torch.manual_seed(0)
 
-    ttnn.enable_program_cache()
+    ttnn.enable_program_cache(device)
 
     tt_cache_path = get_tt_cache_path(model_version)
 

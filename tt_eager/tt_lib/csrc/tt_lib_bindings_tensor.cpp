@@ -24,7 +24,6 @@
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
