@@ -15,13 +15,17 @@ namespace tt {
 namespace tt_metal {
 
 namespace all_gather_buffer_params {
+    constexpr uint32_t erisc_handshake_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    constexpr uint32_t total_l1_buffer_space = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    // Temporary workaround to support grayskull compile until we compute this dynamically based on tensor and page size
     constexpr uint32_t num_buffers = 2;
     constexpr uint32_t semaphore_size = 32; // TODO: Remove this once dedicated semaphore space for user kernels are added
-    constexpr uint32_t semaphore_offset = semaphore_size * num_buffers; // TODO: Remove this once dedicated semaphore space for user kernels are added
-    constexpr uint32_t eth_buffer_size = round_down((eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE - semaphore_offset) / num_buffers, 32);
-    constexpr uint32_t eth_sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    constexpr uint32_t semaphore_offset = total_l1_buffer_space > 34*1024 ? semaphore_size * num_buffers : 0; // TODO: Remove this once dedicated semaphore space for user kernels are added
+    constexpr uint32_t eth_buffer_size = total_l1_buffer_space > 34*1024 ? std::min<uint32_t>(16*1024, round_down((eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE - semaphore_offset) / num_buffers, 32)) : 0;
+
+    constexpr uint32_t eth_sem_l1_byte_address = erisc_handshake_address + 16;
     constexpr uint32_t eth_buffer_l1_byte_address = eth_sem_l1_byte_address + semaphore_offset;
-    static_assert(num_buffers <= eth_l1_mem::address_map::MAX_NUM_CHANNELS);
+    static_assert(eth_buffer_size == 0 or num_buffers <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
     static_assert(all_gather_buffer_params::eth_buffer_size * all_gather_buffer_params::num_buffers + all_gather_buffer_params::semaphore_offset <= eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 }
 

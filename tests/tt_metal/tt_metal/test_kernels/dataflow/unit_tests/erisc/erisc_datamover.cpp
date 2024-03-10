@@ -39,7 +39,7 @@ void eth_setup_handshake2(std::uint32_t handshake_register_address, bool is_send
         DPRINT << "eth_wait_for_bytes\n";
         eth_wait_for_bytes(16);
         DPRINT << "wait eth_receiver_done\n";
-        eth_receiver_done();
+        eth_receiver_channel_done(0);
     }
 }
 
@@ -64,6 +64,7 @@ void kernel_main() {
 
     uint8_t sender_channels_start = get_arg_val<uint32_t>(args_offset++);
     uint32_t sender_num_channels = get_arg_val<uint32_t>(args_offset++);
+    uint8_t num_senders_with_no_work = 0;
     DPRINT << "EDM args(" << (uint32_t)enable_sender_side << "): sender_channels_start "
            << (uint32_t)sender_channels_start << "\n";
     DPRINT << "EDM args(" << (uint32_t)enable_sender_side << "): sender_num_channels " << sender_num_channels << "\n";
@@ -76,6 +77,7 @@ void kernel_main() {
         // TODO(snijjar): we can consider computing this instead using a helper in erisc_datamover_api.h
         // The erisc's local l1 copy of the semaphore workers remotely increment
         uint32_t sender_semaphores_base_address = get_arg_val<uint32_t>(args_offset++);
+        // worker's semaphore L1 address
         uint32_t worker_semaphore_address = get_arg_val<uint32_t>(args_offset++);
         uint32_t sender_num_workers = get_arg_val<uint32_t>(args_offset++);
         DPRINT << "EDM arg (" << (uint32_t)enable_sender_side
@@ -103,6 +105,9 @@ void kernel_main() {
             (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
             (const erisc::datamover::WorkerXY *)workers_xy_list_addr,
             true);
+        if (sender_num_messages_to_send == 0) {
+            num_senders_with_no_work++;
+        }
     }
 
     // Receiver args
@@ -112,6 +117,7 @@ void kernel_main() {
            << (uint32_t)receiver_channels_start << "\n";
     DPRINT << "EDM args(" << (uint32_t)enable_sender_side << "): receiver_num_channels " << receiver_num_channels
            << "\n";
+    uint8_t num_receivers_with_no_work = 0;
     for (uint32_t channel = 0; channel < receiver_num_channels; channel++) {
         uint32_t receiver_buffers_base_address = get_arg_val<uint32_t>(args_offset++);
         uint32_t receiver_num_messages_to_send = get_arg_val<uint32_t>(args_offset++);
@@ -147,11 +153,16 @@ void kernel_main() {
             (volatile tt_l1_ptr uint32_t *const)receiver_semaphores_base_address,
             (const erisc::datamover::WorkerXY *)workers_xy_list_addr,
             false);
+
+        if (receiver_num_messages_to_send == 0) {
+            num_receivers_with_no_work++;
+        }
     }
 
     // Handshake with other erisc to make sure it's safe to start sending/receiving
     // Chose an arbitrary ordering mechanism to guarantee one of the erisc's will always be "sender" and the other
     // will always be "receiver" (only for handshake purposes)
+    DPRINT << "EDM handshaking with other eth. enable_sender_side " << (uint32_t)enable_sender_side << "\n";
     bool act_as_sender_in_handshake =
         (sender_channels_start < receiver_channels_start || receiver_num_channels == 0) && sender_num_channels > 0;
     erisc::datamover::eth_setup_handshake(handshake_addr, enable_sender_side);
@@ -161,8 +172,8 @@ void kernel_main() {
     constexpr uint32_t SWITCH_INTERVAL = 100000;
     uint32_t did_nothing_count = 0;
 
-    uint32_t num_senders_complete = !enable_sender_side ? sender_num_channels : 0;
-    uint32_t num_receivers_complete = !enable_receiver_side ? receiver_num_channels : 0;
+    uint32_t num_senders_complete = !enable_sender_side ? sender_num_channels : num_senders_with_no_work;
+    uint32_t num_receivers_complete = !enable_receiver_side ? receiver_num_channels : num_receivers_with_no_work;
     uint32_t curr_sender = 0;
     uint32_t curr_receiver = 0;
     DPRINT << "EDM arg (" << (uint32_t)enable_sender_side << "): \tNOC_INDEX " << (uint32_t)noc_index << "\n";
@@ -199,7 +210,7 @@ void kernel_main() {
             }
 
             curr_sender += 1;
-            curr_sender = (curr_sender == sender_num_channels) ? 0 : curr_sender;
+            curr_sender = (curr_sender >= sender_num_channels) ? 0 : curr_sender;
         }
         //////////////////////////////////////
         // RECEIVER
@@ -222,7 +233,7 @@ void kernel_main() {
             }
 
             curr_receiver += 1;
-            curr_receiver = (curr_receiver == receiver_num_channels) ? 0 : curr_receiver;
+            curr_receiver = (curr_receiver >= receiver_num_channels) ? 0 : curr_receiver;
         }
         //////////////////////////////////////
 

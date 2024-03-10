@@ -88,10 +88,17 @@ class ChannelBuffer final {
         total_num_messages_to_move(total_num_messages_to_move),
         state(is_sender_side ? STATE::WAITING_FOR_WORKER : STATE::WAITING_FOR_ETH),
         is_sender_side(is_sender_side) {
+
         clear_local_semaphore();
-        if (is_sender_side) {
-            // Tell the sender side workers that we're ready to accept data on this channel
-            increment_worker_semaphores();
+
+        if (total_num_messages_to_move != 0) {
+            if (is_sender_side) {
+                // Tell the sender side workers that we're ready to accept data on this channel
+                // Even if we have no messages to
+                increment_worker_semaphores();
+            }
+        } else {
+            goto_state(STATE::DONE);
         }
     };
 
@@ -106,6 +113,8 @@ class ChannelBuffer final {
             WorkerXY worker_xy = this->worker_coords[i];
             uint64_t worker_semaphore_address =
                 get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
+            DPRINT << "EDM 1 semaphore inc at x=" << (uint32_t)worker_xy.x << ", y=" << (uint32_t)worker_xy.y
+                   << ", addr=" << (uint32_t)worker_semaphore_l1_address << "\n";
             noc_semaphore_inc(worker_semaphore_address, 1);
         }
     }
@@ -143,6 +152,7 @@ class ChannelBuffer final {
     [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const { return this->address; }
 
     FORCE_INLINE void increment_messages_moved() { this->num_messages_moved++; }
+    FORCE_INLINE uint32_t get_num_messages_moved() { return this->num_messages_moved; }
 
     [[nodiscard]] FORCE_INLINE bool all_messages_moved() {
         return this->num_messages_moved == this->total_num_messages_to_move;
@@ -221,7 +231,7 @@ void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sende
         eth_wait_for_receiver_done();
     } else {
         eth_wait_for_bytes(16);
-        eth_receiver_done();
+        eth_receiver_channel_done(0);
     }
 }
 
