@@ -10,6 +10,7 @@ namespace eth_l1_mem {
 
 
 struct address_map {
+  static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 0;
   // Sizes
   static constexpr std::int32_t FIRMWARE_SIZE = 0;
   // Base addresses

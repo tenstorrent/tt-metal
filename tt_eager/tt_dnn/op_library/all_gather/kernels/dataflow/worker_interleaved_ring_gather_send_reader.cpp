@@ -114,5 +114,5 @@ void kernel_main() {
     // TODO: Debug why this is needed, or else readback from host seems to happen before kernels have finished?
     // This can go on either worker sender core
     // This doesn't work just calling the regular barriers that use the set noc_index
-    ncrisc_noc_full_sync();
+    // ncrisc_noc_full_sync();
 }
