@@ -17,27 +17,30 @@ namespace tt {
 namespace tt_metal {
 
 void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
-    constexpr uint32_t header_size = 32;
-    constexpr uint32_t semaphore_offset = 32;
-    constexpr uint32_t MAX_BUFFER = round_down((eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE - semaphore_offset) / 2, 32) - header_size;
     TT_FATAL(input_tensors.size() == 1);
+    const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    TT_FATAL(page_size <= MAX_BUFFER, "Page size too large");
-    TT_FATAL(page_size % 32 == 0);
+    TT_FATAL(page_size <= all_gather_buffer_params::eth_buffer_size, "Page size too large");
+    TT_FATAL(page_size % 32 == 0, "All Gather currently requires aligned pages");
 
+    // TODO: This can be removed by passing two page sizes, actual and aligned to be used for address offsets
+    // Buffer sizes also need to take this aligned page size into consideration
     // TODO: Validate ring
-    TT_FATAL(input_tensors[0].storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensors[0].buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
-    TT_FATAL(input_tensors[0].memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0);
+    TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
+    TT_FATAL(all_gather_buffer_params::num_buffers <= input_tensor.device()->compute_with_storage_grid_size().x, "Worker cores used by eth buffers are parallelizaed over cols");
     if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
+        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
 }
 
 std::vector<Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -52,7 +55,7 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id);
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id);
 }
 
 tt::stl::reflection::Attributes AllGather::attributes() const {

@@ -1395,6 +1395,27 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 }
 
 /**
+ * A blocking call that waits until the value of a local L1 memory address on
+ * the Tensix core executing this function becomes equal or greater than a target value.
+ * This L1 memory address is used as a semaphore of size 4 Bytes, as a
+ * synchronization mechanism. Also, see *noc_semaphore_set*.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
+ * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True |
+ * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True |
+ */
+FORCE_INLINE
+void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    DEBUG_STATUS('N', 'S', 'M', 'W');
+    while ((*sem_addr) < val)
+        ;
+    DEBUG_STATUS('N', 'S', 'M', 'D');
+}
+
+/**
  * Sets the value of a local L1 memory address on the Tensix core executing
  * this function to a specific value. This L1 memory address is used as a
  * semaphore of size 4 Bytes, as a synchronization mechanism. Also, see

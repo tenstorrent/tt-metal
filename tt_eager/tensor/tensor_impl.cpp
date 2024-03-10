@@ -75,10 +75,8 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
 
 std::array<uint32_t, 2> get_sharded_page_shape(Layout layout,  DataType dtype, std::array<uint32_t, 2> shard_shape) {
     uint32_t page_size = 0;
+
     std::array<uint32_t, 2> page_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};
-
-
-    uint32_t size_of_element = element_size_bytes_wrapper(dtype);
 
     //Physical limitation in FD for now
     switch (layout) {
