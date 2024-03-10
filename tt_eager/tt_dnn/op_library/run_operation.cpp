@@ -10,7 +10,6 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -165,22 +164,28 @@ std::vector<Tensor> run_device_operation(
         const std::vector<std::optional<const Tensor>>&,
         std::vector<Tensor>&)>
         get_or_create_program;
-    if (program_cache::is_enabled()) {
-        get_or_create_program = [](const DeviceOperation& operation,
+    auto& program_cache = input_tensors[0].device()->program_cache;
+    if (program_cache.is_enabled()) {
+        get_or_create_program = [&program_cache](const DeviceOperation& operation,
                                    const std::vector<Tensor>& input_tensors,
                                    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                    std::vector<Tensor>& output_tensors) -> std::reference_wrapper<Program> {
-            auto&& [program_with_callbacks, cache_hit] =
-                program_cache::get_or_create(operation, input_tensors, optional_input_tensors, output_tensors);
+
+            auto program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
+            auto&& [program_ptr, cache_hit] = program_cache.find(program_hash);
+            if (not cache_hit) {
+                program_ptr = std::make_shared<operation::ProgramWithCallbacks>(operation.create_program(input_tensors, optional_input_tensors, output_tensors));
+                program_cache.insert(program_hash, program_ptr);
+            }
+            auto& program_with_callbacks = *(reinterpret_cast<operation::ProgramWithCallbacks*>(program_ptr.get()));
             TT_ASSERT(program_with_callbacks.supports_program_cache());
 
-            auto& program = program_with_callbacks.program;
             if (cache_hit) {
                 ZoneScopedN("Cache_hit_set_runtime_args");
                 if (program_with_callbacks.override_addresses_callback.has_value()) {
                     auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
                     override_addresses(
-                        override_addresses_callback, program, input_tensors, optional_input_tensors, output_tensors);
+                        override_addresses_callback, program_with_callbacks.program, input_tensors, optional_input_tensors, output_tensors);
                 }
 
                 if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
@@ -188,13 +193,13 @@ std::vector<Tensor> run_device_operation(
                         program_with_callbacks.override_runtime_arguments_callback.value();
                     operation.override_runtime_arguments(
                         override_runtime_arguments_callback,
-                        program,
+                        program_with_callbacks.program,
                         input_tensors,
                         optional_input_tensors,
                         output_tensors);
                 }
             }
-            return program;
+            return program_with_callbacks.program;
         };
     } else {
         get_or_create_program = [](const DeviceOperation& operation,

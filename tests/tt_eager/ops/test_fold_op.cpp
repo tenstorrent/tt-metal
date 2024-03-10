@@ -9,7 +9,6 @@
 
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tt_dnn/op_library/fold/fold_op.hpp"
-#include "tt_eager/tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt;

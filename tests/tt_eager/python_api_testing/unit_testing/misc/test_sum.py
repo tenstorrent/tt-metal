@@ -16,7 +16,7 @@ import tt_lib as ttl
         ((32, 32, 32, 32), 0),
     ),  # single tile
 )
-def test_sum_for_dim_hw(use_program_cache, shape_dim, device):
+def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -46,7 +46,7 @@ def test_sum_for_dim_hw(use_program_cache, shape_dim, device):
         ((32, 32, 32, 32), 0),
     ),  # single tile
 )
-def test_sum_global(use_program_cache, shape_dim, device):
+def test_sum_global(device, use_program_cache, shape_dim):
     shape, dim = shape_dim
     torch.manual_seed(0)
 

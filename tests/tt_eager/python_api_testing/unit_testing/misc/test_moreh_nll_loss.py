@@ -141,7 +141,7 @@ def get_tt_tensors_2d(torch_input, torch_target, torch_weight, torch_divisor, to
 @pytest.mark.parametrize("ignore_index", [0, -1])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 def test_moreh_nll_loss_4d(shape, ignore_index, reduction_mean, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors_4d(shape, device)
     nll_loss = torch.nn.NLLLoss(
@@ -169,7 +169,7 @@ def test_moreh_nll_loss_4d(shape, ignore_index, reduction_mean, device):
 @pytest.mark.parametrize("ignore_index", [0, -1])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 def test_moreh_nll_loss_2d(shape, ignore_index, reduction_mean, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors_2d(shape, device)
     nll_loss = torch.nn.NLLLoss(
@@ -204,7 +204,7 @@ def test_moreh_nll_loss_2d(shape, ignore_index, reduction_mean, device):
 @pytest.mark.parametrize("ignore_index", [0, -1])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors_4d(shape, device)
     nll_loss = torch.nn.NLLLoss(
@@ -257,7 +257,7 @@ def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, device)
 @pytest.mark.parametrize("ignore_index", [0, -1])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 def test_moreh_nll_loss_2d_backward(shape, ignore_index, reduction_mean, device):
-    ttl.program_cache.enable()
+    device.enable_program_cache()
 
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors_2d(shape, device)
     nll_loss = torch.nn.NLLLoss(

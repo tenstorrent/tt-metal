@@ -41,6 +41,7 @@ import torch
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_run_downsample(
+    device,
     use_program_cache,
     batch_size,
     output_channels,
@@ -53,7 +54,6 @@ def test_run_downsample(
     grid_size,
     height_sharded,
     dtype,
-    device,
 ):
     if batch_size > 8 and dtype != ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip("Batch > 8 must be run fully bfp8")

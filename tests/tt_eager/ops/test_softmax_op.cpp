@@ -4,7 +4,6 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/program_cache.hpp"
 #include "tt_eager/tt_dnn/op_library/softmax/softmax_op.hpp"
 #include <tt_numpy/functions.hpp>
 

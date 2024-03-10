@@ -49,7 +49,7 @@ def transpose(
     assert passing
 
     if expected_program_cache_size != None:
-        assert ttl.program_cache.num_entries() == expected_program_cache_size
+        assert device.num_program_cache_entries() == expected_program_cache_size
 
 
 def test_transpose_hc(device):

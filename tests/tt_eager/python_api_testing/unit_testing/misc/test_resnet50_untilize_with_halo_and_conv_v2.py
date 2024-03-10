@@ -448,8 +448,8 @@ hardcoded_conv_blocking_and_parallelization_config = {
     "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
 )
 def test_resnet50_conv(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,

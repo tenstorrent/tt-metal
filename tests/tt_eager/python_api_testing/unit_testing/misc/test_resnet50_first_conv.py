@@ -44,10 +44,10 @@ import torch
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
 @pytest.mark.parametrize("sharded_out", (True, False))
 def test_resnet50_first_conv(
+    device,
     use_program_cache,
     N,
     extra_padding_for_32B_alignment,
-    device,
     untilize_out,
     has_bias,
     fuse_relu,
