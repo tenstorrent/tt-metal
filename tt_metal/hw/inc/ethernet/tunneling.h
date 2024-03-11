@@ -39,9 +39,6 @@ struct erisc_info_t {
     volatile uint32_t unused_arg1;
     volatile uint32_t unused_arg2;
     volatile eth_channel_sync_t channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS]; // user_buffer_bytes_sent
-    uint32_t reserved_0_;
-    uint32_t reserved_1_;
-    uint32_t reserved_2_;
 };
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
@@ -62,6 +59,10 @@ static constexpr uint32_t data_buffer_size = eth_l1_mem::address_map::ERISC_L1_T
                                              (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t));
 
 namespace internal_ {
+
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
+    return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
+}
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
