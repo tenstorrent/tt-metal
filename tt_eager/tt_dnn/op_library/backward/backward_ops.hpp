@@ -256,6 +256,7 @@ std::vector<Tensor> imag_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> real_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 } //namespace tt_metal
 
 } //namespace tt
