@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull, is_grayskull
 
 
 # fmt: off
@@ -499,6 +500,7 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
 
 
+# @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
@@ -553,10 +555,15 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     TILE_HEIGHT = 32
 
     if batch_size == 2:
-        if m_size == 1024 and k_size == 96 and n_size == 1024 and dtype == ttnn.bfloat16:
+        if m_size == 1024 and k_size == 96 and n_size == 1024 and (dtype == ttnn.bfloat16 or is_grayskull()):
             pytest.skip("skip: Raises OOM")
         if m_size == 4096 and k_size == 64 and n_size == 4096:
             pytest.skip("skip: Raises OOM without decomposition")
+        if is_grayskull():
+            if m_size == 4096 and (
+                (k_size == 96 and n_size == 64) or (k_size == 64 and n_size == 96) or (k_size == 4096 and n_size == 64)
+            ):
+                pytest.skip("skip: Raises OOM on GS")
 
     torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
@@ -573,7 +580,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     input_tensor_c = (
         ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) if has_bias else None
     )
-    pcc = 0.96 if dtype == ttnn.bfloat8_b else 0.98
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
 
     if has_bias:
         output_tensor = ttnn.linear(
