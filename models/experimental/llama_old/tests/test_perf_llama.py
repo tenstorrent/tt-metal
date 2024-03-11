@@ -120,7 +120,7 @@ def run_perf_llama(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     ((0.150, 10),),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_bare_metal(device, use_program_cache, expected_inference_time, expected_compile_time):
     run_perf_llama(expected_inference_time, expected_compile_time, device)
 
 
@@ -129,5 +129,5 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
     "expected_inference_time, expected_compile_time",
     ((0.3, 11),),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_virtual_machine(device, use_program_cache, expected_inference_time, expected_compile_time):
     run_perf_llama(expected_inference_time, expected_compile_time, device)
