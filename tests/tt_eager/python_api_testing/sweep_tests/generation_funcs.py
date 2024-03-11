@@ -1879,3 +1879,26 @@ def gen_upsample_args(
         dtype,
     ):
         yield input_info
+
+
+def gen_softplus_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "beta",
+        "threshold",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
