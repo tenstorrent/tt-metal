@@ -1048,6 +1048,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.le_bw
 
+.. autofunction:: tt_lib.tensor.unary_fmod_bw
+
+.. autofunction:: tt_lib.tensor.unary_remainder_bw
+
 Loss Functions
 ==============
 
