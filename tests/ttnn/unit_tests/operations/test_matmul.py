@@ -170,7 +170,7 @@ def test_tutorial_matmul(device):
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -190,7 +190,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -214,7 +214,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -228,7 +228,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     )
 
     output = ttnn.matmul(
-        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8)
+        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=4)
     )
 
     output = ttnn.to_torch(output)
@@ -265,6 +265,16 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         ),  # mcast 2d transposed
         (
             2,
+            1,
+            128,
+            256,
+            512,
+            True,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+        ),  # mcast 2d with shard width > 1 TILE
+        (
+            2,
             3,
             64,
             32 * 7,
@@ -275,7 +285,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
             None,
-        ),  # mcast input_a
+        ),  # mcast in0
         (
             2,
             3,
@@ -288,7 +298,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
                 strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             None,
-        ),  # mcast input_a
+        ),  # mcast in1
         (
             7,
             7,
@@ -308,7 +318,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             ),
         ),  # bmm
     ],
-    ids=["mcast_2d", "mcast_2d_transposed", "mcast_in0", "mcast_in1", "bmm"],
+    ids=["mcast_2d", "mcast_2d_transposed", "mcast_2d_shard_width_gt_1", "mcast_in0", "mcast_in1", "bmm"],
 )
 def test_sharded_matmul(
     device,
@@ -361,7 +371,7 @@ def test_sharded_matmul(
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("batch_size", [1, 7])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)
 
@@ -381,14 +391,14 @@ def test_matmul_with_core_grid(device, batch_size):
             output_tensor = ttnn.matmul(
                 input_tensor_a,
                 input_tensor_b,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=12),
+                core_grid=ttnn.CoreGrid(y=batch_size, x=8),
             )
-        assert "1D mcast for in0 or in1 is not implemented ye" in str(exception.value)
+        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=12),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=8),
         )
 
         output_tensor = ttnn.to_torch(output_tensor)
@@ -477,7 +487,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
 @pytest.mark.parametrize("n_size", [4672])
-@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=8, x=8)])
+@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=7, x=8)])
 def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_size, core_grid):
     torch.manual_seed(0)
 

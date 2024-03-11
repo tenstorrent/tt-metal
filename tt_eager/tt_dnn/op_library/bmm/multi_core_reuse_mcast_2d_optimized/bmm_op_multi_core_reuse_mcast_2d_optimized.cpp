@@ -776,8 +776,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
-        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-        TT_ASSERT(output_tensors.size() == 1);
+        TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3);
+        TT_FATAL(output_tensors.size() == 1);
 
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto src_buffer_b = input_tensors.at(1).buffer();
@@ -860,9 +860,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b; // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_ASSERT(c.storage_type() == StorageType::DEVICE);
-        TT_ASSERT(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_ASSERT(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+        TT_FATAL(c.storage_type() == StorageType::DEVICE);
+        TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
+        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
         bias_buffer = c.buffer();
 
@@ -876,20 +876,20 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
-        TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+        TT_FATAL(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
         // same condition as above, different message
-        TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
+        TT_FATAL(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
-    TT_ASSERT(in0_buffer->size() % in0_single_tile_size == 0);
-    TT_ASSERT(in1_buffer->size() % in1_single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
+    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
 
-    TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
-    TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
-    TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
+    TT_FATAL(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_FATAL(ashape[2] % TILE_HEIGHT == 0);
+    TT_FATAL(ashape[3] % TILE_WIDTH == 0);
+    TT_FATAL(bshape[2] % TILE_HEIGHT == 0);
+    TT_FATAL(bshape[3] % TILE_WIDTH == 0);
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -899,13 +899,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
             packer_l1_acc = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            TT_FATAL(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -917,7 +917,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     }, compute_kernel_config);
 
     if (fp32_dest_acc_en) {
-        TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+        TT_FATAL(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -934,7 +934,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
         Mt = B * Mt;
         B = 1;
     }
-    TT_ASSERT(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -944,7 +944,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-    TT_ASSERT(
+    TT_FATAL(
         num_blocks_total <= num_cores_x * num_cores_y,
         fmt::format(
             "Num total blocks must be smaller than num blocks y and num blocks x: {} <= {} * {}",
@@ -960,7 +960,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Buffer *out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -985,9 +985,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
         );
     } else if (core_range.x > 1 or core_range.y > 1) {
         // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
-        TT_ASSERT(false, "1D mcast for in0 or in1 is not implemented yet.");
+        TT_FATAL(false, "1D mcast for in0 or in1 is not implemented yet.");
     } else {
-        TT_ASSERT(false, "Grid is invalid for mcast matmul!");
+        TT_FATAL(false, "Grid is invalid for mcast matmul!");
     }
 
     return {};
