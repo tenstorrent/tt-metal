@@ -43,30 +43,39 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address;
-    auto start_core = core_range.start;
-    auto end_core = core_range.end;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord{x, y};
-            auto num_semaphores = program.num_semaphores(logical_core);
-            if (num_semaphores == NUM_SEMAPHORES) {
+    std::optional<uint32_t> address = nullopt;
+    static std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+    std::fill(semaphore_histogram.begin(), semaphore_histogram.end(), 0);
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            CoreCoord logical_core(x, y);
+            auto semaphores = program.semaphores_on_core(logical_core);
+            if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" +
                     std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
-            uint32_t addr = num_semaphores == 0
-                                ? SEMAPHORE_BASE
-                                : program.semaphore_address(num_semaphores - 1) + L1_ALIGNMENT;
-            if (!address.has_value()) {
-                address = addr;
-            } else if (addr != address) {
-                TT_THROW(
-                    "Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " +
-                    std::to_string(address.value()) + " but it is at " + std::to_string(addr));
+
+            for (const auto &semaphore : semaphores) {
+                semaphore_histogram[semaphore.get().id()]++;
             }
         }
     }
+
+    std::optional<uint32_t> uninitialized_sem_id = nullopt;
+    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
+        if (semaphore_histogram.at(sem_id) == 0) {
+            uninitialized_sem_id = sem_id;
+            break;
+        }
+    }
+
+    if (uninitialized_sem_id.has_value()) {
+        address = SEMAPHORE_BASE + (L1_ALIGNMENT * uninitialized_sem_id.value());
+    } else {
+        TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
+    }
+
     return address;
 }
 
@@ -720,14 +729,14 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
                 CoreCoord start_core = core_range.start;
                 CoreCoord end_core = core_range.end;
                 TT_FATAL(start_core == end_core or start_core < end_core && "Invalid core range!");
-                auto addr = get_semaphore_address(program, core_range);
+                std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
-                    address = addr;
+                    address = addr_candidate;
                 } else {
-                    TT_ASSERT(addr == address);
+                    address = std::max(address.value(), addr_candidate.value());
                 }
             }
-            TT_FATAL(address.has_value(), "Expecting a valid Semaphore address!");
+            TT_FATAL(address.has_value(), "Unable to initialize Semaphore!");
 
             program.add_semaphore(crs, address.value(), initial_value, core_type);
 
