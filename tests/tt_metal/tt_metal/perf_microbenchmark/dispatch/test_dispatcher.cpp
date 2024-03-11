@@ -43,11 +43,11 @@ uint32_t prefetcher_buffer_size_g = 0;
 uint32_t prefetcher_page_batch_size_g = DEFAULT_PREFETCHER_PAGE_BATCH_SIZE;
 uint32_t max_xfer_size_bytes_g = MAX_XFER_SIZE_16B << 4;
 uint32_t min_xfer_size_bytes_g = MIN_XFER_SIZE_16B << 4;
+uint32_t test_type_g;
 bool debug_g;
 bool lazy_g;
 bool fire_once_g;
 bool use_coherent_data_g;
-bool test_type_g;
 bool send_to_all_g;
 bool perf_test_g;
 
@@ -65,7 +65,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "    -t: test type, 0:uni_write 1:packed_write (default {})", 0);
+        log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:packed_write (default {})", 0);
         log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end.x);
         log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
         log_info(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
@@ -161,6 +161,21 @@ void gen_cmds(Device *device,
             }
             break;
         case 1:
+            {
+                uint32_t xfer_size_16B = (std::rand() & (MAX_XFER_SIZE_16B - 1));
+                if (total_size_bytes + (xfer_size_16B << 4) > buffer_size) {
+                    xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
+                }
+                xfer_size_bytes = xfer_size_16B << 4;
+                if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
+                if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
+                gen_dispatcher_multicast_write_cmd(device, dispatch_cmds, worker_cores, worker_data,
+                                                 worker_data_addr, xfer_size_bytes);
+
+            }
+            break;
+
+        case 2:
             xfer_size_bytes = gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_data, worker_data_addr);
             break;
         }
@@ -316,7 +331,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
         if (iterations_g == 1) {
-            float total_words;
+            float total_words = 0;
             if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
                 log_fatal("Set max/min xfer size to match for reliable perf data");
             }
@@ -325,6 +340,9 @@ int main(int argc, char **argv) {
                 total_words = worker_data_size(worker_data);
                 break;
             case 1:
+                total_words = worker_data_size(worker_data);
+                break;
+            case 2:
                 if (!send_to_all_g) {
                     log_fatal("Set send_to_all to true for reliable perf data");
                 }
