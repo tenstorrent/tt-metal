@@ -241,6 +241,7 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
     CQDispatchCmd cmd;
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+    cmd.write_packed.is_multicast = 0;
     cmd.write_packed.count = worker_cores.size();
     cmd.write_packed.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
     cmd.write_packed.size = size_words * sizeof(uint32_t);
