@@ -104,9 +104,9 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
                 }
             }
 
-            cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
-            data[core].data.resize(padded_size(data[core].data.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
-            data[core].valid.resize(padded_size(data[core].valid.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
+            cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+            data[core].data.resize(padded_size(data[core].data.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+            data[core].valid.resize(padded_size(data[core].valid.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
         }
     }
 }
@@ -185,7 +185,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
         cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
     }
-    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT6/sizeof(uint)
+    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
 
     generate_random_packed_payload(cmds, worker_cores, worker_data, size_words);
 
@@ -256,9 +256,10 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
     // Note: this cmd doesn't clamp to a max size which means it can overflow L1 buffer
     // However, this cmd doesn't send much data and the L1 buffer is < L1 limit, so...
 
-    uint32_t xfer_size_words = (std::rand() % (dispatch_buffer_page_size_g >> sizeof(uint32_t))) + 1;
+    uint32_t xfer_size_words = (std::rand() % (dispatch_buffer_page_size_g / sizeof(uint32_t))) + 1;
     uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
     if (perf_test_g) {
+        TT_ASSERT(max_xfer_size_bytes_g < dispatch_buffer_page_size_g);
         if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
         if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
     }
@@ -276,7 +277,7 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
     }
 
     gen_dispatcher_packed_write_cmd(device, cmds, gets_data, worker_data,
-                                    dst_addr, xfer_size_bytes * sizeof(uint32_t));
+                                    dst_addr, xfer_size_bytes / sizeof(uint32_t));
 
     return xfer_size_bytes;
 }
