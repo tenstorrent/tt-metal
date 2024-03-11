@@ -200,12 +200,14 @@ void process_write_packed() {
     uint32_t xfer_size = cmd->write_packed.size;
     uint32_t dst_addr = cmd->write_packed.addr;
 
+    // ASSERT(xfer_size < dispatch_cb_page_size);
+
     volatile CQDispatchWritePackedSubCmd tt_l1_ptr *sub_cmd_ptr = (volatile CQDispatchWritePackedSubCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd));
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedSubCmd);
     data_ptr = (data_ptr + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1);
     uint32_t stride = (xfer_size + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1);
 
-    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << ENDL();
+    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         sub_cmd_ptr++;
@@ -213,6 +215,7 @@ void process_write_packed() {
 
         // Get a page if needed
         if (data_ptr + xfer_size > cb_fence) {
+            DPRINT << data_ptr << " " << cb_fence << ENDL();
             // Check for block completion
             uint32_t remainder_xfer_size = 0;
             uint32_t remainder_dst_addr;
