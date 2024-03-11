@@ -226,8 +226,7 @@ def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, device)
     torch_loss.backward(output_grad)
 
     tt_output_grad = (
-        ttl.tensor.Tensor(output_grad, ttl.tensor.DataType.BFLOAT16)
-        .reshape(1, 1, 1, 1)
+        ttl.tensor.Tensor(output_grad.reshape(1, 1, 1, 1), ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("nan"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
@@ -279,8 +278,7 @@ def test_moreh_nll_loss_2d_backward(shape, ignore_index, reduction_mean, device)
     torch_loss.backward(output_grad)
 
     tt_output_grad = (
-        ttl.tensor.Tensor(output_grad, ttl.tensor.DataType.BFLOAT16)
-        .reshape(1, 1, 1, 1)
+        ttl.tensor.Tensor(output_grad.reshape(1, 1, 1, 1), ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("nan"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)

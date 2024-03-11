@@ -32,7 +32,7 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
 inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     ttnn::validate_input_tensor("ttnn.reshape", tensor, reshape_input_schemas[0]);
 
-    auto tensor_shape = tensor.ttnn_shape();
+    auto tensor_shape = tensor.shape;
     if (tensor_shape == shape) {
         return tensor;
     }
@@ -102,14 +102,14 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t
     std::array<std::uint32_t, Rank> new_shape{};
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (new_volume < 0) {
-        const auto volume = tensor.ttnn_shape().with_tile_padding().volume();
+        const auto volume = tensor.shape.with_tile_padding().volume();
         new_shape[index_of_negative_1] = volume / (-new_volume);
     }
     return reshape(tensor, ttnn::Shape(new_shape));
 }
 
 inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    const auto tensor_shape = tensor.ttnn_shape();
+    const auto tensor_shape = tensor.shape;
     const auto rank = tensor_shape.rank();
     if (rank == 4) {
         return tensor;
@@ -123,7 +123,7 @@ inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
 }
 
 inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
-    auto shape = tensor.ttnn_shape();
+    auto shape = tensor.shape;
     if (shape.rank() != 4) {
         TT_THROW("Tensor has to be of rank 4!");
     }

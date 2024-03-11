@@ -159,9 +159,9 @@ int main(int argc, char **argv) {
         Tensor output_tensor_cpu = create_device_tensor(shapec, a.get_dtype(), Layout::TILE, device, a.memory_config());
         Tensor out_cpu = tt::operations::primary::moreh_matmul(a, b, std::nullopt, false, static_cast<bool>(transpose_b)).cpu();
 
-        const auto expected_storage = std::get<DeviceStorage>(output_tensor_cpu.storage());
+        const auto expected_storage = std::get<DeviceStorage>(output_tensor_cpu.get_storage());
         Tensor with_output_tensor = tt::operations::primary::moreh_matmul(a, b, output_tensor_cpu, false, static_cast<bool>(transpose_b));
-        const auto actual_storage = std::get<DeviceStorage>(with_output_tensor.storage());
+        const auto actual_storage = std::get<DeviceStorage>(with_output_tensor.get_storage());
         Tensor out_cpu_with_output_tensor = with_output_tensor.cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
