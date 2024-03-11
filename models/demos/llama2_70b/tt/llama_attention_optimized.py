@@ -78,7 +78,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.max_seq_len,
+                    # self.max_seq_len,
+                    1024,  # HACK: Reduce DRAM reqs
                     self.head_dim,
                 )
             )
@@ -86,7 +87,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 (
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
-                    self.max_seq_len,
+                    # self.max_seq_len,
+                    1024,  # HACK: Reduce DRAM reqs
                     self.head_dim,
                 )
             )
@@ -454,6 +456,11 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 output_mem_config=self.model_config["L1_MEMCFG"]
                 # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             )
+
+            # Shard key_layer
+            # key_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+            #     key_layer[i],
+            #     sharded_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],)
             # Pad and transpose Q for batched matmul
             if self.batched_attn:
                 query_layer[i] = tt_lib.tensor.pad(
