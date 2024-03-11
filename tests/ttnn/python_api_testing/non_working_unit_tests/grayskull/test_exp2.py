@@ -23,7 +23,7 @@ def run_eltwise_exp2_tests(
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
 
     try:
         # get ref result

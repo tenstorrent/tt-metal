@@ -13,7 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
-def run_eltwise_exp_tests(
+def run_eltwise_expm1_tests(
     input_shape,
     dtype,
     dlayout,
@@ -27,11 +27,11 @@ def run_eltwise_exp_tests(
 
     try:
         # get ref result
-        ref_value = torch.exp(x)
+        ref_value = torch.expm1(x)
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
 
-        tt_result = ttnn.exp(x)
+        tt_result = ttnn.expm1(x)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
 
     except Exception as e:
@@ -50,8 +50,8 @@ test_sweep_args = [
         [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.L1_MEMORY_CONFIG,
-        6861134,
+        ttnn.DRAM_MEMORY_CONFIG,
+        11079580,
     ),
     (
         [(12, 224, 224)],
@@ -68,5 +68,5 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_exp(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
-    run_eltwise_exp_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+def test_eltwise_expm1(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    run_eltwise_expm1_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
