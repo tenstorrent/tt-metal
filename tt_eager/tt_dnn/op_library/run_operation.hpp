@@ -169,7 +169,7 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
                 raise_unsupported_storage<T>();
             }
         },
-        tensor.storage());
+        tensor.get_storage());
 }
 
 template<typename OperationType>

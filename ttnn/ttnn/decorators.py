@@ -220,6 +220,7 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
 
             return call_wrapper
 
+        @wraps(function)
         def fallback_decorator(function):
             def call_wrapper(*function_args, **function_kwargs):
                 try:

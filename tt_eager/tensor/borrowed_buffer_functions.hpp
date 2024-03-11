@@ -52,7 +52,7 @@ Buffer<T> get_as(Tensor& tensor) {
                 TT_THROW("Tensor must have BorrowedStorage");
             }
         },
-        tensor.storage());
+        tensor.get_storage());
 }
 
 template<typename T>
@@ -67,7 +67,7 @@ const Buffer<T> get_as(const Tensor& tensor) {
                 TT_THROW("Tensor must have BorrowedStorage");
             }
         },
-        tensor.storage());
+        tensor.get_storage());
 }
 
 }  // namespace borrowed_buffer

@@ -98,7 +98,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     output_stream.write(reinterpret_cast<const char*>(&layout), sizeof(Layout));
 
     std::visit(
-        [&output_stream] (const auto& storage) {
+        [&output_stream](const auto& storage) {
 
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
@@ -120,8 +120,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage()
-    );
+        tensor.get_storage());
 }
 
 Tensor load_tensor(const std::string& file_name) {

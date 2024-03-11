@@ -34,15 +34,15 @@ inline ttnn::Tensor add(
 
     auto&& [input_tensor_a, input_tensor_b] = [](const auto& input_tensor_a_arg, const auto& input_tensor_b_arg) {
         // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-        if (tt::tt_metal::compute_volume(input_tensor_a_arg.ttnn_shape()) <
-            tt::tt_metal::compute_volume(input_tensor_b_arg.ttnn_shape())) {
+        if (tt::tt_metal::compute_volume(input_tensor_a_arg.shape) <
+            tt::tt_metal::compute_volume(input_tensor_b_arg.shape)) {
             return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
         }
         return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
     }(input_tensor_a_arg, input_tensor_b_arg);
 
-    const auto original_shape = input_tensor_a.ttnn_shape();
-    const auto input_shape_b = input_tensor_b.ttnn_shape();
+    const auto original_shape = input_tensor_a.shape;
+    const auto input_shape_b = input_tensor_b.shape;
 
     std::size_t height_b{};
     std::size_t width_b{};
@@ -94,7 +94,7 @@ inline ttnn::Tensor add(
     if (dtype.has_value()) {
         TT_THROW("ttnn.add: cannot change dtype when broadcasting");
     }
-    const auto original_shape = input_tensor_a.ttnn_shape();
+    const auto original_shape = input_tensor_a.shape;
 
     auto input_tensor_a_4D = ttnn::unsqueeze_to_4D(input_tensor_a);
 

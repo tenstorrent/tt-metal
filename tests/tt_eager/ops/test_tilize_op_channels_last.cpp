@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         log_debug(LogTest, "Moving src data to host to validate");
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
-        Tensor g = Tensor(host_a.storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+        Tensor g = Tensor(host_a.get_storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         Tensor golden = g.to(Layout::TILE);
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
         auto result_vec = owned_buffer::get_as<bfloat16>(c);
