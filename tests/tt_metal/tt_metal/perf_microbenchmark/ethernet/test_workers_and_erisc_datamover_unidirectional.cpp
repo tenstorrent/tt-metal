@@ -211,7 +211,6 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\t-- sender --");
     log_debug(tt::LogTest, "\tchip0_sender_channels_offset: {}", chip0_sender_channels_offset);
     uint32_t chip0_sender_num_channels = chip0_arg_sender_num_channels;
-    chip0_edm_args.push_back(chip0_sender_num_channels);
     log_debug(tt::LogTest, "\tchip0_sender_num_channels: {}", chip0_sender_num_channels);
     uint32_t chip0_receiver_channels_offset = chip0_sender_channels_offset + chip0_sender_num_channels;
     uint32_t chip0_sender_erisc_sender_buffer_address = chip0_next_buffer_address;
@@ -269,7 +268,7 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\tchip0_receiver_channels_offset: {}", chip0_receiver_channels_offset);
     chip0_edm_args.push_back(chip0_receiver_channels_offset);
     uint32_t chip0_receiver_num_channels = 0;
-    chip0_edm_args.push_back(chip0_receiver_num_channels);
+    // chip0_edm_args.push_back(chip0_receiver_num_channels);
     log_debug(tt::LogTest, "\tchip0_receiver_num_channels: {}", chip0_receiver_num_channels);
     //---------------------
 
@@ -284,7 +283,9 @@ bool RunWriteBWTest(
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
                 uint32_t(1),  // enable sender side
-                uint32_t(0)   // enable receiver side
+                uint32_t(0),   // enable receiver side
+                static_cast<uint32_t>(chip0_sender_num_channels),
+                static_cast<uint32_t>(0)
             }});
 
     // chip 0 sender_worker_sender
@@ -346,6 +347,7 @@ bool RunWriteBWTest(
     auto chip1_receiver_worker_core = CoreCoord(0, 0);
     uint32_t chip1_worker_semaphores_base_address = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
 
+    uint32_t chip1_receiver_num_channels = chip0_arg_sender_num_channels;
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover.cpp",
@@ -353,8 +355,10 @@ bool RunWriteBWTest(
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
-                uint32_t(0),  // enable sender side
-                uint32_t(1)   // enable receiver side
+                static_cast<uint32_t>(0),  // enable sender side
+                static_cast<uint32_t>(1),   // enable receiver side
+                static_cast<uint32_t>(0),
+                static_cast<uint32_t>(chip1_receiver_num_channels)
             }});
 
     //                              Device 1 - RECEIVER
@@ -362,7 +366,6 @@ bool RunWriteBWTest(
     uint32_t chip1_sender_num_channels = 0;
     uint32_t chip1_next_buffer_address = erisc_handshake_address + 16;
     std::vector<uint32_t> chip1_edm_args = {erisc_handshake_address};
-    uint32_t chip1_receiver_num_channels = chip0_arg_sender_num_channels;
 
     //                              Device 1 - SENDER
     uint32_t chip1_sender_channel_size = 0;
@@ -371,7 +374,7 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\t-- sender --");
     chip1_edm_args.push_back(chip1_sender_channels_offset);
     log_debug(tt::LogTest, "\tchip1_sender_channels_offset: {}", chip1_sender_channels_offset);
-    chip1_edm_args.push_back(chip1_sender_num_channels);
+    // chip1_edm_args.push_back(chip1_sender_num_channels);
     log_debug(tt::LogTest, "\tchip1_sender_num_channels: {}", chip1_sender_num_channels);
     CoreCoord chip1_sender_noc_xy(0,0);
     for (uint32_t sc = 0; sc < chip1_sender_num_channels; sc++) {
@@ -422,7 +425,7 @@ bool RunWriteBWTest(
     uint32_t chip1_eth_receiver_l1_sem_addr = 0;
     chip1_edm_args.push_back(chip1_receiver_channels_offset);
     log_debug(tt::LogTest, "\tchip1_receiver_channels_offset: {}", chip1_receiver_channels_offset);
-    chip1_edm_args.push_back(chip1_receiver_num_channels);
+    // chip1_edm_args.push_back(chip1_receiver_num_channels);
     log_debug(tt::LogTest, "\tchip1_receiver_num_channels: {}", chip1_receiver_num_channels);
     for (uint32_t sc = 0; sc < chip1_receiver_num_channels; sc++) {
         //    Informs how many times to iterate through the next group of args
