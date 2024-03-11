@@ -957,6 +957,7 @@ class TTPyCompositeConv(TTPyOp):
                 output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
                 output_dtype=output_dtype,
                 compute_kernel_config=compute_kernel_config,
+                # untilize_out=True if fuse_relu else False,
             )
             return output
 
