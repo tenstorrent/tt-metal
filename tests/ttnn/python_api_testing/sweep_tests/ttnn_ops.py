@@ -710,8 +710,8 @@ def eltwise_add(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.add(t0, t1)
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    t2 = ttnn.add(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def eltwise_exp(
@@ -725,8 +725,8 @@ def eltwise_exp(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.exp(t0)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.exp(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def permute(
@@ -741,8 +741,8 @@ def permute(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.permute(t0, permute_dims)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.permute(t0, permute_dims, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def reshape(
@@ -757,8 +757,8 @@ def reshape(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.reshape(t0, reshape_dims)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.reshape(t0, reshape_dims)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def gelu(
@@ -773,8 +773,8 @@ def gelu(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    t1 = ttnn.gelu(t0)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.gelu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sub(
@@ -792,8 +792,8 @@ def eltwise_sub(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.sub(t0, t1, alpha=scalar)
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    t2 = ttnn.sub(t0, t1, alpha=scalar, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
@@ -810,8 +810,8 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
 def eltwise_tanh(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    t1 = ttnn.tanh(t0)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.tanh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_softmax(
@@ -825,8 +825,8 @@ def eltwise_softmax(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softmax(t0, dim=-1)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.softmax(t0, dim=-1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_softplus(
@@ -840,8 +840,8 @@ def eltwise_softplus(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softplus(t0)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.softplus(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def mul(
@@ -859,8 +859,8 @@ def mul(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.mul(t0, t1)
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    t2 = ttnn.mul(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
@@ -882,19 +882,17 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config,
         tt_bias = None
 
     t1 = ttnn.linear(
-        t0,
-        tt_weight,
-        bias=tt_bias,
-        dtype=ttnn.bfloat16,  # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x)
+        t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, memory_config=memory_config_to_ttnn(output_mem_config)
     )
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_softmax_in_place(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    t1 = ttnn.softmax(t0, -1)
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    t1 = ttnn.softmax(t0, -1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
 
 
 def matmul(
@@ -912,8 +910,8 @@ def matmul(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = t0 @ t1  # ttnn.matmul(t0, t1)
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    t2 = ttnn.matmul(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def layernorm(
@@ -932,9 +930,9 @@ def layernorm(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttnn.layer_norm(t0, weight=t1, bias=t2)
+    t3 = ttnn.layer_norm(t0, weight=t1, bias=t2, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t3, output_mem_config)
+    return ttnn_tensor_to_torch(t3)
 
 
 def layernorm_residual(
@@ -955,9 +953,11 @@ def layernorm_residual(
     t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = setup_ttnn_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
 
-    t4 = ttnn.layer_norm(t0, residual_input_tensor=t1, weight=t2, bias=t3)
+    t4 = ttnn.layer_norm(
+        t0, residual_input_tensor=t1, weight=t2, bias=t3, memory_config=memory_config_to_ttnn(output_mem_config)
+    )
 
-    return ttnn_tensor_to_torch(t4, output_mem_config)
+    return ttnn_tensor_to_torch(t4)
 
 
 def layernorm_noweights(
@@ -971,9 +971,9 @@ def layernorm_noweights(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.layer_norm(t0)
+    t1 = ttnn.layer_norm(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def attention_softmax_nomask(
@@ -987,10 +987,11 @@ def attention_softmax_nomask(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t2 = ttnn.transformer.attention_softmax(
+        t0, head_size=None, attention_mask=None, memory_config=memory_config_to_ttnn(output_mem_config)
+    )
 
-    t2 = ttnn.transformer.attention_softmax(t0, head_size=None, attention_mask=None)
-
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    return ttnn_tensor_to_torch(t2)
 
 
 def attention_softmax(
@@ -1014,9 +1015,11 @@ def attention_softmax(
     if scalar < 0:
         scalar = -scalar
 
-    t2 = ttnn.transformer.attention_softmax(t0, head_size=scalar, attention_mask=t1)
+    t2 = ttnn.transformer.attention_softmax(
+        t0, head_size=scalar, attention_mask=t1, memory_config=memory_config_to_ttnn(output_mem_config)
+    )
 
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    return ttnn_tensor_to_torch(t2)
 
 
 def rmsnorm(
@@ -1034,9 +1037,9 @@ def rmsnorm(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
-    t2 = ttnn.rms_norm(t0, t1)
+    t2 = ttnn.rms_norm(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    return ttnn_tensor_to_torch(t2)
 
 
 def transformer_concatenate_heads(
@@ -1050,9 +1053,9 @@ def transformer_concatenate_heads(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.transformer.concatenate_heads(t0, memory_config=output_mem_config)
+    t1 = ttnn.transformer.concatenate_heads(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def full_like(
