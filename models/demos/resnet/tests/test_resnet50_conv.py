@@ -668,7 +668,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
     ids=["output_BFLOAT16", "output_BFLOAT8_B"],
 )
 def test_resnet50_conv(
-    use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, weights_dtype, output_dtype
+    device, use_program_cache, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, weights_dtype, output_dtype
 ):
     output_mem_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1

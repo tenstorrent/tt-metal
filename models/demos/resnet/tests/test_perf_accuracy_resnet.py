@@ -166,6 +166,7 @@ def run_perf_resnet(
     ((16, 0.015, 33, 160), (20, 0.0185, 33, 160)),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     model_location_generator,
     batch_size,
@@ -173,7 +174,6 @@ def test_perf_bare_metal(
     expected_compile_time,
     hf_cat_image_sample_input,
     iterations,
-    device,
     function_level_defaults,
 ):
     if is_e75(device):
@@ -196,6 +196,7 @@ def test_perf_bare_metal(
     ((16, 0.015, 36, 50), (20, 0.016, 36, 50)),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     model_location_generator,
     batch_size,
@@ -203,7 +204,6 @@ def test_perf_virtual_machine(
     expected_compile_time,
     hf_cat_image_sample_input,
     iterations,
-    device,
     function_level_defaults,
 ):
     if is_e75(device):

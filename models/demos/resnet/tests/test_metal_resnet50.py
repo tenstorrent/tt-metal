@@ -135,7 +135,7 @@ golden_pcc = {
     ids=["HiFi4", "HiFi2", "LoFi"],
 )
 def test_run_resnet50_inference(
-    use_program_cache, device, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
 ):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")

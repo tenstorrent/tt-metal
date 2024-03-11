@@ -351,6 +351,7 @@ def test_bert_batch_dram(
     ids=["BERT_LARGE"],
 )
 def test_bert_batch_dram_with_program_cache(
+    device,
     use_program_cache,
     model_version,
     batch,
@@ -362,7 +363,6 @@ def test_bert_batch_dram_with_program_cache(
     model_config_str,
     model_location_generator,
     request,
-    device,
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
