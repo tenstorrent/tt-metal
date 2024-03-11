@@ -91,11 +91,11 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     ),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     run_perf_vit(
         expected_inference_time,
@@ -116,11 +116,11 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     run_perf_vit(
         expected_inference_time,

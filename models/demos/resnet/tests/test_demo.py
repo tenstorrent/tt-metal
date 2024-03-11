@@ -12,11 +12,11 @@ from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_image
     ((8, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(
+    device,
     use_program_cache,
     batch_size,
     input_loc,
     imagenet_label_dict,
-    device,
 ):
     expected_prediction = [
         "ruffed grouse, partridge, Bonasa umbellus",

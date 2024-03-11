@@ -121,7 +121,7 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
     "model_name,iterations",
     (("microsoft/swin-tiny-patch4-window7-224", 20),),
 )
-def test_perf_bare_metal(use_program_cache, device, model_name, iterations, model_location_generator):
+def test_perf_bare_metal(device, use_program_cache, model_name, iterations, model_location_generator):
     run_swin_perf(device, model_name, iterations, model_location_generator)
 
 
@@ -130,5 +130,5 @@ def test_perf_bare_metal(use_program_cache, device, model_name, iterations, mode
     "model_name,iterations",
     (("microsoft/swin-tiny-patch4-window7-224", 20),),
 )
-def test_perf_virtual_machine(use_program_cache, device, model_name, iterations, model_location_generator):
+def test_perf_virtual_machine(device, use_program_cache, model_name, iterations, model_location_generator):
     run_swin_perf(device, model_name, iterations, model_location_generator)

@@ -133,12 +133,12 @@ def run_perf_resnet(
     ),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
@@ -164,12 +164,12 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")

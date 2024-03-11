@@ -216,6 +216,7 @@ def run_test_FalconModel_inference(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconModel_inference(
+    device,
     use_program_cache,
     model_version,
     llm_mode,
@@ -225,7 +226,6 @@ def test_FalconModel_inference(
     num_layers,
     pcc,
     model_config_str,
-    device,
 ):
     enable_persistent_kernel_cache()
     model_config = get_model_config(model_config_str)
