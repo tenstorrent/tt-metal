@@ -387,7 +387,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Ten
 
             uint32_t per_core_M = M / virtual_y;
             uint32_t per_core_N = N / virtual_x;
-            uint32_t in0_block_w = shard_shape[1] / TILE_WIDTH % 2 == 0 ? 2 : 1;
+            uint32_t in0_block_w = shard_shape[1] / TILE_WIDTH;
 
             auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint);
             auto out_subblock_h = std::get<0>(subblock_hw);
@@ -778,6 +778,18 @@ void Matmul::validate(
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
+    std::visit(
+        [input_tensor_a](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (
+                not std::is_same_v<ProgramConfigType, MatmulDefaultProgramConfig>
+            ) {
+                TT_FATAL(program_config.compute_with_storage_grid_size.x <= input_tensor_a.device()->compute_with_storage_grid_size().x, "Matmul grid size exceeds maximum device compute grid size!");
+                TT_FATAL(program_config.compute_with_storage_grid_size.y <= input_tensor_a.device()->compute_with_storage_grid_size().y, "Matmul grid size exceeds maximum device compute grid size!");
+            }
+        },
+        this->program_config
+    );
 
     TT_FATAL(optional_input_tensors.size() == 1);
     const auto& optional_bias = optional_input_tensors.at(0);
@@ -792,7 +804,11 @@ void Matmul::validate(
     }
 
     std::visit(
-        [&](const auto& program_config) {
+        [
+            input_tensor_a,
+            input_tensor_b,
+            this
+        ](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
             // We can uplift these variants to skip mcasting to support single core (1D) or single row/col (2D)
@@ -892,7 +908,7 @@ void Matmul::validate(
                     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                     TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
-                    TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
+                    TT_FATAL((shard_shape[1] / TILE_WIDTH) == program_config.in0_block_w);
                     TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == N / program_config.per_core_N);
                 }
                 if (this->output_mem_config.is_sharded()) {
