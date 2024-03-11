@@ -13,7 +13,7 @@ import numpy as np
 
 import tt_lib
 
-from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama import Llama
 
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
@@ -63,9 +63,12 @@ def run_test_LlamaModel_inference(
     emulated=False,
 ):
     if emulated:
-        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
-        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
+        # ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+        # tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        # cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
+        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
+        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
+        cache_path = model_config["DEFAULT_CACHE_PATH"]
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
@@ -121,7 +124,7 @@ def run_test_LlamaModel_inference(
         tt_lib.device.Synchronize(device)
 
     generation_start_pos = 1
-    generation_length = 20
+    generation_length = 40
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -145,8 +148,12 @@ def run_test_LlamaModel_inference(
             attn_mask,
         )
 
+        print(f"Syncronizing devices for token idx {start_pos}")
+
         for device in devices:
             tt_lib.device.Synchronize(device)
+
+        print(f"Done synchronizing devices")
 
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
@@ -229,6 +236,8 @@ def run_test_LlamaModel_inference(
         (0.999, 1),
         (0.998, 2),
         (0.99, 4),
+        (0.98, 6),
+        (0.98, 7),
         (0.98, 8),
         (0.96, 10),
         (0.94, 20),
@@ -255,9 +264,11 @@ def test_LlamaModel_inference(
     n_layers,
     n_devices,
     all_devices,
+    # device,
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, n_devices)
+    # devices = [device]
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:

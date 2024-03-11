@@ -37,7 +37,7 @@ class TtLlamaModelForGeneration:
         if n_layers == None:
             n_layers = 80
 
-        if n_layers >= 40:
+        if n_layers >= 40 and n_devices == 4:
             n_layers_per_group = 20
             assert n_layers % n_layers_per_group == 0
         else:

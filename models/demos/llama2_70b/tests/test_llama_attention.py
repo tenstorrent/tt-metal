@@ -9,8 +9,8 @@ from pathlib import Path
 
 import tt_lib
 
-from models.demos.llama2_70b.reference.llama import Llama
-from models.demos.llama2_70b.reference.llama.model import precompute_freqs_cis
+from models.demos.llama2_70b.reference.llama.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,

@@ -133,6 +133,7 @@ def get_model_config(model_config_str, num_devices=8):
             model_config[key] = BFLOAT16_DTYPE
 
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
+    # model_config["KV_CACHE_DTYPE"] = BFLOAT16_DTYPE # HACK:! JUST FOR UPDATE_CACHE TESTING
 
     hidden_size = model_config_entries["hidden_size"]
 
@@ -538,6 +539,19 @@ def get_model_config(model_config_str, num_devices=8):
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
                 shard_spec_8_cores_grid,
+                [
+                    shard_height,  # Each core has 32 users
+                    head_dim,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_1_cores_grid,
                 [
                     shard_height,  # Each core has 32 users
                     head_dim,  # head dim

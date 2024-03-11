@@ -12,12 +12,13 @@ from time import sleep
 import pytest
 from loguru import logger
 
-from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama import Llama
 from transformers.generation.utils import top_k_top_p_filtering
 from models.demos.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
+from models.utility_functions import get_devices_for_t3000
 
 
 def main(args):
@@ -345,7 +346,7 @@ def construct_arg(**kwargs):
 )
 @pytest.mark.parametrize(
     "n_devices",
-    ((4),),
+    (4, 8),
 )
 def test_LlamaModel_demo(
     # model args
@@ -364,15 +365,17 @@ def test_LlamaModel_demo(
     top_k,
     temperature,
     # TT args
-    pcie_devices,
+    # pcie_devices,
+    all_devices,
     n_devices,
     emulated,
 ):
     ## Get model config
     model_config = get_model_config("BFLOAT16-DRAM", num_devices=n_devices)
+    devices = get_devices_for_t3000(all_devices, n_devices)
 
-    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices and emulated == False:
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if len(devices) < n_devices and emulated == False:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -391,7 +394,7 @@ def test_LlamaModel_demo(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        pcie_devices=pcie_devices,
+        pcie_devices=devices,
         n_devices=n_devices,
         emulated=emulated,
         model_config=model_config,

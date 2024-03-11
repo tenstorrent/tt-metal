@@ -8,7 +8,7 @@ from loguru import logger
 from pathlib import Path
 
 import tt_lib
-from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.model_config import (

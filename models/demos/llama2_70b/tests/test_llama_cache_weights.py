@@ -14,7 +14,7 @@ import numpy as np
 
 import tt_lib
 
-from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama import Llama
 
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,

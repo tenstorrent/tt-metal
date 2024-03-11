@@ -22,3 +22,6 @@
 [submodule "tt_metal/third_party/tt_llk_wormhole_b0"]
 	path = tt_metal/third_party/tt_llk_wormhole_b0
 	url = https://github.com/tenstorrent/tt-llk-wh-b0.git
+[submodule "models/demos/llama2_70b/reference/llama"]
+	path = models/demos/llama2_70b/reference/llama
+	url = https://github.com/tenstorrent-metal/llama.git
