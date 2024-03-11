@@ -362,7 +362,7 @@ def test_FalconDecoder_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     if llm_mode == "prefill" and model_config_str == "BFLOAT16-SHARDED":
         pytest.skip("Prefill is only tested for BFLOAT8_B!")
