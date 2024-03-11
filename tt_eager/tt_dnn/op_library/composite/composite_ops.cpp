@@ -105,15 +105,20 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _log1p)(x, output_mem_config);
 }
 
-// softplus[x] = log[1 + exp[x]]
+// softplus[x] =(1/beta) * log[1 + exp[x * beta]]
+// (x*beta) > threshold ==> x
 // use transformation y = log[1+exp[x]] by broadcast
-Tensor _softplus(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor exp_x = exp(x, output_mem_config);
+Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfig& output_mem_config) {
+    float oned_beta = (1 / beta);
+    Tensor x_beta = mul_unary(x, beta, output_mem_config);
+    Tensor exp_x = exp(x_beta, output_mem_config);
     Tensor result_log1p = log1p(exp_x, output_mem_config);
-    return result_log1p;
+    Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
+    sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x, sp_result, output_mem_config);
+    return sp_result;
 }
-Tensor softplus(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _softplus)(a, output_mem_config);
+Tensor softplus(const Tensor& a, float beta, float threshold, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _softplus)(a, beta, threshold, output_mem_config);
 }
 
 // tanhshrink(x) = x - tanh(x)
@@ -227,7 +232,7 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
 // use transformation y = x*tanh[softplus[x]] by broadcast
 // Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
 Tensor _mish(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor sp_x = softplus(x, output_mem_config);
+    Tensor sp_x = softplus(x, 1.0f, 20.0f, output_mem_config);
     Tensor tanh_x = tanh(sp_x, output_mem_config);
     sp_x.deallocate();
     Tensor mish_x = mul(x, tanh_x, std::nullopt, output_mem_config);

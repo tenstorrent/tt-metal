@@ -229,6 +229,13 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
                 "equal_nan": random.choice([False, True]),
             }
         )
+    elif fn in ["softplus"]:
+        test_args.update(
+            {
+                "beta": random.choice([0.5, -3, 1, 4]),
+                "threshold": random.choice([-20, 10, 20, 5]),
+            }
+        )
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,
