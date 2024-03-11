@@ -120,7 +120,7 @@ def test_FalconMLP_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
