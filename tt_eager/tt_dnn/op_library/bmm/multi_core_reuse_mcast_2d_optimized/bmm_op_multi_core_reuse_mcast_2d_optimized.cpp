@@ -454,7 +454,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig interm0_cb_config = tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    if (interm0_data_format != output_data_format) {
+    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // output
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
             {output_cb_index, output_data_format},
