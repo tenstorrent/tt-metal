@@ -947,7 +947,12 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
     align_program_page_idx_to_new_page();
     for (const KernelGroup& kernel_group : kernel_group_unicast) {
-        populate_program_binaries_pages(kernel_group);
+        if (kernel_group.get_core_type() == CoreType::ETH) {
+            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
+            for (const auto& logical_core : kernel->logical_cores()) {
+                populate_program_binaries_pages(kernel_group);
+            }
+        }
     }
 
     // Since GO signal begin in a new page, I need to advance my idx

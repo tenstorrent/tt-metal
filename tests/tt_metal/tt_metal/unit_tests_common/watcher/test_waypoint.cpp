@@ -52,26 +52,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         CoreRange(xy_start, xy_end),
         ComputeConfig{});
 
-    // Also run on ethernet cores if they're present
-    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    // TODO: Change back to a single erisc_kid once the bug with CoreRange fast dispatch is fixed.
-    vector<KernelHandle> erisc_kids;
-    if (has_eth_cores) {
-        std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            eth_core_ranges.insert(CoreRange(core, core));
-            auto erisc_kid = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-                core,
-                tt_metal::EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
-            erisc_kids.push_back(erisc_kid);
-        }
-    }
-
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
@@ -108,15 +88,25 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             );
         }
     }
-    int idx = 0;
-    for (const auto& core : device->get_active_ethernet_cores(true)) {
-        SetRuntimeArgs(
+    // Also run on ethernet cores if they're present
+    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
+    if (has_eth_cores) {
+        KernelHandle erisc_kid;
+        std::set<CoreRange> eth_core_ranges;
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
+            eth_core_ranges.insert(CoreRange(core, core));
+        }
+        erisc_kid = CreateKernel(
             program,
-            erisc_kids[idx++],
-            core,
-            args
-        );
+            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+            eth_core_ranges,
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
+            SetRuntimeArgs(program, erisc_kid, core, args);
+        }
     }
+
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(device, program);
