@@ -70,13 +70,6 @@ void kernel_main() {
                             read_l1_index += per_core_N;
                             write_l1_index += 32;
                         }
-                        write_l1_index = 0;
-                        for (uint32_t t=0; t < num_nz_rows_per_tile; ++t) {
-                            for (uint32_t c=num_cols_per_group; c < 32; ++c) {
-                                wptr[c + write_l1_index] = 0;
-                            }
-                            write_l1_index += 32;
-                        }
                     } else {
 
                         volatile tt_l1_ptr uint16_t* wptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_in));
