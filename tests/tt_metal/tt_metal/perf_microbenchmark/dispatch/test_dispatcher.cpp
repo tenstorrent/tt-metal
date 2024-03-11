@@ -54,7 +54,7 @@ bool perf_test_g;
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
     first_worker_g,
-    {first_worker_g.x + 2, first_worker_g.y + 2},
+    {first_worker_g.x + 1, first_worker_g.y + 1},
 };
 
 void init(int argc, char **argv) {
@@ -149,6 +149,10 @@ void gen_cmds(Device *device,
         switch (test_type_g) {
         case 0:
             {
+                if (all_workers_g.size() != 1) {
+                    log_fatal("Should use single core for unicast write test. Other cores ignored.");
+                }
+
                 uint32_t xfer_size_16B = (std::rand() & (MAX_XFER_SIZE_16B - 1));
                 if (total_size_bytes + (xfer_size_16B << 4) > buffer_size) {
                     xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
@@ -228,8 +232,8 @@ int main(int argc, char **argv) {
 #endif
         vector<uint32_t> cmds;
         worker_data_t worker_data;
-        for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
-            for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
+        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
+            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
                 one_worker_data_t one;
                 worker_data.insert({CoreCoord(x, y), one});
             }
@@ -330,7 +334,7 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
-        if (iterations_g == 1) {
+        if (iterations_g > 0) {
             float total_words = 0;
             if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
                 log_fatal("Set max/min xfer size to match for reliable perf data");
@@ -346,15 +350,16 @@ int main(int argc, char **argv) {
                 if (!send_to_all_g) {
                     log_fatal("Set send_to_all to true for reliable perf data");
                 }
-                total_words = worker_data_size(worker_data) *
-                    (all_workers_g.end.x - all_workers_g.start.x) * (all_workers_g.end.y - all_workers_g.start.y);
+                total_words = worker_data_size(worker_data) * all_workers_g.size();
                 break;
             }
 
+            total_words *= iterations_g;
             float bw = total_words * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
-            log_info(LogTest, "BW: {} GB/s", ss.str());
+            log_info(LogTest, "BW: {} GB/s (from total_words: {} size: {} MB via host_iter: {} for num_cores: {})",
+                ss.str(), total_words, total_words * sizeof(uint32_t) / (1024.0 * 1024.0), iterations_g, all_workers_g.size());
         } else {
             log_info(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
         }
