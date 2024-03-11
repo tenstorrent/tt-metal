@@ -88,7 +88,7 @@ struct CQDispatchBaseCmd {
 } __attribute__((packed));
 
 struct CQDispatchWriteCmd {
-    uint8_t is_multicast;
+    uint8_t num_mcast_dests;    // 0 = unicast, 1+ = multicast
     uint16_t pad1;
     uint32_t noc_xy_addr;
     uint32_t addr;
