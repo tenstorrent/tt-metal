@@ -59,7 +59,9 @@ def run_test_FalconCausalLM_end_to_end(
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
+    )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
