@@ -127,15 +127,16 @@ void get_dispatch_cb_page() {
 
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
+template<bool multicast>
 FORCE_INLINE
-void process_write() {
+void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
     uint32_t dst_noc = cmd->write.noc_xy_addr;
     uint32_t dst_addr = cmd->write.addr;
     uint32_t length = cmd->write.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-    DPRINT << "dispatch_write: " << length << ENDL();
+    DPRINT << "dispatch_write: " << length << " num_mcast_dests: " << num_mcast_dests << ENDL();
     while (length != 0) {
         uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
@@ -148,7 +149,11 @@ void process_write() {
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     uint32_t orphan_size = dispatch_cb_end - data_ptr;
                     if (orphan_size != 0) {
-                        noc_async_write(data_ptr, dst, orphan_size);
+                        if constexpr (multicast){
+                            noc_async_write_multicast(data_ptr, dst, orphan_size, num_mcast_dests);
+                        } else {
+                            noc_async_write(data_ptr, dst, orphan_size);
+                        }
                         block_noc_writes_to_clear[rd_block_idx]++;
                         length -= orphan_size;
                         xfer_size -= orphan_size;
@@ -171,7 +176,11 @@ void process_write() {
             dispatch_cb_block_release_pages();
         }
 
-        noc_async_write(data_ptr, dst, xfer_size);
+        if constexpr (multicast){
+            noc_async_write_multicast(data_ptr, dst, xfer_size, num_mcast_dests);
+        } else {
+            noc_async_write(data_ptr, dst, xfer_size);
+        }
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
 
         length -= xfer_size;
@@ -180,6 +189,18 @@ void process_write() {
     }
     cmd_ptr = data_ptr;
 }
+
+FORCE_INLINE
+void process_write() {
+    volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
+    uint32_t num_mcast_dests = cmd->write.num_mcast_dests;
+    if (num_mcast_dests == 0) {
+        process_write_linear<false>(0);
+    } else {
+        process_write_linear<true>(num_mcast_dests);
+    }
+}
+
 
 // Packed write command
 // Layout looks like:

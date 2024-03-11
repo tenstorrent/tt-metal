@@ -208,6 +208,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     cmd.write.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
     cmd.write.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
     cmd.write.length = length;
+    cmd.write.num_mcast_dests = 0;
 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
@@ -227,8 +228,38 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
     cmd.write.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
     cmd.write.addr = dst_addr + worker_data[worker_core].data.size() * sizeof(uint32_t);
     cmd.write.length = length;
+    cmd.write.num_mcast_dests = 0;
 
     add_dispatcher_cmd(cmds, worker_core, worker_data, cmd, length);
+}
+
+inline void gen_dispatcher_multicast_write_cmd(Device *device,
+                                             vector<uint32_t>& cmds,
+                                             CoreRange worker_core_range,
+                                             worker_data_t& worker_data,
+                                             uint32_t dst_addr,
+                                             uint32_t length) {
+
+    CQDispatchCmd cmd;
+
+    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start, CoreType::WORKER);
+    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end, CoreType::WORKER);
+
+    // Sanity check that worker_data covers all cores being targeted.
+    for (uint32_t y = worker_core_range.start.y; y <= worker_core_range.end.y; y++) {
+        for (uint32_t x = worker_core_range.start.x; x <= worker_core_range.end.x; x++) {
+            CoreCoord worker(x, y);
+            TT_ASSERT(worker_data.find(worker) != worker_data.end(), "Worker core x={},y={} missing in worker_data", x, y);
+        }
+    }
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
+    cmd.write.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+    cmd.write.addr = dst_addr + worker_data[worker_core_range.start].data.size() * sizeof(uint32_t);
+    cmd.write.length = length;
+    cmd.write.num_mcast_dests = worker_core_range.size();
+
+    add_dispatcher_cmd(cmds, worker_core_range, worker_data, cmd, length);
 }
 
 inline void gen_dispatcher_packed_write_cmd(Device *device,
