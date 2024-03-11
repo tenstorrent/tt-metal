@@ -283,8 +283,10 @@ def test_LlamaModel_inference(
     # device,
     emulated,
 ):
-    devices = get_devices_for_t3000(all_devices, n_devices)
-    # devices = [device]
+    if emulated:
+        devices = get_devices_for_t3000(all_devices, 1)
+    else:
+        devices = get_devices_for_t3000(all_devices, n_devices)
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
