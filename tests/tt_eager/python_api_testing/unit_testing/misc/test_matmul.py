@@ -534,9 +534,9 @@ def test_matmul_no_mcast_fp32_input_output(
 @pytest.mark.parametrize("in0_sharded", [False], ids=["in0_unsharded"])
 @pytest.mark.parametrize("in1_sharded", [True], ids=["in1_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
-@pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 128, 128, 2, 4]])
+@pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 128, 64, 2, 2]])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32])
 def test_matmul_untilize_output(
     device,
     packer_l1_acc,
