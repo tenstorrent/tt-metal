@@ -349,7 +349,9 @@ def log1p(x, *args, **kwargs):
 
 
 def softplus(x, *args, **kwargs):
-    return torch.nn.functional.softplus(x)
+    beta = kwargs.pop("beta")
+    threshold = kwargs.pop("threshold")
+    return torch.nn.functional.softplus(x, beta=beta, threshold=threshold)
 
 
 def add1(x, *args, **kwargs):
@@ -357,7 +359,7 @@ def add1(x, *args, **kwargs):
 
 
 def mish(x, *args, **kwargs):
-    return x * torch.tanh(softplus(x))
+    return x * torch.tanh(softplus(x, beta=1.0, threshold=20.0))
 
 
 def recip(x, *args, **kwargs):

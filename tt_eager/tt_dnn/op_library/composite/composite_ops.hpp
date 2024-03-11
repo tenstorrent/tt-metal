@@ -83,7 +83,7 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation:
 
 // softplus[x] = log[1 + exp[x]]
 // use transformation y = log[1+exp[x]] by broadcast
-Tensor softplus(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor softplus(const Tensor& x, float beta=1.0, float threshold=20.0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // mish[x] = x*tanh[softplus[x]]
 // use transformation y = x*tanh[softplus[x]] by broadcast
