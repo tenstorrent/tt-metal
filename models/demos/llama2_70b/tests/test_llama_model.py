@@ -26,6 +26,10 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devic
 from models.demos.llama2_70b.tt.llama_model import TtLlamaModel
 from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 
+import re
+
+pattern = r"PCC: ([\d.]+)"
+
 
 class PytorchLlamaModel(torch.nn.Module):
     def __init__(self, hf_reference_model):
@@ -126,6 +130,9 @@ def run_test_LlamaModel_inference(
     generation_start_pos = 1
     generation_length = 40
     all_tests_pass = True
+    all_pccs = []
+    all_top1 = []
+    all_top5 = []
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -169,6 +176,9 @@ def run_test_LlamaModel_inference(
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
+        extracted_pcc = re.search(pattern, output_pcc)
+        extracted_pcc = float(extracted_pcc.group(1))
+        all_pccs.append(extracted_pcc)
 
         kl_divs = scipy.stats.entropy(
             torch.nn.functional.softmax(pytorch_out, dim=-1), torch.nn.functional.softmax(tt_out, dim=-1), axis=-1
@@ -182,6 +192,9 @@ def run_test_LlamaModel_inference(
         top1_acc = top_k_accuracy_score(reference_top1, tt_out, k=1, labels=np.arange(tt_out.shape[-1]))
         top5_acc = top_k_accuracy_score(reference_top1, tt_out, k=5, labels=np.arange(tt_out.shape[-1]))
 
+        all_top1.append(top1_acc)
+        all_top5.append(top5_acc)
+
         logger.info(f"Mean Top-1: {top1_acc}")
         logger.info(f"Mean Top-5: {top5_acc}")
 
@@ -191,6 +204,9 @@ def run_test_LlamaModel_inference(
             logger.warning(f"[start_pos={start_pos}] Llama2-70b Model output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
+    logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
+    logger.info(f"Average Top-1 over {len(all_top1)} tokens: {sum(all_top1) / len(all_top1)}")
+    logger.info(f"Average Top-5 over {len(all_top5)} tokens: {sum(all_top5) / len(all_top5)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
