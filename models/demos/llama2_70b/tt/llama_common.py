@@ -21,7 +21,7 @@ def rms_decomp(x, norm_weight, eps):
     # mean_squared = tt_lib.tensor.mean(squared, )
     sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
     # Tensor is 1,1,32,1+31 now
-    mean_squared = tt_lib.tensor.div_unary(sum_squared, x.get_legacy_shape()[-1])
+    mean_squared = tt_lib.tensor.div_unary(sum_squared, x.shape[-1])
     mean_squared_eps = tt_lib.tensor.add_unary(mean_squared, eps)
     rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
     rms_recip = tt_lib.tensor.recip(rms)
@@ -37,9 +37,7 @@ def tt_all_reduce(tensors):
     if len(tensors) == 1:
         return tensors[0]
 
-    assert [tensor.get_legacy_shape() for tensor in tensors] == [
-        tensors[0].get_legacy_shape() for _ in range(len(tensors))
-    ]
+    assert [tensor.shape for tensor in tensors] == [tensors[0].shape for _ in range(len(tensors))]
     dev = tensors[0].device()
     tensors_torch = [tt2torch_tensor(tensor) for tensor in tensors]
     base_tensor_torch = tensors_torch[0]
