@@ -331,13 +331,12 @@ class ProgramEventBuffer {
 
     template <bool write_to_completion_queue>
     void write_events() {
-        uint32_t event_addr;
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
             if constexpr (write_to_completion_queue) {
                 completion_queue_reserve_back(32); // Need to clean up
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
-                write_event(event_addr);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(this->event_addr) = event;
+                write_event(this->event_addr);
                 record_last_completed_event(event);
                 completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
             } else {
