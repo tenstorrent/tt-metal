@@ -151,7 +151,6 @@ class transformer_2d_model:
         output_bfloat16: bool = False,
     ):
         inner_dim = num_attention_heads * attention_head_dim
-
         assert norm_num_groups == 32
         is_input_continuous = (in_channels is not None) and (patch_size is None)
         is_input_vectorized = num_vector_embeds is not None
@@ -211,6 +210,9 @@ class transformer_2d_model:
             hidden_states = pre_process_input(self.device, hidden_states)
 
         else:
+            hidden_states = ttnn.reshape(
+                hidden_states, (self.batch_size, 1, self.input_height * self.input_width, in_channels)
+            )
             if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
             print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
@@ -227,6 +229,9 @@ class transformer_2d_model:
         hidden_states = ttnn.to_memory_config(
             hidden_states, ttnn.L1_MEMORY_CONFIG
         )  # sharded to interleaved since we can't tilize block sharded
+        hidden_states = ttnn.reshape(
+            hidden_states, (1, 1, self.batch_size * self.input_height * self.input_width, in_channels)
+        )
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.TILE_LAYOUT,

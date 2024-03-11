@@ -225,36 +225,33 @@ def test_group_norm_with_block_sharded(device, N, C, H, W, num_groups):
 
 
 @pytest.mark.parametrize(
-    ("shape", "grid"),
+    ("shape"),
     [
-        ((1, 1, 2048, 320), (8, 2)),
-        ((1, 1, 128, 1280), (4, 8)),
-        ((2, 1, 64, 1280), (4, 8)),
-        ((2, 1, 64, 2560), (4, 8)),
-        ((1, 1, 8192, 320), (8, 2)),
-        ((2, 1, 4096, 320), (8, 2)),
-        ((2, 1, 4096, 960), (8, 2)),
-        ((2, 1, 1024, 320), (8, 2)),
-        ((2, 1, 1024, 960), (8, 2)),
-        ((1, 1, 2048, 640), (8, 4)),
-        ((2, 1, 1024, 640), (8, 4)),
-        ((2, 1, 1024, 1920), (8, 4)),
-        ((2, 1, 256, 640), (8, 4)),
-        ((2, 1, 256, 1920), (8, 4)),
-        ((2, 1, 1024, 1280), (8, 8)),
-        ((1, 1, 512, 1280), (8, 8)),
-        ((2, 1, 256, 1280), (8, 8)),
-        ((2, 1, 256, 2560), (8, 8)),
+        ((1, 1, 2048, 320)),
+        ((1, 1, 128, 1280)),
+        ((2, 1, 64, 1280)),
+        ((2, 1, 64, 2560)),
+        ((1, 1, 8192, 320)),
+        ((2, 1, 4096, 320)),
+        ((2, 1, 4096, 960)),
+        ((2, 1, 1024, 320)),
+        ((2, 1, 1024, 960)),
+        ((1, 1, 2048, 640)),
+        ((2, 1, 1024, 640)),
+        ((2, 1, 1024, 1920)),
+        ((2, 1, 256, 640)),
+        ((2, 1, 256, 1920)),
+        ((2, 1, 1024, 1280)),
+        ((1, 1, 512, 1280)),
+        ((2, 1, 256, 1280)),
+        ((2, 1, 256, 2560)),
     ],
 )
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_with_block_sharded_unet(device, shape, grid, num_groups):
+def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
     torch.manual_seed(0)
 
     N, H, W, C = shape
-    x, y = grid
-
-    grid_size = ttnn.CoreGrid(y=y, x=x)
 
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
@@ -271,7 +268,7 @@ def test_group_norm_with_block_sharded_unet(device, shape, grid, num_groups):
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, num_groups)
@@ -292,35 +289,44 @@ def test_group_norm_with_block_sharded_unet(device, shape, grid, num_groups):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(grid_size.x - 1, grid_size.y - 1),
-            )
-        }
-    )
-    shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    # shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    #     {
+    #         ttnn.experimental.tensor.CoreRange(
+    #             ttnn.experimental.tensor.CoreCoord(0, 0),
+    #             ttnn.experimental.tensor.CoreCoord(grid_size.x - 1, grid_size.y - 1),
+    #         )
+    #     }
+    # )
+    # shard_shape = N * H * W // grid_size.x, C // grid_size.y
 
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR, False
+    # shard_spec = ttnn.experimental.tensor.ShardSpec(
+    #     shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR, False
+    # )
+    # sharded_mem_config = ttnn.MemoryConfig(
+    #     ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    # )
+    sharded_mem_config, core_grid = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+        device=device,
+        num_channels=C,
+        num_groups=num_groups,
+        input_nhw=N * H * W,
+        is_height_sharded=False,
     )
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
-
+    print("  ")
+    print("GN shape - ", shape)
+    print("GN shard config - ", sharded_mem_config)
+    print("  ")
     output_tensor = ttnn.group_norm(
         input_tensor,
         num_groups=num_groups,
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=core_grid,
     )
 
-    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

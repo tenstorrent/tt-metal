@@ -471,6 +471,10 @@ class UNet2DConditionModel:
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if up_block_type == "CrossAttnUpBlock2D":
+                # breakpoint()
+                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_sample_reallocate_")
+                sample = ttnn.reallocate(sample)
+                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_")
                 sample = up_block(
                     hidden_states=sample,
                     temb=emb,

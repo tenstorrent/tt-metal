@@ -82,6 +82,7 @@ class cross_attention_upblock2d:
         only_cross_attention: bool = False,
     ):
         for i, (resnet, attention) in enumerate(zip(self.resnets, self.attentions)):
+            ttnn.dump_device_memory_state(self.device, prefix="in_uplock_")
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
 
@@ -110,7 +111,15 @@ class cross_attention_upblock2d:
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
+            breakpoint()
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
+            breakpoint()
+            ttnn.dump_device_memory_state(self.device, prefix="before_deallocate_")
+            ttnn.deallocate(on_dev_res_hidden_states)
+            ttnn.dump_device_memory_state(self.device, prefix="after_deallocate_")
+            # breakpoint()
+            # hidden_states = ttnn.reallocate(hidden_states)
+            # ttnn.dump_device_memory_state(self.device, prefix="after_reallocate_before_resnet")
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,
