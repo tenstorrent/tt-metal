@@ -25,8 +25,8 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) :
-    storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+Tensor::Tensor(const Storage& storage, const ttnn::Shape& shape, DataType dtype, Layout layout) :
+    storage(storage), shape(shape), dtype(dtype), layout(layout) {
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -50,9 +50,12 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
                 raise_unsupported_storage<StorageType>();
             }
         },
-        this->storage_
+        this->storage
     );
 }
+
+Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) :
+    Tensor(storage, ttnn::Shape{shape}, dtype, layout) {}
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -92,7 +95,7 @@ void Tensor::deallocate(bool force) {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage_);
+        this->storage);
 }
 
 
@@ -208,7 +211,7 @@ Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
 }
 
 uint32_t Tensor::element_size() const {
-    return tensor_impl::element_size_bytes_wrapper(this->dtype_);
+    return tensor_impl::element_size_bytes_wrapper(this->dtype);
 }
 
 Tensor Tensor::reshape(int N, int C, int H, int W) const {
@@ -226,9 +229,8 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
         TT_ASSERT(new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
 
-    auto new_tensor = *this;
-    new_tensor.shape_ = new_shape;
-    return new_tensor;
+    const auto& tensor = *this;
+    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
 bool Tensor::is_allocated() const {
@@ -263,7 +265,7 @@ bool Tensor::is_allocated() const {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage_
+        this->storage
     );
 }
 
@@ -304,13 +306,11 @@ StorageType Tensor::storage_type() const {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage_
+        this->storage
     );
 }
 
-const Storage& Tensor::storage() const {
-    return this->storage_;
-}
+const Storage& Tensor::get_storage() const { return this->storage; }
 
 namespace detail {
 const Shape compute_strides(const Shape& shape) {
@@ -328,9 +328,7 @@ const Shape Tensor::strides() const {
     return detail::compute_strides(this->get_legacy_shape());
 }
 
-uint32_t Tensor::volume() const {
-    return tt::tt_metal::compute_volume(this->shape_);
-}
+uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->shape.value()); }
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;

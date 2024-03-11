@@ -37,11 +37,11 @@ void validate_input_tensor(
 
     const auto& tensor = std::get<ttnn::Tensor>(tensor_to_validate);
 
-    if (tensor.ttnn_shape().rank() < input_schema.min_rank or tensor.ttnn_shape().rank() > input_schema.max_rank) {
+    if (tensor.shape.rank() < input_schema.min_rank or tensor.shape.rank() > input_schema.max_rank) {
         TT_THROW(
             "{}: Tensor rank is not valid: rank is {} but must be  {} <= rank <- {}",
             operation_name,
-            tensor.ttnn_shape().rank(),
+            tensor.shape.rank(),
             input_schema.min_rank,
             input_schema.max_rank);
     }

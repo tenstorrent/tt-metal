@@ -404,7 +404,7 @@ inline Tensor to_device(
     }
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
-        tensor.storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
+        tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
@@ -465,7 +465,7 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage());
+        tensor.get_storage());
 
 
     return std::visit(
@@ -578,7 +578,7 @@ inline Tensor pad(
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage());
+        tensor.get_storage());
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
@@ -652,7 +652,7 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage());
+        tensor.get_storage());
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
@@ -860,7 +860,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
     }
 
     return std::visit(
-        [&] (auto&& storage) -> std::string {
+        [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 const auto buffer = owned_buffer::get_as<T>(storage.buffer);
@@ -880,8 +880,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage()
-    );
+        tensor.get_storage());
 }
 
 template <typename T>
@@ -928,7 +927,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.storage());
+        tensor.get_storage());
 }
 
 }  // namespace tensor_impl
