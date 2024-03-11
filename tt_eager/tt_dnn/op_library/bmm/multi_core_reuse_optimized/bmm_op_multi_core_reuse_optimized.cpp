@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
 
     // Assume all of core_range is used (ie. num_evenly_divided_output_blocks > 0)
-    TT_ASSERT(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
+    TT_FATAL(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
     // Pass in a and b shapes instead
 
-    TT_ASSERT(bcast_batch == false, "Bcast batch not supported for this parallelization");
+    TT_FATAL(bcast_batch == false, "Bcast batch not supported for this parallelization");
 
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
@@ -498,10 +498,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
-        TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+        TT_FATAL(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
         // same condition as above, different message
-        TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
+        TT_FATAL(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
 
@@ -513,13 +513,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
             packer_l1_acc = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            TT_FATAL(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -531,7 +531,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     }, compute_kernel_config);
 
     if (fp32_dest_acc_en) {
-        TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+        TT_FATAL(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -545,7 +545,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     uint32_t Nt = bshape[3]/TILE_WIDTH;
 
     // TODO: Generalize
-    TT_ASSERT(fuse_batch, "Only fuse_batch=true is supported for bert large optimized bmm!");
+    TT_FATAL(fuse_batch, "Only fuse_batch=true is supported for bert large optimized bmm!");
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -560,7 +560,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     // Pass in cshape instead
     tt_metal::Buffer *out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

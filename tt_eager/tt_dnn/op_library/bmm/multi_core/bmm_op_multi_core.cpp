@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B
     // MN = MK*KN
@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 		} else if (core_group_2.core_coord_in_core_ranges(core)) {
 			num_output_tiles_per_core = num_output_tiles_per_core_group_2;
 		} else {
-			TT_ASSERT(false, "Core not in specified core ranges");
+			TT_FATAL(false, "Core not in specified core ranges");
 		}
         tt_metal::SetRuntimeArgs(
             program, reader_id, core,
