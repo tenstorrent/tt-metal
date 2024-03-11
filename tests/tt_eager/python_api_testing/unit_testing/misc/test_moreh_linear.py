@@ -58,7 +58,8 @@ def test_moreh_linear(shapes, has_bias, device):
 
     if has_bias:
         tt_bias, torch_bias, _ = get_bias_tensors(bias_shape, False, device)
-        tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight, tt_bias)
+        tt_output_tensor = None
+        tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight, tt_bias, tt_output_tensor)
     else:
         torch_bias = None
         tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight)

@@ -23,7 +23,7 @@ inline bool is_shape_scalar(const Shape& bias) {
 }
 
 inline void moreh_linear_validate(
-    const Tensor& input, const Tensor& weight, std::optional<std::reference_wrapper<const Tensor>> bias) {
+    const Tensor& input, const Tensor& weight, std::optional<std::reference_wrapper<const Tensor>> bias, std::optional<Tensor> output_tensor) {
     const auto& weight_shape = weight.get_legacy_shape().without_padding();
     TT_ASSERT(weight_shape[0] == 1 && weight_shape[1] == 1, "weight should be a 2D tensor");
     if (bias) {
@@ -39,9 +39,10 @@ Tensor moreh_linear_(
     const Tensor& input,
     const Tensor& weight,
     std::optional<std::reference_wrapper<const Tensor>> bias,
+    std::optional<Tensor> output_tensor,
     const MemoryConfig& output_mem_config) {
-    moreh_linear_validate(input, weight, bias);
-    Tensor mm_output = moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
+    moreh_linear_validate(input, weight, bias, output_tensor);
+    Tensor mm_output = moreh_matmul(input, weight, output_tensor, false, true, output_mem_config);
     if (bias) {
         const auto& bias_tensor = bias->get();
         const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
@@ -54,12 +55,13 @@ Tensor moreh_linear_(
 Tensor moreh_linear(
     const Tensor& input,
     const Tensor& weight,
-    std::optional<std::reference_wrapper<const Tensor>> bias,
+    std::optional<Tensor> bias,
+    std::optional<Tensor> output_tensor,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(
         input.storage_type() == StorageType::DEVICE && weight.storage_type() == StorageType::DEVICE,
         "input and weight tensors need to be on device");
-    return moreh_linear_(input, weight, bias, output_mem_config);
+    return moreh_linear_(input, weight, bias, output_tensor, output_mem_config);
 }
 
 }  // namespace primary

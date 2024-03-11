@@ -548,6 +548,7 @@ void py_module(py::module& m_primary) {
         py::arg("input").noconvert(),
         py::arg("weight").noconvert(),
         py::arg("bias").noconvert() = std::nullopt,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_linear operation.
