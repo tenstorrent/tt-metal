@@ -1616,6 +1616,27 @@ std::vector<Tensor> le_bw(const Tensor& grad, const MemoryConfig& output_mem_con
     return operation::decorate_as_composite(__func__, _le_bw)(grad, output_mem_config);
 }
 
+
+std::vector<Tensor> _unary_fmod_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_fmod_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_fmod_bw)(grad, input, scalar, output_mem_config);
+}
+
+std::vector<Tensor> _unary_remainder_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_remainder_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_remainder_bw)(grad, input, scalar, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
