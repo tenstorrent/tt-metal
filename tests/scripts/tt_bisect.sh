@@ -59,11 +59,11 @@ echo "Good commit:" $good_commit
 echo "Bad commit:" $bad_commit
 
 found=false
-build_code=0
 
 git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
+   build_code=0
    echo "at commit `git rev-parse HEAD`"
    echo "Make clean"
    make clean; build_code+=$?
