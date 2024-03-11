@@ -1623,5 +1623,5 @@ op_map = {
     "ttnn-logaddexp": {
         "tt_lib_op": ttnn_ops.logaddexp,
         "pytorch_op": pytorch_ops.logaddexp,
-    },    
+    },
 }
