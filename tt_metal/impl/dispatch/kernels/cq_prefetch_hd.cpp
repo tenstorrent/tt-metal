@@ -271,6 +271,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
 // bandwidth will be low and we'll be DRAM bound (send to dispatcher is ~free).
 // With larger pages we'll get closer to a bandwidth match
 // The dispatch buffer is a ring buffer.
+template<bool is_dram>
 uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
 
     // This ensures that a previous cmd using the scratch buf has finished
@@ -284,7 +285,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     uint32_t read_length = pages * page_size;
     uint32_t write_length = pages * page_size;
 
-    InterleavedAddrGen<true> addr_gen;
+    InterleavedAddrGen<is_dram> addr_gen;
     addr_gen.bank_base_address = base_addr;
     addr_gen.page_size = page_size;
 
@@ -403,7 +404,11 @@ void kernel_main() {
         switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
-            cmd_ptr = process_relay_paged_cmd(cmd_ptr);
+            if (cmd->relay_paged.is_dram) {
+                cmd_ptr = process_relay_paged_cmd<true>(cmd_ptr);
+            } else {
+                cmd_ptr = process_relay_paged_cmd<false>(cmd_ptr);
+            }
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
