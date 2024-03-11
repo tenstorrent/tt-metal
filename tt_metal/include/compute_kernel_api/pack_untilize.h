@@ -69,8 +69,8 @@ ALWI void pack_untilize_dst_init_short(uint32_t ocb, uint32_t face_r_dim = 16, u
 }
 
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
-ALWI void pack_untilize_dst(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t block_c_index = 0 /* valid only when full_ct_dim > block_ct_dim*/) {
-    PACK(( llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, face_r_dim, num_faces, block_c_index) ));
+ALWI void pack_untilize_dst(uint32_t ocb, uint32_t block_rt_dim = 1, uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
+    PACK(( llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, face_r_dim, num_faces, block_c_index) ));
 }
 
 }
