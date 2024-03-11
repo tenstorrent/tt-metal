@@ -90,11 +90,18 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange &cr) const;
 
-    auto semaphores_on_core(const CoreCoord &core) const;
+    auto semaphores_on_core(const CoreCoord &core) const {
+        std::vector<std::reference_wrapper<const Semaphore>> semaphores;
+        for ( const Semaphore & s : this->semaphores_) {
+            if (s.initialized_on_logical_core(core)) {
+                semaphores.emplace_back(std::cref(s));
+            }
+        }
+        return semaphores;
+    }
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
-    uint32_t semaphore_address ( uint32_t sem_index ) const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const;
     std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
 

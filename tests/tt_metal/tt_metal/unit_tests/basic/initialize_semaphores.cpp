@@ -118,3 +118,34 @@ TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
             devices_.at(id), program, core_range);
     }
 }
+
+TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    CoreCoord core0(0,0);
+    uint32_t sem0_addr = tt_metal::CreateSemaphore(program, core0, 0);
+
+    CoreCoord core1(4,0);
+    uint32_t sem1_addr = tt_metal::CreateSemaphore(program, core1, 1);
+
+    CoreRange core_range({1, 0}, {3, 0});
+    CoreRangeSet core_range_set({core_range});
+    CoreRangeSet core_range_set2 = core_range_set.merge({core1});
+    std::set<CoreRange> set_of_cores({CoreRange({2,0}, {2,0}), CoreRange({3,0}, {3,0}), CoreRange({5,0}, {5,0})});
+    CoreRangeSet core_range_set3(set_of_cores);
+    CoreRangeSet core_range_set4({CoreRange({5,0}, {6,0})});
+
+    uint32_t sem2_addr = tt_metal::CreateSemaphore(program, core_range_set, 2);
+    uint32_t sem3_addr = tt_metal::CreateSemaphore(program, core_range_set2, 3);
+    uint32_t sem4_addr = tt_metal::CreateSemaphore(program, core_range_set2, 4);
+    uint32_t sem5_addr = tt_metal::CreateSemaphore(program, core_range_set3, 5);
+    uint32_t sem6_addr = tt_metal::CreateSemaphore(program, core_range_set4, 6);
+
+    EXPECT_EQ(sem0_addr, SEMAPHORE_BASE);
+    EXPECT_EQ(sem1_addr, SEMAPHORE_BASE);
+    EXPECT_EQ(sem2_addr, SEMAPHORE_BASE);
+    EXPECT_EQ(sem3_addr, SEMAPHORE_BASE + L1_ALIGNMENT);
+    EXPECT_EQ(sem4_addr, SEMAPHORE_BASE + L1_ALIGNMENT * 2);
+    EXPECT_EQ(sem5_addr, SEMAPHORE_BASE + L1_ALIGNMENT * 3);
+    EXPECT_EQ(sem6_addr, SEMAPHORE_BASE);
+}
