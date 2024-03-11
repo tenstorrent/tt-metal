@@ -127,7 +127,7 @@ void get_dispatch_cb_page() {
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 FORCE_INLINE
-void dispatch_write() {
+void process_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
     uint32_t dst_noc = cmd->write.noc_xy_addr;
@@ -193,7 +193,7 @@ void dispatch_write() {
 //
 // Since all subcmds all appear in the first page and given the size restrictions
 // this command can't be too many pages.  All pages are released at the end
-void dispatch_write_packed() {
+void process_write_packed() {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
     uint32_t count = cmd->write_packed.count;
@@ -290,6 +290,17 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     return cmd_ptr + cmd->debug.stride;
 }
 
+static void process_wait() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+
+    uint32_t addr = cmd->wait.addr;
+    uint32_t count = cmd->wait.count;
+
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    while (*sem_addr < count); // XXXXX use a wrapping compare
+}
+
 void kernel_main() {
     DPRINT << "dispatcher start" << ENDL();;
 
@@ -318,7 +329,7 @@ void kernel_main() {
         case CQ_DISPATCH_CMD_WRITE_HOST:
             DEBUG_STATUS('D', 'W', 'B');
             DPRINT << "cmd_write\n";
-            dispatch_write();
+            process_write();
             DEBUG_STATUS('D', 'W', 'D');
             break;
 
@@ -328,11 +339,12 @@ void kernel_main() {
 
         case CQ_DISPATCH_CMD_WRITE_PACKED:
             DPRINT << "cmd_write_packed" << ENDL();
-            dispatch_write_packed();
+            process_write_packed();
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
             DPRINT << "cmd_wait" << ENDL();
+            process_wait();
             break;
 
         case CQ_DISPATCH_CMD_GO:

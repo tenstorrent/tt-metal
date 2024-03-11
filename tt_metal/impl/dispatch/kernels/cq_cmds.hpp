@@ -118,8 +118,8 @@ struct CQDispatchWritePackedSubCmd {
 struct CQDispatchWaitCmd {
     uint8_t pad1;
     uint16_t pad2;
-    uint32_t addr;
-    uint32_t count;
+    uint32_t addr;            // address to read
+    uint32_t count;           // wait while address is < count
 };
 
 struct CQDispatchCmd {
