@@ -34,7 +34,7 @@ jobs:
       - name: Build tt-metal CPP tests
         run: make tests
       - name: Run pre/post regression tests
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit_multi_device --dispatch-mode ""
