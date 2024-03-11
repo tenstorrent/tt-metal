@@ -5,13 +5,11 @@
 #include <cstdint>
 
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t onetile = 1;
-
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
     constexpr uint32_t in_cb = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(2);
@@ -22,27 +20,26 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t u_range = get_compile_time_arg_val(8);
 
-    untilize_init(in_cb, untilized_in_cb);
+    pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
     for (uint32_t  h = 0; h < num_batched_heads; ++h) {
-        untilize_init_short(in_cb);
+
         cb_wait_front(in_cb, Wt);
         cb_reserve_back(untilized_in_cb, Wt);
-        untilize_block(in_cb, Wt, untilized_in_cb);
+        pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
         cb_push_back(untilized_in_cb, Wt);
         cb_pop_front(in_cb, Wt);
-        untilize_uninit(in_cb);
 
         unpack_reconfig_data_format_srca(in_cb, cache_cb);
 
         for(uint32_t u = 0; u <u_range; ++u) {
-            untilize_init_short(cache_cb);
+            pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
             cb_wait_front(cache_cb, Wt);
             cb_reserve_back(untilized_cache_cb, Wt);
-            untilize_block(cache_cb, Wt, untilized_cache_cb);
+            pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
             cb_push_back(untilized_cache_cb, Wt);
             cb_pop_front(cache_cb, Wt);
-            untilize_uninit(cache_cb);
+            pack_untilize_uninit(untilized_cache_cb);
 
             unpack_reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
@@ -60,6 +57,7 @@ void MAIN {
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         unpack_reconfig_data_format_srca(cache_cb, in_cb);
+        pack_untilize_init_short<Wt>(in_cb, untilized_in_cb);
     }
 }
 } // NAMESPACE
