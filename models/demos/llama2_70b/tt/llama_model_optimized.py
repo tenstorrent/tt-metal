@@ -190,11 +190,10 @@ class TtLlamaModel_optimized(nn.Module):
         x_fractured = torch.chunk(x, self.num_devices, dim=-1)
         xs = []
         for i in range(self.num_devices):
-            device = self.devices[i]
             xs.append(
                 torch2tt_tensor(
                     x_fractured[i],
-                    device,
+                    self.devices[i],
                     tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
             )
@@ -211,7 +210,7 @@ class TtLlamaModel_optimized(nn.Module):
             rot_mats.append(
                 torch2tt_tensor(
                     rot_mat.clone(),
-                    device,
+                    self.devices[i],
                     tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
                     tt_dtype=self.model_config["ROT_MAT_DTYPE"],
                 )
@@ -230,9 +229,8 @@ class TtLlamaModel_optimized(nn.Module):
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
-                    device,
-                    # tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                    self.devices[i],
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],  # BFLOAT16_DTYPE currently pushes faster
                 )
             )
         if self.batched_attn:
@@ -281,11 +279,10 @@ class TtLlamaModel_optimized(nn.Module):
 
         profiler.start("pushing_input_x_to_device_DRAM")
         for i in range(self.num_devices):
-            device = self.devices[i]
             xs.append(
                 torch2tt_tensor(
                     x_fractured[i],
-                    device,
+                    self.devices[i],
                     tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
             )
@@ -310,7 +307,7 @@ class TtLlamaModel_optimized(nn.Module):
             rot_mats.append(
                 torch2tt_tensor(
                     rot_mat.clone(),
-                    device,
+                    self.devices[i],
                     tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
                     tt_dtype=self.model_config["ROT_MAT_DTYPE"],
                 )
@@ -333,9 +330,8 @@ class TtLlamaModel_optimized(nn.Module):
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
-                    device,
-                    # tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                    self.devices[i],
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],  # BFLOAT16_DTYPE currently pushes faster
                 )
             )
         profiler.end("pushing_attn_mask_to_DRAM")
