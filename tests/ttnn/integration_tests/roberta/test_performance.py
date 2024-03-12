@@ -47,6 +47,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
 
     input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None
 
     if bert == ttnn_bert:
@@ -70,6 +71,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         ttnn_bert_inputs = bert.preprocess_inputs(
             input_ids,
             torch_token_type_ids,
+            torch_position_ids,
             torch_attention_mask,
             device=device,
         )
