@@ -6,7 +6,7 @@ test-list:
         end-shape: [1, 512, 2048, 4096]
         interval: [1, 32, 32, 32]
         num-shapes: 2
-        num-samples: 64
+        num-samples: 128
         method: ttnn-embeddings
       datagen:
         function: gen_rand
@@ -21,10 +21,10 @@ test-list:
           - input-1:
             data-layout: ["ROW_MAJOR"]
             data-type: ["UINT32"]
-            buffer-type: ["DRAM"]
+            buffer-type: ["DRAM", "L1"]
           - input-2:
             data-layout: ["ROW_MAJOR"]
             data-type: ["BFLOAT16"]
-            buffer-type: ["DRAM"]
-        out-buffer-type: ["DRAM"]
+            buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: embeddings_sweep.csv
