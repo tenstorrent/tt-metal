@@ -114,7 +114,13 @@ typedef enum debug_sanitize_which_riscv {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
+    DebugNumUniqueRiscs
 } riscv_id_t;
+
+struct debug_pause_msg_t {
+    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t pad[8 - DebugNumUniqueRiscs];
+};
 
 constexpr int num_riscv_per_core = 5;
 struct mailboxes_t {
@@ -125,6 +131,7 @@ struct mailboxes_t {
     struct debug_status_msg_t debug_status[num_riscv_per_core];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;
+    struct debug_pause_msg_t pause_status;
 };
 
 #ifndef TENSIX_FIRMWARE
