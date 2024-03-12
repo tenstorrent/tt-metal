@@ -317,7 +317,7 @@ def all_devices(request):
 
 
 @pytest.fixture(scope="function")
-def device_mesh(request):
+def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
 
     device_ids = ttnn.get_device_ids()
@@ -332,7 +332,7 @@ def device_mesh(request):
 
 
 @pytest.fixture(scope="function")
-def pcie_device_mesh(request):
+def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
 
     device_ids = ttnn.get_pcie_device_ids()
