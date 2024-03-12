@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+// #include "dprint.h"
 
 void kernel_main() {
     const uint32_t cache_addr  = get_arg_val<uint32_t>(0);
@@ -40,35 +41,43 @@ void kernel_main() {
     uint32_t b = batch_start_id;
     uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
+    constexpr uint32_t granularity = 2;
+
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(untilized_input_cb_id, Wt);
         uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id)) + batch_read_offset;
 
-        for (uint32_t u = 0; u < u_range; ++u) {
-            cb_wait_front(untilized_cache_cb_id, Wt);
-            cb_reserve_back(untilized_cache2_cb_id, Wt);
-            uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + offset;
-            noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
-            noc_async_read_barrier();
-            cb_push_back(untilized_cache2_cb_id, Wt);
-            input_l1_read_addr += Wbytes;
-            // Compute will pop both cache cbs together
+        for (uint32_t u = 0; u < u_range / granularity; ++u) {
+            for (uint32_t g = 0; g < granularity; ++g) {
+                cb_wait_front(untilized_cache_cb_id, Wt);
+                cb_reserve_back(untilized_cache2_cb_id, Wt);
+                uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + offset;
+                noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
+                input_l1_read_addr += Wbytes;
+                noc_async_read_barrier();
+                cb_push_back(untilized_cache2_cb_id, Wt);
+                cb_pop_front(untilized_cache_cb_id, Wt); // NEW
+            }
 
-            cb_wait_front(cache_cb_id, Wt);
-            uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
-            for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
-                out_l1_read_addr += cache_tile_bytes;
+
+            for (uint32_t g = 0; g < granularity; ++g) {
+                cb_wait_front(cache_cb_id, Wt);
+                uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
+                for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                    noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
+                    out_l1_read_addr += cache_tile_bytes;
+                }
+                cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
+                b++;
+                if (b == B) {
+                    b = 0;
+                    cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
+                }
+                cb_pop_front(cache_cb_id, Wt);
             }
-            cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
-            b++;
-            if (b == B) {
-                b = 0;
-                cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cache_cb_id, Wt);
         }
+        noc_async_write_barrier();
+
         cb_pop_front(untilized_input_cb_id, Wt);
     }
 }

@@ -62,7 +62,8 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 
     uint32_t interm0_cb_index = CB::c_intermed0;
     uint32_t interm1_cb_index = CB::c_intermed1;
-    uint32_t num_interm_tiles = Wt;
+    // uint32_t num_interm_tiles = 2 * Wt;
+    uint32_t num_interm_tiles = 4 * Wt;
     std::map<uint8_t, tt::DataFormat> interim_data_format_spec = {
         {interm0_cb_index, interm_cb_data_format},
         {interm1_cb_index, interm_cb_data_format}
@@ -79,7 +80,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 
     // Output is same tensor as cache input, so cb/tile size is same
     uint32_t output_cb_index = CB::c_out0;
-    uint32_t num_output_tiles = 2 * Wt;
+    uint32_t num_output_tiles = B * Wt;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * cache_single_tile_size, {{output_cb_index, cache_cb_data_format}})
 		.set_page_size(output_cb_index, cache_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
