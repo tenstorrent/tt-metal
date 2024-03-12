@@ -741,7 +741,7 @@ def permute(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.permute(t0, permute_dims, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.permute(t0, permute_dims)  # , memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
 
 
@@ -1037,7 +1037,7 @@ def rmsnorm(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
-    t2 = ttnn.rms_norm(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.rms_norm(t0, t1)  # , memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 

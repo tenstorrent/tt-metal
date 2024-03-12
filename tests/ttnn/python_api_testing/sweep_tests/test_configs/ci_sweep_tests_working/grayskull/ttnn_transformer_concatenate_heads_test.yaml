@@ -6,10 +6,9 @@ test-list:
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
-        num-samples: 64
+        num-samples: 128
         args-sampling-strategy: "all"
       env:
-        # TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
@@ -21,7 +20,7 @@ test-list:
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM"]
-        out-buffer-type: ["DRAM"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: transformer_concatenate_heads_sweep.csv
