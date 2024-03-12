@@ -15,7 +15,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx) {
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset) {
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
@@ -42,6 +42,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     uint32_t Bcache = cache_tensor.get_legacy_shape()[0];
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
+    uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
     tt_metal::Device *device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -221,7 +222,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             core,
             {
                 dst_buffer->address(),
-                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset
+                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset, batch_read_offset
             }
         );
         total_batched_heads += num_batched_heads_per_core;
