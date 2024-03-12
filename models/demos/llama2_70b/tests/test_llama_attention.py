@@ -247,10 +247,7 @@ def test_LlamaAttention_inference(
     all_devices,
     emulated,
 ):
-    if emulated:
-        devices = get_devices_for_t3000(all_devices, 1)
-    else:
-        devices = get_devices_for_t3000(all_devices, n_devices)
+    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
