@@ -243,12 +243,12 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COLUMN_MAJOR
     return ttnn.create_sharded_memory_config(
         (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
-        ttnn.CoreGrid(grid_size[1], grid_size[0]),
+        ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
         shard_strategy,
         shard_orientation,
         halo=False,
         use_height_and_width_as_shard_shape=True,
-    ), ttnn.CoreGrid(grid_size[1], grid_size[0])
+    ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
