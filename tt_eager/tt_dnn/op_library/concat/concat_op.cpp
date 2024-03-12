@@ -109,6 +109,15 @@ Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim, const Memory
         return operation::run(Concat{normalized_dim, output_mem_config}, {input_tensors}).at(0);
     }
     else {
+        if (normalized_dim == ref_rank - 1) {
+            for (const auto& input_tensor : input_tensors) {
+                TT_FATAL(input_tensor.get_legacy_shape()[dim] % TILE_WIDTH == 0);
+            }
+        } else if (normalized_dim == ref_rank - 2) {
+            for (const auto& input_tensor : input_tensors) {
+                TT_FATAL(input_tensor.get_legacy_shape()[dim] % TILE_HEIGHT == 0);
+            }
+        }
         return operation::run_with_autoformat(Concat{normalized_dim}, {input_tensors}).at(0);
     }
 }
