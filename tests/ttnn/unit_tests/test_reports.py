@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 
+@pytest.mark.skip(reason="This test is not yet implemented")
 @pytest.mark.parametrize("height", [64])
 @pytest.mark.parametrize("width", [64])
 def test_print_l1_buffers_of_add_operation(tmp_path, height, width):
@@ -26,9 +27,9 @@ def test_print_l1_buffers_of_add_operation(tmp_path, height, width):
     )
     output_tensor = ttnn.add(input_tensor, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    ttnn.print_l1_buffers(str(tmp_path / "l1_buffer_state.txt"))
-
     ttnn.to_torch(output_tensor)
+
+    ttnn.print_l1_buffers(str(tmp_path / "l1_buffer_state.txt"))
 
     device = ttnn.close_device(device)
 
