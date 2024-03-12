@@ -45,7 +45,7 @@ jobs:
       - name: Set up dynamic env vars
         run: |
           source tests/end_to_end_tests/env/bin/activate
-          echo "TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(python -m tt_metal.scripts.get_home_dir --short)" >> $GITHUB_ENV
       - name: Activate env and run release tests - host
         shell: bash
         run: |
@@ -79,11 +79,11 @@ jobs:
       - name: Set up dynamic env vars
         run: |
           source tests/end_to_end_tests/env/bin/activate
-          echo "TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(python -m tt_metal.scripts.get_home_dir --short)" >> $GITHUB_ENV
       - name: Set up kernel builds
         run: |
           source tests/end_to_end_tests/env/bin/activate
-          python -m tt_lib.scripts.set_up_kernels --short prepare
+          python -m tt_metal.scripts.set_up_kernels --short prepare
       - name: Activate env and run release tests - silicon
         shell: bash
         run: |

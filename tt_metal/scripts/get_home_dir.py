@@ -14,7 +14,7 @@ if __name__ == "__main__":
 
     short = args.short
 
-    home_dir = str(Path(__file__).parent.parent.resolve())
+    home_dir = str(Path(__file__).parent.parent.parent.resolve())
 
     if short:
         print(home_dir)
