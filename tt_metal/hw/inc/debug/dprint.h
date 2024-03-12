@@ -86,7 +86,8 @@ struct U32_ARRAY {
     U32_ARRAY(uint32_t* ptr, uint32_t len) : ptr(ptr), len(len) {}
 } ATTR_PACK;
 struct TYPED_U32_ARRAY : public U32_ARRAY {
-    TYPED_U32_ARRAY(uint32_t my_type, uint32_t* ptr, uint32_t len) : U32_ARRAY(ptr, len+1) { ptr[len] = my_type; }
+    TYPED_U32_ARRAY(uint16_t my_type, uint16_t my_subtype, uint32_t* ptr, uint32_t len) : U32_ARRAY(ptr, len+1) {
+        ptr[len] = ((uint32_t)my_type << 16) + (uint32_t)my_subtype; }
 } ATTR_PACK;
 
 // These primitives are intended for ordering debug prints

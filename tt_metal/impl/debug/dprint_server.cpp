@@ -20,6 +20,8 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/dprint_common.h"
 
+#include "tensix_types.h"
+
 using std::uint32_t;
 using std::int32_t;
 using std::string;
@@ -216,38 +218,59 @@ static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
     return result;
 }
 
+// Prints a given datum in the array, given the data_format
+static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t datum, uint16_t data_format) {
+    switch (data_format) {
+        case static_cast<std::uint8_t>(tt::DataFormat::Float16):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2):
+        case static_cast<std::uint8_t>(tt::DataFormat::Lf8):
+            stream << setw(setwidth) << make_float (5, 10, datum & 0xffff) << " ";
+            stream << setw(setwidth) << make_float (5, 10, (datum >> 16) & 0xffff) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Float16_b):
+            stream << setw(setwidth) << make_float (8, 7, datum & 0xffff) << " ";
+            stream << setw(setwidth) << make_float (8, 7, (datum >> 16) & 0xffff) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
+            stream << setw(setwidth) << make_float(8, 10, datum) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Float32):
+            stream << setw(setwidth) << *reinterpret_cast<float*>(&datum) << " "; // Treat datum as if it stores bits for a float
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::UInt32):
+            stream << setw(setwidth) << datum << " ";
+            break;
+        default:
+            stream << "Unknown data format " << data_format;
+            break;
+   }
+}
+
 // Prints a typed uint32 array given the number of elements including the type.
 // If force_element_type is set to a valid type, it is assumed that the type is not included in the
 // data array, and the type is forced to be the given type.
-static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t* data, uint force_element_type = TypedU32_ARRAY_Format_INVALID ) {
-    uint32_t element_type = (force_element_type == TypedU32_ARRAY_Format_INVALID) ? data[raw_element_count-1] : force_element_type;
-    raw_element_count = (force_element_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
+static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t* data, TypedU32_ARRAY_Format force_array_type = TypedU32_ARRAY_Format_INVALID ) {
+    uint16_t array_type = data[raw_element_count-1] >> 16;
+    uint16_t array_subtype = data[raw_element_count-1] & 0xffff;
 
-    // stream << setwidth << "  ARRAY[len=" << std::dec << raw_element_count - 1 << ", type=" << element_type << "] = ";
+    raw_element_count = (force_array_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
+
+    // stream << setwidth << "  ARRAY[len=" << std::dec << raw_element_count - 1 << ", type=" << array_type << "] = ";
     for (uint32_t i = 0; i < raw_element_count - 1; i++) {
-        switch (element_type) {
+        switch (array_type) {
             case TypedU32_ARRAY_Format_Raw:
                 stream << std::hex << "0x" << data[i] << " ";
                 break;
-            case TypedU32_ARRAY_Format_TensixRegister_FP16_A:
-                stream << setw(setwidth) << make_float (5, 10, data[i] & 0xffff) << " ";
-                stream << setw(setwidth) << make_float (5, 10, (data[i] >> 16) & 0xffff) << " ";
-                break;
-            case TypedU32_ARRAY_Format_TensixRegister_FP16_B:
-                stream << setw(setwidth) << make_float (8, 7, data[i] & 0xffff) << " ";
-                stream << setw(setwidth) << make_float (8, 7, (data[i] >> 16) & 0xffff) << " ";
-                break;
-            case TypedU32_ARRAY_Format_TensixRegister_TF32:
-                stream << setw(setwidth) << make_float(8, 10, data[i]) << " ";
-                break;
-            case TypedU32_ARRAY_Format_TensixRegister_FP32:
-                stream << setw(setwidth) << *reinterpret_cast<float*>(&data[i]) << " "; // Treat data[i] as if it stores bits for a float
-                break;
-            case TypedU32_ARRAY_Format_TensixRegister_INT32:
-                stream << setw(setwidth) << data[i] << " ";
+            case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
+                PrintTensixRegisterData(stream, setwidth, raw_element_count, data[i], array_subtype);
                 break;
             default:
-                stream << "Unknown type " << element_type;
+                stream << "Unknown type " << array_type;
                 break;
         }
     }
