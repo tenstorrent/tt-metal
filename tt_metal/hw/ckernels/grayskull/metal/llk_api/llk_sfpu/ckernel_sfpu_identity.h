@@ -28,12 +28,5 @@ inline void calculate_identity()
     }
 }
 
-
-template <bool APPROXIMATION_MODE>
-void identity_init() {
-    // nada
-}
-
-
 }  // namespace sfpu
 }  // namespace ckernel

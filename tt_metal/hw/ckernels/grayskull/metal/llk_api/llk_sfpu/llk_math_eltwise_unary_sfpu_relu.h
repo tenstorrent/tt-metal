@@ -17,7 +17,7 @@ namespace ckernel {
 // RELU MAX
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::relu_max_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0) {
@@ -30,7 +30,7 @@ inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0) {
 // RELU MIN
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::relu_min_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -55,14 +55,14 @@ inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::relu_min_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
 
 // LEAKY RELU
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::lrelu_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
