@@ -374,25 +374,35 @@ def to_torch(
         tensor = ttnn.from_device(tensor)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-        tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
-    def impl(ttl_tensor):
-        if ttl_tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
+        def impl(tensor, layout):
+            return tensor.to(layout)
+
+        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")
+        tensor = to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+    def impl(tensor):
+        shape_without_tile_padding = tuple(tensor.shape)
+        tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
+
+        if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-        if ttl_tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
-        output = ttl_tensor.to_torch()
+        tensor = tensor.to_torch()
+
+        slices = [slice(None, x) for x in shape_without_tile_padding]
+        tensor = tensor[slices]
 
         if torch_rank is None:
-            return output
+            return tensor
 
-        while len(output.shape) != torch_rank:
-            if output.shape[0] != 1:
+        while len(tensor.shape) != torch_rank:
+            if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-            output = output.squeeze()
-        return output
+            tensor = tensor.squeeze()
+        return tensor
 
-    tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
     tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
 
     return TorchTensor(tensor)
