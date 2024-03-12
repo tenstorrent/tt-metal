@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
 
 
@@ -17,13 +19,19 @@ void kernel_main() {
     uint32_t my_batch_id              = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool src0_is_dram          = get_compile_time_arg_val(1) == 1;
-    constexpr bool src1_is_dram          = get_compile_time_arg_val(2) == 1;
-    #define src_stick_size_is_pow2 get_compile_time_arg_val(3) == 1
+    constexpr uint32_t batch_cb_id = get_compile_time_arg_val(1);
+    constexpr bool batch_ids_is_dram          = get_compile_time_arg_val(2) == 1;
+    constexpr bool src0_is_dram          = get_compile_time_arg_val(3) == 1;
+    constexpr bool src1_is_dram          = get_compile_time_arg_val(4) == 1;
+    #define src_stick_size_is_pow2 get_compile_time_arg_val(5) == 1
     #if (src_stick_size_is_pow2)
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(6);
     const InterleavedPow2AddrGen<src0_is_dram> s0 = {
         .bank_base_address = input_addr_a,
+        .log_base_2_of_page_size = src_log_base_2_of_page_size // TODO(AP): refactor
+    };
+    const InterleavedPow2AddrGen<src1_is_dram> s1 = {
+        .bank_base_address = input_addr_b,
         .log_base_2_of_page_size = src_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
@@ -31,26 +39,28 @@ void kernel_main() {
         .bank_base_address = input_addr_a,
         .page_size = stick_size
     };
-    #endif
-    #if (src_stick_size_is_pow2)
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(4);
-    const InterleavedPow2AddrGen<src0_is_dram> s1 = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = src_log_base_2_of_page_size // TODO(AP): refactor
-    };
-    #else
-    const InterleavedAddrGen<src0_is_dram> s1 = {
-        .bank_base_address = src_addr,
+    const InterleavedAddrGen<src1_is_dram> s1 = {
+        .bank_base_address = input_addr_b,
         .page_size = stick_size
     };
     #endif
-    volatile tt_l1_ptr uint32_t* batch_ids_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ids_addr);
+
+    const InterleavedAddrGen<batch_ids_is_dram> batchAddr = {
+        .bank_base_address = batch_ids_addr,
+        .page_size = sizeof(uint32_t)
+    };
+
 
     bool replace_batch = false;
     uint32_t batch_to_replace_id = 0;
     //first go through batch id
     for (uint32_t i=0; i<batch_id_size; i++) {
-        uint32_t batch_id_to_replace = *batch_ids_addr_ptr;
+        uint64_t src_noc_addr = get_noc_addr(i, batchAddr);
+        uint32_t l1_write_addr = get_write_ptr(batch_cb_id);
+        noc_async_read(src_noc_addr, l1_write_addr, sizeof(uint32_t));
+        noc_async_read_barrier();
+        volatile tt_l1_ptr int* addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
+        uint32_t batch_id_to_replace = addr_ptr[0];
         if(batch_id_to_replace == my_batch_id) {
             replace_batch = true;
             batch_to_replace_id = i;
@@ -64,6 +74,8 @@ void kernel_main() {
     } else {
         start_id = my_batch_id;
     }
+
+
 
     uint32_t end_id = start_id + batch_size_in_sticks;
     for (uint32_t i = start_id; i < end_id; ++ i) {

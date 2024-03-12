@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include "tt_dnn/op_library/indexed_slice/indexed_slice_op.hpp"
+#include "tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
@@ -18,7 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor & input_b, const Tensor &output) {
+operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor & input_b, const Tensor &output) {
     tt_metal::Program program{};
     Device *device = input_a.device();
 
@@ -32,11 +32,12 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
     uint32_t B = input_a.get_legacy_shape()[0];
     uint32_t b = input_b.get_legacy_shape()[0];
 
-    TT_ASSERT(batch_ids.get_legacy_shape()[0] == b);
+    TT_ASSERT(batch_ids.get_legacy_shape()[-1] == b);
 
     //parallelize across batch
     uint32_t num_units = B;
     uint32_t cb_index = 0;
+    uint32_t batch_cb_index = 1;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
 
@@ -47,10 +48,18 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
             .set_page_size(cb_index, rounded_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    tt::DataFormat batch_cb_data_format = tt_metal::datatype_to_dataformat_converter(batch_ids.get_dtype());
+    uint32_t batch_page_size = 32;
+    tt_metal::CircularBufferConfig batch_cb_config =
+        tt_metal::CircularBufferConfig(2* batch_page_size, {{batch_cb_index, cb_data_format}})
+            .set_page_size(batch_cb_index, batch_page_size);
+    auto batch_cb = tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
+
 
     bool in0_is_dram = input_a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = input_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
 
@@ -58,6 +67,8 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
     // reader
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)cb_index,
+        (std::uint32_t)batch_cb_index,
+        (std::uint32_t) batch_ids_is_dram,
         (std::uint32_t)in0_is_dram,
         (std::uint32_t)in1_is_dram,
         (std::uint32_t)stick_size_is_power_of_two,
@@ -66,7 +77,7 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/indexed_slice/kernels/dataflow/indexed_slice_reader.cpp",
+        "tt_eager/tt_dnn/op_library/indexed_fill/kernels/dataflow/indexed_fill_reader.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(
             reader_compile_time_args));
@@ -108,6 +119,7 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
                                                     local_batch_size_in_sticks,
                                                     i*local_batch_size_in_sticks
         };
+        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
     }
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores,  page_size](
@@ -118,8 +130,8 @@ operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids
         const std::vector<Tensor>& output_tensors
     ) {
         auto output = output_tensors.at(0);
-        auto input_a = input_tensors.at(0);
-        auto input_b = input_tensors.at(0);
+        auto input_a = input_tensors.at(1);
+        auto input_b = input_tensors.at(2);
         auto batch_ids = input_tensors.at(0);
         uint32_t core_id = 0;
         uint32_t B = input_a.get_legacy_shape()[0];
