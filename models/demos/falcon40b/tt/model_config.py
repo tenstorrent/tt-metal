@@ -216,6 +216,14 @@ def get_model_config(model_config_str, llm_mode, input_shape, num_devices):
                 ),
             }
         )
+        shard_spec_16_cores_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 1),
+                ),
+            }
+        )
         shard_spec_8_cores_grid = ttl.tensor.CoreRangeSet(
             {
                 ttl.tensor.CoreRange(
@@ -452,32 +460,60 @@ def get_model_config(model_config_str, llm_mode, input_shape, num_devices):
             )
         model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         # TODO: Remove this once nlp_create_qkv_heads supports HEIGHT > 32 for sharded
-        model_config["CREATE_Q_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    shard_height,
-                    head_dim,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
-        model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_2_cores_grid,
-                [
-                    shard_height,
-                    head_dim,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+        if num_devices == 4:
+            model_config["CREATE_Q_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1,
+                ttl.tensor.ShardSpec(
+                    shard_spec_32_cores_grid,
+                    [
+                        shard_height,
+                        head_dim,
+                    ],
+                    ttl.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+            model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1,
+                ttl.tensor.ShardSpec(
+                    shard_spec_2_cores_grid,
+                    [
+                        shard_height,
+                        head_dim,
+                    ],
+                    ttl.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+        elif num_devices == 8:
+            model_config["CREATE_Q_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1,
+                ttl.tensor.ShardSpec(
+                    shard_spec_16_cores_grid,
+                    [
+                        shard_height,
+                        head_dim,
+                    ],
+                    ttl.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+            model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1,
+                ttl.tensor.ShardSpec(
+                    shard_spec_1_cores_grid,
+                    [
+                        shard_height,
+                        head_dim,
+                    ],
+                    ttl.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
