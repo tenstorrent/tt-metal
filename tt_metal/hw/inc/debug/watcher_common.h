@@ -8,6 +8,11 @@
 
 #if defined(WATCHER_ENABLED)
 
+#if defined(COMPILE_FOR_ERISC)
+#include "erisc.h"
+extern "C" void erisc_early_exit(std::int32_t stack_save_addr);
+#endif
+
 inline uint32_t debug_get_which_riscv()
 {
 #if defined(COMPILE_FOR_BRISC)

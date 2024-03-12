@@ -102,7 +102,7 @@ static void dump_l1_status(FILE *f, Device *device, CoreCoord core, const launch
     }
 }
 
-static const char * get_riscv_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type)
+static const char * get_riscv_name(CoreCoord core, uint32_t type)
 {
     switch (type) {
     case DebugBrisc:
@@ -118,7 +118,6 @@ static const char * get_riscv_name(CoreCoord core, const launch_msg_t *launch_ms
     case DebugTrisc2:
         return "trisc2";
     default:
-        log_running_kernels(launch_msg);
         TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
@@ -195,18 +194,18 @@ static void dump_noc_sanity_status(FILE *f,
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
+        fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_riscv_name(core, san->which), noc, san->addr, san->len);
         fflush(f);
         log_running_kernels(launch_msg);
         log_warning("Watcher stopped the device due to bad NOC L1/reg address");
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d reading L1[addr=0x%08lx,len=%d]",
-                 core.str().c_str(), get_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
+                 core.str().c_str(), get_riscv_name(core, san->which), noc, san->addr, san->len);
         TT_THROW(buf);
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "%s using noc%d tried to access core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_riscv_name(core, launch_msg, san->which),
+                get_riscv_name(core, san->which),
                 noc,
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
@@ -217,7 +216,7 @@ static void dump_noc_sanity_status(FILE *f,
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to accesss core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]",
                  core.str().c_str(),
-                 get_riscv_name(core, launch_msg, san->which),
+                 get_riscv_name(core, san->which),
                  noc,
                  NOC_UNICAST_ADDR_X(san->addr),
                  NOC_UNICAST_ADDR_Y(san->addr),
@@ -226,7 +225,7 @@ static void dump_noc_sanity_status(FILE *f,
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "%s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_riscv_name(core, launch_msg, san->which),
+                get_riscv_name(core, san->which),
                 noc,
                 NOC_MCAST_ADDR_START_X(san->addr),
                 NOC_MCAST_ADDR_START_Y(san->addr),
@@ -239,7 +238,7 @@ static void dump_noc_sanity_status(FILE *f,
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]}",
                  core.str().c_str(),
-                 get_riscv_name(core, launch_msg, san->which),
+                 get_riscv_name(core, san->which),
                  noc,
                  NOC_MCAST_ADDR_START_X(san->addr),
                  NOC_MCAST_ADDR_START_Y(san->addr),
@@ -279,7 +278,7 @@ static void dump_assert_status(
             std::string line_num_warning = "Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
             fprintf(
                 f, "%s tripped assert on line %d. Current kernel: %s. %s",
-                get_riscv_name(core, launch_msg, assert_status->which),
+                get_riscv_name(core, assert_status->which),
                 assert_status->line_num,
                 get_kernel_name(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str()
@@ -291,7 +290,7 @@ static void dump_assert_status(
             TT_THROW(
                 "Watcher detected an assert: core {}, riscv {}, line {}. Current kernel: {}. {}",
                 core.str(),
-                get_riscv_name(core, launch_msg, assert_status->which),
+                get_riscv_name(core, assert_status->which),
                 assert_status->line_num,
                 get_kernel_name(core, launch_msg, assert_status->which),
                 line_num_warning
@@ -311,10 +310,30 @@ static void dump_assert_status(
         default:
             log_running_kernels(launch_msg);
             TT_THROW(
-                "Watcher unexpexted data corruption, noc assert state on core {} unknown failure code: {}.\n",
+                "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
                 core.str(),
                 assert_status->tripped
             );
+    }
+}
+
+static void dump_pause_status(
+    CoreCoord core,
+    const debug_pause_msg_t *pause_status,
+    std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores
+) {
+    // Just record which cores are paused, printing handled at the end.
+    for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
+        auto pause = pause_status->flags[risc_id];
+        if (pause == 1) {
+            paused_cores.insert({core, static_cast<riscv_id_t>(risc_id)});
+        } else if (pause > 1) {
+            TT_THROW(
+                "Watcher data corruption, pause state on core {} unknown code: {}.\n",
+                core.str(),
+                pause
+            );
+        }
     }
 }
 
@@ -458,7 +477,14 @@ static void validate_kernel_ids(FILE *f,
     used_kernel_names[launch->triscs_watcher_kernel_id] = true;
 }
 
-static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, Device *device, CoreCoord core, bool dump_all) {
+static void dump_core(
+    FILE *f,
+    std::map<int, bool>& used_kernel_names,
+    Device *device,
+    CoreCoord core,
+    bool dump_all,
+    std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores
+) {
 
     string pad(11 - core.str().length(), ' ');
     fprintf(f, "Device %i, ", device->id());
@@ -487,6 +513,7 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, Device *d
             dump_l1_status(f, device, core,  &mbox_data->launch);
         dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
         dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
+        dump_pause_status(core, &mbox_data->pause_status, paused_cores);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -526,6 +553,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
             log_info(LogLLRuntime, "Watcher checking device {}", device->id());
         }
 
+        std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
         std::map<int, bool> used_kernel_names;
         CoreCoord grid_size = device->logical_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -533,18 +561,54 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
                 CoreCoord logical_core(x, y);
                 CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
                 if (device->storage_only_cores().find(logical_core) == device->storage_only_cores().end()) {
-                    dump_core(f, used_kernel_names, device, worker_core, dump_all);
+                    dump_core(f, used_kernel_names, device, worker_core, dump_all, paused_cores);
                 }
             }
         }
 
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
             CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-            dump_core(f, used_kernel_names, device, physical_core, dump_all);
+            dump_core(f, used_kernel_names, device, physical_core, dump_all, paused_cores);
         }
 
         for (auto k_id : used_kernel_names) {
             fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        }
+
+        // Handle any paused cores, wait for user input.
+        if (!paused_cores.empty()) {
+            string paused_cores_str = "Paused cores: ";
+            for (auto &core_and_risc : paused_cores) {
+                paused_cores_str += fmt::format(
+                    "{}:{}, ",
+                    core_and_risc.first.str(),
+                    get_riscv_name(core_and_risc.first, core_and_risc.second)
+                );
+            }
+            paused_cores_str += "\n";
+            fprintf(f, "%s", paused_cores_str.c_str());
+            log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
+            if (!tt::llrt::OptionsG.get_watcher_auto_unpause()) {
+                while (std::cin.get() != '\n') { ; }
+            }
+
+            // Clear all pause flags
+            for (auto &core_and_risc : paused_cores) {
+                const CoreCoord &core = core_and_risc.first;
+                riscv_id_t risc_id = core_and_risc.second;
+                uint64_t addr = tt::llrt::is_ethernet_core(core, device->id())?
+                    GET_ETH_MAILBOX_ADDRESS_HOST(pause_status) :
+                    GET_MAILBOX_ADDRESS_HOST(pause_status);
+                auto pause_data = tt::llrt::read_hex_vec_from_core(
+                    device->id(),
+                    core,
+                    addr,
+                    sizeof(debug_pause_msg_t)
+                );
+                auto pause_msg = reinterpret_cast<debug_pause_msg_t *>(&(pause_data[0]));
+                pause_msg->flags[risc_id] = 0;
+                tt::llrt::write_hex_vec_to_core(device->id(), core, pause_data, addr);
+            }
         }
     }
 }
@@ -633,6 +697,15 @@ void watcher_init(Device *device) {
     assert_data->tripped = DebugAssertOK;
     assert_data->which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
+    // Initialize pause flags to 0
+    std::vector<uint32_t> debug_pause_init_val;
+    debug_pause_init_val.resize(sizeof(debug_pause_msg_t) / sizeof(uint32_t));
+    static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
+    debug_pause_msg_t *pause_data = reinterpret_cast<debug_pause_msg_t *>(&(debug_pause_init_val[0]));
+    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
+        pause_data->flags[idx] = 0;
+    }
+
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -642,6 +715,7 @@ void watcher_init(Device *device) {
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(assert_status));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(pause_status));
         }
     }
 
@@ -665,6 +739,12 @@ void watcher_init(Device *device) {
             physical_core,
             debug_assert_init_val,
             GET_ETH_MAILBOX_ADDRESS_HOST(assert_status)
+        );
+        tt::llrt::write_hex_vec_to_core(
+            device->id(),
+            physical_core,
+            debug_pause_init_val,
+            GET_ETH_MAILBOX_ADDRESS_HOST(pause_status)
         );
     }
 

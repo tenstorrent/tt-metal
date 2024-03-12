@@ -121,8 +121,34 @@ assert was tripped. An example of an assert and the resulting message is shown b
 If this assert was tripped, the kernel will hang, and a message will be reported on stderr as well
 as in the watcher log file:
 
-..code-block::
+.. code-block::
 
     # For example, the kernel running on device 0, core (1,1), brisc trips an assert. The last waypoint will also be shown.
     # Note that the reported line number may be from an included header file, rather than from the kernel source.
     Device 0, Core (x=1,y=1):    AST1,R,R,R,R  brisc tripped assert on line 7. Running kernel: my_kernel.cpp.
+
+Pausing
+-------
+Temporarily pausing a kernel on the device is supported using the `PAUSE` macro. When the watcher is
+disabled, pauses will be compiled out. When a pause is hit, the kernel on the device will wait for
+a signal from the user (via pressing ENTER as prompted on the command line). Note that while waiting
+for a pause to be cleared, the watcher server is temporarily halted, and regular polling only
+resumes after the user has given the unpause signal. An example of a pause and resulting message is
+shown below:
+
+.. code-block:: c++
+
+    #include "debug/pause.h"
+
+    void kernel_main() {
+        // Other parts of the kernel...
+        PAUSE();  // Kernel halts here until user presses ENTER on the console.
+        // Rest of the kernel...
+    }
+
+The resulting message will be printed on the command line (and watcher log):
+
+.. code-block::
+
+    INFO     | Paused cores: (x=1,y=1):brisc
+    Press ENTER to unpause core(s) and continue...
