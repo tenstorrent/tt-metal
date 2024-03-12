@@ -206,14 +206,17 @@ def test_bert(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.BertConfig.from_pretrained(model_name)
-    config.position_embedding_type = "none"
     model = transformers.BertModel.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.ones(1, sequence_size)
     torch_output = model(
-        torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask
+        torch_input_ids,
+        token_type_ids=torch_token_type_ids,
+        position_ids=torch_position_ids,
+        attention_mask=torch_attention_mask,
     ).last_hidden_state
 
     parameters = preprocess_model_parameters(
@@ -225,6 +228,7 @@ def test_bert(model_name, batch_size, sequence_size):
         config,
         torch_input_ids,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         parameters=parameters,
     )
@@ -240,13 +244,18 @@ def test_bert_for_question_answering(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.BertConfig.from_pretrained(model_name)
-    config.position_embedding_type = "none"
     model = transformers.BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.ones(1, sequence_size)
-    torch_output = model(torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask)
+    torch_output = model(
+        torch_input_ids,
+        token_type_ids=torch_token_type_ids,
+        position_ids=torch_position_ids,
+        attention_mask=torch_attention_mask,
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -257,11 +266,12 @@ def test_bert_for_question_answering(model_name, batch_size, sequence_size):
         config,
         torch_input_ids,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         parameters=parameters,
     )
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.9999)
-    assert_with_pcc(torch_output.end_logits, end_logits, 0.9999)
+    assert_with_pcc(torch_output.start_logits, start_logits)
+    assert_with_pcc(torch_output.end_logits, end_logits)

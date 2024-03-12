@@ -4,87 +4,99 @@
 
 import ttnn
 
-# from models.demos.metal_BERT_large_11.tt.model_config import get_model_config
-# model_config = get_model_config(8, ttnn.CoreGrid(8, 8), "BFLOAT8_B-SHARDED")
+from ttnn.dot_access import DotAccessDict
 
-core_grid = ttnn.CoreGrid(y=8, x=8)
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
-program_configs = {
-    "query_key_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=6,
-        per_core_M=12,
-        per_core_N=12,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    "query_by_key_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=6,
-        per_core_M=24,
-        per_core_N=12,
-    ),
-    "attention_probabilities_by_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=12,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        per_core_M=24,
-        per_core_N=2,
-    ),
-    "self_output_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        per_core_M=12,
-        per_core_N=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    "ff1_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=12,
-        per_core_N=16,
-        transpose_mcast=False,
-        fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
-    ),
-    "ff2_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        in0_block_w=16,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        per_core_M=12,
-        per_core_N=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    "layernorm_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        subblock_w=4,
-        block_h=12,
-        block_w=4,
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-        im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
-        out_data_format=ttnn.bfloat8_b,
-        inplace=True,
-    ),
-    "softmax_program_config": ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        subblock_w=6,
-        block_h=24,
-        block_w=12,
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-        im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
-    ),
-}
+"""
+from models.demos.metal_BERT_large_11.tt.model_config import get_model_config
+model_config = get_model_config(12, ttnn.CoreGrid(y=8, x=12), "BFLOAT8_B-SHARDED")
+for key, value in model_config.items():
+    print(f"{key}: {value}")
+"""
+
+
+def update_model_config(config, batch_size):
+    core_grid = ttnn.CoreGrid(y=8, x=batch_size)
+
+    program_configs = {
+        "query_key_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=6,
+            per_core_M=12,
+            per_core_N=12,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        "query_by_key_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=6,
+            per_core_M=24,
+            per_core_N=12,
+        ),
+        "attention_probabilities_by_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=12,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=24,
+            per_core_N=2,
+        ),
+        "self_output_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=4,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=12,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        "ff1_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=12,
+            per_core_N=16,
+            transpose_mcast=True,
+            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
+        ),
+        "ff2_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=16,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=12,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        "layernorm_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=4,
+            block_h=12,
+            block_w=4,
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            out_data_format=ttnn.bfloat8_b,
+            inplace=True,
+        ),
+        "softmax_program_config": ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=6,
+            block_h=24,
+            block_w=12,
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+        ),
+    }
+
+    return DotAccessDict(dict(**config.to_dict(), core_grid=core_grid, program_configs=program_configs))
 
 
 def bert_attention(
@@ -104,7 +116,7 @@ def bert_attention(
         bias=parameters.self.query_key_value.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["query_key_value_matmul_program_config"],
+        program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
 
     (
@@ -123,7 +135,7 @@ def bert_attention(
         key,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["query_by_key_matmul_program_config"],
+        program_config=config.program_configs["query_by_key_matmul_program_config"],
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
@@ -132,7 +144,7 @@ def bert_attention(
         attention_scores,
         attention_mask=attention_mask,
         head_size=head_size,
-        program_config=program_configs["softmax_program_config"],
+        program_config=config.program_configs["softmax_program_config"],
     )
 
     context_layer = ttnn.matmul(
@@ -140,7 +152,7 @@ def bert_attention(
         value,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["attention_probabilities_by_value_matmul_program_config"],
+        program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
     )
     ttnn.deallocate(attention_probabilities)
     ttnn.deallocate(value)
@@ -156,7 +168,7 @@ def bert_attention(
         bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["self_output_matmul_program_config"],
+        program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
 
@@ -167,7 +179,7 @@ def bert_attention(
         bias=parameters.output.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=program_configs["layernorm_program_config"],
+        program_config=config.program_configs["layernorm_program_config"],
     )
     ttnn.deallocate(self_output)
 
@@ -175,6 +187,7 @@ def bert_attention(
 
 
 def bert_intermediate(
+    config,
     hidden_states,
     *,
     parameters,
@@ -185,7 +198,7 @@ def bert_intermediate(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["ff1_matmul_program_config"],
+        program_config=config.program_configs["ff1_matmul_program_config"],
     )
     return output
 
@@ -203,7 +216,7 @@ def bert_output(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=program_configs["ff2_matmul_program_config"],
+        program_config=config.program_configs["ff2_matmul_program_config"],
     )
     ttnn.deallocate(hidden_states)
 
@@ -214,7 +227,7 @@ def bert_output(
         bias=parameters.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=program_configs["layernorm_program_config"],
+        program_config=config.program_configs["layernorm_program_config"],
     )
     ttnn.deallocate(residual)
 
@@ -227,7 +240,7 @@ def bert_feedforward(
     *,
     parameters,
 ):
-    intermediate = bert_intermediate(hidden_states, parameters=parameters.intermediate)
+    intermediate = bert_intermediate(config, hidden_states, parameters=parameters.intermediate)
     hidden_states = bert_output(config, intermediate, hidden_states, parameters=parameters.output)
     return hidden_states
 
@@ -258,6 +271,7 @@ def bert(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     parameters,
 ):
@@ -277,31 +291,41 @@ def bert(
     )
     ttnn.deallocate(token_type_ids)
 
-    embeddings = ttnn.add(
+    word_plus_token_type_embeddings = ttnn.add(
         word_embeddings, token_type_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(word_embeddings)
     ttnn.deallocate(token_type_embeddings)
 
+    position_embeddings = ttnn.embedding(
+        position_ids,
+        parameters.embeddings.position_embeddings.weight,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(position_ids)
+
+    embeddings = ttnn.layer_norm(
+        word_plus_token_type_embeddings,
+        residual_input_tensor=position_embeddings,
+        weight=parameters.embeddings.LayerNorm.weight,
+        bias=parameters.embeddings.LayerNorm.bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(word_plus_token_type_embeddings)
+    ttnn.deallocate(position_embeddings)
+
     encoder_input = ttnn.to_memory_config(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
             embeddings.shape,
-            core_grid=core_grid,
+            core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
     ttnn.deallocate(embeddings)
-
-    encoder_input = ttnn.layer_norm(
-        encoder_input,
-        weight=parameters.embeddings.LayerNorm.weight,
-        bias=parameters.embeddings.LayerNorm.bias,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=program_configs["layernorm_program_config"],
-    )
 
     encoder_output = None
     for encoder_parameters in parameters.encoder.layer:
@@ -320,6 +344,7 @@ def bert_for_question_answering(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -329,6 +354,7 @@ def bert_for_question_answering(
         config,
         input_ids,
         token_type_ids,
+        position_ids,
         attention_mask,
         parameters[name],
     )
@@ -348,6 +374,7 @@ def bert_for_question_answering(
 def preprocess_inputs(
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     device,
 ):
@@ -361,9 +388,12 @@ def preprocess_inputs(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
+    position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     if attention_mask is not None:
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
+        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
+        attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
+        attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(
             attention_mask,
             dtype=ttnn.bfloat16,
@@ -372,7 +402,7 @@ def preprocess_inputs(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    return input_ids, token_type_ids, attention_mask
+    return input_ids, token_type_ids, position_ids, attention_mask
 
 
 def custom_preprocessor(torch_model, name):

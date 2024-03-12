@@ -4,6 +4,8 @@
 
 import ttnn
 
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
+
 
 def bert_attention(
     config,
@@ -154,7 +156,7 @@ def bert_feedforward(
     return hidden_states
 
 
-def bert_encoder(
+def bert_layer(
     config,
     hidden_states,
     attention_mask,
@@ -180,6 +182,7 @@ def bert(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     parameters,
 ):
@@ -187,6 +190,7 @@ def bert(
         input_ids,
         parameters.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
+        pad_token=config.pad_token_id,
     )
     ttnn.deallocate(input_ids)
 
@@ -197,9 +201,20 @@ def bert(
     )
     ttnn.deallocate(token_type_ids)
 
-    embeddings = word_embeddings + token_type_embeddings
+    word_plus_token_type_embeddings = word_embeddings + token_type_embeddings
     ttnn.deallocate(word_embeddings)
     ttnn.deallocate(token_type_embeddings)
+
+    position_embeddings = ttnn.embedding(
+        position_ids,
+        parameters.embeddings.position_embeddings.weight,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    ttnn.deallocate(position_ids)
+
+    embeddings = word_plus_token_type_embeddings + position_embeddings
+    ttnn.deallocate(word_plus_token_type_embeddings)
+    ttnn.deallocate(position_embeddings)
 
     encoder_input = ttnn.layer_norm(
         embeddings,
@@ -211,7 +226,7 @@ def bert(
 
     encoder_output = None
     for encoder_parameters in parameters.encoder.layer:
-        encoder_output = bert_encoder(
+        encoder_output = bert_layer(
             config,
             encoder_input,
             attention_mask,
@@ -227,6 +242,7 @@ def bert_for_question_answering(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -236,6 +252,7 @@ def bert_for_question_answering(
         config,
         input_ids,
         token_type_ids,
+        position_ids,
         attention_mask,
         parameters[name],
     )
@@ -253,6 +270,7 @@ def bert_for_question_answering(
 def preprocess_inputs(
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     device,
 ):
@@ -265,10 +283,12 @@ def preprocess_inputs(
     token_type_ids = ttnn.from_torch(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+    position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if attention_mask is not None:
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
+        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
+        attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
+        attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(
             attention_mask,
             dtype=ttnn.bfloat16,
@@ -277,7 +297,7 @@ def preprocess_inputs(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    return input_ids, token_type_ids, attention_mask
+    return input_ids, token_type_ids, position_ids, attention_mask
 
 
 def custom_preprocessor(torch_model, name):

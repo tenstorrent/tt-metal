@@ -155,6 +155,7 @@ def bert(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -163,10 +164,13 @@ def bert(
     token_type_embeddings = ttnn.embedding(
         token_type_ids, parameters.embeddings.token_type_embeddings.weight, layout=ttnn.TILE_LAYOUT
     )
-    hidden_states = word_embeddings + token_type_embeddings
+    position_embeddings = ttnn.embedding(
+        position_ids, parameters.embeddings.position_embeddings.weight, layout=ttnn.TILE_LAYOUT
+    )
+    embeddings = word_embeddings + token_type_embeddings + position_embeddings
 
     hidden_states = ttnn.layer_norm(
-        hidden_states,
+        embeddings,
         weight=parameters.embeddings.LayerNorm.weight,
         bias=parameters.embeddings.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
@@ -186,6 +190,7 @@ def bert_for_question_answering(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -195,6 +200,7 @@ def bert_for_question_answering(
         config,
         input_ids,
         token_type_ids,
+        position_ids,
         attention_mask,
         parameters=parameters[name],
     )
@@ -209,21 +215,24 @@ def bert_for_question_answering(
 def preprocess_inputs(
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     device,
 ):
     import torch
 
+    batch_size, _ = input_ids.shape
+
     input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     token_type_ids = ttnn.from_torch(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+    position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if attention_mask is not None:
-        attention_mask = torch.zeros(input_ids.shape, dtype=torch.bfloat16)
         attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
-
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 31))
+        attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
+        attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(
             attention_mask,
             dtype=ttnn.bfloat16,
@@ -232,7 +241,7 @@ def preprocess_inputs(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    return input_ids, token_type_ids, attention_mask
+    return input_ids, token_type_ids, position_ids, attention_mask
 
 
 def custom_preprocessor(torch_model, name):
