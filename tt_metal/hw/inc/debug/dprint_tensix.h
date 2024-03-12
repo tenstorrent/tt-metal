@@ -31,6 +31,10 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         // Determine the format of the data in the destination register
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
 
+        if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
+            data_format_reg_field_value = 0; // Override the data format to tt::DataFormat::Float32
+        }
+
         // Print the contents
         DPRINT << FIXED() << SETPRECISION(2);
         uint32_t rd_data[8+1]; // data + array_type
@@ -54,7 +58,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 // Print the contents of the whole configuration register. The register is specified by
 // the name of any field within it.
 // Example:
-//    dprint_cfg_regHW_CFG_0,ALU_FORMAT_SPEC_REG2_Dstacc);
+//    dprint_cfg_reg(HW_CFG_0,ALU_FORMAT_SPEC_REG2_Dstacc);
 #define dprint_cfg_reg(bank,reg_field_name) {\
     uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32);\
     DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();\
