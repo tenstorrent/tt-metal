@@ -370,18 +370,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         start_pos: int,
         attn_masks: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
-        attn_outputs = self.attn_qkv_mqa(xs, rot_mats, start_pos, attn_masks)
+        query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
+        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, attn_masks)
         return self.attn_selfout(attn_outputs)
 
-    def attn_qkv_mqa(
+    def attn_qkv(
         self,
         xs: tt_lib.tensor.Tensor,
         rot_mats: tt_lib.tensor.Tensor,
-        start_pos: int,
-        attn_masks: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
-        padded_layer_past_len = nearest_32(start_pos + 1)
-
         # Assume input is already padded to 32, even if the batch size is not 32. Batch size is in self.max_batch_size.
         assert xs[0].shape[2] == 32, "Input tensor must be padded to 32"
 
@@ -512,6 +509,21 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         ],
                         output_mem_config=self.model_config["DEFAULT_MEMCFG"],
                     )
+
+        return query_layer, key_layer, value_layer
+
+    def attn_mqa(
+        self,
+        query_layer: tt_lib.tensor.Tensor,
+        key_layer: tt_lib.tensor.Tensor,
+        value_layer: tt_lib.tensor.Tensor,
+        start_pos: int,
+        attn_masks: tt_lib.tensor.Tensor,
+    ) -> tt_lib.tensor.Tensor:
+        padded_layer_past_len = nearest_32(start_pos + 1)
+
+        for i in range(len(query_layer)):
+            if self.batched_attn:
                 query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
                     query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
                 )
