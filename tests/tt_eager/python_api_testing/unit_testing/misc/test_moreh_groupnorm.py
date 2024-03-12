@@ -230,6 +230,7 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
     assert pass_rstd
 
 
+@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
