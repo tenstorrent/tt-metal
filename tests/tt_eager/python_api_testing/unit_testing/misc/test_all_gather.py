@@ -20,14 +20,6 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     elif num_devices == 2 and num_links <= 2:
         return True, "Not enough links to run"
 
-    if layout == ttl.tensor.Layout.ROW_MAJOR and input_dtype == ttl.tensor.DataType.BFLOAT8_B:
-        return True, "Invalid combination"
-
-    if num_devices < 2:
-        return True, "Requires multiple devices to run"
-    elif num_devices == 2 and num_links <= 2:
-        return True, "Not enough links to run"
-
     if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
         return True, "Unsupported test case"
 
@@ -101,12 +93,8 @@ def run_all_gather_on_t3000_impl(
 
     tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
 
-    torch.set_printoptions(sci_mode=False)
-    # import time
-    # time.sleep(5)
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        print((tt_output_tensor != input_tensor).nonzero())
         if input_dtype == ttl.tensor.DataType.BFLOAT16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
