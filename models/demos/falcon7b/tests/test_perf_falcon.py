@@ -387,7 +387,6 @@ class TestParametrized:
     )
     @skip_for_wormhole_b0()
     def test_perf_gs_bare_metal(
-        device,
         use_program_cache,
         model_version,
         llm_mode,
@@ -400,6 +399,7 @@ class TestParametrized:
         request,
         model_config_str,
         model_location_generator,
+        device,
     ):
         if is_e75(device) and batch == 32:
             pytest.skip("Falcon batch 32 is not supported on E75")
@@ -446,7 +446,6 @@ class TestParametrized:
     )
     @skip_for_grayskull()
     def test_perf_wh_bare_metal(
-        device,
         use_program_cache,
         model_version,
         llm_mode,
@@ -459,6 +458,7 @@ class TestParametrized:
         request,
         model_config_str,
         model_location_generator,
+        device,
     ):
         model_config = get_model_config(model_config_str)
         tt_cache_path = get_tt_cache_path(model_version)
@@ -511,7 +511,6 @@ class TestParametrized:
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
 def test_perf_virtual_machine(
-    device,
     use_program_cache,
     model_version,
     llm_mode,
@@ -524,6 +523,7 @@ def test_perf_virtual_machine(
     request,
     model_config_str,
     model_location_generator,
+    device,
 ):
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is not supported on E75")
