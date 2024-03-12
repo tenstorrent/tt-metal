@@ -383,7 +383,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         padded_layer_past_len = nearest_32(start_pos + 1)
 
         # Assume input is already padded to 32, even if the batch size is not 32. Batch size is in self.max_batch_size.
-        assert xs[0].shape()[2] == 32, "Input tensor must be padded to 32"
+        assert xs[0].shape[2] == 32, "Input tensor must be padded to 32"
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
