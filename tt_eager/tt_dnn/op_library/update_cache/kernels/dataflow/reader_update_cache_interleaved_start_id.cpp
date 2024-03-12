@@ -30,6 +30,8 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
     const DataFormat input_data_format = get_dataformat(input_cb_id);
 
+    constexpr uint32_t granularity = 2;
+
     const InterleavedAddrGenFast<cache_is_dram> s0 = {
         .bank_base_address = cache_addr,
         .page_size = cache_tile_bytes,
@@ -63,21 +65,24 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
         #endif
-        for (uint32_t u = 0; u < u_range; ++u) {
-            cb_reserve_back(cache_cb_id, Wt);
+        for (uint32_t u = 0; u < u_range / granularity; ++u) {
+            cb_reserve_back(cache_cb_id, Wt * granularity);
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
-            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
-                cache_l1_write_addr += cache_tile_bytes;
+            for (uint32_t g = 0; g < granularity; ++g) {
+                for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                    noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                    cache_l1_write_addr += cache_tile_bytes;
+                }
+                cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
+                b++;
+                if (b == B) {
+                    b = 0;
+                    cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
+                }
             }
-            cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
-            b++;
-            if (b == B) {
-                b = 0;
-                cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
-            }
+
             noc_async_read_barrier();
-            cb_push_back(cache_cb_id, Wt);
+            cb_push_back(cache_cb_id, Wt * granularity);
         }
     }
 }
