@@ -32,6 +32,8 @@ def run_perf_resnet(
     device,
 ):
     disable_persistent_kernel_cache()
+    if batch_size <= 2:
+        pytest.skip("Batch size 1 and 2 are not supported with sharded data")
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
     cpu_key = f"ref_key_batchsize{batch_size}"
