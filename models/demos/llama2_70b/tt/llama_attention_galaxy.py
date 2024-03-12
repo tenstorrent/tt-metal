@@ -208,8 +208,9 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
             attn_masks_group = attn_masks[
                 group_id * self.num_devices_per_group : (group_id + 1) * self.num_devices_per_group
             ]
-            outputs_group = self.attentions[group_id].attn_qkv_mqa(
-                xs_group, rot_mats_group, start_pos, attn_masks_group
+            query_layer, key_layer, value_layer = self.attentions[group_id].attn_qkv(xs_group, rot_mats_group)
+            outputs_group = self.attentions[group_id].attn_mqa(
+                query_layer, key_layer, value_layer, start_pos, attn_masks_group
             )
             all_attn_outputs.append(outputs_group)
         # Do all gather across device groups before selfout
