@@ -388,7 +388,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
             for i in range(len(xs)):
                 xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config[f"FUSED_QKV_MM_INPUT_MEMCFG"]
+                    xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
                 )
 
         # Fused QKV
