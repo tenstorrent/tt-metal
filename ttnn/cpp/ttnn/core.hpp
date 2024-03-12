@@ -19,6 +19,27 @@ inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageT
     return tensor.storage_type() == storage_type;
 }
 
+inline bool is_tensor_on_device(const ttnn::Tensor& tensor) {
+    return tensor.storage_type() == StorageType::DEVICE;
+}
+
+inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE;
+}
+
+inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
+    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
+}
+
+inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
+    for (const auto& tensor : tensors) {
+        if (is_tensor_on_multi_device(tensor)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline void set_printoptions(const std::string& profile) {
     tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
         magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
@@ -29,5 +50,9 @@ inline void set_printoptions(const std::string& profile) {
 }  // namespace core
 
 using core::has_storage_type_of;
+using core::is_tensor_on_device;
+using core::is_tensor_on_multi_device;
+using core::is_tensor_on_device_or_multidevice;
+using core::any_tensor_on_multi_device;
 using core::set_printoptions;
 }  // namespace ttnn
