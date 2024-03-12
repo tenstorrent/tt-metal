@@ -845,7 +845,7 @@ int main(int argc, char **argv) {
             "tt_metal/impl/dispatch/kernels/cq_prefetch_hd.cpp",
             {prefetch_core},
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = prefetch_compile_args,
                 .defines = defines
@@ -857,7 +857,7 @@ int main(int argc, char **argv) {
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             {dispatch_core},
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = dispatch_compile_args,
                 .defines = defines
