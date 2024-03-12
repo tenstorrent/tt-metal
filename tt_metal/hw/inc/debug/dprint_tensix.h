@@ -17,12 +17,19 @@
 #define READ_CFG_REG_FIELD(bank,reg_field_name)\
     (dbg_read_cfgreg(bank, reg_field_name##_ADDR32) & reg_field_name##_MASK) >> reg_field_name##_SHAMT
 
+// Helper macros
+#define READ_HW_CFG_0_REG_FIELD(reg_field_name)     READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_0, reg_field_name)
+#define READ_HW_CFG_1_REG_FIELD(reg_field_name)     READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_1, reg_field_name)
+#define READ_THREAD_0_CFG_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::THREAD_0_CFG, reg_field_name)
+#define READ_THREAD_1_CFG_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::THREAD_1_CFG, reg_field_name)
+#define READ_THREAD_2_CFG_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::THREAD_2_CFG, reg_field_name)
+
 // Print the contents of tile with index tile_id within the destination register
 void dprint_tensix_dest_reg(int tile_id = 0) {
     dbg_halt();
     MATH({
         // Determine the format of the data in the destination register
-        uint32_t data_format_reg_field_value = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_0, ALU_FORMAT_SPEC_REG2_Dstacc);
+        uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
 
         // Print the contents
         DPRINT << FIXED() << SETPRECISION(2);
@@ -38,16 +45,17 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 
 // Print the contents of the specified configuration register field.
 // Example:
-//   dprint_cfg_reg_field(ckernel::dbg_cfgreg::HW_CFG_0, ALU_FORMAT_SPEC_REG_SrcA_val);
+//   dprint_cfg_reg_field(HW_CFG_0,ALU_FORMAT_SPEC_REG2_Dstacc);
 #define dprint_cfg_reg_field(bank,reg_field_name) {\
-    uint32_t field_val = READ_CFG_REG_FIELD(bank, reg_field_name);\
+    uint32_t field_val = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::bank, reg_field_name);\
     DPRINT << #reg_field_name << " = " << field_val << ENDL();\
 }
 
-// Only print the contents of the whole register.
+// Print the contents of the whole configuration register. The register is specified by
+// the name of any field within it.
 // Example:
-//    dprint_cfg_reg(ckernel::dbg_cfgreg::HW_CFG_0, ALU_FORMAT_SPEC_REG_SrcA_val);
+//    dprint_cfg_regHW_CFG_0,ALU_FORMAT_SPEC_REG2_Dstacc);
 #define dprint_cfg_reg(bank,reg_field_name) {\
-    uint32_t reg_val = dbg_read_cfgreg(bank, reg_field_name##_ADDR32);\
-    DPRINT << #reg_field_name << " = " << reg_val << ENDL();\
+    uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32);\
+    DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();\
 }
