@@ -154,6 +154,7 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     return input, gamma, beta, output_grad
 
 
+@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
