@@ -302,6 +302,10 @@ class resnetBlock2D:
                 hidden_states, (self.conv2.batch_size, self.conv2.input_height, self.conv2.input_width, in_channels)
             )
             hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
+            print("gn1 input shape - ", hidden_states.shape)
+            print("Synchronizing device now")
+            ttnn.synchronize_device(self.device)
+            print("Run gn1")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -309,9 +313,12 @@ class resnetBlock2D:
                 bias=self.parameters.norm1.bias,
                 epsilon=eps,
             )
+            print("Done gn1 in torch")
             hidden_states = pre_process_input(self.device, hidden_states)
+            print("Done gn1")
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+            print("Done tilize after gn1")
         else:
             print(f"Resnetblock GN1: memory_config={ttnn.get_memory_config(hidden_states)}")
             hidden_states = ttnn.group_norm(
@@ -351,6 +358,8 @@ class resnetBlock2D:
                 output_tensor_start_width_dim += split_input_channels
                 output_tensor_end_width_dim += split_input_channels
             # hidden_states = split_hidden_states
+        print("conv1_split_chunks=", conv1_split_chunks)
+        print("Starting conv1")
         if conv1_split_chunks == 1:
             # breakpoint()
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv1s[0].conv.input_sharded_memory_config)
@@ -371,7 +380,7 @@ class resnetBlock2D:
                     )
                     ttnn.deallocate(split_hidden_states[i - 1])
             hidden_states = split_hidden_states[-1]
-
+        print("Done conv1")
         # split_hidden_states = []
         # breakpoint()
         if temb is not None:
@@ -418,6 +427,7 @@ class resnetBlock2D:
                 (self.conv1s[0].batch_size, self.conv1s[0].input_height, self.conv1s[0].input_width, out_channels),
             )
             hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
+            print("Run gn2")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -425,7 +435,9 @@ class resnetBlock2D:
                 bias=self.parameters.norm2.bias,
                 epsilon=eps,
             )
+
             hidden_states = pre_process_input(self.device, hidden_states)
+            print("Done gn2")
         else:
             hidden_states = ttnn.to_memory_config(hidden_states, self.second_gn_expected_input_sharded_memory_config)
             print(f"Resnetblock GN2: memory_config={ttnn.get_memory_config(hidden_states)}")
@@ -448,8 +460,9 @@ class resnetBlock2D:
         hidden_states = nonlinearity(hidden_states)
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
+        print("run conv2")
         hidden_states = self.conv2(hidden_states)
-
+        print("done conv2")
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
         if use_in_shortcut:
             if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:

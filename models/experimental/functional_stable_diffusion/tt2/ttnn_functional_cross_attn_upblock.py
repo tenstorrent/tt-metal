@@ -111,9 +111,9 @@ class cross_attention_upblock2d:
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
-            breakpoint()
+            # breakpoint()
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
-            breakpoint()
+            # breakpoint()
             ttnn.dump_device_memory_state(self.device, prefix="before_deallocate_")
             ttnn.deallocate(on_dev_res_hidden_states)
             ttnn.dump_device_memory_state(self.device, prefix="after_deallocate_")

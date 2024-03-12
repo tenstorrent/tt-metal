@@ -99,12 +99,14 @@ def pre_process_input(device, tensor):
     assert input_channels == tensor.get_legacy_shape()[3]
     padded_input_channels = math.ceil(input_channels / 16) * 16
     if padded_input_channels != input_channels:
+        print("here to pad")
         tensor = fallback_ops.pad(
             tensor,
             (0, padded_input_channels - input_channels, 0, 0, 0, 0),
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             output_on_device=False,
         )
+        print("Done pad")
     # Reshape 4d to 2d
     tensor = fallback_ops.reshape(
         tensor,
@@ -116,7 +118,9 @@ def pre_process_input(device, tensor):
         output_on_device=False,
     )
     tensor = ttnn.to_device(tensor, device)
+    print("Done to device")
     tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+    print("Done tilize")
     return tensor
 
 

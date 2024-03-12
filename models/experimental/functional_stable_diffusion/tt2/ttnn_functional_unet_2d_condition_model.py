@@ -543,8 +543,8 @@ class UNet2DConditionModel:
             sample = ttnn.group_norm(
                 sample,
                 num_groups=norm_num_groups,
-                weight=self.parameters.norm.weight,
-                bias=self.parameters.norm.bias,
+                weight=self.parameters.conv_norm_out.weight,
+                bias=self.parameters.conv_norm_out.bias,
                 epsilon=norm_eps,
             )
 
