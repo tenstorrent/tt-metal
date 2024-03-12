@@ -94,6 +94,7 @@ Data Type
 
 ttnn supports the following data types:
 
+- **uint16**
 - **uint32**
 - **float32**
 - **bfloat16**
@@ -101,15 +102,17 @@ ttnn supports the following data types:
 
 
 .. note::
-    :class:`ttnn.Tensor` uses a minimum of 4 bytes to store a row of the tensor on the device.
-    That means that the minimum width of a tensor on the device is as follows:
+    :class:`ttnn.Tensor` uses a minimum of 4 bytes to store a row of the tensor in :ref:`ttnn.ROW_MAJOR_LAYOUT<ttnn.ROW_MAJOR_LAYOUT>` on the device.
+    That means that the width of a tensor on the device must be a multiple of `4 / sizeof(dtype)`. The exact numbers are shown below:
 
-    .. list-table:: Minimum width of a tensor on the device
+    .. list-table:: Required Width Multiples for Data Types
         :widths: 25 25
         :header-rows: 1
 
         * - Data Type
-          - Minimum Width
+          - Required Width Multiple
+        * - ttnn.uint16
+          - 2
         * - ttnn.uint32
           - 1
         * - ttnn.float32
