@@ -20,6 +20,6 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_add_sweep.csv
