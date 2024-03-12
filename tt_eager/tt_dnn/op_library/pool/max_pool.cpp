@@ -204,7 +204,7 @@ Tensor max_pool2d_v2(const Tensor &input,
 
 operation::OpPerformanceModel MaxPool::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.shape;
     uint32_t batch_size = this->in_n_;
     uint32_t conv_activation_h = this->in_h_;
     uint32_t conv_activation_w = this->in_w_;
