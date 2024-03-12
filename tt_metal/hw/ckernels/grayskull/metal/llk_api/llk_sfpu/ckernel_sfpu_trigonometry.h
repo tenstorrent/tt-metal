@@ -177,6 +177,7 @@ inline void calculate_sine()
         dst_reg++;
     }
 }
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_cosine()
 {
@@ -221,7 +222,7 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val)
         dst_reg[0] = sfpi::abs(val)  ;
     }
     v_else{
-        dst_reg[0] =  sfpu_reciprocal<true>(sfpi::abs(val));
+        dst_reg[0] =  _sfpu_reciprocal_<true>(sfpi::abs(val));
     }
     v_endif;
 

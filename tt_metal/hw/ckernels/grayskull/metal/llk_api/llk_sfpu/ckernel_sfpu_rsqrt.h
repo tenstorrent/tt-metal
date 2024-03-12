@@ -21,7 +21,7 @@ inline void calculate_rsqrt()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat result = sfpu_reciprocal<false>(in);
+        vFloat result = _sfpu_reciprocal_<false>(in);
         v_if(dst_reg[0] < 1.0f){
             result = 1.0f;
         }v_endif;

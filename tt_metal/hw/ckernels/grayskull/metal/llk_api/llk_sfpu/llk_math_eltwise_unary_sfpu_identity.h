@@ -20,7 +20,6 @@ inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode
                                 (ckernel::sfpu::calculate_identity<APPROXIMATE, first_iterations>,
                                 ckernel::sfpu::calculate_identity<APPROXIMATE,4>,
                                 dst_index, vector_mode);
-
 }
 
 template <bool APPROXIMATE>

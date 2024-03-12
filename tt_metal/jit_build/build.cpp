@@ -120,6 +120,7 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " +
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " +
         "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/common/inc " + // TODO(fixme) datamovement fw shouldn't read this
+        "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/common/inc/sfpu " + // TODO(fixme) datamovement fw shouldn't read this
         "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;

@@ -37,7 +37,6 @@ inline void relu_max(uint uint_threshold)
     }
 }
 
-
 // RELU MIN
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>

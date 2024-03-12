@@ -69,8 +69,8 @@ template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
-				 ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
-				 dst_index, VectorMode::RC, param0);
+                                ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
+                                dst_index, VectorMode::RC, param0);
 }
 
 }
