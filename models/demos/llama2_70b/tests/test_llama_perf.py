@@ -11,7 +11,7 @@ import tt_lib
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 
 from models.utility_functions import (
@@ -145,7 +145,7 @@ def run_test_LlamaModel_end_to_end(
 
     del state_dict
 
-    start_pos = 128
+    start_pos = 0
     enable_persistent_kernel_cache()
     profiler.start("warmup_processing_of_input")
     tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
@@ -175,6 +175,7 @@ def run_test_LlamaModel_end_to_end(
     profiler.end("first_model_run_with_compile", force_enable=True)
     for device in devices:
         tt_lib.device.Synchronize(device)
+    logger.info(f"Finished first Llama model with compile")
 
     del tt_out
     del rot_mat
@@ -206,11 +207,15 @@ def run_test_LlamaModel_end_to_end(
     for device in devices:
         tt_lib.device.Synchronize(device)
 
+    logger.info(f"Finished Llama model warm up run for inference")
+
     profiler.start(f"model_run_for_inference")
     run_inference()
     profiler.end(f"model_run_for_inference")
     for device in devices:
         tt_lib.device.Synchronize(device)
+
+    logger.info(f"Finished Llama model run for inference")
 
     profiler.print()
 
