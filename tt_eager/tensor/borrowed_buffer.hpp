@@ -14,7 +14,7 @@ namespace borrowed_buffer {
 
 template<typename T>
 struct Buffer {
-
+    explicit Buffer() = default;
     explicit Buffer(T* data_ptr, std::size_t size) :
         data_ptr_(data_ptr),
         size_(size) {}

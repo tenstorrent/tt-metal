@@ -21,7 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class Layout { ROW_MAJOR = 0, TILE = 1 };
+enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 enum class DataType {
     BFLOAT16 = 0,
@@ -29,7 +29,8 @@ enum class DataType {
     UINT32 = 2,
     BFLOAT8_B = 3,
     BFLOAT4_B = 4,
-    UINT16 = 6
+    UINT16 = 6,
+    INVALID = 7,
 };
 
 enum class StorageType {
@@ -218,6 +219,7 @@ static_assert(std::variant_size_v<OwnedBuffer> + 1 == std::variant_size_v<tt::tt
 struct OwnedStorage {
     OwnedBuffer buffer;
 
+    OwnedStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
@@ -226,6 +228,7 @@ using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
 
+    DeviceStorage() = default;
     const MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
@@ -252,6 +255,8 @@ using BorrowedBuffer = std::variant<
     borrowed_buffer::Buffer<bfloat16>>;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
+
+    BorrowedStorage() = default;
     std::function<void()> on_creation_callback = [] {};
     std::function<void()> on_destruction_callback = [] {};
 
@@ -305,6 +310,7 @@ struct MultiDeviceHostStorage {
     std::vector<OwnedBuffer> buffers;
     std::vector<Shape> shapes;
 
+    MultiDeviceHostStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
@@ -312,6 +318,8 @@ struct MultiDeviceHostStorage {
 struct MultiDeviceStorage {
     std::vector<DeviceBuffer> buffers;
     std::vector<Shape> shapes;
+
+    MultiDeviceStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };

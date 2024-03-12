@@ -32,6 +32,7 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/tensors/test_host_device_loopback \
 		 tests/tt_eager/tensors/test_raw_host_memory_pointer \
 		 tests/tt_eager/tensors/test_sharded_loopback \
+		 tests/tt_eager/tensors/test_async_tensor_apis \
 		 tests/tt_eager/integration_tests/test_bert \
 
 TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))

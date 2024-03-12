@@ -168,7 +168,6 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
 Tensor convert_numpy_tensor_to_tt_tensor(
     const py::handle &np_tensor, std::optional<DataType> optional_data_type = std::nullopt) {
-    std::cout << "convert_numpy_tensor_to_tt_tensor" << std::endl;
     py::object np = py::module_::import("numpy");
     if (not py::isinstance(np_tensor, np.attr("ndarray"))) {
         TT_THROW("The tensor must be of type numpy.ndarray!");
@@ -806,7 +805,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         py_tensor = np.zeros((1, 1, 32, 32))
                         tt_lib.tensor.Tensor(py_tensor)
                 )doc")
-            .def_property_readonly("shape", [](const Tensor &self) { return self.shape; })
+            .def_property_readonly("shape", [](const Tensor &self) { return self.get_shape(); })
             .def_property_readonly("dtype", [](const Tensor &self) { return self.get_dtype(); })
             .def_property_readonly("layout", [](const Tensor &self) { return self.get_layout(); })
             .def(

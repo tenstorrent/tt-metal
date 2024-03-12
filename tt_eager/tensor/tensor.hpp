@@ -25,16 +25,29 @@ namespace tt {
 namespace tt_metal {
 
 struct Tensor {
-    Storage storage;
-    ttnn::Shape shape;
-    DataType dtype;
-    Layout layout;
+    struct TensorAttributes {
+        Storage storage;
+        ttnn::Shape shape;
+        DataType dtype;
+        Layout layout;
+
+        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) : storage(storage), shape(shape), dtype(dtype), layout(layout) {}
+        TensorAttributes() : shape({0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
+        ~TensorAttributes() = default;
+    };
+
+    // Shared pointer to all attributes associated with this tensor
+    // Can be safely passed between threads when the tensor is copied
+    std::shared_ptr<TensorAttributes> tensor_attributes;
 
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    Tensor(const Storage &storage, const ttnn::Shape &shape, DataType dtype, Layout layout);
-    Tensor(const Storage &storage, const Shape &shape, DataType dtype, Layout layout);
+    Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout);
+    Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout);
+
+    // Default constructor to initialize empty tensor
+    Tensor() : tensor_attributes(std::make_shared<TensorAttributes>()) {}
 
     Tensor(const Tensor &other) = default;
     Tensor &operator=(const Tensor &other) = default;
@@ -83,10 +96,21 @@ struct Tensor {
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
+    const TensorAttributes& get_attr() const { return *tensor_attributes; }
     const Storage &get_storage() const;
-    const Shape &get_legacy_shape() const { return this->shape.value(); }
-    DataType get_dtype() const { return this->dtype; }
-    Layout get_layout() const { return this->layout; }
+    const Shape &get_legacy_shape() const { return this->get_attr().shape.value(); }
+    const ttnn::Shape &get_shape() const { return this->get_attr().shape; }
+    const DataType& get_dtype() const { return this->get_attr().dtype; }
+    const Layout& get_layout() const { return this->get_attr().layout; }
+
+
+    // ======================================================================================
+    //                                      Setters
+    // ======================================================================================
+    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_shape (const ttnn::Shape& shape) { this->tensor_attributes->shape = shape; }
+    void set_dtype(const DataType& dtype) { this->tensor_attributes->dtype = dtype; }
+    void set_layout(const Layout& layout) { this->tensor_attributes->layout = layout; }
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -99,16 +123,16 @@ struct Tensor {
     bool is_allocated() const;
 
     bool is_contiguous() const {
-        if (this->layout == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->shape.value() == this->shape.value().without_padding();
+        if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+            return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
         } else {
             return false;
         }
     }
 
     // TODO(arakhmati): clean up the methods below
-    Buffer *buffer() const { return std::get<DeviceStorage>(this->storage).buffer.get(); }
-    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage).buffer; }
+    Buffer *buffer() const { return std::get<DeviceStorage>(this->get_storage()).buffer.get(); }
+    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).buffer; }
 
     Device *device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
@@ -130,7 +154,7 @@ struct Tensor {
                     TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");
                 }
             },
-            this->storage);
+            this->get_storage());
     }
     const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
 
@@ -144,7 +168,7 @@ struct Tensor {
     static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->storage), std::cref(this->shape), std::cref(this->dtype), std::cref(this->layout));
+            std::cref(this->get_storage()), std::cref(this->get_shape()), std::cref(this->get_dtype()), std::cref(this->get_layout()));
     }
 
     std::vector<uint32_t> host_page_ordering();
