@@ -33,6 +33,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
@@ -93,6 +95,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
@@ -131,6 +135,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
@@ -169,11 +175,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: Build tt-metal CPP tests
-        run: make tests
       - name: Run API Sweep tests
         timeout-minutes: 60
         run: |
