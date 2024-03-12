@@ -87,7 +87,8 @@ struct OpPerformanceModel {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             }
             else if(t.memory_config().buffer_type == BufferType::L1) {
-                return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+                return 1.0f; // TODO: figure out better modelling scheme for L1->L1 Transfers
+                //return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             }
             return 0.0f;
         };
