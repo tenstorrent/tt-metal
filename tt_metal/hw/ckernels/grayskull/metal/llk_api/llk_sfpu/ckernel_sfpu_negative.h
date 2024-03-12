@@ -15,7 +15,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-
 template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_negative()
 {
@@ -27,5 +26,6 @@ inline void calculate_negative()
         dst_reg++;
     }
 }
+
 }  // namespace sfpu
 }  // namespace ckernel

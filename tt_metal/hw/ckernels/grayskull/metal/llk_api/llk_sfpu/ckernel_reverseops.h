@@ -18,14 +18,6 @@ namespace ckernel
 namespace sfpu
 {
 
-
-
-template <bool APPROXIMATION_MODE>
-void rsub_init() {
-    ;
-}
-
-
 template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_rsub(uint value)
 {
