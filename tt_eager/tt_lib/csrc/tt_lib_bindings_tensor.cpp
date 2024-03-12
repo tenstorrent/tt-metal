@@ -531,8 +531,8 @@ void TensorModule(py::module &m_tensor) {
         "Fills the cache tensor in place with the values from input at the specified batch_idx.
     )doc");
     m_tensor.def("update_cache", &update_cache,
-         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("update_idx"), R"doc(
-        "Updates the cache tensor in place with the values from input at the specified update_idx.
+         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("update_idx"), py::arg("batch_offset") = 0, R"doc(
+        "Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
     )doc");
 
 

@@ -17,6 +17,7 @@ void kernel_main() {
     const uint32_t batch_start_id = get_arg_val<uint32_t>(8);
     const uint32_t Wbytes      = get_arg_val<uint32_t>(9);
     const uint32_t offset      = get_arg_val<uint32_t>(10);
+    const uint32_t batch_read_offset = get_arg_val<uint32_t>(11);
 
     constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
@@ -41,7 +42,7 @@ void kernel_main() {
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(untilized_input_cb_id, Wt);
-        uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id));
+        uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id)) + batch_read_offset;
 
         for (uint32_t u = 0; u < u_range; ++u) {
             cb_wait_front(untilized_cache_cb_id, Wt);

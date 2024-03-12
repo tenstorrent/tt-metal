@@ -23,14 +23,15 @@ enum class UpdateCacheOpType {
     FILL = 0, UPDATE = 1
 };
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx);
-operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx);
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset);
+operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset);
 operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 
 struct UpdateCache {
     const uint32_t batch_idx;
     const uint32_t update_idx;
+    const uint32_t batch_offset;
     const UpdateCacheOpType op_type;
 
     UpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -52,12 +53,12 @@ struct UpdateCache {
 };
 
 inline Tensor fill_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx) {
-    operation::run(UpdateCache{batch_idx, 0, UpdateCacheOpType::FILL}, {cache_tensor, input_tensor});
+    operation::run(UpdateCache{batch_idx, 0, 0, UpdateCacheOpType::FILL}, {cache_tensor, input_tensor});
     return cache_tensor;
 }
 
-inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx) {
-    operation::run(UpdateCache{0, update_idx, UpdateCacheOpType::UPDATE}, {cache_tensor, input_tensor});
+inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset) {
+    operation::run(UpdateCache{0, update_idx, batch_offset, UpdateCacheOpType::UPDATE}, {cache_tensor, input_tensor});
     return cache_tensor;
 }
 

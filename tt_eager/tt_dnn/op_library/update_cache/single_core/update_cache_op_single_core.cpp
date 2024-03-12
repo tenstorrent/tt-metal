@@ -15,7 +15,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx) {
+operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset) {
     Program program{};
 
     CoreRangeSet core({CoreRange({0, 0}, {0, 0})});
@@ -45,6 +45,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
+    uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
     tt_metal::Device *device = input_tensor.device();
 
     uint32_t src0_cb_index = CB::c_in0;
@@ -153,7 +154,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         core,
         {
             dst_buffer->address(),
-            Wt, Bcache, num_batched_heads, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_tile_idx, 0, Wbytes, tile_update_offset
+            Wt, Bcache, num_batched_heads, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_tile_idx, 0, Wbytes, tile_update_offset, batch_read_offset
         }
     );
 

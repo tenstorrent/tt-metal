@@ -124,7 +124,7 @@ class TestUpdateCache:
         else:
             xt = xt.to(device)
 
-        cachett = ttl.tensor.update_cache(cachett, xt, cache_idx)
+        cachett = ttl.tensor.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
 
         tt_got_back = cachett.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
