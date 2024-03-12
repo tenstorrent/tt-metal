@@ -96,7 +96,7 @@ def run_falcon_demo_kv(
 ):
     torch.manual_seed(0)
 
-    tt_lib.program_cache.enable()
+    device.enable_program_cache()
 
     tt_cache_path = get_tt_cache_path(model_version)
 
@@ -387,7 +387,7 @@ def run_falcon_demo_kv(
 
     print_output_prompts(generated_ids, tokenizer)
 
-    tt_lib.program_cache.disable_and_clear()
+    device.disable_and_clear_program_cache()
 
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
