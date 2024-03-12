@@ -85,21 +85,23 @@ def test_sharded_tile(
 
 
 @pytest.mark.parametrize(
-    "input_shape, shard_scheme, shard_size",
+    "input_shape, shard_scheme, shard_size, num_cores",
     [
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512)),
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32)),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), 98),
+        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), 98),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), 98),
+        ([1, 1, 32, 40], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (32, 40), 1),
     ],
 )
 @pytest.mark.parametrize(
     "shard_orientation",
     [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
-def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orientation, function_level_defaults):
+def test_sharded_rm(
+    device, input_shape, shard_size, shard_scheme, shard_orientation, num_cores, function_level_defaults
+):
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
-    num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
