@@ -139,7 +139,26 @@ class TtLlamaMLP_optimized(nn.Module):
                     w3_host,
                 )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def prepare_inputs(self, x):
+        batch, seq_len = 32, 1
+        assert x.size() == (seq_len, 1, batch, self.hidden_size)
+        x_multichip = []
+        for i in range(self.num_devices):
+            x_multichip.append(
+                torch2tt_tensor(
+                    x.clone(),
+                    self.devices[i],
+                    tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                    tt_memory_config=self.model_config["L1_MEMCFG"],
+                )
+            )
+        for i in range(self.num_devices):
+            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+                x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+            )
+        return x_multichip
+
+    def forward(self, x: list) -> list:
         hidden_states = []
         w1_outs = []
         w3_outs = []
