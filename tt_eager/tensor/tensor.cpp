@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/tensor.hpp"
+#include <memory>
 
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_impl_wrapper.hpp"
@@ -25,8 +26,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const Storage& storage, const ttnn::Shape& shape, DataType dtype, Layout layout) :
-    storage(storage), shape(shape), dtype(dtype), layout(layout) {
+Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) : tensor_attributes(std::make_shared<TensorAttributes>(storage, shape, dtype, layout)) {
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -50,54 +50,71 @@ Tensor::Tensor(const Storage& storage, const ttnn::Shape& shape, DataType dtype,
                 raise_unsupported_storage<StorageType>();
             }
         },
-        this->storage
+        this->get_storage()
     );
 }
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) :
+Tensor::Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout) :
     Tensor(storage, ttnn::Shape{shape}, dtype, layout) {}
 
 Tensor::~Tensor() {
     this->deallocate();
+    tensor_attributes.reset();
 }
 
 void Tensor::deallocate(bool force) {
-    ZoneScoped;
-    std::visit(
-        [&force](auto&& storage) {
-            using T = std::decay_t<decltype(storage)>;
-            // Decrement ref count of Owned and Device buffers during tensor destruction.
-            // This will immediately free up memory when Command Queues are in Passthrough mode.
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.buffer.use_count() == 1 or force) {
-                    // force arg is used by ttnn, to destroy on device tensors that are still in host scope
-                    DeallocateBuffer(*storage.buffer);
-                }
-                storage.buffer.reset();
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                if (force) {
-                    TT_THROW("Cannot deallocate tensor with borrowed storage!");
-                }
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                for (auto& buffer : storage.buffers) {
-                    if (buffer.use_count() == 1 or force) {
-                        DeallocateBuffer(*buffer);
+    if (this->tensor_attributes.use_count()) {
+        // Check if the attributes didn't get moved to another tensor.
+        // If not, we can call the deallocation steps on this tensor.
+        std::visit(
+                [force, this](auto& storage) {
+                    using T = std::decay_t<decltype(storage)>;
+                    if constexpr (std::is_same_v<T, OwnedStorage>) {
+                        if (this->tensor_attributes.use_count() == 1) {
+                            std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
+                        }
+                    } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                        if (force or (this->tensor_attributes.use_count() == 1 and storage.buffer.use_count() == 1)) {
+                            // This tensor can be force deallocated by the user. Automatic memory management policy is to deallocate
+                            // this buffer on device when there are no more users: i.e. deallocate called on the last tensor_attributes
+                            // ptr owning this buffer (buffer has use_count of 1 and tensor attribute has a single user)
+                            DeallocateBuffer(*storage.buffer);
+                        }
+                        if (force or this->tensor_attributes.use_count() == 1) {
+                            // Safe to reset this ptr when forcing deallocation (handle is invalid)
+                            // Also safe when the tensor_attributes have a single user. If any other buffer owns this tensor,
+                            // the buffer will not get deleted
+                            storage.buffer.reset();
+                        }
+                    } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                        if (force) {
+                            TT_THROW("Cannot deallocate tensor with borrowed storage!");
+                        }
+                    } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                        for (auto& buffer : storage.buffers) {
+                            if (force or (this->tensor_attributes.use_count() == 1 and buffer.use_count() == 1)) {
+                                // Same logic as above for device buffers
+                                DeallocateBuffer(*buffer);
+                            }
+                            if (force or this->tensor_attributes.use_count() == 1) {
+                                // Same logic as above for host buffer copies
+                                buffer.reset();
+                            }
+                        }
+                    } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                        if (this->tensor_attributes.use_count() == 1) {
+                            // Same logic as above for host tensors
+                            for (auto& current_buffer : storage.buffers) {
+                                std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
+                            }
+                        }
+                    } else {
+                        raise_unsupported_storage<T>();
                     }
-                    buffer.reset();
-                }
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                for (auto& current_buffer : storage.buffers) {
-                    std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
-                }
-            } else {
-                raise_unsupported_storage<T>();
-            }
-        },
-        this->storage);
+                },
+        this->tensor_attributes->storage);
+    }
 }
-
 
 Tensor Tensor::to(CommandQueue & queue, const MemoryConfig & mem_config) const {
     ZoneScoped;
@@ -211,7 +228,7 @@ Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
 }
 
 uint32_t Tensor::element_size() const {
-    return tensor_impl::element_size_bytes_wrapper(this->dtype);
+    return tensor_impl::element_size_bytes_wrapper(this->get_dtype());
 }
 
 Tensor Tensor::reshape(int N, int C, int H, int W) const {
@@ -265,7 +282,7 @@ bool Tensor::is_allocated() const {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage
+        this->get_storage()
     );
 }
 
@@ -306,11 +323,11 @@ StorageType Tensor::storage_type() const {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage
+        this->get_storage()
     );
 }
 
-const Storage& Tensor::get_storage() const { return this->storage; }
+const Storage& Tensor::get_storage() const { return this->get_attr().storage; }
 
 namespace detail {
 const Shape compute_strides(const Shape& shape) {
@@ -328,7 +345,7 @@ const Shape Tensor::strides() const {
     return detail::compute_strides(this->get_legacy_shape());
 }
 
-uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->shape.value()); }
+uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
