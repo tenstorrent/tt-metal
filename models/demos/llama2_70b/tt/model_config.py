@@ -372,20 +372,6 @@ def get_model_config(model_config_str, num_devices=8):
         inplace=True,
     )
     model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-    if num_devices == 32:
-        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    shard_height,
-                    64,  # 2k // 32 cause we chunk activations to 4
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
     model_config["MLP_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
