@@ -13,7 +13,7 @@ from loguru import logger
 #######
 # Test MultiDevice Initialization, Open/Close
 #######
-def test_device_mesh_open_close_explicit():
+def test_device_mesh_open_close_explicit(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
     if num_pcie_devices <= 1:
@@ -34,7 +34,7 @@ def test_multi_device_open_close_full_device_mesh_fixture(pcie_device_mesh):
     pass
 
 
-def test_multi_device_open_close_using_context_manager():
+def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
     device_grid, device_ids = ttnn.DeviceGrid(2, 2), ttnn.get_device_ids()
     if len(device_ids) <= 1:
