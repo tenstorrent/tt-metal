@@ -98,8 +98,6 @@ def run_test_LlamaMLP_inference(
                 emulated=emulated,
                 cache_path=cache_path,
             )
-            tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
-
         else:
             # TT hardware execution -------------------------------------------------------------
             tt_LlamaMLP_model = TtLlamaMLP_optimized(
@@ -113,14 +111,7 @@ def run_test_LlamaMLP_inference(
                 cache_path=cache_path,
             )
 
-            # TODO: Put input sharded in L1
-            tt_mlp_input = [
-                torch2tt_tensor(
-                    tt_inp.clone(),
-                    device,
-                )
-                for device in devices
-            ]
+        tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
     else:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP(
