@@ -31,7 +31,7 @@ class TtLlamaMLP_galaxy(nn.Module):
         self.num_devices = len(devices)
         assert self.num_devices == 32
 
-        self.frac_grid = [4, 8]
+        self.frac_grid = [4, 8]  # [8,4]
 
         self.hidden_size = hidden_size
         self.model_config = model_config
@@ -40,7 +40,7 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         self.layer_name = f"{base_url}.{layer_num}"
 
-        self.FF1_groups = [list(range(i, i + 4)) for i in range(0, self.num_devices, 4)]
+        self.FF1_groups = [list(range(i, i + self.frac_grid[0])) for i in range(0, self.num_devices, self.frac_grid[0])]
         # [[0, 1, 2, 3],
         # [4, 5, 6, 7],
         # [8, 9, 10, 11],
@@ -49,7 +49,9 @@ class TtLlamaMLP_galaxy(nn.Module):
         # [20, 21, 22, 23],
         # [24, 25, 26, 27],
         # [28, 29, 30, 31]]
-        self.FF2_groups = [[i + j for j in range(0, self.num_devices, 4)] for i in range(4)]
+        self.FF2_groups = [
+            [i + j for j in range(0, self.num_devices, self.frac_grid[0])] for i in range(self.frac_grid[0])
+        ]
         # [[0, 4, 8, 12, 16, 20, 24, 28],
         # [1, 5, 9, 13, 17, 21, 25, 29],
         # [2, 6, 10, 14, 18, 22, 26, 30],
@@ -306,7 +308,10 @@ class TtLlamaMLP_galaxy(nn.Module):
         hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
 
         # Transform the flattened list into the 4x8 2D list for FF2 matmuls
-        hidden_states_32chips = [[hidden_states_32chips[i + j * 4] for j in range(8)] for i in range(4)]
+        hidden_states_32chips = [
+            [hidden_states_32chips[i + j * self.frac_grid[0]] for j in range(self.frac_grid[1])]
+            for i in range(self.frac_grid[0])
+        ]
 
         for i in range(len(hidden_states_32chips)):
             for j in range(len(hidden_states_32chips[i])):
@@ -341,7 +346,7 @@ class TtLlamaMLP_galaxy(nn.Module):
         # hidden_states_32chips = [item for sublist in hidden_states_32chips for item in sublist]
 
         # # Transform back to the original pattern
-        # hidden_states_32chips = [hidden_states_32chips[i::8] for i in range(8)]
+        # hidden_states_32chips = [hidden_states_32chips[i::self.frac_grid[1]] for i in range(self.frac_grid[1])]
 
         # if self.emulated:
         #     for i in range(len(hidden_states_32chips)):
