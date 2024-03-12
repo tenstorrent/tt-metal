@@ -17,7 +17,6 @@ namespace ckernel
 namespace sfpu
 {
 
-
 template <bool APPROXIMATION_MODE, int ITERATIONS=4, int RECIPROCAL_ITERATIONS=2>
 inline void calculate_sqrt()
 {
@@ -63,6 +62,7 @@ inline void calculate_sqrt()
         dst_reg++;
     }
 }
+
 template <bool APPROXIMATION_MODE>
 void sqrt_init() {
     if (APPROXIMATION_MODE) {

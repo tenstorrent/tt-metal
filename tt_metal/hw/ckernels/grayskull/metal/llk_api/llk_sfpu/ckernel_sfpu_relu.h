@@ -17,11 +17,6 @@ namespace sfpu {
 
 // RELU MAX
 
-template <bool APPROXIMATION_MODE>
-void relu_max_init() {
-    ;
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_max(uint uint_threshold)
 {
@@ -45,11 +40,6 @@ inline void relu_max(uint uint_threshold)
 
 // RELU MIN
 
-template <bool APPROXIMATION_MODE>
-void relu_min_init() {
-    ;
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
 {
@@ -69,11 +59,6 @@ inline void relu_min(uint uint_threshold)
 //Leaky Relu
 
 // LRELU = LEAKY RELU
-
-template <bool APPROXIMATION_MODE>
-void lrelu_init() {
-    ;
-}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_lrelu(uint slope)
@@ -97,7 +82,6 @@ inline void calculate_lrelu(uint slope)
         dst_reg++;
     }
 }
-
 
 }  // namespace sfpu
 }  // namespace ckernel

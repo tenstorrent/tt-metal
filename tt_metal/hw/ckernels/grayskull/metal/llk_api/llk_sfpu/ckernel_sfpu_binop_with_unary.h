@@ -70,8 +70,5 @@ void calculate_rsub(uint32_t param) {
     return;
 }
 
-template <bool APPROXIMATION_MODE>
-void calculate_binop_with_scalar_init() {}
-
 }  // namespace sfpu
 }  // namespace ckernel

@@ -25,7 +25,7 @@ inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mo
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::reciprocal_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
 }
