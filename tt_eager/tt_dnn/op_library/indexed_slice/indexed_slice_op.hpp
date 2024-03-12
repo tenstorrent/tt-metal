@@ -28,10 +28,10 @@ struct IndexedSlice {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids, const Tensor &input, const Tensor &output);
+operation::ProgramWithCallbacks indexed_slice_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor& input_b, const Tensor &output);
 
 
-Tensor indexed_slice(const Tensor &batch_ids, const Tensor& input, const MemoryConfig& output_mem_config, std::int64_t dim=0);
+Tensor indexed_slice(const Tensor &batch_ids, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config, std::int64_t dim=0);
 
 
 }  // namespace tt_metal
