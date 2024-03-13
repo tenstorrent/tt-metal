@@ -133,6 +133,8 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
     num_cores,
     filter_h,
     filter_w,
+    act_reshard_num_cores=0,
+    input_nhw_height=0,
 ):
     req_conv_input_shard_start_end = []  # start and end indices refer to global padded input tensor
     conv_output_start_stick = 0
@@ -156,6 +158,20 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
         )
         conv_output_start_stick += conv_output_shard_height
 
+    remap = lambda a, b: (a, b)
+    if act_reshard_num_cores != 0:
+        assert input_nhw_height != 0
+        assert (
+            input_nhw_height % act_reshard_num_cores == 0
+        ), f"{input_nhw_height} {act_reshard_num_cores} {num_cores} {unpadded_input_shard_height}"
+        act_unpadded_input_shard_height = input_nhw_height // act_reshard_num_cores
+
+        def _remap(cid, lid):
+            idx = cid * unpadded_input_shard_height + lid
+            return (idx // act_unpadded_input_shard_height, idx % act_unpadded_input_shard_height)
+
+        remap = _remap
+
     tensor_metadata = []
     unpadded_input_shard_local_idx = 0
     core_id = 0
@@ -165,9 +181,9 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
             tensor_metadata.append((True, 0, 0))
         else:
             # sanity check
-            assert core_id < num_cores
+            assert core_id < num_cores, f"{core_id} {num_cores}"
             assert unpadded_input_shard_local_idx < unpadded_input_shard_height
-            tensor_metadata.append((False, core_id, unpadded_input_shard_local_idx))
+            tensor_metadata.append((False, *remap(core_id, unpadded_input_shard_local_idx)))
             unpadded_input_shard_local_idx += 1
             if unpadded_input_shard_local_idx == unpadded_input_shard_height:
                 unpadded_input_shard_local_idx = 0
@@ -363,6 +379,7 @@ def generate_untilize_with_halo_kernel_configs(
     tensor_metadata: list,
     resharded_start_and_end: list,
     core_id_to_physical_coord=lambda core_id: (0, core_id),
+    remote_read=False,
 ):
     ncores = len(resharded_start_and_end)
 
@@ -389,54 +406,55 @@ def generate_untilize_with_halo_kernel_configs(
             is_pad, src_core_id, src_local_idx = tensor_metadata[dst_global_idx]
             if is_pad:
                 assert src_local_idx == 0
-                src_core_id = core_id
-                dst_core_id = pad_local
-            if src_core_id not in per_core_gather_data:
-                per_core_gather_data[src_core_id] = {}
-            if dst_core_id not in per_core_gather_data[src_core_id]:
-                per_core_gather_data[src_core_id][dst_core_id] = []
+                src_core_id = pad_local
+                dst_core_id = core_id
+            if (src_core_id, dst_core_id) not in per_core_gather_data:
+                per_core_gather_data[(src_core_id, dst_core_id)] = []
             assert src_local_idx < 0xFFFF, "Index overflows uint16_t storage type"
             assert dst_local_idx < 0xFFFF, "Index overflows uint16_t storage type"
-            run_length_encode(per_core_gather_data[src_core_id][dst_core_id], src_local_idx, dst_local_idx, is_pad)
+            run_length_encode(per_core_gather_data[(src_core_id, dst_core_id)], src_local_idx, dst_local_idx, is_pad)
 
     padding_config = []
     local_config = []
     remote_config = []
 
-    for src_core_id in np.arange(ncores):
-        core_data = per_core_gather_data[src_core_id]
-
+    for core_id in range(ncores):
         padding_config.append([])
         local_config.append([])
         remote_config.append([])
 
+    for core_key, core_data in per_core_gather_data.items():
+        src_core_id, dst_core_id = core_key
+
         # Padding Encoding: [dst_idx0, num_elems0, dst_idx1, num_elems1, ...]
         # Local/Remote encoding: [dst_core_id0, num_elems0, ...G0..., dst_core_id1, num_elems1, ...G1..., ...]
-        for dst_core_id in core_data.keys():
-            is_padding = dst_core_id == pad_local
-            is_local = dst_core_id == src_core_id
-            is_remote = not is_padding and not is_local
+        is_padding = src_core_id == pad_local
+        is_local = dst_core_id == src_core_id
+        is_remote = not is_padding and not is_local
 
-            if is_padding:
-                noc_x, noc_y = (0xFFFF, 0xFFFF)
-            else:
-                noc_x, noc_y = core_id_to_physical_coord(dst_core_id)
+        if is_padding:
+            del core_data[0::3]
+            padding_config[dst_core_id].extend(core_data)
+        elif is_local:
+            noc_x, noc_y = core_id_to_physical_coord(dst_core_id)
+            local_config[src_core_id].extend([noc_x, noc_y, len(core_data)])
+            local_config[src_core_id].extend(core_data)
+        elif remote_read:
+            assert is_remote
+            noc_x, noc_y = core_id_to_physical_coord(src_core_id)
+            remote_config[dst_core_id].extend([noc_x, noc_y, len(core_data)])
+            remote_config[dst_core_id].extend(core_data)
+        else:
+            assert is_remote
+            noc_x, noc_y = core_id_to_physical_coord(dst_core_id)
+            remote_config[src_core_id].extend([noc_x, noc_y, len(core_data)])
+            remote_config[src_core_id].extend(core_data)
 
-            if is_padding:
-                del core_data[dst_core_id][0::3]
-                padding_config[-1].extend(core_data[dst_core_id])
-            elif is_local:
-                local_config[-1].extend([noc_x, noc_y, len(core_data[dst_core_id])])
-                local_config[-1].extend(core_data[dst_core_id])
-            else:
-                assert is_remote
-                remote_config[-1].extend([noc_x, noc_y, len(core_data[dst_core_id])])
-                remote_config[-1].extend(core_data[dst_core_id])
-
-        # NULL plug
-        padding_config[-1].extend([0, 0])
-        local_config[-1].extend([0, 0, 0])
-        remote_config[-1].extend([0, 0, 0])
+    # NULL plug
+    for core_id in range(ncores):
+        padding_config[core_id].extend([0, 0])
+        local_config[core_id].extend([0, 0, 0])
+        remote_config[core_id].extend([0, 0, 0])
 
     align_up_2d_python_list(padding_config, 0, align_granularity=2)
     align_up_2d_python_list(local_config, 0, align_granularity=2)

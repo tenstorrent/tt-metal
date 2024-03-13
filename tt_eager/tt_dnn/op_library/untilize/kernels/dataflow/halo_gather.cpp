@@ -16,7 +16,7 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-template <uint32_t stick_nbytes, bool is_block_sharded>
+template <uint32_t stick_nbytes, bool is_block_sharded, bool is_read>
 void copy_sticks_async(
     tt_l1_ptr uint16_t const* config_data,
     const uint16_t my_noc_x,
@@ -31,16 +31,24 @@ void copy_sticks_async(
         length = config_data[i + 2];
         i += 3;
 
-        const uint64_t dst_base_addr = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
+        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
-
-            uint64_t dst_addr = dst_base_addr + dst_local_idx * stick_nbytes;
-            uint32_t src_addr = in_base_l1_addr + src_local_idx * stick_nbytes;
             uint32_t size = nsticks * stick_nbytes;
-            noc_async_write(src_addr, dst_addr, size);
+            uint32_t dst_offset = dst_local_idx * stick_nbytes;
+            uint32_t src_offset = src_local_idx * stick_nbytes;
+
+            if constexpr (is_read) {
+                uint32_t dst_addr = out_base_l1_addr + dst_offset;
+                uint64_t src_addr = base_addr + src_offset;
+                noc_async_read(src_addr, dst_addr, size);
+            } else {
+                uint64_t dst_addr = base_addr + dst_offset;
+                uint32_t src_addr = in_base_l1_addr + src_offset;
+                noc_async_write(src_addr, dst_addr, size);
+            }
         }
 
         i += length;
@@ -59,6 +67,7 @@ void kernel_main() {
     constexpr uint32_t in_nsticks = get_compile_time_arg_val(8);    // number of sticks
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
     constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(11);
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
 
@@ -105,14 +114,15 @@ void kernel_main() {
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded>(
+        copy_sticks_async<stick_nbytes, is_block_sharded, remote_read>(
             config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+        copy_sticks_async<stick_nbytes, is_block_sharded, false>(
+            config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     noc_async_read_barrier();

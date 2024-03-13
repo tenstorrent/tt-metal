@@ -39,21 +39,6 @@ class TTPyUntilizeWithHalo(TTPyOp):
         assert sliding_window_op_params_hash in halo_reader_patterns_cache
         utwh_kernel_configs = halo_reader_patterns_cache[sliding_window_op_params_hash]
 
-        ncores_w = sliding_window_op_params.num_cores_w
-        ncores_h = sliding_window_op_params.num_cores_h
-        ncores_nhw = sliding_window_op_params.num_cores_nhw
-
-        is_block_sharding = ncores_w == ncores_nhw
-        out_mem_config = None
-        if is_block_sharding:
-            out_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1
-            )
-        else:
-            out_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-            )
-
         def utwh_(activation):
             return ttl.tensor.untilize_with_halo_v2(
                 activation,
@@ -63,7 +48,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 pad_val,
                 self.sliding_window_op_params.num_cores_nhw,
                 utwh_kernel_configs["max_out_nsticks_per_core"],
-                out_mem_config,
+                utwh_kernel_configs["out_mem_config"],
+                utwh_kernel_configs["remote_read"],
             )
 
         self.utwh = utwh_
@@ -91,6 +77,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             num_cores_w = sliding_window_op_params.num_cores_w
             num_cores_h = sliding_window_op_params.num_cores_h
             num_cores_nhw = sliding_window_op_params.num_cores_nhw
+            act_reshard_num_cores_nhw = sliding_window_op_params.act_reshard_num_cores_nhw
             assert num_cores_nhw > 0
             # TODO: send input_nhw_shape to generate functions (no need for C)
             # output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
@@ -130,41 +117,26 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 num_cores_nhw,
                 window_h,
                 window_w,
+                act_reshard_num_cores=act_reshard_num_cores_nhw,
+                input_nhw_height=input_n * input_h * input_w,
             )
 
             shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
             block_sharding = shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-            if not block_sharding:
-                assert num_cores_w == 12 or num_cores_w == 8
-                if num_cores_nhw >= num_cores_w:
-                    num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
-                    assert num_cores_h >= num_cores_height_excluding_remainder_last_row
-                    core_range_1 = ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
-                    )
-                    num_cores_last = num_cores_nhw % num_cores_w
-                    if num_cores_last > 0:
-                        assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
-                        core_range_2 = ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
-                            ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
-                        )
-                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
-                    else:
-                        assert num_cores_h == num_cores_height_excluding_remainder_last_row
-                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
-                else:
-                    core_range_1 = ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(num_cores_nhw - 1, 0),
-                    )
-                    shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
-            else:
-                core_range = ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+
+            def get_memory_config(shard_shape):
+                shard_orientation = (
+                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
                 )
-                shard_grid = ttl.tensor.CoreRangeSet({core_range})
+                shard_halo = False
+                shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+                mem_layout = (
+                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+                    if block_sharding
+                    else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+                )
+                mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
+                return mem_config
 
             def gen_per_core_gather_data_uint16_tensor(config: list):
                 assert type(config) is list
@@ -183,20 +155,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
                 torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
 
-                shard_orientation = (
-                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
-                )
-                shard_halo = False
-                shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
-                mem_layout = (
-                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-                    if block_sharding
-                    else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-                )
-                mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
-
                 tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16)
-                tt_tensor = tt_tensor.to(device, mem_config) if device is not None else tt_tensor
+                tt_tensor = tt_tensor.to(device, get_memory_config(shard_shape)) if device is not None else tt_tensor
                 return tt_tensor
 
             def core_id_to_physical_coord(core_id):
@@ -207,24 +167,34 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 worker_core = device.worker_core_from_logical_core(core_coord)
                 return (worker_core.x, worker_core.y)
 
+            remote_read = act_reshard_num_cores_nhw > 0
+
             (
                 padding_config,
                 local_config,
                 remote_config,
                 max_out_nsticks_per_core,
             ) = generate_untilize_with_halo_kernel_configs(
-                tensor_metadata, req_conv_input_shard_start_end, core_id_to_physical_coord
+                tensor_metadata,
+                req_conv_input_shard_start_end,
+                core_id_to_physical_coord,
+                remote_read=remote_read,
             )
 
             padding_config_tensor = gen_per_core_gather_data_uint16_tensor(padding_config)
             local_config_tensor = gen_per_core_gather_data_uint16_tensor(local_config)
             remote_config_tensor = gen_per_core_gather_data_uint16_tensor(remote_config)
 
+            # shard_shape[1] filled in with incoming activations in c++ code
+            out_shard_shape = [untilize_with_halo_input_shard_nhw_size, 0]
+
             halo_reader_patterns_cache[sliding_window_op_params_hash] = {
                 "max_out_nsticks_per_core": max_out_nsticks_per_core,
                 "padding_config": padding_config_tensor,
                 "local_config": local_config_tensor,
                 "remote_config": remote_config_tensor,
+                "out_mem_config": get_memory_config(out_shard_shape),
+                "remote_read": remote_read,
             }
 
         return

@@ -12,7 +12,6 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     construct_utwh_output_shards,
     validate_utwh_output_shards_and_req_conv_input_shard_start_end,
     validate_tensor_metadata,
-    generate_untilize_with_halo_kernel_configs,
     validate_untilize_with_halo_kernel_configs,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
