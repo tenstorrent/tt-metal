@@ -16,27 +16,7 @@ from models.experimental.functional_common.attention_mask_functions import (
 
 
 def t5_layer_norm(config, hidden_states, *, weight):
-    # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
-    # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
-    # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
-    # half-precision inputs is done in fp32
-
-    # return ttnn.rms_norm(hidden_states, weight, epsilon=config.layer_norm_epsilon)
-
-    squared_hidden_states = ttnn.pow(hidden_states, 2)
-    averaged_squared_hidden_states = ttnn.mean(
-        squared_hidden_states,
-        dim=-1,
-        keepdim=True,
-    )
-
-    variance = averaged_squared_hidden_states + config.layer_norm_epsilon
-    std = ttnn.rsqrt(variance)
-
-    hidden_states = hidden_states * std
-    hidden_states = hidden_states * weight
-
-    return hidden_states
+    return ttnn.rms_norm(hidden_states, weight, epsilon=config.layer_norm_epsilon)
 
 
 def get_activation_function(dense_act_fn):
