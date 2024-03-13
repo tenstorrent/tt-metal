@@ -75,7 +75,8 @@ FORCE_INLINE uint32_t program_page_transfer(
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
         uint32_t num_pages_left_in_transfer = num_pages_in_transfer - page_idx;
         uint32_t num_to_write = min(num_pages_left_in_transfer, producer_consumer_transfer_num_pages);
-        num_to_write = min(num_to_write, (l1_consumer_fifo_limit - (db_cb_config->rd_ptr_16B << 4) / DeviceCommand::PROGRAM_PAGE_SIZE));
+        num_to_write = min(num_to_write, ((l1_consumer_fifo_limit - (db_cb_config->rd_ptr_16B << 4)) / DeviceCommand::PROGRAM_PAGE_SIZE));
+
         multicore_cb_wait_front(db_cb_config, num_to_write);
         uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
         for (uint32_t i = 0; i < num_to_write; i++) {
