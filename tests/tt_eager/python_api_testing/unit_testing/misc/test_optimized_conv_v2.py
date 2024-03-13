@@ -225,31 +225,39 @@ def test_simple(
     math_fidelity = tt_lib.tensor.MathFidelity.LoFi
     activations_dtype = tt_lib.tensor.DataType.BFLOAT16
     weights_dtype = tt_lib.tensor.DataType.BFLOAT8_B
-    batch_size = 2
-    output_channels = 64
-    input_channels = 32
-    input_height = 66
-    input_width = 10
+    batch_size = 1
+    output_channels = 128
+    input_channels = 128
+    input_height = 16
+    input_width = 16
     filter_height = 3
     filter_width = 3
-    stride_h = 1
-    stride_w = 1
-    pad_h = 1
-    pad_w = 1
-    is_1d_systolic = True
-    untilize_out = True
-    bias = True
+    stride_h = 2
+    stride_w = 2
+    pad_h = filter_height // 2
+    pad_w = filter_width // 2
+    is_1d_systolic = False
+    untilize_out = False
+    bias = False
+    config = None  # {"act_reshard_num_cores_nhw": 2}
+    debug = True
 
     assert output_channels % 32 == 0
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
-    conv_input_pyt = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    if debug:
+        volume = conv_input_shape[0] * conv_input_shape[1] * conv_input_shape[2] * conv_input_shape[3]
+        conv_input_pyt = torch.arange(volume, dtype=torch.bfloat16).reshape(conv_input_shape)
+        conv_weight_pyt = torch.zeros(conv_weight_shape, dtype=torch.bfloat16)
+        conv_weight_pyt[0, 0, 0, 0] = 1.0
+    else:
+        conv_input_pyt = torch.randn(conv_input_shape, dtype=torch.bfloat16)
+        conv_weight_pyt = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
     conv_input_pyt_nhwc = torch.permute(conv_input_pyt, (0, 2, 3, 1))
     conv_input_shape_nhwc = conv_input_pyt_nhwc.shape
-    conv_weight_pyt = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    conv_bias_pyt = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if bias else None
+    conv_bias_pyt = torch.randn(conv_bias_shape, dtype=torch.bfloat16) if bias else None
     out_golden = torch.nn.functional.conv2d(
         conv_input_pyt,
         conv_weight_pyt,
@@ -302,6 +310,7 @@ def test_simple(
         is_1d_systolic,
         reader_patterns_cache,
         bias=tt_tensor_conv_bias,
+        conv_blocking_and_parallelization_config_override=config,
         weights_dtype=weights_dtype,
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
@@ -309,6 +318,14 @@ def test_simple(
         output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
     )
 
+    conv_input_pyt_nhwc = conv_input_pyt_nhwc.reshape(
+        (
+            1,
+            1,
+            conv_input_pyt_nhwc.shape[0] * conv_input_pyt_nhwc.shape[1] * conv_input_pyt_nhwc.shape[2],
+            conv_input_pyt_nhwc.shape[3],
+        ),
+    )
     conv_input = tt_lib.tensor.Tensor(
         conv_input_pyt_nhwc.reshape(-1).tolist(),
         conv_input_pyt_nhwc.shape,
@@ -316,10 +333,18 @@ def test_simple(
         tt_lib.tensor.Layout.ROW_MAJOR,
     )
 
-    conv_input_on_device = conv.copy_input_to_device(conv_input)
+    # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
+    if is_1d_systolic:
+        conv_input = conv_input.to(device, conv.input_sharded_memory_config)
+    else:
+        interleaved_mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        )
+        conv_input = conv_input.to(device, interleaved_mem_config)
+        conv_input = tt_lib.tensor.interleaved_to_sharded(conv_input, conv.input_sharded_memory_config)
 
     # Optimized conv v2
-    output_on_device = conv(conv_input_on_device)
+    output_on_device = conv(conv_input)
 
     # Copy sharded output on host
     # out is in row major layout and NHWC shape
@@ -339,4 +364,7 @@ def test_simple(
     passing_pcc, info = comp_pcc(out_golden, out_result, pcc=pcc)
     print("Passing=", passing_pcc)
     print("Info=", info)
+    if debug:
+        print("golden", out_golden[0, 0])
+        print("result", out_result[0, 0])
     assert passing_pcc

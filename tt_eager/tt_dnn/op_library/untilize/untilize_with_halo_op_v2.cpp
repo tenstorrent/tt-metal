@@ -45,6 +45,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
+    const bool remote_read,
     Tensor& output_tensor) {
     Program program = CreateProgram();
 
@@ -62,21 +63,25 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
-    CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
-    auto shard_shape = input_tensor.shard_spec().value().shape;
-    uint32_t ntiles_per_block = div_up(shard_shape[1], TILE_WIDTH);
-    uint32_t nblocks_per_core = div_up(shard_shape[0], TILE_HEIGHT);
-    uint32_t input_npages = ntiles_per_block * nblocks_per_core;
+    CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
+    auto input_shard_shape = output_tensor.shard_spec().value().shape;
+    auto output_shard_shape = output_tensor.shard_spec().value().shape;
+    TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
+    uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
+    uint32_t remapped_input_shard_shape_for_output_grid = input_nhw_height / ncores_nhw;
+    uint32_t ntiles_per_block = div_up(input_shard_shape[1], TILE_WIDTH);
+    uint32_t input_nblocks_per_core = div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
-    uint32_t out_stick_nbytes = shard_shape[1] * out_nbytes;
+    uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
 
     uint32_t in_page_size = detail::TileSize(in_df);
     uint32_t out_tile_size = detail::TileSize(out_df);
 
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
-        in_page_size = shard_shape[1] * in_nbytes;
-        input_npages = shard_shape[0];
+        in_page_size = input_shard_shape[1] * in_nbytes;
+        input_npages = remapped_input_shard_shape_for_output_grid;
     }
 
     // Construct CBs
@@ -99,7 +104,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         input_to_writer_cb_id = untilize_out_cb_id;
 
         // output of untilize from compute kernel goes into this CB
-        uint32_t output_ntiles = ntiles_per_block * nblocks_per_core;
+        uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
         auto untilize_out_cb_config = CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                                         .set_page_size(untilize_out_cb_id, out_tile_size);
         auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
@@ -135,7 +140,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // Gather data
     if (!skip_untilize) {
         // compute kernel
-        std::vector<uint32_t> compute_ct_args = {nblocks_per_core, ntiles_per_block};
+        std::vector<uint32_t> compute_ct_args = {input_nblocks_per_core, ntiles_per_block};
         std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
             log_debug(
@@ -189,6 +194,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         input_npages,
         out_stick_nbytes,
         is_block_sharded,
+        remote_read,
     };
 
     reader_ct_args[0] = 0;
@@ -285,25 +291,28 @@ std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<T
 
 std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    // NOTE: output is always ROW_MAJOR
-    DataType output_dtype = input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
-    auto shard_spec = input_tensor.shard_spec().value();
-    // log_debug(LogOp, "INPUT SHARD SPEC: {}", shard_spec);
+    DataType output_dtype =
+        input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
 
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout == out_mem_config_.memory_layout,
+        input_tensor.memory_config(),
+        out_mem_config_);
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto core_range = *(shard_spec.grid.ranges().begin());
-        TT_FATAL(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
-    } else {
-        TT_FATAL(ncores_nhw_ == shard_spec.grid.num_cores(), "ncores_nhw ({}) != shard_spec.grid.num_cores ({})", ncores_nhw_, shard_spec.grid.num_cores());
+        auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());
+        auto output_core_range = *(out_mem_config_.shard_spec->grid.ranges().begin());
+        auto input_core_w = input_core_range.end.y - input_core_range.start.y + 1;
+        auto output_core_w = output_core_range.end.y - output_core_range.start.y + 1;
+        TT_FATAL(input_core_w == output_core_w);
     }
-    auto out_shard_spec = shard_spec;
-    out_shard_spec.shape[0] = div_up(output_shape[0] * output_shape[2], ncores_nhw_);
-    out_shard_spec.halo = true;
-    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto mem_config = out_mem_config_;
-    mem_config.shard_spec = out_shard_spec;
-    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+
+    auto out_mem_config = out_mem_config_;
+    out_mem_config.shard_spec->shape[0] = div_up(output_shape[0] * output_shape[2], ncores_nhw_);
+    out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
+    out_mem_config.shard_spec->halo = true;
+    return {create_sharded_device_tensor(
+        output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
@@ -321,6 +330,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
         padding_config,
         local_config,
         remote_config,
+        remote_read_,
         output_tensor)};
 }
 
@@ -332,14 +342,15 @@ Tensor untilize_with_halo_v2(
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& mem_config,
+    const bool remote_read) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
     return operation::run_without_autoformat(
-               UntilizeWithHaloV2{pad_val, ncores_nhw, max_out_nsticks_per_core, mem_config},
+               UntilizeWithHaloV2{pad_val, ncores_nhw, max_out_nsticks_per_core, mem_config, remote_read},
                {
                    input_tensor,
                    padding_config,
