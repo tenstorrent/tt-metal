@@ -14,7 +14,7 @@ import math
 
 
 def prepare_conv_input_and_copy_to_device_interleaved(
-    device, torch_input_tensor_nhwc, input_tensor_shape, use_shallow_conv_variant
+    device, torch_input_tensor_nhwc, input_tensor_shape, use_shallow_conv_variant, mem_config=None
 ):
     # Pad for 16 byte alignnment
     # TODO: for bfp16, pad to 8 only
@@ -29,10 +29,22 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
-    tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
-    if not use_shallow_conv_variant:
-        tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
+    if mem_config is not None:
+        # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
+        if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+            tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
+        else:
+            interleaved_mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+            )
+            tt_input_tensor_on_device = tt_input_tensor.to(device, interleaved_mem_config)
+            tt_input_tensor_on_device = tt_lib.tensor.interleaved_to_sharded(tt_input_tensor_on_device, mem_config)
+    else:
+        tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
+
+        if not use_shallow_conv_variant:
+            tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
     return tt_input_tensor_on_device
 
 
@@ -130,12 +142,15 @@ def run_conv(
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
-    if enable_auto_formatting:
+    if enable_auto_formatting or (config_override is not None and "act_reshard_num_cores_nhw" in config_override):
         tt_input_tensor_on_device = prepare_conv_input_and_copy_to_device_interleaved(
             device,
             torch_input_tensor,
             [batch_size, input_height, input_width, input_channels],
             use_shallow_conv_variant,
+            mem_config=conv.conv.input_sharded_memory_config
+            if config_override is not None and "act_reshard_num_cores_nhw" in config_override
+            else None,
         )
     else:
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
@@ -1070,4 +1085,59 @@ def test_unet_conv_wh(
         use_shallow_conv_variant=use_shallow_conv_variant,
         padded_input_channels=None,
         output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
+    (
+        (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 1}),
+        (1, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, {"act_reshard_num_cores_nhw": 1}),
+        (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 4}),
+        (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 8}),
+        (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 8, "num_cores_nhw": 4}),
+        (2, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 8, "num_cores_nhw": 4}),
+        (2, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, {"act_reshard_num_cores_nhw": 4, "num_cores_nhw": 8}),
+    ),
+)
+@pytest.mark.parametrize("use_1d_systolic_array", [False, True])
+def test_halo_reshard_conv(
+    device,
+    use_program_cache,
+    use_1d_systolic_array,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+):
+    math_fidelity = ttnn.MathFidelity.HiFi4
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat8_b
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
     )
