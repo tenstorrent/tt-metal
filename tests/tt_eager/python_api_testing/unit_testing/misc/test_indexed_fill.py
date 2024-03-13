@@ -36,11 +36,9 @@ def test_indexed_slice(B, b, tt_dtype, device):
     torch.manual_seed(0)
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
-
     input_a_shape = (B, 1, 1, 4)
     input_b_shape = (b, 1, 1, 4)
     torch_batch_ids = torch.randint(0, B - 1, (1, 1, 1, b))
-
     torch_input_a = torch.rand(input_a_shape, dtype=dtype)
     torch_input_b = torch.rand(input_b_shape, dtype=dtype)
     batch_ids = ttl.tensor.Tensor(torch_batch_ids, ttl.tensor.DataType.UINT32).to(
@@ -49,11 +47,7 @@ def test_indexed_slice(B, b, tt_dtype, device):
     input_a = ttl.tensor.Tensor(torch_input_a, tt_dtype).to(device)
     input_b = ttl.tensor.Tensor(torch_input_b, tt_dtype).to(device)
     output = ttl.tensor.indexed_fill(batch_ids, input_a, input_b)
+    torch_input_a[torch_batch_ids[-1]] = torch_input_b
     output_torch = output.cpu().to_torch()
 
-    print(torch_input_a)
-    print(torch_input_b)
-    print(torch_batch_ids)
-    print(output_torch)
-
-    print(output_torch.shape)
+    assert torch.allclose(torch_input_a, output_torch)
