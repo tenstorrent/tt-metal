@@ -80,8 +80,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
-    CommandQueue command_queue(this->device_, 0);
-    CommandQueue data_movement_queue(this->device_, 1);
+    CommandQueue& command_queue = this->device_->command_queue(0);
+    CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
     Program simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
@@ -123,8 +123,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
-    CommandQueue command_queue(this->device_, 0);
-    CommandQueue data_movement_queue(this->device_, 1);
+    CommandQueue& command_queue = this->device_->command_queue(0);
+    CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
     Program simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
@@ -178,7 +178,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
 
     // Single Q for data and commands
     // Keep this queue in passthrough mode for now
-    CommandQueue command_queue(this->device_, 0);
+    CommandQueue& command_queue = this->device_->command_queue(0);
 
     Program simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);

@@ -56,8 +56,8 @@ namespace dram_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -68,8 +68,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToAllDramBanks) {
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -81,8 +81,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileAcrossAllDramBanksTwice
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -95,8 +95,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, Sending131072Pages) {
         .page_size = 128,
         .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -104,8 +104,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, Sending131072Pages) {
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -114,8 +114,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestNon32BAlignedPageSizeForDram2) 
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -127,8 +127,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -141,8 +141,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestIssueMultipleReadWriteCommandsF
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -154,8 +154,8 @@ namespace l1_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -167,8 +167,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToAllL1Banks) {
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -180,8 +180,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToAllL1BanksTwiceRoundR
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
@@ -189,8 +189,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, WriteOneTileToAllL1BanksTwiceRoundR
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
-    CommandQueue a(this->device_, 0);
-    CommandQueue b(this->device_, 1);
+    CommandQueue& a = this->device_->command_queue(0);
+    CommandQueue& b = this->device_->command_queue(1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
