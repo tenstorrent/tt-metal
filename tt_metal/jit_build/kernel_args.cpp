@@ -24,17 +24,21 @@ void str_replace_all(string& source, const string& from, const string& to) {
     }
 }
 
-void log_kernel_defines_and_args (const string &out_kernel_root_path, const string &full_kernel_name, const string &built_in_defines, const string &defines_and_args_str) {
+void log_kernel_defines_and_args (const string &out_dir, const string &full_kernel_name, const string &defines_and_args_str) {
     std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);
-    string defines_as_csv(built_in_defines + " " + defines_and_args_str);
+    string defines_as_csv(defines_and_args_str);
+
     str_replace_all(defines_as_csv, "KERNEL_COMPILE_TIME_", "");
     str_replace_all(defines_as_csv, "-D", ",");
     str_replace_all(defines_as_csv, " ", "");
+    str_replace_all(defines_as_csv, ",", ", ");
 
-    if (kernel_defines_and_args_.find(full_kernel_name) == kernel_defines_and_args_.end()) {
-        kernel_defines_and_args_[full_kernel_name] = defines_as_csv;
+    if (kernel_defines_and_args_.find(out_dir) == kernel_defines_and_args_.end()) {
+        kernel_defines_and_args_[out_dir] = defines_as_csv;
     } else {
-        // TT_ASSERT(kernel_defines_and_args_[full_kernel_name] == defines_as_csv, "Mismatched defines and args for kernel: {}. Expected:\n{}, Got:     \n{}", full_kernel_name, kernel_defines_and_args_[full_kernel_name], defines_as_csv);
+        if (kernel_defines_and_args_[out_dir] != defines_as_csv) {
+            log_error ("Multiple distinct kernel arguments found for: {}. Existing:\n{}, New:     \n{}", out_dir, kernel_defines_and_args_[full_kernel_name], defines_as_csv);
+        }
     }
 }
 
