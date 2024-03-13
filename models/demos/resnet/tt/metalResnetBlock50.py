@@ -1114,6 +1114,8 @@ class Bottleneck:
                 packer_l1_acc=False,
             )
 
+        untilize_out = False
+
         self.conv1 = resnet50_1x1_conv_as_matmul(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
@@ -1123,8 +1125,9 @@ class Bottleneck:
             fuse_relu=True,
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            output_dtype=tt_lib.tensor.DataType.BFLOAT16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
+            untilize_out=untilize_out,
         )
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]

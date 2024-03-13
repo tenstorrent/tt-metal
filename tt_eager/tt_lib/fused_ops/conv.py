@@ -89,6 +89,7 @@ def resnet50_1x1_conv_as_matmul(
     weights_dtype=None,
     output_dtype=None,
     compute_kernel_config=None,
+    untilize_out=False,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
@@ -143,6 +144,7 @@ def resnet50_1x1_conv_as_matmul(
             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
             output_dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
+            untilize_out=untilize_out,
         )
 
         return output
