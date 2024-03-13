@@ -485,9 +485,11 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
         uint64_t cb_region_end = cb_allocator.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
+            detail::DumpDeviceMemoryState(device);
             TT_THROW("Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B", cb_allocator.core_range.str(), cb_region_end, max_l1_size);
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
+            detail::DumpDeviceMemoryState(device);
             TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, cb_allocator.core_range.str(), lowest_address.value(), cb_region_end);
         }
     }

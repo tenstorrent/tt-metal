@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/detail/reports/memory_reporter.hpp"
+
+#include <algorithm>
+
+#include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include <algorithm>
 
 namespace tt::tt_metal {
 
@@ -16,6 +19,12 @@ namespace detail {
 using bank_to_statistics = std::map<uint32_t, allocator::Statistics>;
 
 std::atomic<bool> MemoryReporter::is_enabled_ = false;
+
+MemoryReporter::MemoryReporter() {
+    if (parse_env<bool>("TT_METAL_ENABLE_MEMORY_REPORTS", false)) {
+        is_enabled_ = true;
+    }
+}
 
 MemoryReporter::~MemoryReporter() {
     if (this->program_l1_usage_summary_report_.is_open()) {
@@ -132,7 +141,8 @@ void MemoryReporter::init_reports() {
     write_headers(this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
 void DumpDeviceMemoryState(const Device *device) {
-    MemoryReporter::inst().dump_memory_usage_state(device);
+    if (MemoryReporter::inst().enabled())
+        MemoryReporter::inst().dump_memory_usage_state(device);
 }
 
 bool MemoryReporter::enabled() {

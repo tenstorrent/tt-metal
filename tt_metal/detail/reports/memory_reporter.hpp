@@ -64,7 +64,7 @@ class MemoryReporter {
     static MemoryReporter& inst();
     static bool enabled();
    private:
-    MemoryReporter(){};
+    MemoryReporter();
     ~MemoryReporter();
     void init_reports();
     static std::atomic<bool> is_enabled_;
