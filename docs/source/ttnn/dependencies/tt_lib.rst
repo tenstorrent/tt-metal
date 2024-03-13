@@ -1054,6 +1054,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_remainder_bw
 
+.. autofunction:: tt_lib.tensor.imag_bw
+
+.. autofunction:: tt_lib.tensor.real_bw
+
 Loss Functions
 ==============
 
