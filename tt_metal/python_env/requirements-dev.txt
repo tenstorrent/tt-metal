@@ -11,6 +11,7 @@ black==23.10.1
 build==0.10.0
 twine==4.0.2
 yamllint==1.32.0
+mypy==1.9.0
 
 # For docs
 -r ../../docs/requirements-docs.txt
