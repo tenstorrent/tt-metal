@@ -199,7 +199,7 @@ class transformer_2d_model:
                 (self.proj_in.batch_size, self.proj_in.input_height, self.proj_in.input_width, in_channels),
             )
             hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
-            hidden_states = ttnn.group_norm(
+            hidden_states = ttnn.operations.normalization._fallback_group_norm(
                 hidden_states,
                 num_groups=norm_num_groups,
                 weight=self.parameters.norm.weight,

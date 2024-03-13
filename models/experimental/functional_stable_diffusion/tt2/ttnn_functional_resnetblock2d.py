@@ -278,6 +278,8 @@ class resnetBlock2D:
         else:
             nonlinearity = ttnn.silu
         print("Input tensor of resnet block memory config=", ttnn.get_memory_config(input_tensor))
+        print("Synchronizing device now")
+        ttnn.synchronize_device(self.device)
         if ttnn.get_memory_config(input_tensor) == ttnn.L1_MEMORY_CONFIG:
             print("Input tensor of resnet block is in L1 interleaved")
         ttnn.dump_device_memory_state(self.device, prefix="in_resnet_block_start")
@@ -306,7 +308,7 @@ class resnetBlock2D:
             print("Synchronizing device now")
             ttnn.synchronize_device(self.device)
             print("Run gn1")
-            hidden_states = ttnn.group_norm(
+            hidden_states = ttnn.operations.normalization._fallback_group_norm(
                 hidden_states,
                 num_groups=groups,
                 weight=self.parameters.norm1.weight,
@@ -428,7 +430,7 @@ class resnetBlock2D:
             )
             hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
             print("Run gn2")
-            hidden_states = ttnn.group_norm(
+            hidden_states = ttnn.operations.normalization._fallback_group_norm(
                 hidden_states,
                 num_groups=groups,
                 weight=self.parameters.norm2.weight,

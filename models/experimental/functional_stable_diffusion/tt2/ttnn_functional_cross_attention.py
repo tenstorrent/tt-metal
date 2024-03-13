@@ -180,7 +180,6 @@ class cross_attention:
             )
             ttnn.deallocate(query)
             ttnn.deallocate(t_key)
-
             attention_scores = ttnn.transformer.attention_softmax(
                 attention_scores, attention_mask=attention_mask, head_size=head_size
             )
@@ -199,7 +198,6 @@ class cross_attention:
                 head_size=head_size,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-
         return attention_scores
 
     def __call__(

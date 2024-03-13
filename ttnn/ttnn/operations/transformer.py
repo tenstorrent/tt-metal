@@ -394,7 +394,7 @@ def attention_softmax(
     else:
         scaled_input_tensor = input_tensor * scaler
         output_tensor = ttl.tensor.softmax(scaled_input_tensor, output_mem_config=memory_config)
-        return output_tensor
+    return output_tensor
 
 
 @ttnn.register_operation(

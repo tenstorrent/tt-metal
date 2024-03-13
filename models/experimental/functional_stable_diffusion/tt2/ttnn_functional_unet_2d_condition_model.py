@@ -540,7 +540,7 @@ class UNet2DConditionModel:
                 ),
             )
             sample = ttnn.permute(sample, (0, 3, 1, 2))
-            sample = ttnn.group_norm(
+            sample = ttnn.operations.normalization._fallback_group_norm(
                 sample,
                 num_groups=norm_num_groups,
                 weight=self.parameters.conv_norm_out.weight,
@@ -553,6 +553,7 @@ class UNet2DConditionModel:
         else:
             sample = ttnn.to_memory_config(sample, self.gn_expected_input_sharded_memory_config)
             print(f"Starting final group norm")
+            print("GN input shape - ", sample.shape)
             print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
             sample = ttnn.group_norm(
                 sample,
@@ -562,8 +563,8 @@ class UNet2DConditionModel:
                 bias=self.parameters.conv_norm_out.bias,
                 memory_config=self.conv_out.conv.input_sharded_memory_config,
                 core_grid=ttnn.CoreGrid(
-                    self.group_norm_grid_size[1],
-                    self.group_norm_grid_size[0],
+                    y=self.group_norm_grid_size[1],
+                    x=self.group_norm_grid_size[0],
                 ),
             )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
