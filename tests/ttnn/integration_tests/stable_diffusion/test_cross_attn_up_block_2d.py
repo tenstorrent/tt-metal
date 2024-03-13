@@ -169,7 +169,6 @@ def test_cross_attn_up_block_2d_256x256(
     assert_with_pcc(torch_output, op, 0.90)
 
 
-@pytest.mark.skip(reason="Hangs on GS, issue #6144")
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel, in_channels ,out_channels",
     [
