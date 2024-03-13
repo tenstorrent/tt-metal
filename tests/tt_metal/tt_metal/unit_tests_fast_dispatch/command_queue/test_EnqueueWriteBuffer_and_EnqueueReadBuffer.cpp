@@ -370,8 +370,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
         uint32_t num_pages = buffer_size / page_size;
 
         TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
-        CommandQueue a(device, 0);
-        local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(device, a, buf_config);
+        local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(device, device->command_queue(), buf_config);
     }
 }
 
