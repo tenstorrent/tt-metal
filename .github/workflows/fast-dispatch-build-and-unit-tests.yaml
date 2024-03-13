@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 jobs:
-  python-api-ops-tests:
+  fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -12,12 +12,23 @@ jobs:
       matrix:
         runner-info: [
           # E150
-          {arch: grayskull, runs-on: ["grayskull"]},
+          {arch: grayskull, runs-on: ["grayskull"], name: E150},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
+        test-group: [
+          {name: fallback-backward-loss-ops, cmd: ./tests/scripts/run_python_unit_test_ops.sh},
+          {name: misc group 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 2 --group 1 },
+          {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 2 --group 2 },
+          {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
+          {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
+          {name: Metal C++ GTest, cmd: ./build/test/tt_metal/unit_tests_fast_dispatch},
+          {name: Eager C++, cmd: python tests/scripts/run_tt_eager.py --dispatch-mode fast},
+          {name: Metal C++, cmd: python tests/scripts/run_tt_metal.py --dispatch-mode fast},
+        ]
+    name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
@@ -38,115 +49,13 @@ jobs:
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: fallback-ops tests
-        timeout-minutes: 120
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: 90
         run: |
           source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_test_fallback_ops.sh
-      - name: backward-ops tests
-        timeout-minutes: 120
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_test_backward_ops.sh
-      - name: loss-ops tests
-        timeout-minutes: 120
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_test_loss_ops.sh
-      - name: moreh tests
-        timeout-minutes: 120
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_test_moreh.sh
-  python-api-misc-unit-tests:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"]},
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
-        ]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: misc tests
-        timeout-minutes: 120
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_test_misc.sh
-  model-tests:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"]},
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
-        ]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: Run API Model tests
-        timeout-minutes: 60
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_model_tests.sh
+          ${{ matrix.test-group.cmd }}
   sweep-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -180,28 +89,6 @@ jobs:
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: Run API Sweep tests
-        timeout-minutes: 60
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_sweep_tests.sh
-      - name: Run tt-metal and tt-eager tests
-        timeout-minutes: 60
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          env python tests/scripts/run_tt_metal.py --dispatch-mode fast
-          env python tests/scripts/run_tt_eager.py --dispatch-mode fast
-      - name: Run pre/post C++ regression tests
-        timeout-minutes: 60
-        run: |
-          source $HOME/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./build/test/tt_metal/unit_tests_fast_dispatch
       - name: Build Docs
         timeout-minutes: 15
         run: |
