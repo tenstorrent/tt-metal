@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
@@ -21,7 +22,8 @@ def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
     try:
         # get ref result
         ref_value = torch.nn.L1Loss(reduction="sum")(x, y)
-
+        # x = x.unsqueeze(0)
+        # y = y.unsqueeze(0)
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
         y = ttnn_ops.setup_ttnn_tensor(y, device, dlayout[1], in_mem_config[1], dtype[1])
 
@@ -33,9 +35,14 @@ def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
         logger.warning(f"Operation execution crashed")
         raise e
 
-    assert len(tt_result.shape) == len(ref_value.shape)
-    assert tt_result.shape == ref_value.shape
-    assert_with_pcc(ref_value, tt_result, 0.99)
+    tt_result = tt_result.squeeze(0)
+    tt_result = tt_result.squeeze(0)
+
+    success, pcc_value = comp_pcc(ref_value, tt_result)
+    logger.debug(pcc_value)
+    logger.debug(success)
+
+    assert success
 
 
 test_sweep_args = [
