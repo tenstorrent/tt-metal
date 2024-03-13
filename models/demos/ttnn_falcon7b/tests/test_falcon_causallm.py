@@ -206,6 +206,7 @@ def run_test_FalconCausalLM_inference(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconCausalLM_inference(
+    device,
     use_program_cache,
     model_version,
     llm_mode,
@@ -217,7 +218,6 @@ def test_FalconCausalLM_inference(
     request,
     model_config_str,
     model_location_generator,
-    device,
 ):
     enable_persistent_kernel_cache()
     model_config = get_model_config(model_config_str)

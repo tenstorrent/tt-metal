@@ -145,13 +145,13 @@ def run_perf_efficientnet_b0(
     ),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     imagenet_sample_input,
     model_location_generator,
     expected_inference_time,
     expected_compile_time,
     iterations,
-    device,
 ):
     run_perf_efficientnet_b0(
         imagenet_sample_input,
@@ -175,13 +175,13 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     imagenet_sample_input,
     model_location_generator,
     expected_inference_time,
     expected_compile_time,
     iterations,
-    device,
 ):
     run_perf_efficientnet_b0(
         imagenet_sample_input,

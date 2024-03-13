@@ -32,6 +32,8 @@ def run_perf_resnet(
     device,
 ):
     disable_persistent_kernel_cache()
+    if batch_size <= 2:
+        pytest.skip("Batch size 1 and 2 are not supported with sharded data")
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
     cpu_key = f"ref_key_batchsize{batch_size}"
@@ -131,12 +133,12 @@ def run_perf_resnet(
     ),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
@@ -162,12 +164,12 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")

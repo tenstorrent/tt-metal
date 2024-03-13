@@ -21,7 +21,7 @@ struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
     uint32_t num_cores_nhw;
     uint32_t per_core_out_matrix_height_ntiles;
-    uint32_t per_core_weight_matrix_width_ntiles;
+    uint32_t per_core_out_matrix_width_ntiles;
     // std::size_t in0_block_w;
     // std::size_t out_subblock_h;
     // std::size_t out_subblock_w;
@@ -35,7 +35,7 @@ struct OptimizedConvParallelizationConfig {
             std::cref(this->grid_size),
             std::cref(this->num_cores_nhw),
             std::cref(this->per_core_out_matrix_height_ntiles),
-            std::cref(this->per_core_weight_matrix_width_ntiles));
+            std::cref(this->per_core_out_matrix_width_ntiles));
     }
 
     CoreCoord get_grid_size() const {
@@ -46,27 +46,18 @@ struct OptimizedConvParallelizationConfig {
 struct OptimizedConvBlockConfig {
     uint32_t act_block_h_ntiles;
     uint32_t act_block_w_ntiles;
-    uint32_t act_c_num_blocks;
-    uint32_t weight_block_w_ntiles;
-    uint32_t out_block_h_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
 
     static constexpr auto attribute_names = std::make_tuple(
         "act_block_h_ntiles",
         "act_block_w_ntiles",
-        "act_c_num_blocks",
-        "weight_block_w_ntiles",
-        "out_block_h_ntiles",
         "out_subblock_h_ntiles",
         "out_subblock_w_ntiles");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->act_block_h_ntiles),
             std::cref(this->act_block_w_ntiles),
-            std::cref(this->act_c_num_blocks),
-            std::cref(this->weight_block_w_ntiles),
-            std::cref(this->out_block_h_ntiles),
             std::cref(this->out_subblock_h_ntiles),
             std::cref(this->out_subblock_w_ntiles));
     }

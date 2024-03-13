@@ -188,6 +188,7 @@ def run_bert_question_and_answering_inference(
     ids=["BERT_LARGE"],
 )
 def test_bert(
+    device,
     use_program_cache,
     model_version,
     batch,
@@ -198,7 +199,6 @@ def test_bert(
     pcc,
     model_config_str,
     model_location_generator,
-    device,
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")

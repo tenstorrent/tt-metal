@@ -1,5 +1,5 @@
 Watcher
-*******
+=======
 
 Overview
 --------
@@ -98,3 +98,31 @@ The log file will contain lines such as the following:
 - The slave message ``smsg`` sent from BRISC to the other RISC Vs are all Go ``G``; ``D`` would indicate Done
 - The kernel IDs ``k_ids`` running are ``4`` on BRISC, ``3`` on NCRISC and ``5`` on TRISC; look further down the log file
   to see the names and paths to those kernels
+
+Asserts
+-------
+Asserts are supported in kernel code. When the watcher is disabled, asserts will be compiled out.
+When the watcher is enabled, tripping an assert will cause the program to exit, and report which
+assert was tripped. An example of an assert and the resulting message is shown below:
+
+.. code-block:: c++
+
+    #include "debug/assert.h"  // Required in all kernels using watcher asserts
+    #include "debug/status.h"  // Pair the assert with a status to see which assert is tripped
+
+    void kernel_main() {
+        uint32_t a = get_arg_val<uint32_t>(0);
+        uint32_t b = get_arg_val<uint32_t>(1);
+
+        DEBUG_STATUS('A', 'S', 'T', '1');
+        ASSERT(a != b);
+    }
+
+If this assert was tripped, the kernel will hang, and a message will be reported on stderr as well
+as in the watcher log file:
+
+..code-block::
+
+    # For example, the kernel running on device 0, core (1,1), brisc trips an assert. The last waypoint will also be shown.
+    # Note that the reported line number may be from an included header file, rather than from the kernel source.
+    Device 0, Core (x=1,y=1):    AST1,R,R,R,R  brisc tripped assert on line 7. Running kernel: my_kernel.cpp.

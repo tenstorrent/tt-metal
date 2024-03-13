@@ -16,21 +16,37 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_div(input_shapes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+@pytest.mark.parametrize(
+    "round_mode",
+    (
+        None,
+        "trunc",
+        "floor",
+    ),
+)
+def test_bw_div(input_shapes, round_mode, device):
+    in_data = torch.Tensor(size=input_shapes).uniform_()
+    in_data.requires_grad = True
+    input_tensor = (
+        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+    )
+    grad_data = torch.Tensor(size=input_shapes).uniform_()
+    grad_tensor = (
+        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+    )
     other_data, other_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.div_bw(grad_tensor, input_tensor, other_tensor)
+    pyt_y = torch.div(in_data, other_data, rounding_mode=round_mode)
+
+    if round_mode == None:
+        round_mode = "None"
+    tt_output_tensor_on_device = tt_lib.tensor.div_bw(grad_tensor, input_tensor, other_tensor, round_mode=round_mode)
 
     in_data.retain_grad()
     other_data.retain_grad()
 
-    pyt_y = torch.div(in_data, other_data)
-
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad, other_data.grad]
-
     status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status

@@ -69,8 +69,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
     "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
 )
 def test_optimized_conv_v2(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -219,8 +219,8 @@ def test_optimized_conv_v2(
 
 
 def test_simple(
-    use_program_cache,
     device,
+    use_program_cache,
 ):
     math_fidelity = tt_lib.tensor.MathFidelity.LoFi
     activations_dtype = tt_lib.tensor.DataType.BFLOAT16

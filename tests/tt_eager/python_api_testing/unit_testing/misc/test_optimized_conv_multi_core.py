@@ -69,6 +69,7 @@ import torch
     ),
 )
 def test_run_optimized_conv(
+    device,
     use_program_cache,
     N,
     K,
@@ -89,7 +90,6 @@ def test_run_optimized_conv(
     untilize_out,
     has_bias,
     fuse_relu,
-    device,
 ):
     if has_bias and untilize_out:
         ## bias is only supported without untilize out
@@ -167,13 +167,11 @@ def test_run_optimized_conv(
                 grid_size=(num_cores_x, num_cores_y),
                 num_cores_nhw=num_cores_x,
                 per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-                per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+                per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
             ttl.tensor.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
-                weight_block_w_ntiles=weight_block_w,
-                out_block_h_ntiles=out_block_h,
                 out_subblock_h_ntiles=out_subblock_h,
                 out_subblock_w_ntiles=out_subblock_w,
             ),

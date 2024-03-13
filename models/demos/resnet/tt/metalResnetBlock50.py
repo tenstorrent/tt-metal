@@ -1145,6 +1145,7 @@ class Bottleneck:
             per_core_weight_w,
             num_cores_nhw,  # This number is only meaningful for batch 8, 16
         ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][(conv2_output_padded_face_size, width)]
+
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
@@ -1168,16 +1169,17 @@ class Bottleneck:
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": grid_size[1] if conv_2d else 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
+
             move_utwh_output = False
             if self.deallocate and (
                 self.module_input_shape[0] == 20
@@ -1456,6 +1458,19 @@ class ResNet(nn.Module):
 
         self.first_conv_num_cores_nhw = 98
         if sharded:
+            self.fold_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(11, 7),
+                    ),
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 8),
+                        tt_lib.tensor.CoreCoord(3, 8),
+                    ),
+                }
+            )
+
             self.shard_grid = tt_lib.tensor.CoreRangeSet(
                 {
                     tt_lib.tensor.CoreRange(
@@ -1512,16 +1527,16 @@ class ResNet(nn.Module):
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": self.first_conv_num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
 
             tt_tensor_conv_weight = tt_lib.tensor.Tensor(
                 conv1_weight.reshape(-1).tolist(),
@@ -2035,28 +2050,43 @@ class ResNet(nn.Module):
         C = _nearest_y(x.shape[3], 4)
         x = torch.nn.functional.pad(x, (0, C - x.shape[3], 3, 3, 3, 3))
 
-        # reshape to [1, 1, NHW / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
-        x = x.reshape(1, 1, x.shape[0] * x.shape[1] * x.shape[2] // stride_w, x.shape[3] * stride_w)
+        # reshape to [N, H, W / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
+        x = x.reshape(x.shape[0], x.shape[1], x.shape[2] // stride_w, x.shape[3] * stride_w)
 
-        NHW = x.shape[2] // stride_h
-        NHW_even = _nearest_y(NHW, self.first_conv_num_cores_nhw * 32)
+        NHW = x.shape[0] * x.shape[1] * x.shape[2]
+        NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
+        shard_spec = tt_lib.tensor.ShardSpec(
+            self.fold_grid, [NHW // 100, x.shape[3]], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+        )
         x = torch2tt_tensor(
             x,
             self.device,
             tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
             tt_memory_config=tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                shard_spec,
+            ),
+        )
+
+        # fold for unity stride on device
+        x = tt_lib.tensor.fold(x, stride_h=stride_h, stride_w=1)
+
+        # non-optimal resharding via the interleaved round trip, because
+        # direct resharding from 100 to 98 cores breaks the reshard op
+        x = tt_lib.tensor.sharded_to_interleaved(
+            x,
+            output_mem_config=tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             ),
         )
 
-        # fold and pad for unity stride on device
-        x = tt_lib.tensor.fold(x, width=115, stride_h=stride_h, stride_w=1, pad_rows=NHW_even - NHW)
         x = tt_lib.tensor.interleaved_to_sharded(
             x,
             self.shard_grid,
             [
-                x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
+                NHW_even // self.first_conv_num_cores_nhw,
                 x.get_legacy_shape()[3],
             ],
             tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,

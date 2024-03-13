@@ -88,7 +88,7 @@ struct CQDispatchBaseCmd {
 } __attribute__((packed));
 
 struct CQDispatchWriteCmd {
-    uint8_t is_multicast;
+    uint8_t num_mcast_dests;    // 0 = unicast, 1+ = multicast
     uint16_t pad1;
     uint32_t noc_xy_addr;
     uint32_t addr;
@@ -106,13 +106,18 @@ struct CQDispatchWritePagedCmd {
 
 struct CQDispatchWritePackedCmd {
     uint8_t is_multicast;
-    uint16_t count;           // number of sub-cmds (max 1020)
+    uint16_t count;           // number of sub-cmds (max 1020 unicast, 510 mcast)
     uint32_t addr;            // common memory address across all packed SubCmds
     uint16_t size;            // size of each packet, stride is padded to L1 alignment and less than dispatch_cb_page_size
 } __attribute__((packed));
 
-struct CQDispatchWritePackedSubCmd {
+struct CQDispatchWritePackedUnicastSubCmd {
     uint32_t noc_xy_addr;     // unique XY address for each SubCmd
+} __attribute__((packed));
+
+struct CQDispatchWritePackedMulticastSubCmd {
+    uint32_t noc_xy_addr;     // unique XY address for each SubCmd
+    uint32_t num_mcast_dests;
 } __attribute__((packed));
 
 struct CQDispatchWaitCmd {

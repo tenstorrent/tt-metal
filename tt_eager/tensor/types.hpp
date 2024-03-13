@@ -240,8 +240,8 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    static constexpr auto attribute_names = std::make_tuple("memory_config", "device_id");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config(), this->buffer->device()->id()); }
+    static constexpr auto attribute_names = std::make_tuple("memory_config");
+    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -358,8 +358,8 @@ static tt::tt_metal::Shape compute_ttl_shape(
 
 template <std::size_t Rank>
 struct RankedShape {
-    const std::size_t rank;
-    const tt::tt_metal::Shape value;
+    std::size_t rank;
+    tt::tt_metal::Shape value;
 
     explicit RankedShape(tt::tt_metal::Shape &&shape) : rank{Rank}, value(shape) {}
     explicit RankedShape(const tt::tt_metal::Shape &shape) : rank{Rank}, value(shape) {}
@@ -399,6 +399,9 @@ struct RankedShape {
     }
 
     const auto &operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+
+    static constexpr auto attribute_names = std::make_tuple("rank", "value");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->rank), std::cref(this->value)); }
 };
 
 template <std::size_t Rank>
@@ -421,16 +424,16 @@ static std::ostream &operator<<(std::ostream &os, const RankedShape<Rank> &shape
 
 struct Shape {
     using RankedShapeVariant = std::variant<
-        const RankedShape<1>,
-        const RankedShape<2>,
-        const RankedShape<3>,
-        const RankedShape<4>,
-        const RankedShape<5>,
-        const RankedShape<6>,
-        const RankedShape<7>,
-        const RankedShape<8>>;
+        RankedShape<1>,
+        RankedShape<2>,
+        RankedShape<3>,
+        RankedShape<4>,
+        RankedShape<5>,
+        RankedShape<6>,
+        RankedShape<7>,
+        RankedShape<8>>;
 
-    const RankedShapeVariant ranked_shape;
+    RankedShapeVariant ranked_shape;
 
    private:
     RankedShapeVariant ttl_shape_to_ttnn_shape(const tt::tt_metal::Shape &shape) {
@@ -536,6 +539,9 @@ struct Shape {
             },
             this->ranked_shape);
     }
+
+    static constexpr auto attribute_names = std::make_tuple("ranked_shape");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->ranked_shape)); }
 };
 
 static std::ostream &operator<<(std::ostream &os, const Shape &self) {

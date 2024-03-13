@@ -41,7 +41,7 @@ def unpadding_test(
         output_tensor_start[3] : output_tensor_end[3] + 1,
     ]
 
-    return a_pt, a_ref, ttl.program_cache.num_entries()
+    return a_pt, a_ref, device.num_program_cache_entries()
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_softplus_args
       output-file: eltwise_softplus_sweep.csv
       args:
         data-layout: ["TILE"]
@@ -41,7 +41,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_softplus_args
       output-file: eltwise_softplus_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]

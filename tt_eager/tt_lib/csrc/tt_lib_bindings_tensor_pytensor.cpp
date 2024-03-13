@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <memory>
 
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/owned_buffer.hpp"
@@ -292,7 +293,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     std::vector<OwnedBuffer> host_owned_buffers;
     std::vector<Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
-        host_owned_buffers.push_back(std::get<OwnedStorage>(shard.storage()).buffer);
+        host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
     auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_shapes};
@@ -332,7 +333,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         auto frombuffer = torch.attr("frombuffer");
 
         auto buffer = std::visit(
-            [] (auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+            [](auto &&storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
                 using T = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<T, OwnedStorage>) {
                     return storage.buffer;
@@ -349,8 +350,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     raise_unsupported_storage<T>();
                 }
             },
-            tt_tensor.storage()
-        );
+            tt_tensor.get_storage());
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
@@ -403,7 +403,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     raise_unsupported_storage<T>();
                 }
             },
-            tt_tensor.storage());
+            tt_tensor.get_storage());
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
@@ -538,7 +538,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         // For additional info see: https://pybind11.readthedocs.io/en/stable/advanced/functions.html#keep-alive
         auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
 
-
             Class constructor supports tensors of rank 4.
             The constructor takes following arguments:
 
@@ -568,7 +567,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         )doc");
 
-        pyTensor.def(py::init<ttnn::Tensor&>()).def(
+        pyTensor.def(py::init<ttnn::Tensor &>())
+            .def(
                 py::init<>([](std::vector<float> &&data,
                               const std::array<uint32_t, 4> &shape,
                               DataType data_type,
@@ -764,9 +764,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         py_tensor = np.zeros((1, 1, 32, 32))
                         tt_lib.tensor.Tensor(py_tensor)
                 )doc")
-            .def_property_readonly("shape", [](const Tensor& self) { return self.ttnn_shape(); })
-            .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
-            .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
+            .def_property_readonly("shape", [](const Tensor &self) { return self.shape; })
+            .def_property_readonly("dtype", [](const Tensor &self) { return self.get_dtype(); })
+            .def_property_readonly("layout", [](const Tensor &self) { return self.get_layout(); })
             .def(
                 "deallocate",
                 [](Tensor &self, bool force) { return self.deallocate(force); },
@@ -1243,7 +1243,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                                 raise_unsupported_storage<T>();
                             }
                         },
-                        self.storage());
+                        self.get_storage());
                 },
                 R"doc(
                 Get the underlying buffer.
@@ -1282,7 +1282,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     is_sharded = tt_tensor.is_sharded()
 
             )doc")
-            .def("is_contiguous", [](const Tensor& self) -> bool { return self.is_contiguous(); })
+            .def("is_contiguous", [](const Tensor &self) -> bool { return self.is_contiguous(); })
             .def(
                 "is_sharded", [](const Tensor &self) { return self.is_sharded(); }, R"doc(
                 Check if TT Tensor is sharded.

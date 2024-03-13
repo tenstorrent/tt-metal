@@ -65,6 +65,7 @@ import torch
     ),
 )
 def test_run_generic_conv(
+    device,
     use_program_cache,
     run_conv_with_address_map,
     K,
@@ -80,7 +81,6 @@ def test_run_generic_conv(
     untilize_out,
     has_bias,
     fuse_relu,
-    device,
 ):
     if run_conv_with_address_map and has_bias:
         ## bias is only supported without address map

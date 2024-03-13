@@ -149,31 +149,31 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     uint32_t in1_width = in1.get_legacy_shape()[3];
 
     // input matrix shape checks
-    TT_ASSERT(in0_batch == 1, "Supports only batch = 1");
-    TT_ASSERT(in1_batch == in0_batch, "Batch dimension needs to match for two inputs");
-    TT_ASSERT(in0_channel == in1_channel, "Channel dimension needs to match for two inputs");
-    TT_ASSERT(in0_width == in1_height, "Input matrices should be compatible for multiplication");
+    TT_FATAL(in0_batch == 1, "Supports only batch = 1");
+    TT_FATAL(in1_batch == in0_batch, "Batch dimension needs to match for two inputs");
+    TT_FATAL(in0_channel == in1_channel, "Channel dimension needs to match for two inputs");
+    TT_FATAL(in0_width == in1_height, "Input matrices should be compatible for multiplication");
     if (has_bias) {
-        TT_ASSERT(bias.get_legacy_shape()[3] == in1.get_legacy_shape()[3], "Bias shape mismatch");
+        TT_FATAL(bias.get_legacy_shape()[3] == in1.get_legacy_shape()[3], "Bias shape mismatch");
     }
 
     // tile size checks
-    TT_ASSERT(in0_height % constants::TILE_HEIGHT == 0, "Input tensor in0 height needs to be divisible by TILE_HEIGHT");
-    TT_ASSERT(in1_height % constants::TILE_HEIGHT == 0, "Input tensor in1 height needs to be divisible by TILE_HEIGHT");
-    TT_ASSERT(in0_width % constants::TILE_WIDTH == 0, "Input tensor in0 width needs to be divisible by TILE_WIDTH");
-    TT_ASSERT(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
+    TT_FATAL(in0_height % constants::TILE_HEIGHT == 0, "Input tensor in0 height needs to be divisible by TILE_HEIGHT");
+    TT_FATAL(in1_height % constants::TILE_HEIGHT == 0, "Input tensor in1 height needs to be divisible by TILE_HEIGHT");
+    TT_FATAL(in0_width % constants::TILE_WIDTH == 0, "Input tensor in0 width needs to be divisible by TILE_WIDTH");
+    TT_FATAL(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
     if (has_bias) {
-        TT_ASSERT(bias.get_legacy_shape()[2] % constants::TILE_HEIGHT == 0);
-        TT_ASSERT(bias.get_legacy_shape()[3] % constants::TILE_WIDTH == 0);
+        TT_FATAL(bias.get_legacy_shape()[2] % constants::TILE_HEIGHT == 0);
+        TT_FATAL(bias.get_legacy_shape()[3] % constants::TILE_WIDTH == 0);
     }
 
     // device compatibility checks
-    TT_ASSERT(in0.storage_type() == StorageType::DEVICE and in1.storage_type() == StorageType::DEVICE, "Operands need to be on the device!");
-    TT_ASSERT(in0.device() == in1.device(), "Operands need to be on the same device!");
-    TT_ASSERT(in0.buffer() != nullptr && in1.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
+    TT_FATAL(in0.storage_type() == StorageType::DEVICE and in1.storage_type() == StorageType::DEVICE, "Operands need to be on the device!");
+    TT_FATAL(in0.device() == in1.device(), "Operands need to be on the same device!");
+    TT_FATAL(in0.buffer() != nullptr && in1.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
     if (has_bias) {
-        TT_ASSERT(bias.storage_type() == StorageType::DEVICE);
-        TT_ASSERT(bias.device() == in0.device());
+        TT_FATAL(bias.storage_type() == StorageType::DEVICE);
+        TT_FATAL(bias.device() == in0.device());
     }
 
     // input data type and formats
@@ -183,26 +183,26 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     const auto in1_df = datatype_to_dataformat_converter(in1_dt);
 
     // input data format checks
-    TT_ASSERT(in0_dt == DataType::BFLOAT16 || (in0_dt == DataType::BFLOAT8_B && !tilize_in0),
+    TT_FATAL(in0_dt == DataType::BFLOAT16 || (in0_dt == DataType::BFLOAT8_B && !tilize_in0),
               "in0 only supports BFLOAT16 and BFLOAT8_B data types for now");
-    TT_ASSERT(in1_dt == DataType::BFLOAT16 || in1_dt == DataType::BFLOAT8_B, "in1 only supports BFLOAT16 and BFLOAT8_B formats for now!");
+    TT_FATAL(in1_dt == DataType::BFLOAT16 || in1_dt == DataType::BFLOAT8_B, "in1 only supports BFLOAT16 and BFLOAT8_B formats for now!");
     if (has_bias) {
-        TT_ASSERT(bias.get_dtype() == DataType::BFLOAT16 || bias.get_dtype() == DataType::BFLOAT8_B);
+        TT_FATAL(bias.get_dtype() == DataType::BFLOAT16 || bias.get_dtype() == DataType::BFLOAT8_B);
     }
 
     // output data format
     const auto out_df = datatype_to_dataformat_converter(out_dt);
 
     // out dt checks
-    TT_ASSERT(!untilize_out || (untilize_out && out_dt == DataType::BFLOAT16));
+    TT_FATAL(!untilize_out || (untilize_out && out_dt == DataType::BFLOAT16));
 
     if (has_bias) {
-        TT_ASSERT(!untilize_out, "Untilize is not supported with bias");
+        TT_FATAL(!untilize_out, "Untilize is not supported with bias");
     }
 
     // // TODO (AS): Certain mixed-prec cases do not currently work. Assert them out.
     // if (!(in0_dt == out_dt && in0_dt == in1_dt && in0_dt == DataType::BFLOAT16) && (tilize_in0 || untilize_out)) {
-    //     TT_ASSERT(false, "TODO: Cases to be debugged");
+    //     TT_FATAL(false, "TODO: Cases to be debugged");
     // }
 
     const auto in0_tile_nbytes = tile_size(in0_df);
@@ -212,8 +212,8 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     Buffer *src0_dram_buffer = in0.buffer();
     Buffer *src1_dram_buffer = in1.buffer();
 
-    TT_ASSERT(src0_dram_buffer->size() % in0_tile_nbytes == 0, "Buffer size of tensor in0 must be multiple of tile size");
-    TT_ASSERT(src1_dram_buffer->size() % in1_tile_nbytes == 0, "Buffer size of tensor in1 must be multiple of tile size");
+    TT_FATAL(src0_dram_buffer->size() % in0_tile_nbytes == 0, "Buffer size of tensor in0 must be multiple of tile size");
+    TT_FATAL(src1_dram_buffer->size() % in1_tile_nbytes == 0, "Buffer size of tensor in1 must be multiple of tile size");
 
     Device *device = in0.device();
     CoreCoord core = {0, 0};
@@ -223,7 +223,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     CoreRange core_range(core, core);
 
     Buffer *dst_dram_buffer = out.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // TODO [AS]: support non-tile multiple shapes
     // Convert tensor dims to tile dims
@@ -231,9 +231,9 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     uint32_t in0_width_ntiles = in0_width / constants::TILE_WIDTH;      // == in0_width_nblocks * in0_block_width_ntiles
     uint32_t in1_width_ntiles = in1_width / constants::TILE_WIDTH;      // == in1_width_nblocks * in1_block_width_ntiles
     // Ensure the size arguments match the input tensors
-    TT_ASSERT(in0_height_ntiles == in0_height_nblocks * in0_block_height_ntiles, "Mismatch in tensor in0 height!");
-    TT_ASSERT(in0_width_ntiles == in0_width_nblocks * in0_block_width_ntiles, "Mismatch tensor in0 width!");
-    TT_ASSERT(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch in tensor in1 width! in1_width_ntiles = {}, in1_width_nblocks = {}, in1_block_width_ntiles = {}", in1_width_ntiles, in1_width_nblocks, in1_block_width_ntiles);
+    TT_FATAL(in0_height_ntiles == in0_height_nblocks * in0_block_height_ntiles, "Mismatch in tensor in0 height!");
+    TT_FATAL(in0_width_ntiles == in0_width_nblocks * in0_block_width_ntiles, "Mismatch tensor in0 width!");
+    TT_FATAL(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch in tensor in1 width! in1_width_ntiles = {}, in1_width_nblocks = {}, in1_block_width_ntiles = {}", in1_width_ntiles, in1_width_nblocks, in1_block_width_ntiles);
 
     // in0
     uint32_t in0_dram_addr = src0_dram_buffer->address();
@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     uint32_t in0_block_num_tiles = in0_block_h * in0_block_w;
     uint32_t in0_num_subblocks = in0_block_h / in0_subblock_h;
     uint32_t in0_subblock_num_tiles = in0_subblock_h * in0_block_w;
-    TT_ASSERT(in0_block_h % out_subblock_height_ntiles == 0);
+    TT_FATAL(in0_block_h % out_subblock_height_ntiles == 0);
 
     // in1
     uint32_t in1_dram_addr = src1_dram_buffer->address();
@@ -258,12 +258,12 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     uint32_t in1_num_subblocks = in1_block_w / in1_subblock_w;
     uint32_t in1_block_h = in0_block_w;
     uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
-    TT_ASSERT(in1_block_w % out_subblock_width_ntiles == 0);
+    TT_FATAL(in1_block_w % out_subblock_width_ntiles == 0);
 
     // out
     uint32_t out_dram_addr = dst_dram_buffer->address();
     uint32_t out_subblock_ntiles = out_subblock_height_ntiles * out_subblock_width_ntiles;
-    TT_ASSERT(out_subblock_ntiles <= 8, "Subblock can have at most 8 tiles to fit computed intermediates in dst[half]");
+    TT_FATAL(out_subblock_ntiles <= 8, "Subblock can have at most 8 tiles to fit computed intermediates in dst[half]");
 
     // bias
     uint32_t bias_addr = 0;

@@ -11,7 +11,6 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -263,19 +262,17 @@ void test_program_cache() {
         run_test<tt::tt_metal::UnaryOpType::SQRT>(device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
-    tt::tt_metal::program_cache::enable();
+    device->enable_program_cache();
     run_tests();
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
-
     TT_FATAL(
-        tt::tt_metal::program_cache::num_entries() == 4,
+        device->num_program_cache_entries() == 4,
         "There are {} entries",
-        tt::tt_metal::program_cache::num_entries());
+        device->num_program_cache_entries());
 
-    tt::tt_metal::program_cache::disable_and_clear();
-
-    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 0);
+    device->disable_and_clear_program_cache();
+    TT_FATAL(device->num_program_cache_entries() == 0);
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 int main(int argc, char** argv) {

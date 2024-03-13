@@ -130,11 +130,11 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
-    uint32_t M = 8;
-    uint32_t K = 4;
+    uint32_t M = 4;
+    uint32_t K = 2;
     uint32_t N = K;
-    int out_subblock_h = 4;
-    int out_subblock_w = 2;
+    int out_subblock_h = 2;
+    int out_subblock_w = 1;
     int in0_block_w = K;
 
     uint32_t single_tile_size = 2 * 1024;

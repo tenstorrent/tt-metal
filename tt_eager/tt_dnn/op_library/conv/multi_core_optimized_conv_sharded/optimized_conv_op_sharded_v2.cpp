@@ -199,8 +199,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     TT_ASSERT(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    uint32_t weight_block_w_ntiles = block_config.weight_block_w_ntiles;
-    uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
+    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
+    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
@@ -270,7 +270,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     // TODO: Only updated variables which is affected, but there may be more that needs to account for this
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
-    uint32_t conv_act_c_blocks = block_config.act_c_num_blocks;
     auto shard_shape = a.shard_spec().value().shape;
 
     // parallelization config
@@ -281,11 +280,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     assert(num_cores_x < 13);
     assert(num_cores_y < 10);
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_weight_matrix_width_ntiles = p_config.per_core_weight_matrix_width_ntiles;
+    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
-    assert(conv_act_c_blocks == weight_matrix_width_ntiles / per_core_weight_matrix_width_ntiles);
+    bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
+    uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     uint32_t input_channels_padded = 0;
     if(weight_width_sliced) {
         TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_blocks to be equal to height of grid");
@@ -520,13 +519,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
     log_debug("window_outer: {}, window_inner: {}", window_outer, window_inner);
 
-    assert(weight_matrix_width_ntiles % per_core_weight_matrix_width_ntiles == 0);
-    assert(per_core_weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
-    uint32_t num_blocks_weight_w_per_core = per_core_weight_matrix_width_ntiles / weight_block_w_ntiles;
+    assert(weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0);
+    assert(per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0);
+    uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
     if (not weight_width_sliced) {
         assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
     }
-    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_weight_matrix_width_ntiles;
+    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     assert(num_cores_y % num_weight_slices_width == 0);
     uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
     uint32_t total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
@@ -639,7 +638,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
-    } else if (per_core_weight_matrix_width_ntiles < 5 && per_core_out_matrix_height_ntiles < 22) {
+    } else if (per_core_out_matrix_width_ntiles < 5 && per_core_out_matrix_height_ntiles < 22) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
@@ -926,10 +925,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         uint32_t out_w_start = matrix_h_start % conv_output_size_w;
         uint32_t in_h_start = (n_start * conv_act_size_h) + out_h_start * stride_h;
         uint32_t last_start_in_h_curr_image = 222 + (n_start * conv_act_size_h);
-        uint32_t out_start_tile_id = (act_slice_i * per_core_out_matrix_height_ntiles * weight_matrix_width_ntiles) + (weight_slice_i * per_core_weight_matrix_width_ntiles);
+        uint32_t out_start_tile_id = (act_slice_i * per_core_out_matrix_height_ntiles * weight_matrix_width_ntiles) + (weight_slice_i * per_core_out_matrix_width_ntiles);
         uint32_t out_start_tile_id_h = act_slice_i * per_core_out_matrix_height_ntiles;
-        uint32_t out_start_tile_id_w = weight_slice_i * per_core_weight_matrix_width_ntiles;
-        uint32_t bias_tile_offset = weight_slice_i * per_core_weight_matrix_width_ntiles;
+        uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
+        uint32_t bias_tile_offset = weight_slice_i * per_core_out_matrix_width_ntiles;
         if (has_bias) {
             assert(bias_tile_offset < bias_ntiles);
         }
