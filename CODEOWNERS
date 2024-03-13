@@ -71,11 +71,11 @@ tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT
 tt_metal/third_party/tt_llk_* @rtawfik01 @acejkov
 
 # metal - profiler
-# tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
-# tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent @TT-billteng
-# tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
-# tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
-# docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
+tt_metal/**/profiler/ @mo-tenstorrent
+tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent
+tests/tt_metal/tools/profiler/ @mo-tenstorrent
+tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent
+docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent
 tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
