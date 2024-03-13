@@ -493,24 +493,12 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
 }
 
 std::unordered_map<CoreCoord, std::vector<CorePageRange>> get_core_page_ranges(
-    Buffer* input_buffer, Buffer* output_buffer)
-
-{
+    Buffer* input_buffer, Buffer* output_buffer) {
     const auto& output_shard_to_host_mapping = output_buffer->get_dev_page_to_host_page_mapping();
     const auto& input_page_to_local_page_mapping = input_buffer->get_host_page_to_local_shard_page_mapping();
     const auto& host_page_to_input_page_mapping = input_buffer->get_host_page_to_dev_page_mapping();
 
-    uint32_t num_pages, small_to_big_ratio;
-    bool input_smaller;
-    if (output_shard_to_host_mapping.size() > input_buffer->num_pages()) {
-        small_to_big_ratio = output_shard_to_host_mapping.size() / input_buffer->num_pages();
-        num_pages = input_buffer->num_pages();
-        input_smaller = true;
-    } else {
-        small_to_big_ratio = input_buffer->num_pages() / output_shard_to_host_mapping.size();
-        num_pages = output_shard_to_host_mapping.size();
-        input_smaller = false;
-    }
+    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_pages());
 
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::unordered_map<CoreCoord, std::vector<std::pair<CoreCoord, uint32_t>>> output_core_to_vector_input_core_page;
@@ -529,34 +517,30 @@ std::unordered_map<CoreCoord, std::vector<CorePageRange>> get_core_page_ranges(
     }
 
     // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
-    std::unordered_map<CoreCoord, std::vector<CorePageRange>> ret_map;
     auto output_cores = corerange_to_cores(output_buffer->shard_spec().grid());
+    std::unordered_map<CoreCoord, std::vector<CorePageRange>> ret_map;
+    ret_map.reserve(output_cores.size());
 
     for (auto output_core : output_cores) {
-        auto vector_of_input_core_input_page = output_core_to_vector_input_core_page.at(output_core);
-        ret_map.insert({output_core, std::vector<CorePageRange>()});
-        for (uint32_t outer_input_core_page_id = 0; outer_input_core_page_id < vector_of_input_core_input_page.size();
-             outer_input_core_page_id++) {
-            // we know its on the same output core, get range where input page is
-            //  consecutively increasing and on same input core
-            uint32_t curr_inner_page = vector_of_input_core_input_page[outer_input_core_page_id].second;
-            CoreCoord curr_input_core = vector_of_input_core_input_page[outer_input_core_page_id].first;
-            for (uint32_t inner_input_core_page_id = outer_input_core_page_id;
-                 inner_input_core_page_id < vector_of_input_core_input_page.size();
-                 inner_input_core_page_id++) {
-                auto core = vector_of_input_core_input_page[inner_input_core_page_id].first;
-                auto input_page = vector_of_input_core_input_page[inner_input_core_page_id].second;
-                if (core != curr_input_core || input_page != curr_inner_page + 1) {
-                    outer_input_core_page_id = inner_input_core_page_id;
-                    break;
-                }
-                curr_inner_page = vector_of_input_core_input_page[inner_input_core_page_id].second;
-            }
-            CorePageRange page_range;
-            page_range.core = curr_input_core;
-            page_range.range.start = vector_of_input_core_input_page[outer_input_core_page_id].second;
-            page_range.range.end = curr_inner_page + 1;
-            ret_map.at(output_core).push_back(page_range);
+        ret_map.try_emplace(output_core, std::vector<CorePageRange>{});
+        const auto& input_cores_with_pages = output_core_to_vector_input_core_page.at(output_core);
+        auto it = input_cores_with_pages.begin();
+        const auto end = input_cores_with_pages.end();
+        while (it != end) {
+            const auto start_core = it->first;
+            const auto start_page = it->second;
+            auto expected_next_page = start_page + 1;
+
+            // Find the end of the current range
+            auto next_it = std::find_if(it + 1, end, [start_core, &expected_next_page](const auto& core_page) {
+                const auto& [core, page] = core_page;
+                bool is_same_range = (core == start_core) && (page == expected_next_page);
+                expected_next_page += is_same_range;
+                return !is_same_range;
+            });
+
+            ret_map[output_core].push_back(CorePageRange{start_core, {start_page, expected_next_page}});
+            it = next_it;
         }
     }
 
@@ -589,17 +573,16 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
 
     auto cores = corerange_to_cores(all_cores);
 
-    uint32_t page_size, unit_size, units_per_page;
+    uint32_t page_size, unit_size;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    if(input.get_layout() == Layout::TILE) {
+    if (input.get_layout() == Layout::TILE) {
         page_size = tt_metal::detail::TileSize(data_format);
         unit_size = page_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
         page_size = output.get_legacy_shape()[-1] * output.element_size();
     }
-    units_per_page = page_size / unit_size;
     auto output_shard_shape = output_shard_spec.shape;
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(
@@ -613,16 +596,13 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         uint32_t num_ranges = page_range_vector.size();
         std::vector<uint32_t> runtime_args = {input.buffer()->address(), 0, num_ranges};
         uint32_t num_output_pages = 0;
-        for (uint32_t range_id = 0; range_id < num_ranges; range_id++) {
-            auto physical_input_core = device->worker_core_from_logical_core(page_range_vector[range_id].core);
+        for (const auto& [core, range] : page_range_vector) {
+            auto physical_input_core = device->worker_core_from_logical_core(core);
             runtime_args.push_back(physical_input_core.x);
             runtime_args.push_back(physical_input_core.y);
-            runtime_args.push_back(
-                page_range_vector[range_id].range.start * unit_size * units_per_page);  // start addr_offset
-            runtime_args.push_back(
-                (page_range_vector[range_id].range.end - page_range_vector[range_id].range.start) * unit_size *
-                units_per_page);  // size
-            num_output_pages += page_range_vector[range_id].range.end - page_range_vector[range_id].range.start;
+            runtime_args.push_back(range.start * page_size);                // start addr_offset
+            runtime_args.push_back((range.end - range.start) * page_size);  // size
+            num_output_pages += range.end - range.start;
         }
         runtime_args[1] = num_output_pages;
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
@@ -650,14 +630,13 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
             uint32_t num_ranges = page_range_vector.size();
             std::vector<uint32_t> runtime_args = {src_buffer->address(), 0, num_ranges};
             uint32_t num_output_pages = 0;
-            for (uint32_t range_id = 0; range_id < num_ranges; range_id++) {
-                auto physical_input_core = device->worker_core_from_logical_core(page_range_vector[range_id].core);
+            for (const auto& [core, range] : page_range_vector) {
+                auto physical_input_core = device->worker_core_from_logical_core(core);
                 runtime_args.push_back(physical_input_core.x);
                 runtime_args.push_back(physical_input_core.y);
-                runtime_args.push_back(page_range_vector[range_id].range.start * page_size);
-                runtime_args.push_back(
-                    (page_range_vector[range_id].range.end - page_range_vector[range_id].range.start) * page_size);
-                num_output_pages += page_range_vector[range_id].range.end - page_range_vector[range_id].range.start;
+                runtime_args.push_back(range.start * page_size);
+                runtime_args.push_back((range.end - range.start) * page_size);
+                num_output_pages += range.end - range.start;
             }
             runtime_args[1] = num_output_pages;
             tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
