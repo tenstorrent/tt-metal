@@ -204,19 +204,34 @@ def get_model_config(model_config_str, num_devices=8):
     shared_with_padded_mlp_dim_across_32_cores = padded_mlp_dim // 32
 
     # Embeddings
-    model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_per_device_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+    if num_devices == 4 or num_devices == 8:
+        model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    shard_width_hidden_dim_per_device_across_32_cores,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    elif num_devices == 32:
+        model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
     # Model prepare_inputs
     model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE
     if num_devices == 4:
@@ -252,17 +267,9 @@ def get_model_config(model_config_str, num_devices=8):
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            # Volume must match # of attn heads
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
-                        ),
-                    }
-                ),
+                shard_spec_8_cores_grid,
                 [
-                    32,
+                    shard_height,
                     1,  # Dynamic - must set before using this config
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -337,16 +344,28 @@ def get_model_config(model_config_str, num_devices=8):
             False,
         ),
     )
-    model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=1,
-        block_w=8,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=ttl.tensor.DataType.BFLOAT16,
-        out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
-        inplace=True,
-    )
+    if num_devices == 4 or num_devices == 8:
+        model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=1,
+            block_w=8,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
+            inplace=True,
+        )
+    elif num_devices == 32:
+        model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=1,
+            block_w=8,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
+            inplace=True,  # TODO: Not Inplace RMSNorm because we need to keep the residual
+        )
     model_config["LN_ATTN_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
     model_config["ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
@@ -361,16 +380,28 @@ def get_model_config(model_config_str, num_devices=8):
             False,
         ),
     )
-    model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=1,
-        block_w=8,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=ttl.tensor.DataType.BFLOAT16,
-        out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
-        inplace=True,
-    )
+    if num_devices == 4 or num_devices == 8:
+        model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=1,
+            block_w=8,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
+            inplace=True,
+        )
+    elif num_devices == 32:
+        model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=1,
+            block_w=8,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
+            inplace=False,  # Not Inplace RMSNorm because we need to keep the residual
+        )
     model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
     model_config["MLP_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
