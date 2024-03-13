@@ -126,10 +126,8 @@ def run_test_LlamaMLP_inference(
 
     if n_devices == 32:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
-        assert len(tt_out) == 4
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
-        tt_out = tt_out[..., :28672]
+        assert len(tt_out) == 32
+        tt_out = tt2torch_tensor(tt_out[0])
     else:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
         assert len(tt_out) == len(devices)

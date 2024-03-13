@@ -224,5 +224,18 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         for group_id in range(self.num_device_groups):
             all_attn_outputs[group_id] = self.attentions[group_id].attn_selfout(all_attn_outputs[group_id])
 
+        if self.emulated:
+            for group_id in range(self.num_device_groups):
+                all_attn_outputs[group_id] = tt_all_gather_torch(all_attn_outputs[group_id], dim=-1)
+
         # flatten the all_attn_outputs and return
-        return [output for outputs_group in all_attn_outputs for output in outputs_group]
+        all_attn_outputs = [output for outputs_group in all_attn_outputs for output in outputs_group]
+
+        if self.emulated:
+            # FOR BRINGUP! Outputs are Interaved, Shard them
+            for i in range(len(all_attn_outputs)):
+                all_attn_outputs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    all_attn_outputs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
+                )
+
+        return all_attn_outputs
