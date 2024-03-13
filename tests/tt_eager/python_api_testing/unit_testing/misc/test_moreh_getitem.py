@@ -44,8 +44,6 @@ def to_output_4d_shape(shape, index_dims, index_size):
     ),
 )
 def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dim = shape_index_dim
     torch.manual_seed(2)
 
@@ -104,8 +102,6 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
     ),
 )
 def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dims = shape_index_dims
     torch.manual_seed(1)
 
@@ -161,8 +157,6 @@ def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, devi
     ids=["int32", "bfloat16"],
 )
 def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dims = shape_index_dims
     torch.manual_seed(1)
 
@@ -231,8 +225,6 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
     ),
 )
 def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dim = shape_index_dim
     torch.manual_seed(2)
 
@@ -306,8 +298,6 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
     ),
 )
 def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
@@ -382,8 +372,6 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, device
     ),
 )
 def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
@@ -453,8 +441,6 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, devi
     ),
 )
 def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, device):
-    ttl.program_cache.enable()
-
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
