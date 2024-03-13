@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-sub:
+  - ttnn-logaddexp:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -14,14 +14,14 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -100
-          high: 100
+          low: -64
+          high: 64
       comparison:
         function: comp_pcc
-      args-gen: gen_scalar_args
+      args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_sub_sweep.csv
+      output-file: eltwise_logaddexp_sweep.csv
