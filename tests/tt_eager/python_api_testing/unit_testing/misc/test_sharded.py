@@ -1630,7 +1630,6 @@ def test_reshard(
     assert passing
 
 
-@pytest.mark.skip("unsupported")
 @pytest.mark.parametrize(
     "input_shape, shard_scheme",
     [

@@ -859,12 +859,12 @@ void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buff
 
         if (read) {
             auto host_page_id = page_id;
-            auto dev_page_id = buffer.get_host_to_dev_mapped_page_id(host_page_id);
+            auto dev_page_id = buffer.get_dev_to_host_mapped_page_id(host_page_id);
             TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
             memcpy((char*)dst + dev_page_id * page_size, (char*)temp + host_page_id * page_size, page_size);
         } else {
             auto dev_page_id = page_id;
-            auto host_page_id = buffer.get_dev_to_host_mapped_page_id(dev_page_id);
+            auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
             TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
             memcpy((char*)dst + host_page_id * page_size, (char*)temp + dev_page_id * page_size, page_size);
         }
