@@ -28,6 +28,7 @@ namespace op_profiler {
         tt_dnn_cpu,
         tt_dnn_device,
         custom_zone,
+        signpost,
         unknown
     };
 

@@ -286,6 +286,23 @@ void ProfilerModule(py::module &m_profiler) {
         R"doc(
         Emit a tracy frame signpost.
     )doc");
+
+    m_profiler.def(
+        "signpost",
+        [](std::string message) {
+            auto profile_scope =
+                tt::tt_metal::op_profiler::OpProfileScope(message, tt::tt_metal::op_profiler::OpType::signpost);
+            op_profiler::tracy_message(message, 0xf0f8ff);
+        },
+        py::arg("message").noconvert(),
+        R"doc(
+        Emit a message into the op profile.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | message          | Message description.                           | string                |             | Yes      |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+    )doc");
 }
 
 void DTXModule(py::module &m_dtx) {
