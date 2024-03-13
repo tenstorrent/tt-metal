@@ -37,6 +37,8 @@ jobs:
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
+          source $HOME/python_env/bin/activate
+          pip uninstall metal-libs ttnn -y
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: fallback-ops tests
         timeout-minutes: 120
@@ -99,6 +101,8 @@ jobs:
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
+          source $HOME/python_env/bin/activate
+          pip uninstall metal-libs ttnn -y
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: misc tests
         timeout-minutes: 120
@@ -139,6 +143,8 @@ jobs:
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
+          source $HOME/python_env/bin/activate
+          pip uninstall metal-libs ttnn -y
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Run API Model tests
         timeout-minutes: 60
@@ -179,6 +185,8 @@ jobs:
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
+          source $HOME/python_env/bin/activate
+          pip uninstall metal-libs ttnn -y
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Run API Sweep tests
         timeout-minutes: 60
