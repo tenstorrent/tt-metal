@@ -102,3 +102,6 @@ src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
 .ipynb_checkpoints/
 
 .envrc
+
+# tt_lib and _ttnn stubs
+*.pyi
