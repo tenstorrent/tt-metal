@@ -662,13 +662,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_weights[i].deallocate(True)
             value_layer[i].deallocate(True)
 
-        return attn_output
-
-    def attn_selfout(
-        self,
-        attn_output: tt_lib.tensor.Tensor,
-    ) -> tt_lib.tensor.Tensor:
-        # ATTENTION SELFOUT
+        # Move sharded attn_output to interleaved here because all_gather only takes in interleaved tensors for now
         if self.batched_attn:
             for i in range(len(attn_output)):
                 if self.emulated:
@@ -681,6 +675,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         attn_output[i],
                         output_mem_config=self.model_config["L1_MEMCFG"],
                     )
+        return attn_output
+
+    def attn_selfout(
+        self,
+        attn_output: tt_lib.tensor.Tensor,
+    ) -> tt_lib.tensor.Tensor:
+        # ATTENTION SELFOUT
+        if self.batched_attn:
+            for i in range(len(attn_output)):
                 # TRANSPOSE
                 # Get batch in dim 1
                 attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, 32, 32, 128)
