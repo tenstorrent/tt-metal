@@ -34,6 +34,7 @@ FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, 
     mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
+/*
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
@@ -44,6 +45,8 @@ inline void reblock_and_untilize(
 
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
+    constexpr uint32_t num_faces_in_tile = 4;
+    constexpr uint32_t tile_face_r_dim = 16;
 
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
@@ -68,6 +71,7 @@ inline void reblock_and_untilize(
     }
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
+*/
 
 void MAIN {
 
@@ -93,13 +97,11 @@ void MAIN {
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
     constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
 
-    constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-
     #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CB::c_in3;
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     #else
-    constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
+    constexpr uint32_t mm_out_cb_id = out_cb_id;
     #endif
 
     #ifdef SFPU_OP_INIT_ACTIVATION
@@ -135,11 +137,22 @@ void MAIN {
             }
             #endif
 
+            #ifndef FUSE_BIAS
+            if (last_out && untilize_out) {
+                pack_untilize_dst_init_short<out_subblock_w, out_block_w>(mm_partials_cb_id);
+            }
+            #endif
+
             cb_wait_front(in0_cb_id, in0_block_num_tiles);
             cb_wait_front(in1_cb_id, in1_block_num_tiles);
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
+                #ifndef FUSE_BIAS
+                if (last_out && untilize_out) {
+                    cb_reserve_back(mm_out_cb_id, in1_num_subblocks*out_subblock_num_tiles);
+                }
+                #endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
                     if (enable_reload) {
@@ -170,10 +183,6 @@ void MAIN {
                             SFPU_OP_FUNC_ACTIVATION
                         }
                         #endif
-                        tile_regs_commit();
-                        // Pack out to output buffer
-                        cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
-                        tile_regs_wait();
 
                         #ifdef PACKER_L1_ACC
                             #ifdef FUSE_BIAS
@@ -191,11 +200,26 @@ void MAIN {
                             PACK((  pack_reconfig_data_format(mm_out_cb_id) ));
                         #endif
 
-                        uint32_t start_dst_index = 0;
-                        matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                        tile_regs_commit();
+                        #ifndef FUSE_BIAS
+                        if (untilize_out) {
+                            tile_regs_wait();
+                            pack_untilize_dst<out_subblock_w, out_block_w>(mm_out_cb_id, out_subblock_h, in1_subblock);
+                            tile_regs_release();
 
-                        tile_regs_release();
-                        cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+                        } else
+                        #endif
+                        {
+                            // Pack out to output buffer
+                            cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
+                            tile_regs_wait();
+
+                            uint32_t start_dst_index = 0;
+                            matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+
+                            tile_regs_release();
+                            cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+                        }
                     } else {
                         tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
@@ -224,6 +248,11 @@ void MAIN {
 
                     in1_index_subblock_offset += out_subblock_w;
                 }
+                #ifndef FUSE_BIAS
+                if (last_out && untilize_out) {
+                    cb_push_back(mm_out_cb_id, in1_num_subblocks*out_subblock_num_tiles);
+                }
+                #endif
                 in0_index_subblock_offset += in0_subblock_num_tiles;
             }
 
@@ -266,6 +295,9 @@ void MAIN {
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
+            if (untilize_out) {
+                cb_reserve_back(out_cb_id, in1_num_subblocks*out_subblock_num_tiles);
+            }
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 // Redundant wait since we know data was just pushed
                 cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
@@ -294,18 +326,28 @@ void MAIN {
                 #endif
 
                 // Pack out to output buffer
-                cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    pack_tile(i, untilize_mode_out_cb_id);
+                if (untilize_out) {
+                    tile_regs_wait();
+                    pack_untilize_dst<out_subblock_w, out_block_w>(mm_out_cb_id, out_subblock_h, in1_subblock);
+                    tile_regs_release();
+                } else {
+                    cb_reserve_back(out_cb_id, out_subblock_num_tiles);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                        pack_tile(i, out_cb_id);
+                    }
+                    tile_regs_release();
+                    cb_push_back(out_cb_id, out_subblock_num_tiles);
                 }
-                tile_regs_release();
-                cb_push_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
 
                 in1_index_subblock_offset += out_subblock_w;
             }
+            if (untilize_out) {
+                cb_push_back(out_cb_id, in1_num_subblocks*out_subblock_num_tiles);
+            }
         }
         #endif // FUSE_BIAS
+        /*
         if constexpr(untilize_out) {
             #ifdef PACK_RELU
             PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
@@ -331,6 +373,7 @@ void MAIN {
             }
             pack_untilize_uninit(mm_partials_cb_id);
         }
+        */
         if constexpr(batch > 1) {
             // reconfigure init for matmul
             mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
@@ -341,6 +384,9 @@ void MAIN {
                 // reconfigure unpacker df for src A
                 unpack_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
             #endif
+            if (untilize_out) {
+                pack_untilize_uninit(mm_partials_cb_id);
+            }
         }
     }
 }

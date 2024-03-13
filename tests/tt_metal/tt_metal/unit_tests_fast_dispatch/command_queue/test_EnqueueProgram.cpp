@@ -771,7 +771,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     // This loop caches program and runs
     for (Program& program: programs) {
-        EnqueueProgram(*this->cmd_queue, program, false);
+        EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
     // This loops assumes already cached
@@ -780,11 +780,11 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         auto rng = std::default_random_engine {};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         for (Program& program: programs) {
-            EnqueueProgram(*this->cmd_queue, program, false);
+            EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }
 
-    Finish(*this->cmd_queue);
+    Finish(this->device_->command_queue());
 }
 
 }  // namespace stress_tests
