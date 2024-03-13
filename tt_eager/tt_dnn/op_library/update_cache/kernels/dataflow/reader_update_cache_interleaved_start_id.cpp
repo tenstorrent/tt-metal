@@ -22,15 +22,13 @@ void kernel_main() {
     constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t granularity = get_compile_time_arg_val(4);
 
-    // ublocks size defined in tiles
-    constexpr uint32_t onetile = 1;
+
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
     const DataFormat input_data_format = get_dataformat(input_cb_id);
-
-    constexpr uint32_t granularity = 2;
 
     const InterleavedAddrGenFast<cache_is_dram> s0 = {
         .bank_base_address = cache_addr,

@@ -19,8 +19,8 @@ void MAIN {
     constexpr uint32_t num_batched_heads = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t u_range = get_compile_time_arg_val(8);
+    constexpr uint32_t granularity = get_compile_time_arg_val(9);
 
-    constexpr uint32_t granularity = 2;
 
     pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
@@ -37,6 +37,7 @@ void MAIN {
             pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
 
             for (uint32_t g = 0; g < granularity; ++g) {
+                // Untilize a block from the cache
                 cb_wait_front(cache_cb, Wt);
                 cb_reserve_back(untilized_cache_cb, Wt);
                 pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
@@ -51,6 +52,7 @@ void MAIN {
             tilize_init_short(untilized_cache2_cb, Wt);
 
             for (uint32_t g = 0; g < granularity; ++g) {
+                // Wait on writer to update block. Tilize.
                 cb_wait_front(untilized_cache2_cb, Wt);
                 cb_reserve_back(out_cb, Wt);
                 tilize_block(untilized_cache2_cb, Wt, out_cb);
