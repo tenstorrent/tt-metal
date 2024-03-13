@@ -25,9 +25,9 @@ void kernel_main() {
     constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t granularity = get_compile_time_arg_val(5);
 
-    // ublocks size defined in tiles
-    constexpr uint32_t onetile = 1;
+
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
 
@@ -41,14 +41,15 @@ void kernel_main() {
     uint32_t b = batch_start_id;
     uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
-    constexpr uint32_t granularity = 2;
-
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(untilized_input_cb_id, Wt);
         uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id)) + batch_read_offset;
 
         for (uint32_t u = 0; u < u_range / granularity; ++u) {
+            // Operating on a granularity > 1 led to performance improvements.
+            // It introduces a double-buffered pipeline between compute and writer.
             for (uint32_t g = 0; g < granularity; ++g) {
+                // Wait on compute to untilize a block. Update that block in L1.
                 cb_wait_front(untilized_cache_cb_id, Wt);
                 cb_reserve_back(untilized_cache2_cb_id, Wt);
                 uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + offset;
@@ -61,6 +62,7 @@ void kernel_main() {
 
 
             for (uint32_t g = 0; g < granularity; ++g) {
+                // Wait on compute to tilize an updated block. Write that block to DRAM
                 cb_wait_front(cache_cb_id, Wt);
                 uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
                 for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
@@ -76,6 +78,7 @@ void kernel_main() {
                 cb_pop_front(cache_cb_id, Wt);
             }
         }
+        // Delay syncing the writes to maximize perf.
         noc_async_write_barrier();
 
         cb_pop_front(untilized_input_cb_id, Wt);
