@@ -1658,6 +1658,34 @@ std::vector<Tensor> conj_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _conj_bw)(grad, input, output_mem_config);
 }
 
+// complex imag
+// imag: at::imag(grad)
+std::vector<Tensor> _imag_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mk_complex(zeros_like(real(input, output_mem_config), output_mem_config), grad, output_mem_config) ;
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> imag_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _imag_bw)(grad, input, output_mem_config);
+}
+
+// complex real
+// real: at::real(grad)
+std::vector<Tensor> _real_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mk_complex(grad, zeros_like(imag(input, output_mem_config), output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> real_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _real_bw)(grad, input, output_mem_config);
+}
+
 #undef CHECK_FOR_COMPLEX
 
 }//namespace tt_metal
