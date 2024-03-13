@@ -44,6 +44,11 @@ def gen_func_with_cast(gen_func, dtype, tilize_input=False):
     return lambda size: tilize(gen_func(size).to(dtype)) if tilize_input else gen_func(size).to(dtype)
 
 
+def torch_tensor_to_bfloat8_b(x):
+    tt_tensor = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT8_B)
+    return tt_tensor.to_torch().to(torch.bfloat16)
+
+
 def gen_func_with_cast_tt(gen_func, dtype):
     def tensor_to_dtype(x):
         if dtype == ttl.tensor.DataType.BFLOAT16:
