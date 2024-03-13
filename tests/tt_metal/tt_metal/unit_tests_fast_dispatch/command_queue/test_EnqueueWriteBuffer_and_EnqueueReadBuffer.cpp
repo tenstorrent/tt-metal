@@ -353,7 +353,7 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue, config));
+    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
@@ -620,7 +620,7 @@ TEST_F(CommandQueueFixture, StressWrapTest) {
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, *this->cmd_queue, config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, this->device_->command_queue(), config));
 }
 
 }  // end namespace stress_tests

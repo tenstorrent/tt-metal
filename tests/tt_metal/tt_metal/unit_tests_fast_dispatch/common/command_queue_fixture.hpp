@@ -14,7 +14,6 @@ class CommandQueueFixture : public ::testing::Test {
    protected:
     tt::ARCH arch_;
     Device* device_;
-    std::unique_ptr<CommandQueue> cmd_queue;
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
@@ -26,7 +25,6 @@ class CommandQueueFixture : public ::testing::Test {
         const int device_id = 0;
 
         this->device_ = tt::tt_metal::CreateDevice(device_id);
-        this->cmd_queue = std::make_unique<CommandQueue> ( device_, 0);
     }
 
     void TearDown() override {

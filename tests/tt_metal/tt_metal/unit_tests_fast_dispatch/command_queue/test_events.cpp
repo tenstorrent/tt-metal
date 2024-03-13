@@ -257,7 +257,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
 
             // Cannot count on event being populated with async cq, so only check with passthrough.
             if (mode == CommandQueue::CommandQueueMode::PASSTHROUGH) {
-                EXPECT_EQ(event->cq_id, this->cmd_queue->id());
+                EXPECT_EQ(event->cq_id, this->device_->command_queue().id());
                 EXPECT_EQ(event->event_id, cmds_issued_per_cq);
             }
 
@@ -269,7 +269,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
                 EventSynchronize(event);
                 // For async, can verify event fields here since previous function already called wait-until-ready.
                 if (mode == CommandQueue::CommandQueueMode::ASYNC) {
-                    EXPECT_EQ(event->cq_id, this->cmd_queue->id());
+                    EXPECT_EQ(event->cq_id, this->device_->command_queue().id());
                     EXPECT_EQ(event->event_id, cmds_issued_per_cq);
                 }
             }
