@@ -39,8 +39,6 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
     uint32_t num_tiles = size_bytes / single_bfp_tile_size;
 
     int data_index;
-    int subtile_r;
-    int subtile_c;
     const vector<uint32_t> mask_vec0 = {0xf, 0xf0, 0xf00, 0xf000};
     const vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
     const vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
@@ -71,10 +69,9 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
-                    subtile_r = tr * subtile_rows + i;
                     for (int j = 0; j < subtile_cols; j += 2*num_elements_in_dword) {
-                        subtile_c = tc * subtile_cols + j;
-                        data_index = (tr*64 + tc*32 + i*num_dwords_per_row + j/num_elements_in_dword); // Each uint32_t contains 8 BFP4 values. Divide data index by 8
+                        // Each uint32_t contains 8 BFP4 values. Divide data index by 8
+                        data_index = (tr * 64 + tc * 32 + i * num_dwords_per_row + j / num_elements_in_dword);
                         int tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
 
                         int exponent_index = (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
@@ -142,7 +139,7 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
 
                         uint32_t float_data_index;
                         if (row_major_output) {
-                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                            float_data_index = tile_index * num_float_in_tile + tr * 512 + tc * 256 + i * 16 + j;
                         } else {
                             float_data_index = fp32_element_index;
                             fp32_element_index += 2*num_elements_in_dword;

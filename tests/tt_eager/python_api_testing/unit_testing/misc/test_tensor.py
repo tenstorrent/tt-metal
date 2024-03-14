@@ -69,11 +69,6 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         tt_tensor = tt_tensor.to(device)
         tt_tensor = tt_tensor.cpu()
 
-    if tt_dtype in {
-        ttl.tensor.DataType.BFLOAT8_B,
-    }:
-        tt_tensor = tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
-
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
@@ -88,8 +83,8 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
 
 
 tt_dtype_to_np_dtype = {
-    ttl.tensor.DataType.UINT16: np.int16,
-    ttl.tensor.DataType.UINT32: np.int32,
+    ttl.tensor.DataType.UINT16: np.uint16,
+    ttl.tensor.DataType.UINT32: np.uint32,
     ttl.tensor.DataType.FLOAT32: np.float32,
     ttl.tensor.DataType.BFLOAT16: np.float32,
     ttl.tensor.DataType.BFLOAT8_B: np.float32,
@@ -109,7 +104,7 @@ tt_dtype_to_np_dtype = {
 def test_tensor_conversion_between_torch_and_np(shape, tt_dtype, device):
     dtype = tt_dtype_to_np_dtype[tt_dtype]
 
-    if dtype in {np.int16, np.int32}:
+    if dtype in {np.uint16, np.uint32}:
         np_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
     else:
         np_tensor = np.random.random(shape).astype(dtype=dtype)

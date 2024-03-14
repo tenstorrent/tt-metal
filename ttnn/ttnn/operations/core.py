@@ -373,22 +373,12 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor)
 
-    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-
-        def impl(tensor, layout):
-            return tensor.to(layout)
-
-        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")
-        tensor = to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-
     def impl(tensor):
         shape_without_tile_padding = tuple(tensor.shape)
         tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
 
         if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
         tensor = tensor.to_torch()
 
         slices = [slice(None, x) for x in shape_without_tile_padding]

@@ -89,39 +89,51 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
 
 
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
+    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+        if (target_layout == Layout::TILE) {
+            return tensor;
+        } else {
+            TT_THROW("BFLOAT8_B and BFLOAT4_B tensors can only be in TILE layout");
+        }
+    }
+
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
         {DataType::BFLOAT16, &to_layout<bfloat16>},
         {DataType::FLOAT32, &to_layout<float>},
         {DataType::UINT32, &to_layout<uint32_t>},
-        {DataType::BFLOAT8_B, &to_layout_bfloat8_b},
-        {DataType::BFLOAT4_B, &to_layout_bfloat4_b},
         {DataType::UINT16, &to_layout<uint16_t>},
     };
     return to_layout_map.at(tensor.get_dtype())(tensor, target_layout);
 }
 
 Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &, float)>>
-        pad_map = {
-            {DataType::BFLOAT16, &pad<bfloat16>},
-            {DataType::FLOAT32, &pad<float>},
-            {DataType::UINT32, &pad<uint32_t>},
-            {DataType::BFLOAT8_B, &pad_bfloat8_b},
-            {DataType::BFLOAT4_B, &pad_bfloat4_b},
-            {DataType::UINT16, &pad<uint16_t>},
-        };
+    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+        TT_THROW("BFLOAT8_B and BFLOAT4_B tensors cannot be padded on the host");
+    }
+
+    const static std::
+        unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &, float)>>
+            pad_map = {
+                {DataType::BFLOAT16, &pad<bfloat16>},
+                {DataType::FLOAT32, &pad<float>},
+                {DataType::UINT32, &pad<uint32_t>},
+                {DataType::UINT16, &pad<uint16_t>},
+            };
     return pad_map.at(tensor.get_dtype())(tensor, output_tensor_shape, input_tensor_start, pad_value);
 }
 
 Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, const Shape &output_tensor_end) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &)>> unpad_map = {
-        {DataType::BFLOAT16, &unpad<bfloat16>},
-        {DataType::FLOAT32, &unpad<float>},
-        {DataType::UINT32, &unpad<uint32_t>},
-        {DataType::BFLOAT8_B, &unpad_bfloat8_b},
-        {DataType::BFLOAT4_B, &unpad_bfloat4_b},
-        {DataType::UINT16, &unpad<uint16_t>},
-    };
+    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+        TT_THROW("BFLOAT8_B and BFLOAT4_B tensors cannot be unpadded on the host");
+    }
+
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &)>>
+        unpad_map = {
+            {DataType::BFLOAT16, &unpad<bfloat16>},
+            {DataType::FLOAT32, &unpad<float>},
+            {DataType::UINT32, &unpad<uint32_t>},
+            {DataType::UINT16, &unpad<uint16_t>},
+        };
     return unpad_map.at(tensor.get_dtype())(tensor, output_tensor_start, output_tensor_end);
 }
 

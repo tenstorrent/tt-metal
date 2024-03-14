@@ -70,8 +70,7 @@ inline uint8_t convert_u32_to_bfp8(uint32_t input, uint32_t shared_exp, bool is_
     if (truncate_bfp_mantissa) {
         // Truncation: Round down
         mantissa = mantissa >> 17;
-    }
-    else {
+    } else {
         // Round mantissa to nearest even
         mantissa += 1 << 16;
         mantissa = mantissa >> 17;
@@ -128,7 +127,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float
                     for (int j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
-                            data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                            data_index = tile_index * num_float_in_tile + tr * 512 + tc * 256 + i * 16 + j;
                         } else {
                             data_index = fp32_element_index++;
                         }
@@ -182,8 +181,6 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
     uint32_t num_tiles = size_bytes / single_bfp8_tile_size;
 
     int data_index;
-    int subtile_r;
-    int subtile_c;
     const vector<uint32_t> mask_vec = {0xff, 0xff00, 0xff0000, 0xff000000};
     const vector<uint32_t> shift_vec = {0, 8, 16, 24};
     const __m128i mask = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec.data()));
@@ -207,9 +204,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
-                    subtile_r = tr * 16 + i;
                     for (int j = 0; j < subtile_cols; j += 8) {
-                        subtile_c = tc * 16 + j;
                         data_index = (tr*128 + tc*64 + i*4 + j/4); // Each uint32_t contains 4 BFP8 values. Divide data index by 4.
                         int tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
 
@@ -250,7 +245,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
 
                         uint32_t float_data_index;
                         if (row_major_output) {
-                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                            float_data_index = tile_index * num_float_in_tile + tr * 512 + tc * 256 + i * 16 + j;
                         } else {
                             float_data_index = fp32_element_index;
                             fp32_element_index += 8;

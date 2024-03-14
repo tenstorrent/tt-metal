@@ -19,8 +19,8 @@ def test_to_and_from_4D(height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("height", [7])
-@pytest.mark.parametrize("width", [3])
+@pytest.mark.parametrize("height", [7, 231])
+@pytest.mark.parametrize("width", [3, 312])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_to_and_from_2D(height, width, dtype, layout):

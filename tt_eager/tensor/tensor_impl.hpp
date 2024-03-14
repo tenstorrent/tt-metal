@@ -481,9 +481,6 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         }, output_storage);
 }
 
-Tensor to_layout_bfloat8_b(const Tensor& tensor, Layout target_layout);
-Tensor to_layout_bfloat4_b(const Tensor& tensor, Layout target_layout);
-
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
@@ -583,11 +580,6 @@ inline Tensor pad(
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
-Tensor pad_bfloat8_b(
-    const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
-Tensor pad_bfloat4_b(
-    const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
-
 template <typename T>
 inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
     const auto input_tensor_shape = tensor.get_legacy_shape();
@@ -658,9 +650,6 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
         tensor.get_storage());
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.get_dtype(), tensor.get_layout());
 }
-
-Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-Tensor unpad_bfloat4_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

@@ -213,7 +213,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float>
                     for (int j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
-                            data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                            data_index = tile_index * num_float_in_tile + tr * 512 + tc * 256 + i * 16 + j;
                         } else {
                             data_index = fp32_element_index++;
                         }
