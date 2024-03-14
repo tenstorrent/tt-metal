@@ -325,21 +325,170 @@ void Device::compile_command_queue_programs() {
     ZoneScoped;
     unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
 
+    constexpr uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_base = get_dispatch_buffer_base();
+    constexpr uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
+    constexpr uint32_t prefetch_q_size = PREFETCH_Q_ENTRIES * sizeof(uint16_t);
+    constexpr uint32_t noc_read_alignment = 32;
+    constexpr uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+    constexpr uint32_t scratch_db_base = cmddat_q_base + ((CMDDAT_Q_SIZE + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+    static_assert(scratch_db_base < MEM_L1_SIZE);
+
+    constexpr uint32_t prefetch_d_buffer_pages = PREFETCH_D_BUFFER_SIZE >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+
+    // TODO: These are semaphore IDs, remove these when CreateSemaphore returns ID rather than address
+    constexpr uint32_t prefetch_sync_sem = 0;
+    constexpr uint32_t prefetch_downstream_cb_sem = 1;
+    constexpr uint32_t dispatch_sync_sem = 0;
+    constexpr uint32_t dispatch_cb_sem = 1;
+
+    constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
+    constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
+
+    if (this->is_mmio_capable()) {
+        for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
+            if (device_id != this->id()) {
+                continue; // REMOVE WHEN R CHIP IS SUPPORTED
+            }
+            // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
+            uint8_t num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+            uint32_t cq_size = this->sysmem_manager().get_cq_size();
+
+            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                CoreType dispatch_core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
+
+                tt_cxy_pair prefetch_location = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
+                tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
+                tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(device_id, channel, cq_id);
+
+                TT_ASSERT(prefetch_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
+                    "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", prefetch_location.chip, completion_q_writer_location.chip, this->id());
+
+                CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
+                CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, dispatch_core_type);
+                CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
+
+                uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
+                uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
+
+                TT_ASSERT(tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.size() == 1);
+                CoreCoord pcie_physical_core = tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.at(0);
+
+                std::map<string, string> prefetch_defines = {
+                    {"MY_NOC_X", std::to_string(prefetch_physical_core.x)},
+                    {"MY_NOC_Y", std::to_string(prefetch_physical_core.y)},
+                    {"UPSTREAM_NOC_X", std::to_string(0)},
+                    {"UPSTREAM_NOC_Y", std::to_string(0)},
+                    {"DOWNSTREAM_NOC_X", std::to_string(dispatch_physical_core.x)},
+                    {"DOWNSTREAM_NOC_Y", std::to_string(dispatch_physical_core.y)},
+                };
+
+                std::vector<uint32_t> prefetch_compile_args = {
+                    dispatch_buffer_base,
+                    DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                    dispatch_buffer_pages,
+                    prefetch_downstream_cb_sem,
+                    dispatch_cb_sem,
+                    CQ_START,
+                    issue_queue_size,
+                    prefetch_q_base,
+                    PREFETCH_Q_ENTRIES * (uint32_t)sizeof(uint16_t),
+                    CQ_PREFETCH_Q_RD_PTR,
+                    cmddat_q_base,
+                    CMDDAT_Q_SIZE,
+                    scratch_db_base,
+                    SCRATCH_DB_SIZE,
+                    prefetch_sync_sem,
+                    prefetch_d_buffer_pages, // prefetch_d only
+                    prefetch_d_upstream_cb_sem, // prefetch_d only
+                    prefetch_downstream_cb_sem, // prefetch_d only
+                    PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+                    PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+                    true,   // is_dram_variant
+                    true    // is_host_variant
+                };
+
+                tt::tt_metal::CreateKernel(
+                    *command_queue_program_ptr,
+                    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp", // update this for remote device
+                    prefetch_location,
+                    tt::tt_metal::DataMovementConfig {
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = prefetch_compile_args,
+                        .defines = prefetch_defines});
+
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, dispatch_buffer_pages);
+
+                if (device_id == this->id()) {
+                    std::map<string, string> dispatch_defines = {
+                        {"MY_NOC_X", std::to_string(dispatch_physical_core.x)},
+                        {"MY_NOC_Y", std::to_string(dispatch_physical_core.y)},
+                        {"UPSTREAM_NOC_X", std::to_string(prefetch_physical_core.x)},
+                        {"UPSTREAM_NOC_Y", std::to_string(prefetch_physical_core.y)},
+                        {"DOWNSTREAM_NOC_X", std::to_string(0)},
+                        {"DOWNSTREAM_NOC_Y", std::to_string(0)},
+                    };
+                    std::vector<uint32_t> dispatch_compile_args = {
+                        dispatch_buffer_base,
+                        DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                        DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
+                        dispatch_cb_sem,
+                        prefetch_downstream_cb_sem,
+                        DISPATCH_BUFFER_SIZE_BLOCKS,
+                        prefetch_sync_sem,
+                        completion_queue_start_addr,
+                        completion_queue_size,
+                        dispatch_buffer_base,
+                        DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+                        0, // unused on hd, filled in below for h and d
+                        0, // unused on hd, filled in below for h and d
+                        true,   // is_dram_variant
+                        true    // is_host_variant
+                    };
+
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                        dispatch_location,
+                        tt::tt_metal::DataMovementConfig {
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = dispatch_compile_args,
+                            .defines = dispatch_defines});
+
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, dispatch_buffer_pages);
+
+                } else {
+                    TT_THROW("FD2.0 does not support R chip yet");
+                }
+            }
+        }
+    } else {
+        TT_THROW("FD2.0 does not support R chip yet");
+    }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
 }
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
-    return;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
 
+    std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
     TT_ASSERT(this->command_queue_programs.size() == 1);
     Program& command_queue_program = *this->command_queue_programs[0];
+
+    uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         // Reset the host manager's pointer for this command queue
@@ -353,33 +502,43 @@ void Device::configure_command_queue_programs() {
 
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
+            if (device_id != this->id()) {
+                continue; // UPDATE THIS FOR R CHIP SUPPORT!
+            }
+
             uint8_t curr_num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
             uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
             uint32_t curr_cq_size = this->sysmem_manager().get_cq_size();
 
             for (uint8_t cq_id = 0; cq_id < curr_num_hw_cqs; cq_id++) {
-                tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(curr_num_hw_cqs).issue_queue_reader_core(device_id, curr_channel, cq_id);
+                tt_cxy_pair prefetch_location = dispatch_core_manager::get(curr_num_hw_cqs).prefetcher_core(device_id, curr_channel, cq_id);
                 tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(curr_num_hw_cqs).completion_queue_writer_core(device_id, curr_channel, cq_id);
+                tt_cxy_pair dispatch_location = dispatch_core_manager::get(curr_num_hw_cqs).dispatcher_core(device_id, channel, cq_id);
                 CoreType dispatch_core_type = dispatch_core_manager::get(curr_num_hw_cqs).get_dispatch_core_type(device_id);
 
-                TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
-                    "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
+                TT_ASSERT(prefetch_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
+                    "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", prefetch_location.chip, completion_q_writer_location.chip, this->id());
 
-                // Re-start the pointers
-                uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
-                uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
-                uint32_t issue_queue_start_addr_16B = issue_queue_start_addr >> 4;
-                vector<uint32_t> issue_queue_read_ptr = {issue_queue_start_addr_16B};
-                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_READ_PTR, issue_queue_read_ptr, dispatch_core_type);
-                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr, dispatch_core_type);
+                // Initialize the FetchQ
+                std::vector<uint32_t> prefetch_q(PREFETCH_Q_ENTRIES, 0);
+                std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
+                    (uint32_t)(prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(uint16_t))
+                };
+                detail::WriteToDeviceL1(this, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data);
+                detail::WriteToDeviceL1(this, prefetch_location, prefetch_q_base, prefetch_q);
 
+                // Initialize completion queue write pointer and read pointer copy
+                uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-                vector<uint32_t> completion_queue_last_event = {0x0}; // Reset state in case L1 Clear is disabled.
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr, dispatch_core_type);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr, dispatch_core_type);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, zero);
+
+                // Initialize address where workers signal to completion to dispatch core
+                // This value is always increasing
+                detail::WriteToDeviceL1(this, dispatch_location, DISPATCH_MESSAGE_ADDR, zero);
             }
         }
     }
@@ -388,7 +547,6 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::initialize_command_queue() {
-    return;
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
@@ -412,7 +570,8 @@ void Device::initialize_command_queue() {
             }
         }
     }
-    tt::Cluster::instance().l1_barrier(this->id());
+    // Added this for safety while debugging hangs with FD v1.3 tunnel to R, should experiment with removing it
+    // tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::initialize_synchronous_sw_cmd_queue() {
