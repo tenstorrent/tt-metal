@@ -2162,6 +2162,7 @@ def upsample(
     return ttnn_tensor_to_torch(t1)
 
 
+<<<<<<< HEAD
 def l1_loss_sum(
     x,
     y,
@@ -2228,6 +2229,8 @@ def l1_loss(
     return ttnn_tensor_to_torch(t1)
 
 
+=======
+>>>>>>> #5589: Added bfloat8b in working tests
 def ldexp(
     x,
     y,

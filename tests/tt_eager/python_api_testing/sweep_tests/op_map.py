@@ -1595,7 +1595,7 @@ op_map = {
     "ttnn-l1_loss_mean": {
         "tt_lib_op": ttnn_ops.l1_loss_mean,
         "pytorch_op": pytorch_ops.l1_loss_mean,
-    },
+    },    
     "ttnn-ldexp": {
         "tt_lib_op": ttnn_ops.ldexp,
         "pytorch_op": pytorch_ops.ldexp,
