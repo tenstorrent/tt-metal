@@ -12,20 +12,20 @@ namespace tt::tt_metal {
 
 // A command queue is split into an issue queue and completion queue
 //  Host enqueues commands and data to be sent to device into the issue queue, and device reads from the issue queue.
-//  command_queue_producer and remote_issue_queue_reader kernels read commands targetting the MMIO or remote device respectively from the issue queue
+//  prefetcher kernels read commands targetting the MMIO or remote device respectively from the issue queue
 //  Device writes data into the completion queue for host to read back
 //  command_queue_consumer and remote_completion_queue_writer (to be added) kernels write into the completion queue for MMIO or remote device respectively
-//  Currently two cores are used to interface with each command queue region, marked as `issue_queue_reader` and `completion_queue_writer` below
-// One core dispatches commands to worker cores on the device `command_dispatcher`
+//  Currently two cores are used to interface with each command queue region, marked as `prefetcher` and `completion_queue_writer` below
+// One core dispatches commands to worker cores on the device `dispatcher`
 // The `remote_x` cores are used for remote fast dispatch and receive / transmit fast dispatch packets from ethernet cores
 
 // std::optional is used to determine whether core has been assigned
 // tt_cxy_pair is used over CoreCoord to denote location because remote device command queue interface cores are on the associated MMIO device
 struct dispatch_core_types_t {
-    std::optional<tt_cxy_pair> issue_queue_reader = std::nullopt;  // Pulls commands from the issue queue for a given command queue on a device
+    std::optional<tt_cxy_pair> prefetcher = std::nullopt;  // Pulls commands from the issue queue for a given command queue on a device
     std::optional<tt_cxy_pair> completion_queue_writer = std::nullopt; // Pushes to completion queue for a given command queue on a device
-    std::optional<tt_cxy_pair> command_dispatcher = std::nullopt; // Relays work to worker cores on device that command is targeting. Currently for MMIO devices, command_dispatcher == completion_queue_writer
-    std::optional<tt_cxy_pair> remote_push_and_pull = std::nullopt;    // Receives fast dispatch commands from DST ethernet router, relays programs to command_dispatcher, and returns data through SRC router
+    std::optional<tt_cxy_pair> dispatcher = std::nullopt; // Relays work to worker cores on device that command is targeting. Currently for MMIO devices, dispatcher == completion_queue_writer
+    std::optional<tt_cxy_pair> remote_push_and_pull = std::nullopt;    // Receives fast dispatch commands from DST ethernet router, relays programs to dispatcher, and returns data through SRC router
 };
 
 class dispatch_core_manager {
@@ -48,24 +48,16 @@ class dispatch_core_manager {
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
-    const tt_cxy_pair &issue_queue_reader_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+    const tt_cxy_pair &prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
         dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-        if (assignment.issue_queue_reader.has_value()) {
-            return assignment.issue_queue_reader.value();
+        if (assignment.prefetcher.has_value()) {
+            return assignment.prefetcher.value();
         }
         // Issue queue interface is on the MMIO device
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
-        assignment.issue_queue_reader = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
-
-        if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
-            if (mmio_device_id == device_id) {
-                // For MMIO devices completion queue core is same as command dispatcher core
-                TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Completion queue writer core must match issue queue reader core for MMIO device {}", device_id);
-                assignment.completion_queue_writer = assignment.issue_queue_reader;
-            }
-        }
-        return assignment.issue_queue_reader.value();
+        assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
+        return assignment.prefetcher.value();
     }
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular command queue
@@ -86,14 +78,8 @@ class dispatch_core_manager {
         CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.completion_queue_writer = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
         if (mmio_device_id == device_id) {
-            if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
-                // For MMIO devices with FD v1.3 completion queue core is same as issue queue core
-                TT_ASSERT(not assignment.issue_queue_reader.has_value(), "Issue queue reader core {} must match completion queue interface core for MMIO device {}", assignment.issue_queue_reader.value().str(), device_id);
-                assignment.issue_queue_reader = assignment.completion_queue_writer;
-            } else if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
-                TT_ASSERT(not assignment.command_dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.command_dispatcher.value().str(), device_id);
-                assignment.command_dispatcher = assignment.completion_queue_writer;
-            }
+            TT_ASSERT(not assignment.dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.dispatcher.value().str(), device_id);
+            assignment.dispatcher = assignment.completion_queue_writer;
         }
         return assignment.completion_queue_writer.value();
     }
@@ -103,22 +89,22 @@ class dispatch_core_manager {
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher core
-    const tt_cxy_pair &command_dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+    const tt_cxy_pair &dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
         dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-        if (assignment.command_dispatcher.has_value()) {
-            return assignment.command_dispatcher.value();
+        if (assignment.dispatcher.has_value()) {
+            return assignment.dispatcher.value();
         }
-        CoreCoord command_dispatcher_coord = this->get_next_available_dispatch_core(device_id);
+        CoreCoord dispatcher_coord = this->get_next_available_dispatch_core(device_id);
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        assignment.command_dispatcher = tt_cxy_pair(device_id, command_dispatcher_coord.x, command_dispatcher_coord.y);
-        if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+        assignment.dispatcher = tt_cxy_pair(device_id, dispatcher_coord.x, dispatcher_coord.y);
+        if (mmio_device_id == device_id) {
             TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
-            assignment.completion_queue_writer = assignment.command_dispatcher;
+            assignment.completion_queue_writer = assignment.dispatcher;
         }
-        return assignment.command_dispatcher.value();
+        return assignment.dispatcher.value();
     }
 
-    /// @brief Gets the location of the kernel that receives fast dispatch packets from an ethernet router core and transfers programs to the `command_dispatcher_core`
+    /// @brief Gets the location of the kernel that receives fast dispatch packets from an ethernet router core and transfers programs to the `dispatcher_core`
     ///         This core is also responsible for relaying data (completion events and chip-local buffers) from remote chip back to MMIO chip
     ///         This core is only programmed when targeting fast dispatch on the remote chip and its location is on the same chip that runs the fast dispatch commands
     /// @param device_id ID of the remote device that will run fast dispatch commands

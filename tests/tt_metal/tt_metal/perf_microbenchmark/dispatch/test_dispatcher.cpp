@@ -10,7 +10,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_cmds.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 

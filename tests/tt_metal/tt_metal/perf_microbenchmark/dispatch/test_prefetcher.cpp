@@ -9,7 +9,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_cmds.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 
@@ -20,13 +21,9 @@ constexpr uint32_t MAX_DRAM_READ_SIZE = 256 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 
-constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
-constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-// 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
-constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
-
+constexpr uint32_t PREFETCH_D_DEFAULT_BUFFER_SIZE = 256 * 1024;
 constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
-
+constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
 constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
@@ -36,8 +33,8 @@ constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
-constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+// constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
+// constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
