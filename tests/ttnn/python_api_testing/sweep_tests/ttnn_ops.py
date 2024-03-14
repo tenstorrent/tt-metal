@@ -2074,6 +2074,9 @@ def groupnorm(
 
     return ttnn_tensor_to_torch(t3)
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
 
 def eltwise_addcdiv(
     x,
