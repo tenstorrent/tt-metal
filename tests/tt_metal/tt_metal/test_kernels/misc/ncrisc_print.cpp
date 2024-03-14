@@ -14,6 +14,7 @@ void kernel_main() {
         // Wait for previous core (UNPACK) to finish printing.
         DPRINT << WAIT{4};
         DPRINT << "Test Debug Print: Data1" << ENDL();
-        print_test_data();
+        print_test_data_basic_types();
+        print_test_data_modifiers();
     );
 }
