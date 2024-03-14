@@ -7,7 +7,7 @@ import pytest
 import torch
 from transformers.models import bloom
 
-from models.experimental.functional_bloom.reference import torch_functional_bloom
+from models.demos.grayskull.functional_bloom.reference import torch_functional_bloom
 from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
