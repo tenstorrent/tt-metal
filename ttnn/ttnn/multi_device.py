@@ -40,7 +40,7 @@ def open_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]):
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
     assert len(device_ids) > 0
-    return ttnn._ttnn.multi_device.open_device_mesh(device_grid=device_grid.as_tuple(), device_ids=device_ids)
+    return ttnn._ttnn.multi_device.DeviceMesh(device_grid=device_grid.as_tuple(), device_ids=device_ids)
 
 
 def close_device_mesh(device_mesh):

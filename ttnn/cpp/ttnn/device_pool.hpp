@@ -13,7 +13,7 @@ using Device = ttnn::Device;
 
 namespace device_pool {
 
-extern std::vector<Device *> _devices;
+extern std::vector<Device *> devices;
 
 } // namespace device_pool
 
