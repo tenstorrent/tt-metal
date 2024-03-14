@@ -37,9 +37,9 @@ inline bool is_input_batched(const ttnn::Shape& shape) {
 }  // namespace detail
 
 static inline const std::array<ttnn::TensorSchema, 3> input_schemas{
-    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
+    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
+    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
+    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
 
 inline ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
