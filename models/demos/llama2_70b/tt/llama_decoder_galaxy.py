@@ -258,6 +258,16 @@ class TtLlamaDecoder_galaxy:
                 attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
 
+        if self.emulated:
+            # save l1 space by sharing the same input across "devices"
+            for i in range(1, self.num_devices):
+                # x_multichip[i].deallocate(True)
+                rot_mats[i].deallocate(True)
+                attn_masks[i].deallocate(True)
+                # x_multichip[i] = x_multichip[0]
+                rot_mats[i] = rot_mats[0]
+                attn_masks[i] = attn_masks[0]
+
         return (
             x_multichip,
             start_pos,
@@ -274,48 +284,14 @@ class TtLlamaDecoder_galaxy:
         """
 
         assert len(x_multichip) == 32, "Only 32 devices supported for galaxy"
-        seq_len = x_multichip[0].shape[0]
-        batch_all = x_multichip[0].shape[2]
 
-        x_torch = tt2torch_tensor(x_multichip[0])
-        for i in range(self.num_devices):
-            x_multichip[i].deallocate(True)
+        if self.emulated:
+            # save l1 space by sharing the same input across "devices"
+            for i in range(1, self.num_devices):
+                x_multichip[i].deallocate(True)
+                x_multichip[i] = x_multichip[0]
 
-        all_xs = []
-        for group_id in range(self.num_device_groups):
-            # index out batch for each device groups
-            devices = self.device_groups[group_id]
-            x_torch_batch = x_torch[
-                :, :, group_id * self.batch_size_per_device_group : (group_id + 1) * self.batch_size_per_device_group, :
-            ]
-            # expected shapes:
-            # x_torch_batch: (seq_len, 1, 32//4, hidden_dim)
-            assert x_torch_batch.shape == (seq_len, 1, batch_all // 4, self.hidden_size)
-            xs = []
-            for i in range(self.num_devices_per_group):
-                device = devices[i]
-                xs.append(
-                    pad_by_zero(  # padded x_tt to seq_len, 1, 32, hidden_dim
-                        x_torch_batch.clone(),
-                        device,
-                        tt_dtype=self.model_config["LN_ATTN_OUTPUT_DTYPE"],
-                    )[0]
-                )
-            for i in range(self.num_devices_per_group):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
-                )
-
-            # if emulated, use only the first copy of xs per group
-            if self.emulated:
-                first_x = xs[0]
-                [x.deallocate(True) for x in xs[1:]]
-                xs = [first_x for _ in range(self.num_devices_per_group)]
-
-            # extend to the all_xs, all_rot_mats, all_attn_masks
-            all_xs.extend(xs)
-
-        return all_xs
+        return x_multichip
 
     def __call__(
         self,
