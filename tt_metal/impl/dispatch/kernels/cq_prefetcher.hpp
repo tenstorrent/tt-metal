@@ -312,12 +312,13 @@ class ProgramEventBuffer {
         this->push_noc_encoding = push_noc_encoding;
     }
 
+    template <bool write_to_completion_queue>
     void push_event(uint32_t event) {
         if (this->num_events == 2) {
             volatile tt_l1_ptr uint32_t *dispatch_semaphore_addr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));   // Should be initialized to num commands slots on dispatch core by host
             wait_consumer_idle<2>(dispatch_semaphore_addr);
-            this->write_events<true>();
+            this->write_events<write_to_completion_queue>();
             this->num_events = 0;
         }
 

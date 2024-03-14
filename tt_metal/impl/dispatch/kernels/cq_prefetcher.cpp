@@ -235,7 +235,7 @@ void kernel_main() {
             uint32_t num_pages_to_read = pull_and_push_cb_num_pages / 2;
 
             if (is_program) {
-                program_event_buffer.push_event(event);
+                program_event_buffer.push_event<write_to_completion_queue>(event);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, dispatch_noc_encoding, dispatch_semaphore_addr, get_semaphore(0));
                 for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                     uint32_t num_pages_in_transfer = program_pull_and_push_config<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER>(
@@ -418,7 +418,7 @@ void kernel_main() {
                 // if there is any program data then we need to read it in from DST CB and send it to dispatcher core CB
                 relay_command<command_start_addr, L1_UNRESERVED_BASE, 0>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
                 db_dispatch_cmd_slot_switch = not db_dispatch_cmd_slot_switch;
-                program_event_buffer.push_event(event);
+                program_event_buffer.push_event<write_to_completion_queue>(event);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, dispatch_noc_encoding, dispatch_semaphore_addr, get_semaphore(0));
 
                 volatile tt_l1_ptr uint32_t* buffer_transfer_ptr = command_ptr + DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
