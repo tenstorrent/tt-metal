@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-pow:
+  - ttnn-logaddexp:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -19,10 +19,10 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_power_fp_args
+      args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_pow_sweep.csv
+      output-file: eltwise_logaddexp_sweep.csv
