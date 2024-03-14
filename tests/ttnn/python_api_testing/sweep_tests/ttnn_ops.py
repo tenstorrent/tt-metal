@@ -1996,7 +1996,6 @@ def clip(
 
     return ttnn_tensor_to_torch(t1)
 
-
 def repeat_interleave(
     x,
     *args,
