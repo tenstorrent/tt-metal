@@ -26,6 +26,7 @@ void kernel_main() {
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
     constexpr uint32_t granularity = get_compile_time_arg_val(5);
+    constexpr uint32_t u_count = get_compile_time_arg_val(6);
 
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
@@ -39,13 +40,12 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
-    uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(untilized_input_cb_id, Wt);
         uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id)) + batch_read_offset;
 
-        for (uint32_t u = 0; u < u_range / granularity; ++u) {
+        for (uint32_t u = 0; u < u_count; ++u) {
             // Operating on a granularity > 1 led to performance improvements.
             // It introduces a double-buffered pipeline between compute and writer.
             for (uint32_t g = 0; g < granularity; ++g) {
