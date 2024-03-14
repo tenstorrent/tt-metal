@@ -17,7 +17,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from transformers import BloomTokenizerFast, BloomConfig, BloomForQuestionAnswering
 
 from models.demos.grayskull.functional_bloom.dataset_utils import squadv2_1K_samples_input
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
+from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
 
 
 def load_inputs(input_path, batch):
