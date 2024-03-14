@@ -43,7 +43,6 @@ enum class EnqueueCommandType {
     ENQUEUE_TRACE,
     ENQUEUE_RECORD_EVENT,
     ENQUEUE_WAIT_FOR_EVENT,
-    ENQUEUE_WRAP,
     FINISH,
     FLUSH,
     INVALID
@@ -275,50 +274,6 @@ class EnqueueProgramCommand : public Command {
     constexpr bool has_side_effects() { return true; }
 };
 
-class EnqueueWrapCommand : public Command {
-   protected:
-    Device* device;
-    SystemMemoryManager& manager;
-    uint32_t command_queue_id;
-
-   public:
-    EnqueueWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager);
-
-    virtual const DeviceCommand assemble_device_command(uint32_t) = 0;
-
-    virtual void process() = 0;
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WRAP; }
-};
-
-class EnqueueIssueWrapCommand : public EnqueueWrapCommand {
-    public:
-     EnqueueIssueWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager);
-
-     const DeviceCommand assemble_device_command(uint32_t);
-
-     void process();
-
-     constexpr bool has_side_effects() {
-        // This command does not make it to dispatch core, and pre-fetcher can get the next command while dispatcher is still running.
-        return true;
-     }
-};
-
-class EnqueueCompletionWrapCommand : public EnqueueWrapCommand {
-    private:
-     uint32_t event;
-
-    public:
-     EnqueueCompletionWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event);
-
-     const DeviceCommand assemble_device_command(uint32_t);
-
-     void process();
-
-     constexpr bool has_side_effects() { return false; }
-};
-
 class EnqueueRecordEventCommand : public Command {
    private:
     uint32_t command_queue_id;
@@ -495,8 +450,6 @@ class HWCommandQueue {
     void enqueue_wait_for_event(std::shared_ptr<Event> event);
     void enqueue_trace();
     void finish();
-    void issue_wrap();
-    void completion_wrap(uint32_t event);
     void launch(launch_msg_t& msg);
     friend void EnqueueTraceImpl(CommandQueue& cq);
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
