@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "ttnn/device_pool.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
@@ -20,22 +22,17 @@ class DeviceMesh
 {
 public:
     DeviceGrid device_grid;
-    DeviceIds device_ids;
-    std::vector<Device*> managed_devices;
+    std::vector<std::pair<int, std::unique_ptr<Device>>> managed_devices;
 
     DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids)
-        : device_grid(device_grid), device_ids(device_ids)
+        : device_grid(device_grid)
     {
         auto num_requested_devices = device_ids.size();
         auto num_available_devices = tt::tt_metal::GetNumAvailableDevices();
+        TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
 
-        managed_devices.resize(num_requested_devices, nullptr);
-        for (int i = 0; i < num_requested_devices; i++) { // assume linear ordering
-            auto device_id = device_ids[i];
-            TT_ASSERT(device_id < num_available_devices);
-            if (managed_devices[i] == nullptr) {
-                managed_devices[i] = &ttnn::device::open_device(device_id);
-            }
+        for (auto device_id : device_ids) {
+            managed_devices.emplace_back(device_id, std::unique_ptr<Device>(CreateDevice(device_id, 1)));
         }
     }
     ~DeviceMesh() = default;
@@ -46,18 +43,22 @@ public:
     DeviceMesh(DeviceMesh &&) = delete;
     DeviceMesh &operator=(DeviceMesh &&) = delete;
 
-    Device &get_device(int index)
+    Device &get_device(int queried_device_id)
     {
-        for (int i = 0; i < managed_devices.size(); i++) {
-            if (device_ids[i] == index) {
-                return *managed_devices[i];
+        for (const auto& [device_id, device] : managed_devices) {
+            if (device_id == queried_device_id) {
+                return *device;
             }
         }
         TT_THROW("User has provided an invalid device index");
     }
 
-    const DeviceIds &get_device_ids() const
+    const DeviceIds get_device_ids() const
     {
+        DeviceIds device_ids;
+        for (const auto& [device_id, device] : managed_devices) {
+            device_ids.push_back(device_id);
+        }
         return device_ids;
     }
 
@@ -67,22 +68,16 @@ public:
     }
 };
 
-std::unordered_map<int, std::shared_ptr<DeviceMesh>> id_to_multi_device;
-
-inline DeviceMesh &open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids) {
-    auto multi_device = std::make_shared<DeviceMesh>(device_grid, device_ids);
-    for (auto device_id : device_ids) {
-        id_to_multi_device[device_id] = multi_device;
-    }
-    return *multi_device;
+inline DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids) {
+    return DeviceMesh(device_grid, device_ids);
 }
 
 inline void close_device_mesh(DeviceMesh &multi_device) {
-    for (int i = 0; i < multi_device.managed_devices.size(); i++) {
-        id_to_multi_device.erase(multi_device.managed_devices[i]->id());
-        ttnn::device::close_device(*multi_device.managed_devices[i]);
-        multi_device.managed_devices[i] = nullptr;
+    for (const auto& [device_id, device] : multi_device.managed_devices) {
+        tt::tt_metal::detail::DeallocateBuffers(device.get());
+        device->close();
     }
+    multi_device.managed_devices.clear();
 }
 
 ttnn::Tensor to_device_mesh(const ttnn::Tensor& tensor, ttnn::multi_device::DeviceMesh& device_mesh, const ttnn::MemoryConfig& memory_config) {
@@ -95,12 +90,14 @@ ttnn::Tensor to_device_mesh(const ttnn::Tensor& tensor, ttnn::multi_device::Devi
         {
             Device& target_device = device_mesh.get_device(i);
             auto shard = Tensor{OwnedStorage{host_storage.buffers[i]},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()};
-            shard = shard.to(&target_device);
+            shard = shard.to(&target_device, memory_config);
 
             device_buffers.push_back(std::get<DeviceStorage>(shard.get_storage()).buffer);
         }
         auto storage = MultiDeviceStorage{std::move(device_buffers), host_storage.shapes};
         return Tensor(std::move(storage), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+    } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
+        return tensor; // already on device
     }
     TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
 }
