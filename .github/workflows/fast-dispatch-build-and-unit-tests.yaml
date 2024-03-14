@@ -52,7 +52,7 @@ jobs:
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 90
+        timeout-minutes: 60
         run: |
           source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
