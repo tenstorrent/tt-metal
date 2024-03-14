@@ -44,7 +44,8 @@ def transpose(
     if input_dtype == ttl.tensor.DataType.BFLOAT16:
         passing, output = comp_equal(transposed_ref, tt_got_back)
     else:
-        passing, output = comp_pcc(transposed_ref, tt_got_back)
+        target_pcc = 0.95 if input_dtype == ttl.tensor.DataType.BFLOAT4_B else 0.99
+        passing, output = comp_pcc(transposed_ref, tt_got_back, target_pcc)
     logger.info(output)
     assert passing
 
@@ -69,6 +70,16 @@ def test_transpose_wh_uint16(device):
     W = 32 * 3
     input_shape = (N, C, H, W)
     transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttl.tensor.DataType.UINT16)
+
+
+@skip_for_grayskull("Bfp4 format not supported on Grayskull")
+def test_transpose_wh_bfp4(device):
+    N = 1
+    C = 32
+    H = 32 * 2
+    W = 32 * 3
+    input_shape = (N, C, H, W)
+    transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttl.tensor.DataType.BFLOAT4_B)
 
 
 def test_transpose_hc_program_cache(device, use_program_cache):
