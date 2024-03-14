@@ -8,6 +8,11 @@ from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, until
 from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
     lamb_optimizer_kernel,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
+
+from ttnn.tracer import trace, visualize
+import random
+import transformers
 
 ################################################
 ################# Helper-Funcs #################
@@ -72,12 +77,27 @@ def var_global(x, *args, **kwargs):
     return torch.var(x, [0, 1, 2, 3], keepdim=True)
 
 
+def ttnn_var_global(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.var(x, dim, keepdim=True)
+
+
 def std_global(x, *args, **kwargs):
     return torch.std(x, [0, 1, 2, 3], keepdim=True)
 
 
+def ttnn_std_global(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.std(x, dim, keepdim=True)
+
+
 def mean_global(x, *args, **kwargs):
     return torch.mean(x, [0, 1, 2, 3], keepdim=True)
+
+
+def ttnn_mean_global(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.mean(x, dim, keepdim=True)
 
 
 def normalize_global(x, *args, **kwargs):
@@ -1890,3 +1910,119 @@ def rotary_embedding(x, *args, **kwargs):
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
 
     return pt_out[0]
+
+
+def preprocessing_model_conv_conv(x, *args, **kwargs):
+    torch.manual_seed(234)
+
+    torch_model = TorchConvConv()
+    torch_model.eval()
+
+    torch_input_tensor = x.to(torch.float32)
+
+    output = torch_model(torch_input_tensor)
+
+    return output
+
+
+def preprocessing_model_conv_relu_conv(x, *args, **kwargs):
+    torch.manual_seed(234)
+
+    torch_model = TorchConvReluConv()
+    torch_model.eval()
+
+    torch_input_tensor = x.to(torch.float32)
+
+    output = torch_model(torch_input_tensor)
+
+    return output
+
+
+def preprocessing_model_bert_1(x, *args, **kwargs):
+    torch.manual_seed(234)
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    # get torch model
+    config = transformers.BertConfig.from_pretrained(model_name)
+    model = BertFeedForward(config).eval()
+    model = model.to(torch.bfloat16)
+
+    # prepare inputs
+    torch_hidden_states = x
+
+    # run model
+    torch_output = model(torch_hidden_states)
+
+    return torch_output
+
+
+def preprocessing_model_bert_2(x, *args, **kwargs):
+    torch.manual_seed(234)
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    # get torch model
+    config = transformers.BertConfig.from_pretrained(model_name)
+    config.num_hidden_layers = 2
+    model = transformers.models.bert.modeling_bert.BertEncoder(config).eval()
+
+    # prepare inputs
+    torch_hidden_states = x.to(torch.float32)
+    torch_attention_mask = None
+
+    # run model
+    torch_output = model(torch_hidden_states, attention_mask=torch_attention_mask).last_hidden_state
+
+    return torch_output
+
+
+def preprocessing_model_bert_3(x, *args, **kwargs):
+    torch.manual_seed(234)
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    # get torch model
+    config = transformers.BertConfig.from_pretrained(model_name)
+    model = transformers.models.bert.modeling_bert.BertAttention(config).eval()
+    model = model.to(torch.bfloat16)
+
+    # prepare inputs
+    torch_hidden_states = x
+    sequence_size = x.shape[1]
+    torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
+
+    # run model
+    torch_output, *_ = model(torch_hidden_states, attention_mask=torch_attention_mask)
+
+    return torch_output
+
+
+def preprocessing_model_bert_4(x, *args, **kwargs):
+    torch.manual_seed(234)
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+    # prepare inputs
+    batch_size = x.shape[0]
+    sequence_size = x.shape[1]
+    num_hidden_layers = 1
+
+    # get torch model
+    config = transformers.BertConfig.from_pretrained(model_name)
+    config.position_embedding_type = "none"
+    if num_hidden_layers is not None:
+        config.num_hidden_layers = num_hidden_layers
+    else:
+        pytest.skip("Test mismatches when the default number of hidden layers is used")
+    model = transformers.BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
+
+    # set inputs
+    torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+    torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_attention_mask = None
+
+    # torch_hidden_states = x
+    # sequence_size = x.shape[1]
+    # torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
+
+    # run model
+    # torch_output, *_ = model(torch_hidden_states, attention_mask=torch_attention_mask)
+    torch_output = model(torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask)
+
+    return torch_output.start_logits
