@@ -20,8 +20,9 @@ jobs:
         ]
         test-group: [
           {name: fallback-backward-loss-ops, cmd: ./tests/scripts/run_python_unit_test_ops.sh},
-          {name: misc group 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 2 --group 1 },
-          {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 2 --group 2 },
+          {name: misc group 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 1 },
+          {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 2 },
+          {name: misc group 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 3 },
           {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
           {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
           {name: Metal C++ GTest, cmd: ./build/test/tt_metal/unit_tests_fast_dispatch},
