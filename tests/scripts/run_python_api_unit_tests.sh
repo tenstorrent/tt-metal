@@ -11,5 +11,7 @@ fi
 ./tests/scripts/run_python_unit_tests.sh
 ./tests/scripts/run_python_sweep_tests.sh
 
+./tests/scripts/run_python_ttnn_tests.sh
+
 # Execute python model tests here
 ./tests/scripts/run_python_model_tests.sh
