@@ -521,6 +521,7 @@ struct CommandInterface {
 };
 
 class CommandQueue {
+   friend class Device;
    public:
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
@@ -531,9 +532,11 @@ class CommandQueue {
     ~CommandQueue();
 
     // Command queue constructor
+    private:
     CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
 
     // Trace queue constructor
+    public:
     CommandQueue(Trace* trace);
 
     // Getters for private members

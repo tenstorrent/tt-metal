@@ -741,10 +741,10 @@ void Device::initialize_command_queue() {
     using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
-    sw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
-        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+        // Need to do this since CommandQueue constructor is private
+        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
     if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
         this->compile_command_queue_programs_for_grayskull();
@@ -769,9 +769,9 @@ void Device::initialize_command_queue() {
 void Device::initialize_synchronous_sw_cmd_queue() {
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
-    sw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+        // Need to do this since CommandQueue constructor is private
+        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
         sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
     }
 }
@@ -842,7 +842,11 @@ bool Device::close() {
 
     this->active_devices_.deactivate_device(this->id_);
     this->disable_and_clear_program_cache();
+    this->sw_command_queues_.clear();
+    this->hw_command_queues_.clear();
+
     this->initialized_ = false;
+
     return true;
 }
 
