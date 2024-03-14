@@ -57,7 +57,7 @@ void validate_input_tensor(
     if (input_schema.can_be_on_device and input_schema.can_be_on_cpu) {
         // pass
     } else if (input_schema.can_be_on_device) {
-        if (not ttnn::has_storage_type_of(tensor, ttnn::DEVICE_STORAGE_TYPE)) {
+        if (not ttnn::is_tensor_on_device_or_multidevice(tensor)) {
             TT_THROW("{}: Tensor must be on device!", operation_name);
         }
     } else if (input_schema.can_be_on_cpu) {

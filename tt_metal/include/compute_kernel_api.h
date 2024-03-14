@@ -676,18 +676,6 @@ ALWI void dbg_unhalt() {
  * | row_addr        | The row address in the destination register to read                        | int       |                                                       | True     |
  * | rd_data         | The array of 8 dwords to store the data                                    | uint32_t* |                                                       | True     |
  *
- * Example usage:
- *            dbg_halt()
- *            MATH({
- *               uint32_t rd_data[8+1]; // data + array_type
- *               for (int row = 0; row < 64; row++) {
- *                   // We read 8 dwords at the time, but the full row is 16 dwords
- *                   dbg_read_dest_acc_row(row, rd_data);
- *                   DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 8)
- *                   if (row % 2 == 1) DPRINT << ENDL()
- *               }
-*            })
- *            dbg_unhalt()
  * Return value: None
 */
 ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t *rd_data) {

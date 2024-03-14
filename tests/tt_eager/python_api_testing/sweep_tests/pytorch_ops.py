@@ -1804,3 +1804,22 @@ def upsample(x, *args, scale_factor, **kwargs):
     torch_result = torch_result.permute(0, 2, 3, 1)
 
     return torch_result
+
+
+def l1_loss(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="none")(x, y)
+    return torch_output_tensor
+
+
+def l1_loss_sum(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="sum")(x, y)
+
+    return torch_output_tensor
+
+
+def l1_loss_mean(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
+    return torch_output_tensor

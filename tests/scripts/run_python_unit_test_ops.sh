@@ -8,5 +8,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
 fi
 
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
+    env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/loss_ops/) -vvv
+    env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/fallback_ops/) -vvv
     env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/backward_ops/) -vvv
 fi

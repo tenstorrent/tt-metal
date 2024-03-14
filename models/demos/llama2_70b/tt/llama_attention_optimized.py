@@ -435,52 +435,24 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             value_layer.append(v_heads)
             fused_query_key_value[i].deallocate(True)
 
-        for i in range(len(query_layer)):
-            query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-                query_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
-            )
-            key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-                key_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
-            )
-
         # ROTARY EMBEDDINGS
+        # Q Rotary Embeddings
         for i in range(len(query_layer)):
-            # query_layer[i] = tt_lib.operations.primary.matmul_1d(
-            #     query_layer[i],
-            #     rot_mats[i],
-            #     program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
-            #     output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
-            #     compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
-            #     # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
-            # )
-            # k_heads = tt_lib.matmul(
-            #     k_heads,
-            #     rot_mat,
-            #     # program_config=self.model_config["ROT_MAT_K_MM_PROGCFG"],
-            #     output_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],
-            #     # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            # )
             query_layer[i] = tt_lib.operations.primary.matmul(
                 query_layer[i],
                 rot_mats[i],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-                output_mem_config=self.model_config["L1_MEMCFG"]
+                program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
+                output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
                 # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
             )
-            key_layer[i] = tt_lib.operations.primary.matmul(
-                key_layer[i],
-                rot_mats[i],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-                output_mem_config=self.model_config["L1_MEMCFG"]
-                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-
-            # Shard key_layer
-            # key_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-            #     key_layer[i],
-            #     sharded_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],)
-            # Pad and transpose Q for batched matmul
-            if self.batched_attn:
+        # Pad and transpose Q for batched matmul
+        if self.batched_attn:
+            for i in range(len(query_layer)):
+                # Pad and transpose Q for batched matmul
+                query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                    query_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
+                )
                 query_layer[i] = tt_lib.tensor.pad(
                     query_layer[i], [1, self.padded_local_heads, 32, self.head_dim], [0, 0, 0, 0], 0.0
                 )
@@ -509,6 +481,27 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         ],
                         output_mem_config=self.model_config["DEFAULT_MEMCFG"],
                     )
+                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                    query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
+                )
+
+        # K Rotary Embeddings
+        for i in range(len(key_layer)):
+            key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                key_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
+            )
+        for i in range(len(key_layer)):
+            key_layer[i] = tt_lib.operations.primary.matmul(
+                key_layer[i],
+                rot_mats[i],
+                output_mem_config=self.model_config["L1_MEMCFG"],
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            )
+            # Shard key_layer for K cache update
+            # key_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+            #     key_layer[i],
+            #     sharded_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],)
 
         return query_layer, key_layer, value_layer
 
@@ -521,16 +514,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         attn_masks: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
         padded_layer_past_len = nearest_32(start_pos + 1)
-
-        for i in range(len(query_layer)):
-            if self.batched_attn:
-                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-                    query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
-                )
-            else:
-                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-                    query_layer[i], sharded_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"]
-                )
 
         # K Cache Update
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
@@ -679,8 +662,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_weights[i].deallocate(True)
             value_layer[i].deallocate(True)
 
-            if self.batched_attn:
-                # TRANSPOSE
+        # Move sharded attn_output to interleaved here because all_gather only takes in interleaved tensors for now
+        if self.batched_attn:
+            for i in range(len(attn_output)):
                 if self.emulated:
                     attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
                         attn_output[i],
@@ -691,7 +675,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         attn_output[i],
                         output_mem_config=self.model_config["L1_MEMCFG"],
                     )
-
         return attn_output
 
     def attn_selfout(
@@ -699,19 +682,17 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         attn_output: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
         # ATTENTION SELFOUT
-        for i in range(len(attn_output)):
-            if self.batched_attn:
+        if self.batched_attn:
+            for i in range(len(attn_output)):
                 # TRANSPOSE
                 # Get batch in dim 1
                 attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, 32, 32, 128)
-
                 # Get batch in dim 2
                 attn_output[i] = tt_lib.tensor.transpose(
                     attn_output[i],
                     -2,
                     -3,
                 )
-
                 # UNPAD
                 attn_output_shape = attn_output[i].shape
                 attn_output[i] = tt_lib.tensor.unpad(
@@ -725,7 +706,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     ],
                     output_mem_config=self.model_config["L1_MEMCFG"],
                 )
-
                 # SHARD TO SCORES_TRANSPOSED_OUTPUT_MEMCFG
                 attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
                     attn_output[i], sharded_mem_config=self.model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"]
@@ -764,7 +744,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size
-        # breakpoint()
+
         # FOR BRINGUP! Outputs are sharded. Interleave them
         # for i in range(len(attn_output)):
         #     attn_output[i] = tt_lib.tensor.sharded_to_interleaved(

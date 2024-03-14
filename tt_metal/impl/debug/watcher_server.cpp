@@ -502,7 +502,11 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, Device *d
 
     // Eth core only reports erisc kernel id, uses the brisc field
     if (is_eth_core) {
-        fprintf(f, "k_id:%d", mbox_data->launch.brisc_watcher_kernel_id);
+        // TODO(dma): #5917 - Currently launch message is not written in fast dispatch. We could
+        // force it, but prefer not in order to not hit perf and keep watcher/non-watcher
+        // dispatching the same. Fast dispatch 2.0 will change a lot of the related code, so
+        // re-visit then.
+        fprintf(f, "k_id:%d (unsupported in fast dispatch)", mbox_data->launch.brisc_watcher_kernel_id);
     } else {
         fprintf(f, "k_ids:%d|%d|%d",
             mbox_data->launch.brisc_watcher_kernel_id,

@@ -1584,4 +1584,20 @@ op_map = {
         "tt_lib_op": ttnn_ops.upsample,
         "pytorch_op": pytorch_ops.upsample,
     },
+    "ttnn-l1_loss_sum": {
+        "tt_lib_op": ttnn_ops.l1_loss_sum,
+        "pytorch_op": pytorch_ops.l1_loss_sum,
+    },
+    "ttnn-l1_loss": {
+        "tt_lib_op": ttnn_ops.l1_loss,
+        "pytorch_op": pytorch_ops.l1_loss,
+    },
+    "ttnn-l1_loss_sum": {
+        "tt_lib_op": ttnn_ops.l1_loss_sum,
+        "pytorch_op": pytorch_ops.l1_loss_sum,
+    },
+    "ttnn-l1_loss_mean": {
+        "tt_lib_op": ttnn_ops.l1_loss_mean,
+        "pytorch_op": pytorch_ops.l1_loss_mean,
+    },
 }
