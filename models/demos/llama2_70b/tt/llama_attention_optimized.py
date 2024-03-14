@@ -468,22 +468,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     self.padded_local_heads,
                     self.head_dim,  # Batch must be in dim 0 to match K cache
                 )
-                # Unpad the batch dimension to original batch if the original batch is not 32
-                if self.max_batch_size != 32:
-                    query_layer[i] = tt_lib.tensor.unpad(
-                        query_layer[i],
-                        [0, 0, 0, 0],
-                        [
-                            self.max_batch_size - 1,
-                            0,
-                            self.padded_local_heads - 1,
-                            self.head_dim - 1,
-                        ],
-                        output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-                    )
-                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-                    query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
-                )
 
         # K Rotary Embeddings
         for i in range(len(key_layer)):
@@ -512,8 +496,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         value_layer: tt_lib.tensor.Tensor,
         start_pos: int,
         attn_masks: tt_lib.tensor.Tensor,
+        batch_offset: int = 0,
     ) -> tt_lib.tensor.Tensor:
         padded_layer_past_len = nearest_32(start_pos + 1)
+
+        if self.batched_attn:
+            for i in range(len(query_layer)):
+                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                    query_layer[i], sharded_mem_config=self.model_config["Q_TRANSPOSE_MEMCFG"]
+                )
 
         # K Cache Update
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
@@ -523,7 +514,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         for i in range(len(key_layer)):
             keys = self.layer_past_list[i][0]
-            tt_lib.tensor.update_cache(keys, key_layer[i], start_pos)
+            tt_lib.tensor.update_cache(keys, key_layer[i], start_pos, batch_offset=batch_offset)
             key_layer[i].deallocate(True)
         # key and value layers will have kv_seq_len padded to nearest 32
         for i in range(len(key_layer)):
@@ -614,7 +605,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # V CACHE UPDATE
         for i in range(len(value_layer)):
             values = self.layer_past_list[i][1]
-            tt_lib.tensor.update_cache(values, value_layer[i], start_pos)
+            tt_lib.tensor.update_cache(values, value_layer[i], start_pos, batch_offset=batch_offset)
             value_layer[i].deallocate(True)
         for i in range(len(value_layer)):
             values = self.layer_past_list[i][1]
