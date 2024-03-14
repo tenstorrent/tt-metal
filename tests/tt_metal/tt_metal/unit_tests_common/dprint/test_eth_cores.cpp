@@ -48,21 +48,10 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         // Run the program
         log_info(
             tt::LogTest,
-            "Running print test on eth core {}:({},{})",
+            "Running print test on device {}, eth core logical={}/physical={}",
             device->id(),
-            core.x,
-            core.y
-        );
-        fixture->RunProgram(device, program);
-
-        program = Program();
-        erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print_modifiers.cpp",
-            core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0
-            }
+            core.str(),
+            device->ethernet_core_from_logical_core(core).str()
         );
         fixture->RunProgram(device, program);
 
