@@ -69,13 +69,25 @@ op_map = {
         "tt_lib_op": None,  # tt_lib_ops.var_global,
         "pytorch_op": pytorch_ops.var_global,
     },
+    "ttnn-stats-var_global": {
+        "tt_lib_op": ttnn_ops.var,
+        "pytorch_op": pytorch_ops.ttnn_var_global,
+    },
     "stats-std_global": {
         "tt_lib_op": None,  # tt_lib_ops.std_global,
         "pytorch_op": pytorch_ops.std_global,
     },
+    "ttnn-stats-std_global": {
+        "tt_lib_op": ttnn_ops.std,
+        "pytorch_op": pytorch_ops.ttnn_std_global,
+    },
     "stats-mean_global": {
         "tt_lib_op": None,  # tt_lib_ops.mean_global,
         "pytorch_op": pytorch_ops.mean_global,
+    },
+    "ttnn-stats-mean_global": {
+        "tt_lib_op": ttnn_ops.mean,
+        "pytorch_op": pytorch_ops.ttnn_mean_global,
     },
     "stats-normalize_global": {
         "tt_lib_op": tt_lib_ops.normalize_global,
@@ -524,6 +536,10 @@ op_map = {
     },
     "eltwise-mac": {
         "tt_lib_op": tt_lib_ops.eltwise_mac,
+        "pytorch_op": pytorch_ops.mac,
+    },
+    "ttnn-eltwise-mac": {
+        "tt_lib_op": ttnn_ops.eltwise_mac,
         "pytorch_op": pytorch_ops.mac,
     },
     "eltwise-addcmul": {
@@ -1723,5 +1739,29 @@ op_map = {
     "ttnn-zeros_like": {
         "tt_lib_op": ttnn_ops.zeros_like,
         "pytorch_op": pytorch_ops.zeros_like,
+    },
+    "ttnn-preprocess-model-conv-conv": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_conv_conv,
+        "pytorch_op": pytorch_ops.preprocessing_model_conv_conv,
+    },
+    "ttnn-preprocess-model-conv-relu-conv": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_conv_relu_conv,
+        "pytorch_op": pytorch_ops.preprocessing_model_conv_relu_conv,
+    },
+    "ttnn-preprocess-model-bert-1": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_bert_1,
+        "pytorch_op": pytorch_ops.preprocessing_model_bert_1,
+    },
+    "ttnn-preprocess-model-bert-2": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_bert_2,
+        "pytorch_op": pytorch_ops.preprocessing_model_bert_2,
+    },
+    "ttnn-preprocess-model-bert-3": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_bert_3,
+        "pytorch_op": pytorch_ops.preprocessing_model_bert_3,
+    },
+    "ttnn-preprocess-model-bert-4": {
+        "tt_lib_op": ttnn_ops.preprocessing_model_bert_4,
+        "pytorch_op": pytorch_ops.preprocessing_model_bert_4,
     },
 }
