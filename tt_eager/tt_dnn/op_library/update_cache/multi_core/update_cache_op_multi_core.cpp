@@ -121,13 +121,16 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
+    const uint32_t u_count = u_range/granularity;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) dst_is_dram,
         (std::uint32_t) src_is_dram,
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) src1_cb_index,
-        (std::uint32_t) granularity
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -136,7 +139,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         (std::uint32_t) interm0_cb_index,
         (std::uint32_t) interm1_cb_index,
         (std::uint32_t) interm2_cb_index,
-        (std::uint32_t) granularity
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
     std::map<string, string> reader_kernel_defines;
@@ -156,7 +160,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
     vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
@@ -166,8 +169,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         output_cb_index,
         num_batched_heads_per_core_group_1,
         Wt,
-        u_range,
-        granularity
+        granularity,
+        u_count
     };
 
     auto compute_kernel_group_1_id = tt_metal::CreateKernel(

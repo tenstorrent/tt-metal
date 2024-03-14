@@ -92,12 +92,15 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
+    const uint32_t u_count = u_range/granularity;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) dst_is_dram,
         (std::uint32_t) src_is_dram,
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) src1_cb_index,
-        (std::uint32_t) granularity
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
 
@@ -107,7 +110,8 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         (std::uint32_t) interm0_cb_index,
         (std::uint32_t) interm1_cb_index,
         (std::uint32_t) interm2_cb_index,
-        (std::uint32_t) granularity
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -122,7 +126,6 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
     vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
@@ -132,8 +135,8 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         output_cb_index,
         num_batched_heads,
         Wt,
-        u_range,
-        granularity
+        granularity,
+        u_count
     };
 
     auto eltwise_unary_kernel_id = tt_metal::CreateKernel(

@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t granularity = get_compile_time_arg_val(4);
-
+    constexpr uint32_t u_count = get_compile_time_arg_val(5);
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
@@ -49,7 +49,6 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
-    uint32_t u_range = min(static_cast<uint32_t>(32), B);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         #ifndef INPUT_SHARDED
@@ -63,7 +62,7 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
         #endif
-        for (uint32_t u = 0; u < u_range / granularity; ++u) {
+        for (uint32_t u = 0; u < u_count; ++u) {
             cb_reserve_back(cache_cb_id, Wt * granularity);
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
             for (uint32_t g = 0; g < granularity; ++g) {

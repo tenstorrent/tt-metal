@@ -18,9 +18,8 @@ void MAIN {
     constexpr uint32_t out_cb = get_compile_time_arg_val(5);
     constexpr uint32_t num_batched_heads = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr uint32_t u_range = get_compile_time_arg_val(8);
-    constexpr uint32_t granularity = get_compile_time_arg_val(9);
-
+    constexpr uint32_t granularity = get_compile_time_arg_val(8);
+    constexpr uint32_t u_count = get_compile_time_arg_val(9);
 
     pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
@@ -33,7 +32,7 @@ void MAIN {
         cb_pop_front(in_cb, Wt);
 
         unpack_reconfig_data_format_srca(in_cb, cache_cb);
-        for(uint32_t u = 0; u < u_range / granularity; ++u) {
+        for(uint32_t u = 0; u < u_count; ++u) {
             pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
 
             for (uint32_t g = 0; g < granularity; ++g) {
