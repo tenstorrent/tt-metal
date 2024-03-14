@@ -50,7 +50,9 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         return output_tensor
 
     binary_function.__name__ = f"ttnn.{name}"
-    binary_function.__doc__ = doc + (binary_function.__doc__ if binary_function.__doc__ is not None else "")
+    binary_function.decorated_function.__doc__ = doc + (
+        binary_function.__doc__ if binary_function.__doc__ is not None else ""
+    )
 
     setattr(THIS_MODULE, name, binary_function)
 
@@ -421,11 +423,11 @@ def mul(
 subtract = sub
 multiply = mul
 
-ttnn.Tensor.__add__ = add
-ttnn.Tensor.__radd__ = add
-ttnn.Tensor.__sub__ = sub
-ttnn.Tensor.__mul__ = mul
-ttnn.Tensor.__rmul__ = mul
+ttnn.Tensor.__add__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
+ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
+ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: sub(self, *args, **kwargs)
+ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
+ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 
 
 def _add_and_apply_activation_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -651,7 +653,7 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         return output_tensor
 
     elt_binary_function.__name__ = f"ttnn.{name}"
-    elt_binary_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    elt_binary_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
 

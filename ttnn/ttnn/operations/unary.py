@@ -77,7 +77,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{name}"
-    unary_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    unary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies {name} to :attr:`input_tensor` element-wise.
 
@@ -178,7 +178,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{(name)}"
-    unary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 

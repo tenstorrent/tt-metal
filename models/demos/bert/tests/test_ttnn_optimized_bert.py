@@ -33,6 +33,7 @@ def test_bert_for_question_answering(device, use_program_cache, model_name, batc
     # torch_bert_input = torch.randint(0, config.config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_bert_input = torch.randint(0, 1, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.zeros(1, sequence_size)
 
     torch_parameters = preprocess_model_parameters(
@@ -47,6 +48,7 @@ def test_bert_for_question_answering(device, use_program_cache, model_name, batc
         config,
         torch_bert_input,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         parameters=torch_parameters,
     )
@@ -65,10 +67,12 @@ def test_bert_for_question_answering(device, use_program_cache, model_name, batc
     ttnn_bert_inputs = ttnn_optimized_sharded_bert.preprocess_inputs(
         torch_bert_input,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         device=device,
     )
 
+    config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     tt_output = ttnn_optimized_sharded_bert.bert_for_question_answering(
         config,
         *ttnn_bert_inputs,
