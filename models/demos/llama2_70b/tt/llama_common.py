@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import Tuple
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 

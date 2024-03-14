@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
 from pathlib import Path
-
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 
 from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )

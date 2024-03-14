@@ -1,18 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import torch
-from loguru import logger
 
+from loguru import logger
 import math
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    precompute_freqs as tt_precompute_freqs,
+    precompute_freqs,
     freqs_to_rotation_matrix,
-    gather_rotary_emb as tt_gather_rotary_emb,
+    gather_rotary_emb,
     get_weight_cache_path,
 )
 
@@ -274,10 +275,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
 
     def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
-        cos, sin = tt_precompute_freqs(dhead, end)
+        cos, sin = precompute_freqs(dhead, end)
         rot_mat = freqs_to_rotation_matrix(cos, sin)
         position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
-        rot_emb = tt_gather_rotary_emb(rot_mat, position_ids)
+        rot_emb = gather_rotary_emb(rot_mat, position_ids)
         return rot_emb
 
     def prepare_inputs(self, x, start_pos):
