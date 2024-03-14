@@ -35,10 +35,3 @@ jobs:
         # Does not work yet
         if: ${{ matrix.config != 'release' }}
         run: make tests
-      - name: Remove unnecessary artifacts
-        run: rm -rf build/python_env build/obj build/git_hooks
-      - name: Upload libraries as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
-          path: build
