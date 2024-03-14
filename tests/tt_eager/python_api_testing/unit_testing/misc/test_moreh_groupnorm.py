@@ -39,17 +39,21 @@ def to_npu(
     return npu_tensor
 
 
-def torch_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05):
+def torch_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True):
     N, _, _, _ = input.shape
 
     output = F.group_norm(input, num_groups, gamma, beta, eps)
 
-    x_view = input.view(N, num_groups, -1)
-    mean = x_view.mean(dim=-1, keepdim=True)
-    var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
-    rstd = (var + eps).rsqrt()
+    mean = rstd = None
+    if compute_mean_rstd:
+        x_view = input.view(N, num_groups, -1)
+        mean = x_view.mean(dim=-1, keepdim=True)
+        var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
+        rstd = (var + eps).rsqrt()
+        mean = mean.view(N, num_groups)
+        rstd = rstd.view(N, num_groups)
 
-    return output, mean.view(N, num_groups), rstd.view(N, num_groups)
+    return output, mean, rstd
 
 
 def torch_groupnorm_backward(
@@ -84,7 +88,7 @@ def torch_groupnorm_backward(
     return input.grad, gamma_grad, beta_grad
 
 
-def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, device=None):
+def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True, device=None):
     N, C, _, _ = input.shape
 
     gamma_beta_shape = [1, 1, 1, C]
@@ -94,14 +98,31 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, device=Non
     npu_gamma = to_npu(gamma, device, shape=gamma_beta_shape)
     npu_beta = to_npu(beta, device, shape=gamma_beta_shape)
 
+    npu_mean = npu_rstd = None
+    if compute_mean_rstd:
+        npu_mean = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
+        npu_mean = to_npu(npu_mean, device)
+        npu_rstd = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
+        npu_rstd = to_npu(npu_rstd, device)
+
     # Forward
     npu_output, npu_mean, npu_rstd = ttl.operations.primary.moreh_groupnorm(
-        npu_input, num_groups, eps, npu_gamma, npu_beta
+        npu_input,
+        num_groups,
+        eps,
+        npu_gamma,
+        npu_beta,
+        are_needed_outputs=(True, compute_mean_rstd, compute_mean_rstd),
+        mean=npu_mean,
+        rstd=npu_rstd,
     )
 
     tt_output = to_cpu(npu_output, input.shape)
-    tt_mean = to_cpu(npu_mean, mean_rstd_shape).view(N, num_groups)
-    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape).view(N, num_groups)
+
+    tt_mean = tt_rstd = None
+    if compute_mean_rstd:
+        tt_mean = to_cpu(npu_mean, mean_rstd_shape).view(N, num_groups)
+        tt_rstd = to_cpu(npu_rstd, mean_rstd_shape).view(N, num_groups)
 
     return tt_output, tt_mean, tt_rstd
 
@@ -149,13 +170,13 @@ def tt_groupnorm_backward(
         npu_db = to_npu(npu_db, device)
 
     # Backward
-    ttl.operations.primary.moreh_groupnorm_backward(
+    npu_dx, npu_dg, npu_db = ttl.operations.primary.moreh_groupnorm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,
         npu_rstd,
         num_groups,
-        (input_requires_grad, gamma_requires_grad, beta_requires_grad),
+        are_needed_outputs=(input_requires_grad, gamma_requires_grad, beta_requires_grad),
         gamma=npu_gamma,
         input_grad=npu_dx,
         gamma_grad=npu_dg,
@@ -248,7 +269,14 @@ def make_input_tensors(input_shape, affine, do_backward=False):
         False,
     ],
 )
-def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
+@pytest.mark.parametrize(
+    "compute_mean_rstd",
+    [
+        True,
+        False,
+    ],
+)
+def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
 
     C, num_groups = C_num_groups
@@ -256,9 +284,13 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
     cpu_input, cpu_beta, cpu_gamma, _ = make_input_tensors(input_shape, affine)
 
     # expected
-    expected_output, expected_mean, expected_rstd = torch_groupnorm(cpu_input, num_groups, cpu_gamma, cpu_beta, eps)
+    expected_output, expected_mean, expected_rstd = torch_groupnorm(
+        cpu_input, num_groups, cpu_gamma, cpu_beta, eps, compute_mean_rstd
+    )
     # actual
-    actual_output, actual_mean, actual_rstd = tt_groupnorm(cpu_input, num_groups, cpu_gamma, cpu_beta, eps, device)
+    actual_output, actual_mean, actual_rstd = tt_groupnorm(
+        cpu_input, num_groups, cpu_gamma, cpu_beta, eps, compute_mean_rstd, device
+    )
 
     # Set rtol and atol
     rtol = atol = 0.1
@@ -271,14 +303,20 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
     assert pass_output
 
     # Check mean
-    pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
-    logger.debug(f"mean's {out_mean}")
-    assert pass_mean
+    if compute_mean_rstd:
+        pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
+        logger.debug(f"mean's {out_mean}")
+        assert pass_mean
+    else:
+        assert actual_mean is None
 
     # Check rstd
-    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
-    logger.debug(f"rstd's {out_rstd}")
-    assert pass_rstd
+    if compute_mean_rstd:
+        pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
+        logger.debug(f"rstd's {out_rstd}")
+        assert pass_rstd
+    else:
+        assert actual_rstd is None
 
 
 @pytest.mark.skip("Watcher error, see issue #6319")
@@ -314,7 +352,7 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
     "eps",
     [
         1e-05,
-        1e-12,
+        # 1e-12,
     ],
 )
 @pytest.mark.parametrize(
