@@ -17,8 +17,8 @@ void measure_latency(string kernel_name) {
 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     uint8_t num_hw_cqs = device->num_hw_cqs();
-    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(device->id(), channel, 0);
+    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device->id(), channel, 0);
+    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).dispatcher_core(device->id(), channel, 0);
 
     TT_ASSERT(producer_logical_core != consumer_logical_core, "Producer and consumer core are {}. They should not be the same!", producer_logical_core.str());
 
