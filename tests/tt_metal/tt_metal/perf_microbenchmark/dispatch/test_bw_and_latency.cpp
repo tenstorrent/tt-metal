@@ -237,18 +237,18 @@ int main(int argc, char **argv) {
 
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE);
+                    tt::Cluster::instance().read_core(vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE);
                 } else {
-                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE, vec.size() == 1);
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE, vec.size() == 1);
                 }
             }
 
             auto start = std::chrono::system_clock::now();
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(vec, page_size_g, tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE);
+                    tt::Cluster::instance().read_core(vec, page_size_g, tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE);
                 } else {
-                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE, vec.size() == 1);
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE, vec.size() == 1);
                 }
             }
             auto end = std::chrono::system_clock::now();

@@ -9,7 +9,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_cmds.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 
@@ -20,15 +21,6 @@ constexpr uint32_t MAX_DRAM_READ_SIZE = 256 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 
-constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
-constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-// 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
-constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
-
-constexpr uint32_t PREFETCH_D_DEFAULT_BUFFER_SIZE = 256 * 1024;
-constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
-constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
@@ -38,8 +30,8 @@ constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
-constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+// constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
+// constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
@@ -113,7 +105,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", PREFETCH_D_DEFAULT_BUFFER_SIZE);
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", PREFETCH_D_BUFFER_SIZE);
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
@@ -139,7 +131,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", PREFETCH_D_DEFAULT_BUFFER_SIZE);
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", PREFETCH_D_BUFFER_SIZE);
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
@@ -1133,7 +1125,7 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+        uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
         uint32_t l1_buf_base = l1_unreserved_base_aligned + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
         TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
