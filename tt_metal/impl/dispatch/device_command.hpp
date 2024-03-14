@@ -77,6 +77,7 @@ class DeviceCommand {
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
+    static constexpr uint32_t COMMAND_PTR_SHARD_IDX = 8;
     static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
     // Perf measurements showed best results with divisions of 4 pages being transferred from producer -> consumer

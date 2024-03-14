@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This file is shared by host and device CQ dispatch
+
 // Prefetcher/Dispatcher CMD interfaces
 //  - CMD ID enums: identify the command to execute
 //  - CMD structures: contain parameters for each command

@@ -385,7 +385,7 @@ namespace tt::tt_metal{
 
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
             const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
-            tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).command_dispatcher_core(device->id(), channel, cq_id);
+            tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, cq_id);
             CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
             CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, core_type);
 
