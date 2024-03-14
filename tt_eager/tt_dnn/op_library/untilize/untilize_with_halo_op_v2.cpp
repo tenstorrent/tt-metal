@@ -62,27 +62,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
-    auto grid_size = device->compute_with_storage_grid_size();
-    std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
-    utils::init_neighbor_core_xy_mapping(grid_size, left_neighbor_core, right_neighbor_core, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-
-    uint32_t ncores_x = grid_size.x;
-    uint32_t ncores_y = grid_size.y;
-
     CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
-    uint32_t ncores = all_cores.num_cores();
-    uint32_t ncores_c = 1;
-    if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto core_range = *(all_cores.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
-        ncores_c = core_range.end.y - core_range.start.y + 1;
-    }
-    log_debug(LogOp, "ncores_c: {}", ncores_c);
-    TT_ASSERT(ncores_nhw == ncores);
-
     auto shard_shape = input_tensor.shard_spec().value().shape;
-    uint32_t ntiles_per_block = shard_shape[1] / TILE_WIDTH;
-    uint32_t nblocks_per_core = shard_shape[0] / TILE_HEIGHT;
+    uint32_t ntiles_per_block = div_up(shard_shape[1], TILE_WIDTH);
+    uint32_t nblocks_per_core = div_up(shard_shape[0], TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * nblocks_per_core;
 
     uint32_t out_stick_nbytes = shard_shape[1] * out_nbytes;
@@ -106,8 +89,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // input CB (sharded)
     auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
-                            .set_page_size(src_cb_id, in_page_size)
-                            .set_globally_allocated_address(*src_buffer);
+                             .set_page_size(src_cb_id, in_page_size)
+                             .set_globally_allocated_address(*src_buffer);
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
