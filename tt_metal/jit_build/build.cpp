@@ -428,7 +428,7 @@ void JitBuildState::compile_one(const string& log_file,
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
     if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
+        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
     if (!tt::utils::run_command(cmd, log_file, false)) {

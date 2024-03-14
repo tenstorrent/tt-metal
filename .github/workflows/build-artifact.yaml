@@ -24,11 +24,11 @@ jobs:
       - name: Build tt-metal and libs
         run: |
           make build PYTHON_ENV=$HOME/python_env
-      - uses: actions/upload-artifact@v4
+          make tests
+      - name: 'Tar files'
+        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.arch }}
-          path: |
-            build/hw
-            build/lib
-            tt_eager/tt_lib/*.so
-            ttnn/ttnn/*.so
+          path: ttm_${{ matrix.arch }}.tar

@@ -1628,3 +1628,54 @@ def test_reshard(
         print(torch_tensor)
         print(torch_tensor_after_round_trip)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape, shard_scheme",
+    [
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
+)
+def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation):
+    input_dtype = ttl.tensor.DataType.BFLOAT16
+    output_dtype = ttl.tensor.DataType.BFLOAT16
+
+    assert input_shape[-2] % 32 == 0
+    assert input_shape[-1] % 32 == 0
+    if shard_scheme == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+        grid_x = input_shape[-2] // 32
+        grid_y = 1
+        shard_shape = [input_shape[-2] // grid_x, input_shape[-1] // grid_y]
+    elif shard_scheme == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+        grid_x = input_shape[-1] // 32
+        grid_y = 1
+        shard_shape = [input_shape[-2] // grid_y, input_shape[-1] // grid_x]
+    elif shard_scheme == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+        grid_x = input_shape[-1] // 32
+        grid_y = input_shape[-2] // 32
+        shard_shape = [input_shape[-2] // grid_y, input_shape[-1] // grid_x]
+    else:
+        assert False, f"Unsupported {shard_scheme}"
+
+    shard_grid = ttl.tensor.CoreRangeSet(
+        {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_x - 1, grid_y - 1))}
+    )
+    shard_halo = False
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+
+    volume = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+    golden = torch.arange(volume).reshape(input_shape).bfloat16()
+    ttl_golden = ttl.tensor.Tensor(golden.reshape(-1).tolist(), golden.shape, input_dtype, ttl.tensor.Layout.ROW_MAJOR)
+
+    ## TEST to/from ##
+    ttl_device = ttl_golden.to(device, mem_config)
+    result = ttl_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    passing, output = comp_equal(result, golden)
+    assert passing

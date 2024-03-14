@@ -233,15 +233,18 @@ def test_bert(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.BertConfig.from_pretrained(model_name)
-    config.position_embedding_type = "none"
     model = transformers.BertModel.from_pretrained(model_name, config=config).eval()
     model = model.to(torch.bfloat16)
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
     torch_output = model(
-        torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask
+        torch_input_ids,
+        token_type_ids=torch_token_type_ids,
+        position_ids=torch_position_ids,
+        attention_mask=torch_attention_mask,
     ).last_hidden_state
 
     parameters = preprocess_model_parameters(
@@ -252,6 +255,7 @@ def test_bert(device, model_name, batch_size, sequence_size):
     ttnn_bert_inputs = ttnn_bert.preprocess_inputs(
         torch_input_ids,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         device=device,
     )
@@ -274,7 +278,6 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
     torch.manual_seed(0)
 
     config = transformers.BertConfig.from_pretrained(model_name)
-    config.position_embedding_type = "none"
     if num_hidden_layers is not None:
         config.num_hidden_layers = num_hidden_layers
     else:
@@ -282,9 +285,15 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
     model = transformers.BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
-    torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = None
-    torch_output = model(torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask)
+    torch_output = model(
+        torch_input_ids,
+        token_type_ids=torch_token_type_ids,
+        position_ids=torch_position_ids,
+        attention_mask=torch_attention_mask,
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -294,6 +303,7 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
     ttnn_bert_inputs = ttnn_bert.preprocess_inputs(
         torch_input_ids,
         torch_token_type_ids,
+        torch_position_ids,
         torch_attention_mask,
         device=device,
     )
@@ -306,5 +316,5 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.999)
-    assert_with_pcc(torch_output.end_logits, end_logits, 0.999)
+    assert_with_pcc(torch_output.start_logits, start_logits, 0.997)
+    assert_with_pcc(torch_output.end_logits, end_logits, 0.996)

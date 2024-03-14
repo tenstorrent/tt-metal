@@ -24,9 +24,8 @@ def get_tt_metal_model(version: MambaPretrainedModelName, use_cache: bool, batch
     import tt_lib
     from models.experimental.mamba.tt.full_model import MambaTT
 
-    tt_lib.program_cache.disable_and_clear()
-
     device = tt_lib.device.CreateDevice(0)
+    device.disable_and_clear_program_cache()
     tt_lib.device.SetDefaultDevice(device)
     device = tt_lib.device.GetDefaultDevice()
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)

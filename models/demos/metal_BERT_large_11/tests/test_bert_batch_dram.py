@@ -351,6 +351,7 @@ def test_bert_batch_dram(
     ids=["BERT_LARGE"],
 )
 def test_bert_batch_dram_with_program_cache(
+    device,
     use_program_cache,
     model_version,
     batch,
@@ -362,7 +363,6 @@ def test_bert_batch_dram_with_program_cache(
     model_config_str,
     model_location_generator,
     request,
-    device,
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
@@ -396,10 +396,10 @@ def test_bert_batch_dram_with_program_cache(
     )
 
     if model_config_str == "BFLOAT8_B-SHARDED":
-        assert tt_lib.program_cache.num_entries() == 19
+        assert device.num_program_cache_entries() == 19
     elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert tt_lib.program_cache.num_entries() == 17
+        assert device.num_program_cache_entries() == 17
     elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
-        assert tt_lib.program_cache.num_entries() == 17
+        assert device.num_program_cache_entries() == 17
     else:
-        assert tt_lib.program_cache.num_entries() == 16
+        assert device.num_program_cache_entries() == 16

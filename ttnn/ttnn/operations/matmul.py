@@ -262,7 +262,7 @@ def create_matmul_program_config(
             shard_shape = input_tensor_a_memory_config.shard_spec.shape
             m_tiles_per_core = shard_shape[0] // ttnn.TILE_SIZE
             n_tiles_per_core = (N * shard_shape[1]) // (K * ttnn.TILE_SIZE)
-            k_tiles_per_core = 1
+            k_tiles_per_core = shard_shape[1] // ttnn.TILE_SIZE
 
         m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dst)
 

@@ -288,7 +288,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor &a,
     uint32_t per_core_M = 16;
     uint32_t per_core_N = 16;
 
-    TT_ASSERT(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -300,14 +300,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor &a,
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1; // Should always be 1
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1; // Should always be 1
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-    TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

@@ -349,7 +349,9 @@ def log1p(x, *args, **kwargs):
 
 
 def softplus(x, *args, **kwargs):
-    return torch.nn.functional.softplus(x)
+    beta = kwargs.pop("beta")
+    threshold = kwargs.pop("threshold")
+    return torch.nn.functional.softplus(x, beta=beta, threshold=threshold)
 
 
 def add1(x, *args, **kwargs):
@@ -357,7 +359,7 @@ def add1(x, *args, **kwargs):
 
 
 def mish(x, *args, **kwargs):
-    return x * torch.tanh(softplus(x))
+    return x * torch.tanh(softplus(x, beta=1.0, threshold=20.0))
 
 
 def recip(x, *args, **kwargs):
@@ -1802,3 +1804,22 @@ def upsample(x, *args, scale_factor, **kwargs):
     torch_result = torch_result.permute(0, 2, 3, 1)
 
     return torch_result
+
+
+def l1_loss(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="none")(x, y)
+    return torch_output_tensor
+
+
+def l1_loss_sum(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="sum")(x, y)
+
+    return torch_output_tensor
+
+
+def l1_loss_mean(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
+    return torch_output_tensor

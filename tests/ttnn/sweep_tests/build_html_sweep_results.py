@@ -60,7 +60,8 @@ def trim_column(texte, longueur):
 
 def get_subset_for_status(recent_df, prior_df, status):
     failed_recent = recent_df[recent_df["status"] == status]
-    failed_prior = recent_df[prior_df["status"] == status]
+    matching_prior_status = prior_df["status"] == status
+    failed_prior = prior_df[matching_prior_status]
     return failed_recent, failed_prior
 
 

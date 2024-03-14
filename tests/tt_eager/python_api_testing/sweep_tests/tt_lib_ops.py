@@ -803,6 +803,25 @@ def eltwise_lerp_binary(
 
 
 @setup_host_and_device
+def eltwise_softplus(
+    x,
+    *args,
+    beta,
+    threshold,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.softplus(t0, beta, threshold, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def conv(
     x,
     y,
@@ -2159,7 +2178,6 @@ eltwise_log10 = make_unary_op(ttl.tensor.log10)
 eltwise_swish = make_unary_op(ttl.tensor.swish)
 eltwise_add1 = make_unary_op(ttl.tensor.add1)
 eltwise_log1p = make_unary_op(ttl.tensor.log1p)
-eltwise_softplus = make_unary_op(ttl.tensor.softplus)
 eltwise_erfinv = make_unary_op(ttl.tensor.erfinv)
 eltwise_mish = make_unary_op(ttl.tensor.mish)
 eltwise_hardswish = make_unary_op(ttl.tensor.hardswish)

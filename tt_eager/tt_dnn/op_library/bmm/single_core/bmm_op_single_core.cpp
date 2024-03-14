@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
 
     tt_metal::Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B
     // MN = MK*KN

@@ -38,7 +38,7 @@ from models.utility_functions import (
     is_e75,
     is_wormhole_b0,
     skip_for_grayskull,
-    skip_for_wormhole_b0
+    skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -482,6 +482,7 @@ class TestParametrized:
             model_location_generator,
             expected_inference_time,
         )
+
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(

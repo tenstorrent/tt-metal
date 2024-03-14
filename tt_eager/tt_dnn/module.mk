@@ -25,6 +25,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/unpad/single_core/unpad_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/multi_core/unpad_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/unpad_op.cpp \
+	tt_eager/tt_dnn/op_library/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/indexed_fill/indexed_fill_op.cpp \
 	tt_eager/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
 	tt_eager/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \
 	tt_eager/tt_dnn/op_library/pool/average_pool.cpp \
@@ -179,6 +181,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/fold/fold_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/single_core/fold_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/fold/multi_core/fold_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =

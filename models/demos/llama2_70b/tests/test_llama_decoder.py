@@ -23,6 +23,10 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devic
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
 
+import re
+
+pattern = r"PCC: ([\d.]+)"
+
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
@@ -140,6 +144,7 @@ def run_test_LlamaDecoder_inference(
     generation_start_pos = 1
     generation_length = 50
     all_tests_pass = True
+    all_pccs = []
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -177,6 +182,9 @@ def run_test_LlamaDecoder_inference(
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
+        extracted_pcc = re.search(pattern, output_pcc)
+        extracted_pcc = float(extracted_pcc.group(1))
+        all_pccs.append(extracted_pcc)
 
         if does_pass:
             logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
@@ -184,6 +192,7 @@ def run_test_LlamaDecoder_inference(
             logger.warning(f"[start_pos={start_pos}] Llama2-70b Decoder output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
+    logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
@@ -243,7 +252,7 @@ def test_LlamaDecoder_inference(
     all_devices,
     emulated,
 ):
-    devices = get_devices_for_t3000(all_devices, n_devices)
+    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:

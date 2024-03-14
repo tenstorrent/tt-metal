@@ -834,6 +834,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.addcdiv_bw
 
+.. autofunction:: tt_lib.tensor.conj_bw
+
 .. autofunction:: tt_lib.tensor.unary_mul_bw
 
 .. autofunction:: tt_lib.tensor.unary_add_bw
@@ -845,6 +847,8 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
 .. autofunction:: tt_lib.tensor.div_bw
+
+.. autofunction:: tt_lib.tensor.rdiv_bw
 
 .. autofunction:: tt_lib.tensor.sqrt_bw
 
@@ -1034,11 +1038,21 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.logiteps_bw
 
+.. autofunction:: tt_lib.tensor.softsign_bw
+
+.. autofunction:: tt_lib.tensor.sign_bw
+
+.. autofunction:: tt_lib.tensor.ceil_bw
+
 .. autofunction:: tt_lib.tensor.log2_bw
 
 .. autofunction:: tt_lib.tensor.ge_bw
 
 .. autofunction:: tt_lib.tensor.le_bw
+
+.. autofunction:: tt_lib.tensor.unary_fmod_bw
+
+.. autofunction:: tt_lib.tensor.unary_remainder_bw
 
 Loss Functions
 ==============

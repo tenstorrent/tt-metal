@@ -31,10 +31,5 @@ inline void calculate_logical_not_unary()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void logical_not_unary_init() {
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

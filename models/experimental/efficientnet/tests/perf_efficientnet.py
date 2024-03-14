@@ -40,11 +40,11 @@ def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
     ),
 )
 def test_perf_efficientnet_b0(
+    device,
     use_program_cache,
     imagenet_sample_input,
     expected_inference_time,
     expected_compile_time,
-    device,
 ):
     disable_persistent_kernel_cache()
     first_key = "first_iter"

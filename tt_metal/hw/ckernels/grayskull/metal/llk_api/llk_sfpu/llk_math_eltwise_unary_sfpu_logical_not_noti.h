@@ -16,7 +16,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::logical_not_unary_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index) {
