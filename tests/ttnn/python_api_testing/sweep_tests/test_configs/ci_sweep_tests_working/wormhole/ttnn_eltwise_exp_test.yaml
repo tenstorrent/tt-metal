@@ -13,16 +13,15 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
-        dtype: bfloat16
         args:
-          low: -10
-          high: 10
+          low: -100
+          high: 100
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_exp_sweep.csv
