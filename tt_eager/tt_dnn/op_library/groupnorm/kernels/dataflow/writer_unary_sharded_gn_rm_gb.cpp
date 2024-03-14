@@ -28,6 +28,9 @@ FORCE_INLINE void generate_zero_mask_fill_partial_rows(const uint32_t cb_id, con
                     for (uint32_t j = num_cols; j < 16; ++j) {
                         ptr[face_offset + i + j] = 0;
                     }
+                    for (uint32_t j = 0; j < 16; ++j) {
+                        ptr[face_offset + 256 + i + j] = 0;
+                    }
                 } else {
                     for (uint32_t j = 0; j < 16; ++j) {
                         ptr[face_offset + i + j] = 0x3f80;
@@ -39,6 +42,14 @@ FORCE_INLINE void generate_zero_mask_fill_partial_rows(const uint32_t cb_id, con
                     for (uint32_t j = num_cols - 16; j < 16; ++j) {
                         ptr[face_offset + 256 + i + j] = 0;
                     }
+                }
+            } else {
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + i + j] = 0;
+                }
+
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + 256 + i + j] = 0;
                 }
             }
             row++;
@@ -68,6 +79,14 @@ FORCE_INLINE void generate_zero_mask_fill_full_rows(const uint32_t cb_id, const 
                 for (uint32_t j = 0; j < 16; ++j) {
                     ptr[face_offset + 256 + i + j] = 0x3f80;
                 }
+            } else {
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + i + j] = 0;
+                }
+
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + 256 + i + j] = 0;
+                }
             }
             row++;
         }
@@ -86,6 +105,14 @@ FORCE_INLINE void generate_zero_mask(const uint32_t cb_id, const uint32_t num_co
         for (uint32_t j = 0; j < num_cols; ++j) {
             ptr[j] = 0x3f80;
         }
+
+        for (uint32_t j = num_cols; j < 16; ++j) {
+            ptr[j] = 0;
+        }
+
+        for (uint32_t j = 0; j < 16; ++j) {
+            ptr[256 + j] = 0;
+        }
     } else {
         for (uint32_t j = 0; j < 16; ++j) {
             ptr[j] = 0x3f80;
@@ -93,6 +120,10 @@ FORCE_INLINE void generate_zero_mask(const uint32_t cb_id, const uint32_t num_co
 
         for (uint32_t j = 0; j < num_cols - 16; ++j) {
             ptr[256 + j] = 0x3f80;
+        }
+
+        for (uint32_t j = num_cols - 16; j < 16; ++j) {
+            ptr[256 + j] = 0;
         }
     }
 

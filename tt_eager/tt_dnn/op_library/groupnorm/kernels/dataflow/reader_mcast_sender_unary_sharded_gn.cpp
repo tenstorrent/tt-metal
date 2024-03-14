@@ -175,7 +175,8 @@ void kernel_main() {
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
     const DataFormat data_format = get_dataformat(cb_ex_partial);
-    const uint32_t num_bytes_read = datum_size_bytes;
+    // const uint32_t num_bytes_read = datum_size_bytes;
+    const uint32_t num_bytes_read = single_tile_size_bytes;
 
     volatile tt_l1_ptr uint16_t* rptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_in0));
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
