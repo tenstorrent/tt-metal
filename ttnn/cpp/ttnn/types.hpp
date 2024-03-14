@@ -55,6 +55,12 @@ struct CoreGrid {
 
     CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
 };
+
+static std::ostream &operator<<(std::ostream &os, const CoreGrid &core_grid) {
+    os << "ttnn.CoreGrid(x=" <<core_grid.x<<", y="<<core_grid.y<<")";
+    return os;
+}
+
 }
 
 using namespace types;

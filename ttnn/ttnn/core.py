@@ -140,21 +140,34 @@ def create_sharded_memory_config(
     else:
         shard_height = batch_size * height
         shard_width = width
-        if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR:
-            if shard_height % core_grid.y != 0:
-                raise RuntimeError("Invalid sharding core_grid")
-            if shard_width % core_grid.x != 0:
-                raise RuntimeError("Invalid sharding core_grid")
-            shard_shape = shard_height // core_grid.y, shard_width // core_grid.x
+        if strategy == ShardStrategy.BLOCK:
+            if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR:
+                if shard_height % core_grid.y != 0:
+                    raise RuntimeError("Invalid sharding core_grid")
+                if shard_width % core_grid.x != 0:
+                    raise RuntimeError("Invalid sharding core_grid")
+                shard_shape = shard_height // core_grid.y, shard_width // core_grid.x
 
-        elif shard_orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR:
-            if shard_height % core_grid.x != 0:
+            elif shard_orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR:
+                if shard_height % core_grid.x != 0:
+                    raise RuntimeError("Invalid sharding core_grid")
+                if shard_width % core_grid.y != 0:
+                    raise RuntimeError("Invalid sharding core_grid")
+                shard_shape = shard_height // core_grid.x, shard_width // core_grid.y
+            else:
+                raise RuntimeError("Invalid shard orientation")
+        elif strategy == ShardStrategy.HEIGHT:
+            total_cores = core_grid.x * core_grid.y
+            if shard_height % total_cores != 0:
                 raise RuntimeError("Invalid sharding core_grid")
-            if shard_width % core_grid.y != 0:
+            shard_shape = shard_height // total_cores, shard_width
+        elif strategy == ShardStrategy.WIDTH:
+            total_cores = core_grid.x * core_grid.y
+            if shard_width % total_cores != 0:
                 raise RuntimeError("Invalid sharding core_grid")
-            shard_shape = shard_height // core_grid.x, shard_width // core_grid.y
+            shard_shape = shard_height, shard_width // total_cores
         else:
-            raise RuntimeError("Invalid shard orientation")
+            raise RuntimeError("Invalid sharding scheme")
 
     shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
