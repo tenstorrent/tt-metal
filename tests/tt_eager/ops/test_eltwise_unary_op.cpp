@@ -143,6 +143,7 @@ void test_shape_padding() {
                 tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}},
             {padded_input_tensor})
             .at(0);
+    output_tensor = output_tensor.cpu();
 
     auto output_shape = output_tensor.get_legacy_shape();
     TT_FATAL(output_shape == padded_input_shape);

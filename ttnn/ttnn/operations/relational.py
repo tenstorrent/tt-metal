@@ -66,7 +66,7 @@ def register_ttl_relational_function_zero(name, ttl_relational_function, op_func
         return output_tensor
 
     relational_function.__name__ = f"ttnn.{name}"
-    relational_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    relational_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Returns tensor with the {op_function} of all of the elements of the input tensor :attr:`input_tensor` element-wise.
 
@@ -192,7 +192,7 @@ def register_ttl_relational_function(name, ttl_relational_function, op_name):
         return output_tensor
 
     relational_function.__name__ = f"ttnn.{name}"
-    relational_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    relational_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Performs relational {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b` or one tensor :attr:`input_a` and one :attr:`scalar` element-wise.
 
@@ -237,12 +237,12 @@ for relational_function_name, ttl_relational_function, name in TTL_RELATIONAL_FU
 for relational_function_name, ttl_relational_function, name in TTL_RELATIONAL_FUNCTIONS_ZERO:
     register_ttl_relational_function_zero(relational_function_name, ttl_relational_function, name)
 
-ttnn.Tensor.__eq__ = getattr(THIS_MODULE, "eq")
-ttnn.Tensor.__ne__ = getattr(THIS_MODULE, "ne")
-ttnn.Tensor.__gt__ = getattr(THIS_MODULE, "gt")
-ttnn.Tensor.__ge__ = getattr(THIS_MODULE, "gte")
-ttnn.Tensor.__lt__ = getattr(THIS_MODULE, "lt")
-ttnn.Tensor.__le__ = getattr(THIS_MODULE, "lte")
+ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "eq")(self, *args, **kwargs)
+ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "ne")(self, *args, **kwargs)
+ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "gt")(self, *args, **kwargs)
+ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "ge")(self, *args, **kwargs)
+ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "lt")(self, *args, **kwargs)
+ttnn.Tensor.__le__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "le")(self, *args, **kwargs)
 
 
 def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, param2):
@@ -336,7 +336,7 @@ def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, p
         return output_tensor
 
     isclose_function.__name__ = f"ttnn.{name}"
-    isclose_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    isclose_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {name} function to the elements of the input tensor :attr:`input_a` and :attr:`input_b`.
         {op_name}

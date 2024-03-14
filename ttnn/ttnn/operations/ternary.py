@@ -99,7 +99,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
 
@@ -222,7 +222,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{(name)}"
-    ternary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
 
@@ -328,7 +328,7 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Perform an ternary {name} operation on two tensors based on predicate input tensor.
 

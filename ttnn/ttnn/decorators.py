@@ -224,7 +224,7 @@ class Operation:
         function = self.function
 
         if not self.is_cpp_function or self.fallback is not None:
-            document_input_tensors(self.name, self.function, self.validate_input_tensors)
+            document_input_tensors(self.name, function, self.validate_input_tensors)
 
         def validate_decorator(function):
             @wraps(function)
@@ -324,10 +324,12 @@ class Operation:
     def __call__(self, *function_args, **function_kwargs):
         return self.decorated_function(*function_args, **function_kwargs)
 
-    __doc__ = property(lambda self: self.function.__doc__)
+    __doc__ = property(lambda self: self.decorated_function.__doc__)
 
 
-def register_operation(*, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None):
+def register_operation(
+    *, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None, is_method=False
+):
     if is_cpp_function:
         if fallback is not None:
             if validate_input_tensors is None:
@@ -359,7 +361,15 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
             raise RuntimeError(f"{operation} is already registered")
         REGISTERED_OPERATIONS.add(operation)
 
-        return operation.decorated_function
+        if is_method:
+
+            @wraps(operation)
+            def method_call(self, *args, **kwargs):
+                return operation(self, *args, **kwargs)
+
+            return method_call
+
+        return operation
 
     return operation_decorator
 
