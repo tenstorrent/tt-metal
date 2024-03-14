@@ -60,7 +60,6 @@ void kernel_main() {
                 cb_pop_front(untilized_cache_cb_id, Wt); // NEW
             }
 
-
             for (uint32_t g = 0; g < granularity; ++g) {
                 // Wait on compute to tilize an updated block. Write that block to DRAM
                 cb_wait_front(cache_cb_id, Wt);
@@ -75,12 +74,12 @@ void kernel_main() {
                     b = 0;
                     cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
                 }
+                noc_async_writes_flushed();
                 cb_pop_front(cache_cb_id, Wt);
             }
         }
-        // Delay syncing the writes to maximize perf.
-        noc_async_write_barrier();
-
         cb_pop_front(untilized_input_cb_id, Wt);
     }
+    // Delay syncing the writes to maximize perf.
+    noc_async_write_barrier();
 }
