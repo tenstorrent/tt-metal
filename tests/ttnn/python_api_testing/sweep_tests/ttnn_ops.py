@@ -2,10 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import random
 import torch
 import ttnn
 import tt_lib
 from models.helper_funcs import Linear as tt_Linear
+
+from ttnn.model_preprocessing import preprocess_model, preprocess_model_parameters
+import transformers
+from models.demos.bert.tt import ttnn_bert
+
+from tests.tt_eager.python_api_testing.sweep_tests.model_tests import (
+    TorchConvReluConv,
+    TTNNConvReluConv,
+    run_conv_relu_conv,
+    TorchConvConv,
+    TTNNConvConv,
+    run_conv_conv,
+    BertFeedForward,
+)
 
 
 def layout_to_ttnn(layout):
@@ -2822,5 +2837,281 @@ def zeros_like(
         t0,
         memory_config=memory_config_to_ttnn(output_mem_config),
     )
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def preprocessing_model_conv_conv(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(234)
+    num_channels = x.shape[1]
+
+    # create torch model
+    torch_model = TorchConvConv(num_input_channels=num_channels, num_output_channels=num_channels)
+    torch_model.eval()
+
+    torch_input_tensor = x.to(torch.float32)
+
+    # get model parameters
+    reader_patterns_cache = {}
+    parameters = preprocess_model(
+        initialize_model=lambda: torch_model,
+        run_model=lambda model: model(torch_input_tensor),
+        reader_patterns_cache=reader_patterns_cache,
+        device=device,
+    )
+
+    # create and run TTNN model
+    ttnn_model = TTNNConvConv(parameters)
+    output_tensor = run_conv_conv(ttnn_model, torch_input_tensor)
+
+    return output_tensor
+
+
+def preprocessing_model_conv_relu_conv(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(234)
+    torch_input_tensor = x.to(torch.float32)
+    num_channels = x.shape[1]
+
+    # create torch model
+    torch_model = TorchConvReluConv(num_input_channels=num_channels, num_output_channels=num_channels)
+    torch_model.eval()
+
+    # get model parameters
+    reader_patterns_cache = {}
+    parameters = preprocess_model(
+        initialize_model=lambda: torch_model,
+        run_model=lambda model: model(torch_input_tensor),
+        reader_patterns_cache=reader_patterns_cache,
+        device=device,
+    )
+
+    # create and run TTNN model
+    ttnn_model = TTNNConvReluConv(parameters)
+    output_tensor = run_conv_relu_conv(ttnn_model, torch_input_tensor, device)
+
+    return output_tensor
+
+
+def preprocessing_model_bert_1(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(234)
+
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    config = transformers.BertConfig.from_pretrained(model_name)
+    model = BertFeedForward(config).eval()
+    model = model.to(torch.bfloat16)
+
+    torch_hidden_states = x
+
+    torch_output = model(torch_hidden_states)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=device,
+    )
+
+    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn_bert.bert_feedforward(
+        config,
+        hidden_states,
+        parameters=parameters,
+    )
+    output = ttnn.to_torch(output)
+
+    return output
+
+
+def preprocessing_model_bert_2(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(234)
+
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    config = transformers.BertConfig.from_pretrained(model_name)
+    config.num_hidden_layers = 2
+    model = transformers.models.bert.modeling_bert.BertEncoder(config).eval()
+
+    torch_hidden_states = x.to(torch.float32)
+    torch_attention_mask = None
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=device,
+    )
+
+    hidden_states = ttnn.from_torch(torch_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    if torch_attention_mask is not None:
+        attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        attention_mask = None
+    output = ttnn_bert.bert_encoder(
+        config,
+        hidden_states,
+        attention_mask=attention_mask,
+        parameters=parameters,
+    )
+    output = ttnn.to_torch(output)
+
+    return output
+
+
+def preprocessing_model_bert_3(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(234)
+
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    config = transformers.BertConfig.from_pretrained(model_name)
+    model = transformers.models.bert.modeling_bert.BertAttention(config).eval()
+    model = model.to(torch.bfloat16)
+
+    torch_hidden_states = x
+    sequence_size = x.shape[1]
+    torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=device,
+    )
+
+    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn_bert.bert_attention(
+        config,
+        hidden_states,
+        attention_mask=attention_mask,
+        parameters=parameters,
+    )
+    output = ttnn.to_torch(output)
+
+    return output
+
+
+def preprocessing_model_bert_4(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(0)
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+
+    # set parameters
+    batch_size = x.shape[0]
+    sequence_size = x.shape[1]
+    num_hidden_layers = 1
+
+    # get torch model
+    config = transformers.BertConfig.from_pretrained(model_name)
+    if num_hidden_layers is not None:
+        config.num_hidden_layers = num_hidden_layers
+    else:
+        pytest.skip("Test mismatches when the default number of hidden layers is used")
+    model = transformers.BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
+
+    # set inputs
+    torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+    torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_attention_mask = None
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=device,
+    )
+
+    ttnn_bert_inputs = ttnn_bert.preprocess_inputs(
+        torch_input_ids,
+        torch_token_type_ids,
+        torch_position_ids,
+        torch_attention_mask,
+        device=device,
+    )
+    output = ttnn_bert.bert_for_question_answering(
+        config,
+        *ttnn_bert_inputs,
+        parameters=parameters,
+    )
+
+    output = ttnn.to_torch(output)
+    start_logits = output[..., 0]
+    end_logits = output[..., 1]
+
+    return start_logits
+
+
+def eltwise_mac(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = ttnn.mac(t0, t1, t2, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t3)
+
+
+def mean(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.mean(t0, dim, keepdim=True)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def std(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.std(t0, dim)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def var(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.var(t0, dim)
 
     return ttnn_tensor_to_torch(t1)
