@@ -20,10 +20,7 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
-./build/test/tt_metal/unit_tests
-
-env python tests/scripts/run_tt_metal.py --dispatch-mode slow
-env python tests/scripts/run_tt_eager.py --dispatch-mode slow
+./tests/scripts/run_cpp_unit_tests.sh
 
 echo "Checking docs build..."
 
