@@ -246,12 +246,54 @@ class resnetBlock2D:
         in_channels = parameters.conv1.weight.shape[1]
 
         if not self.fallback_on_groupnorm:
-            self.parameters.norm1.weight = pad_group_norm_weight(self.parameters.norm1.weight, self.groups, in_channels)
-            self.parameters.norm1.bias = pad_group_norm_weight(self.parameters.norm1.bias, self.groups, in_channels)
-            self.parameters.norm2.weight = pad_group_norm_weight(
-                self.parameters.norm2.weight, self.groups, out_channels
+            self.parameters.norm1.weight = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.norm1.weight), in_channels, self.groups
             )
-            self.parameters.norm2.bias = pad_group_norm_weight(self.parameters.norm2.bias, self.groups, out_channels)
+            self.parameters.norm1.bias = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.norm1.bias), in_channels, self.groups
+            )
+
+            self.parameters.norm1.weight = ttnn.from_torch(
+                self.parameters.norm1.weight,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.parameters.norm1.bias = ttnn.from_torch(
+                self.parameters.norm1.bias,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.parameters.norm2.weight = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.norm2.weight), out_channels, self.groups
+            )
+            self.parameters.norm2.bias = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.norm2.bias), out_channels, self.groups
+            )
+
+            self.parameters.norm2.weight = ttnn.from_torch(
+                self.parameters.norm2.weight,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.parameters.norm2.bias = ttnn.from_torch(
+                self.parameters.norm2.bias,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # self.parameters.norm1.weight = pad_group_norm_weight(self.parameters.norm1.weight, self.groups, in_channels)
+            # self.parameters.norm1.bias = pad_group_norm_weight(self.parameters.norm1.bias, self.groups, in_channels)
+            # self.parameters.norm2.weight = pad_group_norm_weight(
+            #     self.parameters.norm2.weight, self.groups, out_channels
+            # )
+            # self.parameters.norm2.bias = pad_group_norm_weight(self.parameters.norm2.bias, self.groups, out_channels)
 
     def __call__(
         self,
@@ -271,7 +313,12 @@ class resnetBlock2D:
         down=False,
         use_in_shortcut: Optional[bool] = None,
         dtype: Optional[ttnn.DataType] = None,
+        dump_to_file=False,
     ):
+        dump_file_prefix = "fallback_" if self.fallback_on_groupnorm else ""
+        if dump_to_file:
+            input_torch = ttnn.to_torch(input_tensor)
+            torch.save(input_torch, dump_file_prefix + "block_input.pt")
         assert groups == self.groups
         if non_linearity == "mish":
             assert False, "Mish is not implemented!"
@@ -290,6 +337,7 @@ class resnetBlock2D:
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             if ttnn.is_sharded(hidden_states):
                 hidden_states = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+            print("GN1 shape - ", (self.conv2.batch_size, in_channels, self.conv2.input_height, self.conv2.input_width))
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(
                 hidden_states, (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, in_channels)
@@ -297,6 +345,13 @@ class resnetBlock2D:
             ttnn.dump_device_memory_state(self.device, prefix="in_resnet_block_before_interleaved_to_sharded_")
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
             ttnn.dump_device_memory_state(self.device, prefix="in_resnet_block_after_interleaved_to_sharded_")
+        if dump_to_file:
+            hidden_states_torch = ttnn.to_torch(hidden_states)
+            torch.save(hidden_states_torch, dump_file_prefix + "gn1_input.pt")
+            torch_weight = ttnn.to_torch(self.parameters.norm1.weight)
+            torch_bias = ttnn.to_torch(self.parameters.norm1.bias)
+            torch.save(torch_weight, dump_file_prefix + "gn1_weight.pt")
+            torch.save(torch_bias, dump_file_prefix + "gn1_bias.pt")
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
@@ -337,7 +392,13 @@ class resnetBlock2D:
                 hidden_states,
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, in_channels),
             )
+            if dump_to_file:
+                hidden_states_torch = ttnn.to_torch(hidden_states)
+                torch.save(hidden_states_torch, dump_file_prefix + "gn1_output_before_tilize.pt")
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+        if dump_to_file:
+            hidden_states_torch = ttnn.to_torch(hidden_states)
+            torch.save(hidden_states_torch, dump_file_prefix + "gn1_output.pt")
         hidden_states = nonlinearity(hidden_states)
 
         if up:
@@ -417,11 +478,15 @@ class resnetBlock2D:
             hidden_states = hidden_states + temb
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        print("GN2 shape - ", (self.conv2.batch_size, out_channels, self.conv2.input_height, self.conv2.input_width))
         hidden_states = ttnn.reshape(
             hidden_states,
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
         )
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        if dump_to_file:
+            hidden_states_torch = ttnn.to_torch(hidden_states)
+            torch.save(hidden_states_torch, dump_file_prefix + "gn2_input.pt")
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
@@ -457,6 +522,9 @@ class resnetBlock2D:
             hidden_states,
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
         )
+        if dump_to_file:
+            hidden_states_torch = ttnn.to_torch(hidden_states)
+            torch.save(hidden_states_torch, dump_file_prefix + "gn2_output.pt")
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         hidden_states = nonlinearity(hidden_states)

@@ -109,6 +109,7 @@ def test_down_block_2d_256x256_ttnn(input_shape, temb_shape, device, model_name,
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, reset_seeds):
+    torch.manual_seed(0)
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
