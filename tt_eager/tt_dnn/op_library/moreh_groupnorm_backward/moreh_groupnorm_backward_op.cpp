@@ -281,8 +281,8 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_gr
             dg_db.push_back(nullptr);
         }
     } else {
-        dg_db.push_back(std::move(dgamma_dbeta[0]));
         dg_db.push_back(nullptr);
+        dg_db.push_back(std::move(dgamma_dbeta[0]));
     }
 
     return std::move(dg_db);
