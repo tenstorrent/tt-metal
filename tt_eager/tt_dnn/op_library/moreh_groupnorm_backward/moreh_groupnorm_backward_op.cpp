@@ -205,6 +205,7 @@ std::vector<Tensor> MorehGroupNormBackwardGammaBetaGrad::create_output_tensors(
     auto device = input_tensors.at(0).device();
 
     std::vector<Tensor> result;
+    result.reserve(2);
 
     if (output_tensors.at(0).has_value()) {
         result.push_back(output_tensors.at(0).value());
