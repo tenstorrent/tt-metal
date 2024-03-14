@@ -27,9 +27,7 @@ jobs:
           {name: ttnn, cmd: ./tests/scripts/run_python_ttnn_tests.sh},
           {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
           {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
-          {name: Metal C++ GTest, cmd: ./build/test/tt_metal/unit_tests_fast_dispatch},
-          {name: Eager C++, cmd: python tests/scripts/run_tt_eager.py --dispatch-mode fast},
-          {name: Metal C++, cmd: python tests/scripts/run_tt_metal.py --dispatch-mode fast},
+          {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
