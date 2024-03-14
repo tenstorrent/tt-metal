@@ -118,56 +118,12 @@ constexpr static std::uint32_t TRISC1_BP_LNUM = TRISC1_BP_LNUM_MACRO;
 constexpr static std::uint32_t TRISC2_BP_LNUM = TRISC2_BP_LNUM_MACRO;
 constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 
-// Dispatch message address
-constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = RING_BUFFER_ADDR + RING_BUFFER_SIZE;
-constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR_RESERVATION = 32;
-constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = DISPATCH_MESSAGE_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION;
-
-constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 8;
-
-// Command queue pointers
-constexpr static uint32_t CQ_ISSUE_READ_PTR = DISPATCH_MESSAGE_REMOTE_SENDER_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION;
-constexpr static uint32_t CQ_ADDR_RESERVATION = 96;
-constexpr static uint32_t CQ_ISSUE_WRITE_PTR = CQ_ISSUE_READ_PTR + L1_ALIGNMENT;
-constexpr static uint32_t CQ_COMPLETION_WRITE_PTR = CQ_ISSUE_WRITE_PTR + L1_ALIGNMENT;
-constexpr static uint32_t CQ_COMPLETION_READ_PTR = CQ_COMPLETION_WRITE_PTR + L1_ALIGNMENT;
-constexpr static uint32_t CQ_COMPLETION_LAST_EVENT = CQ_COMPLETION_READ_PTR + L1_ALIGNMENT;
-constexpr static uint32_t CQ_COMPLETION_16B_SCRATCH = CQ_COMPLETION_LAST_EVENT + L1_ALIGNMENT;
-constexpr static uint32_t EVENT_PTR = CQ_COMPLETION_16B_SCRATCH + L1_ALIGNMENT;
-
-// Host addresses for dispatch
-static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0;
-static constexpr uint32_t HOST_CQ_COMPLETION_WRITE_PTR = 32;
-static constexpr uint32_t HOST_CQ_FINISH_PTR = 64;
-static constexpr uint32_t CQ_START = 96;
-
-static constexpr uint32_t CQ_CONSUMER_CB_BASE = CQ_ISSUE_READ_PTR + CQ_ADDR_RESERVATION;
-static constexpr uint32_t CQ_CONSUMER_CB_ADDR_RESERVATION = 256;
-// CB0
-static constexpr uint32_t CQ_CONSUMER_CB0_ACK = CQ_CONSUMER_CB_BASE;
-static constexpr uint32_t CQ_CONSUMER_CB0_RECV = CQ_CONSUMER_CB0_ACK + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB0_NUM_PAGES_BASE = CQ_CONSUMER_CB0_RECV + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB0_PAGE_SIZE = CQ_CONSUMER_CB0_NUM_PAGES_BASE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB0_TOTAL_SIZE = CQ_CONSUMER_CB0_PAGE_SIZE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB0_READ_PTR = CQ_CONSUMER_CB0_TOTAL_SIZE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB0_WRITE_PTR = CQ_CONSUMER_CB0_READ_PTR + L1_ALIGNMENT;
-
-// CB1
-static constexpr uint32_t CQ_CONSUMER_CB1_ACK = CQ_CONSUMER_CB0_WRITE_PTR + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_RECV = CQ_CONSUMER_CB1_ACK + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_NUM_PAGES_BASE = CQ_CONSUMER_CB1_RECV + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_PAGE_SIZE = CQ_CONSUMER_CB1_NUM_PAGES_BASE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_TOTAL_SIZE = CQ_CONSUMER_CB1_PAGE_SIZE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_READ_PTR = CQ_CONSUMER_CB1_TOTAL_SIZE + L1_ALIGNMENT;
-static constexpr uint32_t CQ_CONSUMER_CB1_WRITE_PTR = CQ_CONSUMER_CB1_READ_PTR + L1_ALIGNMENT;
-
-constexpr static std::uint32_t L1_UNRESERVED_BASE = CQ_CONSUMER_CB_BASE + CQ_CONSUMER_CB_ADDR_RESERVATION; //CQ_CONSUMER_CB_BASE + 16 * L1_ALIGNMENT; // Start of unreserved space
+constexpr static std::uint32_t L1_UNRESERVED_BASE = (((RING_BUFFER_ADDR + RING_BUFFER_SIZE) - 1) | + (32 - 1)) + 1;
 constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
-// DRAM write barrier
-// Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed
+// Reserved DRAM addresses
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
-
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
