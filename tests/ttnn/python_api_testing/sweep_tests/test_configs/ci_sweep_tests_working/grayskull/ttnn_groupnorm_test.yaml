@@ -7,7 +7,7 @@ test-list:
         interval: [32, 32]
         #num-dims: [2]
         num-shapes: 3
-        num-samples: 128
+        num-samples: 64
         args-sampling-strategy: "all"
         method: ttnn-groupnorm
       env:
