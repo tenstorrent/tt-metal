@@ -20,8 +20,8 @@ namespace operations {
 namespace binary {
 
 static inline const std::array<ttnn::TensorSchema, 2> input_schemas{
-    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
+    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
+    ttnn::TensorSchema{2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
 };
 
 inline ttnn::Tensor add(

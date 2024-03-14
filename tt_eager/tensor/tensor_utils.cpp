@@ -47,8 +47,15 @@ namespace tt_metal {
                 auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
                 return rm_tensor.to(Layout::TILE);
             }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
         } else {
-            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
         }
         auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
@@ -92,8 +99,15 @@ namespace tt_metal {
                 auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
                 return rm_tensor.to(Layout::TILE);
             }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
         } else {
-            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
         }
         auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
@@ -109,7 +123,7 @@ namespace tt_metal {
             {DataType::UINT32, &to_weight_tile_layout<uint32_t>},
         };
         if (output_dtype.has_value()) {
-            if (output_dtype == DataType::BFLOAT8_B) {
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
@@ -128,7 +142,7 @@ namespace tt_metal {
             {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}
         };
         if (output_dtype.has_value()) {
-            if (output_dtype == DataType::BFLOAT8_B) {
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());

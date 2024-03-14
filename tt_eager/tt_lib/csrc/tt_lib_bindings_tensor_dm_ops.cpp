@@ -57,7 +57,7 @@ namespace tt::tt_metal::detail{
 
                 Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,UINT32 and UINT16.
+                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32 and UINT16.
 
                 Output tensor will be on device, in same layout, and have the given data type.
 
