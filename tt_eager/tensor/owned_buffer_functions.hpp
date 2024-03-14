@@ -28,7 +28,7 @@ Buffer<T> create(std::size_t size) {
 template<typename T>
 void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT32 or tensor.get_dtype() == DataType::BFLOAT8_B);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT32 or tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT4_B);
     } else if constexpr (std::is_same_v<T, float>) {
         TT_FATAL(tensor.get_dtype() == DataType::FLOAT32);
     } else if constexpr (std::is_same_v<T, bfloat16>) {

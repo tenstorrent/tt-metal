@@ -20,6 +20,7 @@ static constexpr auto uint32 = DataType::UINT32;
 static constexpr auto float32 = DataType::FLOAT32;
 static constexpr auto bfloat16 = DataType::BFLOAT16;
 static constexpr auto bfloat8_b = DataType::BFLOAT8_B;
+static constexpr auto bfloat4_b = DataType::BFLOAT4_B;
 
 using tt::tt_metal::BufferType;
 using tt::tt_metal::MemoryConfig;

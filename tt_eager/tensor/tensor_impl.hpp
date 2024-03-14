@@ -482,6 +482,7 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
 }
 
 Tensor to_layout_bfloat8_b(const Tensor& tensor, Layout target_layout);
+Tensor to_layout_bfloat4_b(const Tensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
@@ -584,6 +585,8 @@ inline Tensor pad(
 
 Tensor pad_bfloat8_b(
     const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
+Tensor pad_bfloat4_b(
+    const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
 
 template <typename T>
 inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
@@ -657,6 +660,7 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
 }
 
 Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
+Tensor unpad_bfloat4_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print
@@ -853,6 +857,16 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
         // Convert to FLOAT32 tensor before printing
         auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
         auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+        auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+        auto float_tensor =
+            Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+        return to_string<float>(float_tensor, tensor.get_dtype());
+    }
+
+    if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
+        // Convert to FLOAT32 tensor before printing
+        auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+        auto input_float_data = unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
         auto float_tensor =
             Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());

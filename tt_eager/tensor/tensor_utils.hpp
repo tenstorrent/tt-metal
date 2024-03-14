@@ -39,6 +39,12 @@ namespace tt_metal {
             TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
             return bfloat8_b_volume / sizeof(std::uint32_t);
         }
+        if (data_type == DataType::BFLOAT4_B) {
+            TT_ASSERT(volume % constants::TILE_HW == 0);
+            const auto bfloat4_b_volume = volume / constants::TILE_HW * constants::BFLOAT4_B_TILE_HW;
+            TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
+            return bfloat4_b_volume / sizeof(std::uint32_t);
+        }
         return volume;
     }
 

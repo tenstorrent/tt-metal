@@ -41,6 +41,7 @@ from ttnn.types import (
     uint16,
     uint32,
     bfloat8_b,
+    bfloat4_b,
     bfloat16,
     float32,
     MemoryConfig,

@@ -14,6 +14,7 @@ uint32 = DataType.UINT32
 float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
+bfloat4_b = DataType.BFLOAT4_B
 
 BufferType = ttl.tensor.BufferType
 TensorMemoryLayout = ttl.tensor.TensorMemoryLayout

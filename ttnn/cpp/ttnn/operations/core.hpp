@@ -21,7 +21,7 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
     ttnn::TensorSchema{
         1,
         8,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::uint16, ttnn::uint32, ttnn::float32},
+        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16, ttnn::uint32, ttnn::float32},
         {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
         true,
         true,

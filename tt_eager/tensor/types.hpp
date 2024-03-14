@@ -28,7 +28,8 @@ enum class DataType {
     FLOAT32 = 1,
     UINT32 = 2,
     BFLOAT8_B = 3,
-    UINT16 = 4,
+    BFLOAT4_B = 4,
+    UINT16 = 6
 };
 
 enum class StorageType {
