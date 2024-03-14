@@ -387,11 +387,12 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);
     auto shard_spec = memory_config.shard_spec.value();
     auto& shard_shape = shard_spec.shape;
-
+    log_debug(LogOp, "shard shape {}", shard_shape);
     uint32_t num_cores = shard_spec.num_cores();
 
     uint32_t num_shards;
     uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+    log_debug(LogOp, "tensor shape  {}", shape); //debug logs remove
     uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_ASSERT(total_width == shard_shape[1], "Shard shape {} does not divide tensor shape {} correctly according to sharding scheme", shard_shape[1], total_width);
