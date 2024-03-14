@@ -268,7 +268,7 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
         torch_input_tensor, num_groups, weight=torch_weight1, bias=torch_bias1
     )
     # torch_inter_tensor = torch.nn.functional.silu(torch_inter_tensor)
-    # torch_output_tensor = torch_inter_tensor
+    torch_output_tensor = torch_inter_tensor
 
     # torch_output_tensor = torch_input_tensor # uncomment this line if only testing untilize + tilize
     # torch_output_tensor = torch.nn.functional.group_norm(
@@ -355,12 +355,12 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
         is_height_sharded=False,
     )
     input_tensor = ttnn.reshape(input_tensor, (1, 1, N * H * W, C))
-    breakpoint()
+    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    breakpoint()
+    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG)
-    breakpoint()
-    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+    # breakpoint()
+    # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
     print("  ")
     print("GN shape - ", shape)
@@ -368,14 +368,14 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
     print("  ")
     input_tensor = ttnn.reshape(input_tensor, (N, 1, H * W, C))
     # output_tensor = input_tensor # uncomment this line if only testing untilzie + tilize
-    # inter_tensor = ttnn.group_norm(
-    #     input_tensor,
-    #     num_groups=num_groups,
-    #     weight=gamma_t1,
-    #     bias=beta_t1,
-    #     memory_config=sharded_mem_config,
-    #     core_grid=core_grid,
-    # )
+    inter_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        weight=gamma_t1,
+        bias=beta_t1,
+        memory_config=sharded_mem_config,
+        core_grid=core_grid,
+    )
     # inter_tensor = ttnn.reshape(inter_tensor, (N, H, W, C))
     inter_tensor = ttnn.to_memory_config(inter_tensor, ttnn.L1_MEMORY_CONFIG)
     # inter_tensor = ttnn.reshape(inter_tensor, (N, 1, H*W, C))
