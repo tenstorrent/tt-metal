@@ -693,7 +693,13 @@ def to_layout(
                         tensor, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
                     )
                 else:
-                    return ttl.tensor.untilize(tensor)
+                    breakpoint()
+                    return ttl.tensor.untilize(
+                        tensor,
+                        output_mem_config=ttnn.get_memory_config(tensor)
+                        if output_memory_config is None
+                        else output_memory_config,
+                    )
             elif layout == ttnn.TILE_LAYOUT:
                 ## since the default of tilize is to use single core, set use_multicore if the input is sharded
                 use_multicore = False
