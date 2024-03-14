@@ -394,15 +394,29 @@ inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b
     // TODO: Uplift interleaved path to call tt::operation::primary::Matmul and deprecate old tt::tt_metal::Matmul
     if (input_tensor_a.is_sharded()) {
         auto matmul_program_config = bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, true);
-        return operation::run(tt::operations::primary::Matmul{
-            .program_config=matmul_program_config,
-            .output_mem_config=mem_config,
-            .output_dtype=input_tensor_a.get_dtype(),
-            .compute_kernel_config=kernel_config_val,
-            .untilize_out=untilize_out
-        }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        return operation::run(
+                   tt::operations::primary::Matmul{
+                       .program_config = matmul_program_config,
+                       .output_mem_config = mem_config,
+                       .output_dtype = input_tensor_a.get_dtype(),
+                       .compute_kernel_config = kernel_config_val,
+                       .untilize_out = untilize_out,
+                   },
+                   {input_tensor_a, input_tensor_b},
+                   {std::nullopt})
+            .at(0);
     } else {
-        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        return operation::run_with_autoformat(
+                   Matmul{
+                       .bcast_batch = true,
+                       .output_mem_config = mem_config,
+                       .output_dtype = input_tensor_a.get_dtype(),
+                       .compute_kernel_config = kernel_config_val,
+                       .untilize_out = untilize_out,
+                   },
+                   {input_tensor_a, input_tensor_b},
+                   {std::nullopt})
+            .at(0);
     }
 }
 // TODO: Should we merge this with matmul and expose an option (or infer it from shape) to bcast_batch
@@ -425,7 +439,17 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
             .untilize_out=untilize_out
         }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     } else {
-        return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.get_dtype(), .compute_kernel_config=kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        return operation::run_with_autoformat(
+                   Matmul{
+                       .bcast_batch = false,
+                       .output_mem_config = mem_config,
+                       .output_dtype = input_tensor_a.get_dtype(),
+                       .compute_kernel_config = kernel_config_val,
+                       .untilize_out = untilize_out,
+                   },
+                   {input_tensor_a, input_tensor_b},
+                   {std::nullopt})
+            .at(0);
     }
 }
 
