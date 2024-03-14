@@ -523,7 +523,7 @@ def linear(
     )
 
 
-ttnn.Tensor.__matmul__ = matmul
+ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: matmul(self, *args, **kwargs)
 
 
 __all__ = []

@@ -80,7 +80,7 @@ def register_ttl_loss_function(name, ttl_loss_function):
         return output_tensor
 
     loss_function.__name__ = f"ttnn.{name}"
-    loss_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    loss_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies {name} to :attr:`input_tensor_a` and :attr:`input_tensor_b` with loss_mode :attr:`loss_mode`.
 
