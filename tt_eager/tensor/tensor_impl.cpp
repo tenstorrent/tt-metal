@@ -66,7 +66,6 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 default:
                     TT_ASSERT(false && "Unsupported data type!");
             }
-            printf("MT: total_size_bytes = %d, page_size = %d\n", total_size_bytes, page_size);
             TT_ASSERT(total_size_bytes % page_size == 0);
         }
         break;
