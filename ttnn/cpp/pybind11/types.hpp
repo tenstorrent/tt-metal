@@ -37,7 +37,12 @@ void py_module(py::module& module) {
         .def(py::init<std::size_t, std::size_t>(), py::kw_only(), py::arg("x"), py::arg("y"))
         .def_property_readonly("x", [](const ttnn::CoreGrid& self) { return self.x; })
         .def_property_readonly("y", [](const ttnn::CoreGrid& self) { return self.y; })
-        .def_property_readonly("num_cores", [](const ttnn::CoreGrid& self) { return self.x * self.y; });
+        .def_property_readonly("num_cores", [](const ttnn::CoreGrid& self) { return self.x * self.y; })
+        .def("__repr__", [](const ttnn::CoreGrid& self) -> std::string {
+            std::stringstream ss;
+            ss << self;
+            return ss.str();
+        });
 
     auto PyShape = py::class_<ttnn::Shape>(module, "Shape");
     PyShape.def(py::init<tt::tt_metal::Shape>());
