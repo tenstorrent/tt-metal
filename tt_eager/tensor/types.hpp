@@ -486,6 +486,10 @@ struct Shape {
             other.ranked_shape);
     }
 
+    const auto &value() const {
+        return std::visit([](const auto &shape) -> const auto & { return shape.value; }, this->ranked_shape);
+    }
+
     template <std::size_t Rank>
     bool operator==(const std::array<std::uint32_t, Rank> &other) const {
         return Shape{this->value().without_padding()} == Shape{other};
@@ -493,10 +497,6 @@ struct Shape {
 
     const auto &operator[](std::int64_t index) const {
         return std::visit([index](const auto &shape) -> decltype(auto) { return shape[index]; }, this->ranked_shape);
-    }
-
-    const auto &value() const {
-        return std::visit([](const auto &shape) -> const auto & { return shape.value; }, this->ranked_shape);
     }
 
     const auto volume() const {

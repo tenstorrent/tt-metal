@@ -65,8 +65,8 @@ void py_module(py::module& module) {
            const std::optional<const ttnn::Tensor>& bias,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const std::string>& activation,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor  {
+           const std::optional<const std::string>& activation = std::nullopt,
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::linear(
                 input_tensor_a,
                 input_tensor_b,

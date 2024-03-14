@@ -136,7 +136,7 @@ Tensor moreh_nll_loss_step1(
 
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     return operation::run(
                MorehNllLossStep1{
@@ -161,7 +161,7 @@ Tensor moreh_nll_loss_step2(
 
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     return operation::run(
                MorehNllLossStep2{
