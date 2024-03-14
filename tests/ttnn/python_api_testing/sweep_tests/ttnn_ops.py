@@ -2227,3 +2227,69 @@ def l1_loss(
     t2 = ttnn.l1_loss(t0, t1, loss_mode="none", memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
+
+
+def mse_loss_sum(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    x = x.unsqueeze(0)
+    y = y.unsqueeze(0)
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.mse_loss(t0, t1, loss_mode="sum", memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def mse_loss_mean(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    x = x.unsqueeze(0)
+    y = y.unsqueeze(0)
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.mse_loss(t0, t1, loss_mode="mean", memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def mse_loss(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    x = x.unsqueeze(0)
+    y = y.unsqueeze(0)
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.mse_loss(t0, t1, loss_mode="none", memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
