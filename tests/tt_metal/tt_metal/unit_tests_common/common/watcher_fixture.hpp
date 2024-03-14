@@ -10,7 +10,7 @@
 // A version of CommonFixture with watcher enabled
 class WatcherFixture: public CommonFixture {
 public:
-    inline static const string log_file_name = "built/watcher.log";
+    inline static const string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.

@@ -792,7 +792,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     this->initialize_and_launch_firmware();
 
-    watcher_attach(this, build_env_.get_out_root_path());
+    watcher_attach(this);
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;
