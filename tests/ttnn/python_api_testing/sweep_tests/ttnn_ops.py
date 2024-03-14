@@ -1997,7 +1997,6 @@ def clip(
     return ttnn_tensor_to_torch(t1)
 
 
-<<<<<<< HEAD
 def repeat_interleave(
     x,
     *args,
@@ -2075,7 +2074,6 @@ def groupnorm(
 
     return ttnn_tensor_to_torch(t3)
 
-<<<<<<< HEAD
 
 def eltwise_addcdiv(
     x,
@@ -2242,7 +2240,7 @@ def ldexp(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.ldexp(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -2261,7 +2259,7 @@ def logical_and(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.logical_and(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -2280,7 +2278,7 @@ def logical_or(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.logical_or(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -2299,7 +2297,7 @@ def logical_xor(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.logical_xor(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -2335,7 +2333,7 @@ def logaddexp(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.logaddexp(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -2354,7 +2352,7 @@ def logaddexp2(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
 
     t2 = ttnn.logaddexp2(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
