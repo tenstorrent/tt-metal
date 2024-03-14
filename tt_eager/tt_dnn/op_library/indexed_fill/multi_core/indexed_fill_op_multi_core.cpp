@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt::DataFormat batch_cb_data_format = tt_metal::datatype_to_dataformat_converter(batch_ids.get_dtype());
-    uint32_t batch_page_size = 32;
+    uint32_t batch_page_size = round_up_to_mul32(b*sizeof(uint32_t));
     tt_metal::CircularBufferConfig batch_cb_config =
         tt_metal::CircularBufferConfig(2* batch_page_size, {{batch_cb_index, cb_data_format}})
             .set_page_size(batch_cb_index, batch_page_size);

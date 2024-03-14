@@ -47,20 +47,26 @@ void kernel_main() {
 
     const InterleavedAddrGen<batch_ids_is_dram> batchAddr = {
         .bank_base_address = batch_ids_addr,
-        .page_size = sizeof(uint32_t)
+        .page_size =  batch_id_size << 2
     };
 
 
     bool replace_batch = false;
     uint32_t batch_to_replace_id = 0;
     //first go through batch id
-    for (uint32_t i=0; i<batch_id_size; i++) {
-        uint64_t src_noc_addr = get_noc_addr(i, batchAddr);
+
+
+    volatile tt_l1_ptr int* addr_ptr;
+
+    if(batch_id_size > 0) {
+        uint64_t src_noc_addr = get_noc_addr(0, batchAddr);
         uint32_t l1_write_addr = get_write_ptr(batch_cb_id);
-        noc_async_read(src_noc_addr, l1_write_addr, sizeof(uint32_t));
+        noc_async_read(src_noc_addr, l1_write_addr, (batch_id_size << 2) );
         noc_async_read_barrier();
-        volatile tt_l1_ptr int* addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
-        uint32_t batch_id_to_replace = addr_ptr[0];
+        addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
+    }
+    for (uint32_t i=0; i<batch_id_size; i++) {
+        uint32_t batch_id_to_replace = addr_ptr[i];
         if(batch_id_to_replace == my_batch_id) {
             replace_batch = true;
             batch_to_replace_id = i;
