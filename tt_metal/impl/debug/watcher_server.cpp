@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
+#include <filesystem>
 
 #include "llrt/llrt.hpp"
 #include "watcher_server.hpp"
@@ -33,7 +34,7 @@ static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
 static std::mutex watch_mutex;
 static std::unordered_set<Device *> devices;
-static string logfile_path = "";
+static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
@@ -49,12 +50,14 @@ static double get_elapsed_secs() {
     return elapsed_secs.count();
 }
 
-static FILE * create_file(const string& log_path) {
+static FILE * create_file() {
 
     FILE *f;
 
     const char *fmode = tt::llrt::OptionsG.get_watcher_append()? "a" : "w";
-    string fname = log_path + watcher::logfile_name;
+    std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path);
+    std::filesystem::create_directories(output_dir);
+    string fname = output_dir.string() + watcher::logfile_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
     }
@@ -751,14 +754,13 @@ void watcher_init(Device *device) {
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
 }
 
-void watcher_attach(Device *device, const string& log_path) {
+void watcher_attach(Device *device) {
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
     if (!watcher::enabled && tt::llrt::OptionsG.get_watcher_enabled()) {
 
-        watcher::logfile_path = log_path;
-        watcher::logfile = watcher::create_file(log_path);
+        watcher::logfile = watcher::create_file();
         watcher::watcher_killed_due_to_error = false;
 
         watcher::kernel_names.clear();
@@ -827,11 +829,11 @@ void watcher_server_set_error_flag(bool val) {
 }
 
 void watcher_clear_log() {
-    watcher::logfile = watcher::create_file(watcher::logfile_path);
+    watcher::logfile = watcher::create_file();
 }
 
 string watcher_get_log_file_name() {
-    return watcher::logfile_path + watcher::logfile_name;
+    return tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path + watcher::logfile_name;
 }
 
 } // namespace tt
