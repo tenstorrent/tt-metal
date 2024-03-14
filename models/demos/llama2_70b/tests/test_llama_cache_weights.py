@@ -3,19 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
-import torch
 import pytest
 from loguru import logger
-
 from pathlib import Path
-import scipy
-from sklearn.metrics import top_k_accuracy_score
-import numpy as np
-
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 
 from models.demos.llama2_70b.reference.llama.llama import Llama
-
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -24,7 +20,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_model import TtLlamaModel
 from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 
 
