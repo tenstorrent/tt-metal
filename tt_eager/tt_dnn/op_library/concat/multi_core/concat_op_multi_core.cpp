@@ -437,7 +437,6 @@ operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &inp
         num_output_tiles_per_block += num_accum_tiles * dim_tiles;
     }
     vector<uint32_t> common_reader_kernel_args = {
-        num_input_tensors,
         0, 0, 0
     };
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
@@ -449,7 +448,8 @@ operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &inp
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) src0_cb_index
+        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) num_input_tensors,
     };
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -500,9 +500,9 @@ operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &inp
         }
 
         vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[1] = num_tiles_per_core;
-        reader_kernel_args[2] = curr_tensor;
-        reader_kernel_args[3] = curr_tensor_id;
+        reader_kernel_args[0] = num_tiles_per_core;
+        reader_kernel_args[1] = curr_tensor;
+        reader_kernel_args[2] = curr_tensor_id;
         reader_kernel_args.insert(reader_kernel_args.end(), tile_id_per_tensor.begin(), tile_id_per_tensor.end());
 
         vector<uint32_t> writer_kernel_args = {
