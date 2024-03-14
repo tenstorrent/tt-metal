@@ -30,8 +30,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t num_groups,
-    Tensor &gamma_grad,
-    Tensor &beta_grad) {
+    const std::optional<const Tensor> gamma_grad,
+    const std::optional<const Tensor> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -69,9 +69,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const auto HtWt = Ht * Wt;
     const auto num_inner_tiles = batch * HtWt;  // inner_size
 
-    // TODO(seunghwan100): Make gamm_grad, beta_grad optional
-    const bool gamma_grad_has_value = true;
-    const bool beta_grad_has_value = true;
+    const bool gamma_grad_has_value = gamma_grad.has_value();
+    const bool beta_grad_has_value = beta_grad.has_value();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -205,8 +204,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const auto mean_addr = mean.buffer()->address();
     const auto rstd_addr = rstd.buffer()->address();
 
-    const auto gamma_grad_addr = gamma_grad.buffer()->address();
-    const auto beta_grad_addr = beta_grad.buffer()->address();
+    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0;
+    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

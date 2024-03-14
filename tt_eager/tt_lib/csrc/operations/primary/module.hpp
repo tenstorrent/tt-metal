@@ -867,7 +867,7 @@ void py_module(py::module& m_primary) {
         py::arg("mean_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("rstd_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
-        "Performs a moreh_groupnorm operation.
+        Performs a moreh_groupnorm operation.
     )doc");
 
     // moreh_groupnorm_backward
@@ -879,6 +879,7 @@ void py_module(py::module& m_primary) {
         py::arg("mean").noconvert(),
         py::arg("rstd").noconvert(),
         py::arg("num_groups").noconvert(),
+        py::arg("are_needed_outputs").noconvert() = std::vector<bool>{true, true, true},
         py::kw_only(),
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("input_grad").noconvert() = std::nullopt,
@@ -888,7 +889,7 @@ void py_module(py::module& m_primary) {
         py::arg("gamma_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("beta_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
-        "Performs a moreh_groupnorm_backward operation.
+        Performs a moreh_groupnorm_backward operation.
     )doc");
 
     m_primary.def(
