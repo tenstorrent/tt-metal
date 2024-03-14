@@ -55,13 +55,16 @@ Tensor convert_torch_tensor_to_tt_tensor(
     } else if (torch_dtype.equal(torch.attr("int32"))) {
         // TODO(arakhmati): add DataType::INT32?
         data_type = DataType::UINT32;
+    }  else if (torch_dtype.equal(torch.attr("int16"))) {
+        // TODO(arakhmati): add DataType::INT16?
+        data_type = DataType::UINT16;
     } else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
     }
 
     switch (data_type) {
         case DataType::UINT16: {
-            if (not torch_dtype.equal(torch.attr("int32"))) {
+            if (not torch_dtype.equal(torch.attr("int16"))) {
                 contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int16"));
             }
             break;
