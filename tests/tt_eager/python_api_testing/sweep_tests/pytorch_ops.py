@@ -1823,3 +1823,22 @@ def l1_loss_mean(x, y, *args, **kwargs):
     # return torch.nn.functional.upsample(x, scale_factor=2)
     torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
     return torch_output_tensor
+
+
+def mse_loss(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.MSELoss(reduction="none")(x, y)
+    return torch_output_tensor
+
+
+def mse_loss_sum(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.MSELoss(reduction="sum")(x, y)
+
+    return torch_output_tensor
+
+
+def mse_loss_mean(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
+    return torch_output_tensor
