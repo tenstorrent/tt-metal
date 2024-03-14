@@ -311,3 +311,12 @@ Reports
 
    ttnn/print_l1_buffers
    ttnn/set_printoptions
+
+
+Operation Hooks
+***************
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/register_pre_operation_hook
+   ttnn/register_post_operation_hook

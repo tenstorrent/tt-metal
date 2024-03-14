@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import contextmanager
+import dataclasses
 from functools import wraps
 import inspect
 from loguru import logger
@@ -29,10 +30,7 @@ def compare(torch_outputs, outputs, pcc):
     matches = True
     last_message = None
     for torch_output, output in zip(torch_outputs, outputs):
-        shape = torch_output.shape
-        slices = [slice(0, dim) for dim in shape]
         output = ttnn.to_torch(output)
-        output = output[slices]
         passed, last_message = comp_pcc(torch_output, output, pcc)
         matches &= passed
     return matches, last_message
@@ -73,6 +71,55 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     if ttnn.is_tensor_storage_on_device(output):
         torch_output = ttnn.to_device(torch_output, output.device())
     return torch_output
+
+
+PRE_OPERATION_HOOKS = []
+
+
+@contextmanager
+def register_pre_operation_hook(hook):
+    """
+
+    register_pre_operation_hook is a context manager that registers a pre-operation hook. The hook can be used to run custom code before the operation is executed.
+
+    The hook takes in the following arguments:
+    - operation: The operation that is being called
+    - args: The arguments that are passed to the operation
+    - kwargs: The keyword arguments that are passed to the operation
+
+    The hook must return None.
+
+    """
+
+    global PRE_OPERATION_HOOKS
+    PRE_OPERATION_HOOKS.append(hook)
+    yield
+    PRE_OPERATION_HOOKS.pop()
+
+
+POST_OPERATION_HOOKS = []
+
+
+@contextmanager
+def register_post_operation_hook(hook):
+    """
+
+    register_post_operation_hook is a context manager that registers a post-operation hook. The hook can be used to run custom code after the operation is executed.
+
+    The hook takes in the following arguments:
+    - operation: The operation that is being called
+    - args: The arguments that are passed to the operation
+    - kwargs: The keyword arguments that are passed to the operation
+    - output: The output of the operation
+
+    The hook must return None.
+
+    """
+
+    global POST_OPERATION_HOOKS
+    POST_OPERATION_HOOKS.append(hook)
+    yield
+    POST_OPERATION_HOOKS.pop()
 
 
 def document_input_tensors(name, function, validate_input_tensors):
@@ -143,26 +190,144 @@ def document_input_tensors(name, function, validate_input_tensors):
 REGISTERED_OPERATIONS = set()
 
 
-def query_all_registered_operations(include_experimental=False):
+def query_operations(include_experimental=False):
     sorted_operations = sorted(REGISTERED_OPERATIONS)
 
     ttnn_operations = [
         operation
         for operation in sorted_operations
-        if operation.startswith("ttnn.") and not operation.startswith("ttnn.experimental.")
+        if operation.name.startswith("ttnn.") and not operation.name.startswith("ttnn.experimental.")
     ]
-    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.experimental.")]
+    ttl_operations = [operation for operation in sorted_operations if operation.name.startswith("ttnn.experimental.")]
     if include_experimental:
         return ttnn_operations + ttl_operations
     else:
         return ttnn_operations
 
 
-def register_operation(*, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None):
-    if name in REGISTERED_OPERATIONS:
-        raise RuntimeError(f"{name} is already registered")
-    REGISTERED_OPERATIONS.add(name)
+@dataclasses.dataclass
+class Operation:
+    name: str
+    function: callable
+    validate_input_tensors: callable
+    torch_function: callable
+    is_cpp_function: bool
+    fallback: callable
 
+    def __gt__(self, other):
+        return self.name < other.name
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __post_init__(self):
+        function = self.function
+
+        if not self.is_cpp_function or self.fallback is not None:
+            document_input_tensors(self.name, self.function, self.validate_input_tensors)
+
+        def validate_decorator(function):
+            @wraps(function)
+            def call_wrapper(*function_args, **function_kwargs):
+                if not self.is_cpp_function:
+                    self.validate_input_tensors(self.name, *function_args, **function_kwargs)
+                return function(*function_args, **function_kwargs)
+
+            return call_wrapper
+
+        def debug_decorator(function):
+            @wraps(function)
+            def call_wrapper(*function_args, **function_kwargs):
+                if self.torch_function is not None:
+                    logger.info(f"{self.name} : Comparing against PyTorch")
+
+                if self.torch_function is not None:
+                    torch_output = self.torch_function(*function_args, **function_kwargs)
+                else:
+                    torch_output = None
+
+                output = function(*function_args, **function_kwargs)
+
+                if torch_output is not None:
+                    matches, last_message = compare(torch_output, output, pcc=PEARSON_CORRELATION_COEFFICIENT)
+                    if not matches:
+                        if USE_TORCH_OUTPUT_IF_MISMATCHES:
+                            logger.warning(f"{self.name}: Comparing against PyTorch failed, using PyTorch output")
+                            if not isinstance(output, ttnn.Tensor):
+                                raise TypeError(f"Expected Tensor, got {type(output)}")
+                            output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
+                        else:
+                            output = ttnn.to_torch(output)
+                            raise RuntimeError(
+                                f"{self.name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
+                            )
+
+                return output
+
+            return call_wrapper
+
+        def fallback_decorator(function):
+            @wraps(function)
+            def call_wrapper(*function_args, **function_kwargs):
+                try:
+                    return function(*function_args, **function_kwargs)
+                except NotImplementedError:
+                    logger.warning(f"{self.name}: falling back to torch due to NotImplementedError")
+                    return self.fallback(*function_args, **function_kwargs)
+                except Exception as e:
+                    exception_message = "\n".join(str(e).split("\n")[:3])
+                    logger.warning(f"{self.name}: falling back to torch due to {exception_message}")
+                    return self.fallback(*function_args, **function_kwargs)
+
+            return call_wrapper
+
+        if self.fallback is not None:
+            function = fallback_decorator(function)
+
+        def runtime_decorator(function):
+            @wraps(function)
+            def call_wrapper(*function_args, **function_kwargs):
+                decorated_function = function
+                if ENABLE_VALIDATE_DECORATOR:
+                    decorated_function = validate_decorator(decorated_function)
+                if ENABLE_DEBUG_DECORATOR:
+                    decorated_function = debug_decorator(decorated_function)
+
+                if ttnn.tracer.ENABLE_TRACER:
+                    decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
+
+                for hook in PRE_OPERATION_HOOKS:
+                    hook_return_value = hook(self, function_args, function_kwargs)
+                    if hook_return_value is not None:
+                        raise RuntimeError(
+                            f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
+                        )
+
+                output = decorated_function(*function_args, **function_kwargs)
+
+                for hook in POST_OPERATION_HOOKS:
+                    hook_return_value = hook(self, function_args, function_kwargs, output)
+                    if hook_return_value is not None:
+                        raise RuntimeError(
+                            f"Post-operation hook {hook} returned {hook_return_value} but must return None"
+                        )
+
+                return output
+
+            return call_wrapper
+
+        if not ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
+            function = runtime_decorator(function)
+
+        self.decorated_function = function
+
+    def __call__(self, *function_args, **function_kwargs):
+        return self.decorated_function(*function_args, **function_kwargs)
+
+    __doc__ = property(lambda self: self.function.__doc__)
+
+
+def register_operation(*, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None):
     if is_cpp_function:
         if fallback is not None:
             if validate_input_tensors is None:
@@ -178,84 +343,23 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
         if validate_input_tensors is None:
             raise RuntimeError(f"Registering {name}: validate_input_tensors is required for non-cpp functions")
 
-    def operation_decorator(function):
-        if not is_cpp_function or fallback is not None:
-            document_input_tensors(name, function, validate_input_tensors)
+    def operation_decorator(function: callable):
+        global REGISTERED_OPERATIONS
 
-        def validate_decorator(function):
-            def call_wrapper(*function_args, **function_kwargs):
-                if not is_cpp_function:
-                    validate_input_tensors(name, *function_args, **function_kwargs)
-                return function(*function_args, **function_kwargs)
+        operation = Operation(
+            name=name,
+            function=function,
+            validate_input_tensors=validate_input_tensors,
+            torch_function=torch_function,
+            is_cpp_function=is_cpp_function,
+            fallback=fallback,
+        )
 
-            return call_wrapper
+        if operation in REGISTERED_OPERATIONS:
+            raise RuntimeError(f"{operation} is already registered")
+        REGISTERED_OPERATIONS.add(operation)
 
-        def debug_decorator(function):
-            def call_wrapper(*function_args, **function_kwargs):
-                if torch_function is not None:
-                    logger.info(f"{name} : Comparing against PyTorch")
-
-                if torch_function is not None:
-                    torch_output = torch_function(*function_args, **function_kwargs)
-                else:
-                    torch_output = None
-
-                output = function(*function_args, **function_kwargs)
-
-                if torch_output is not None:
-                    matches, last_message = compare(torch_output, output, pcc=PEARSON_CORRELATION_COEFFICIENT)
-                    if not matches:
-                        if USE_TORCH_OUTPUT_IF_MISMATCHES:
-                            logger.warning(f"{name}: Comparing against PyTorch failed, using PyTorch output")
-                            if not isinstance(output, ttnn.Tensor):
-                                raise TypeError(f"Expected Tensor, got {type(output)}")
-                            output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
-                        else:
-                            output = ttnn.to_torch(output)
-                            raise RuntimeError(
-                                f"{name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
-                            )
-
-                return output
-
-            return call_wrapper
-
-        def fallback_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                try:
-                    return function(*function_args, **function_kwargs)
-                except NotImplementedError:
-                    logger.warning(f"{name}: falling back to torch due to NotImplementedError")
-                    return fallback(*function_args, **function_kwargs)
-                except Exception as e:
-                    exception_message = "\n".join(str(e).split("\n")[:3])
-                    logger.warning(f"{name}: falling back to torch due to {exception_message}")
-                    return fallback(*function_args, **function_kwargs)
-
-            return call_wrapper
-
-        if fallback is not None:
-            function = fallback_decorator(function)
-
-        if ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
-            return function
-
-        @wraps(function)
-        def call_wrapper(*function_args, **function_kwargs):
-            decorated_function = function
-            if ENABLE_VALIDATE_DECORATOR:
-                decorated_function = validate_decorator(decorated_function)
-            if ENABLE_DEBUG_DECORATOR:
-                decorated_function = debug_decorator(decorated_function)
-
-            if ttnn.tracer.ENABLE_TRACER:
-                decorated_function = ttnn.tracer.trace_ttnn_operation(name, decorated_function)
-
-            output = decorated_function(*function_args, **function_kwargs)
-            return output
-
-        return call_wrapper
+        return operation.decorated_function
 
     return operation_decorator
 

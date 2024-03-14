@@ -110,10 +110,12 @@ import ttnn.tracer
 
 from ttnn.decorators import (
     register_operation,
-    query_all_registered_operations,
+    query_operations,
     enable_debug_decorator,
     override_pcc_of_debug_decorator,
     disable_validate_decorator,
+    register_pre_operation_hook,
+    register_post_operation_hook,
 )
 
 import ttnn.experimental

@@ -1,4 +1,4 @@
-personal_ws-1.1 en 536
+personal_ws-1.1 en 539
 ABI
 ADDI
 API
@@ -45,6 +45,7 @@ CreateDevice
 CreateKernel
 CreateProgram
 CreateSemaphore
+DATAMOVEMENT
 DEFAULTFLOAT
 DPRINT
 DataFormat
@@ -234,6 +235,7 @@ csv
 ctl
 datacopy
 dataflow
+datamovement
 datatypes
 deallocate
 deallocation
@@ -328,6 +330,7 @@ iw
 iy
 jupyter
 kv
+kwargs
 labelled
 ld
 ldexp
