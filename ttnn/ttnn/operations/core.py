@@ -693,7 +693,6 @@ def to_layout(
                         tensor, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
                     )
                 else:
-                    breakpoint()
                     return ttl.tensor.untilize(
                         tensor,
                         output_mem_config=ttnn.get_memory_config(tensor)

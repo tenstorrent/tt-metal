@@ -331,6 +331,7 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
     # Special reshape for GN
     input_tensor = ttnn.reshape(input_tensor, (N, 1, H * W, C))
     # output_tensor = input_tensor # uncomment this line if only testing untilzie + tilize
+    # ttnn.synchronize_device(device)
     inter_tensor = ttnn.group_norm(
         input_tensor,
         num_groups=num_groups,
