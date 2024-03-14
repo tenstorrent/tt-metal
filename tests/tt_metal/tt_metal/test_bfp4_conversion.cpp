@@ -50,8 +50,6 @@ int main(int argc, char **argv) {
         // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false and row_major_output=false yield the same result
         pass &= (packed_bfp4b_tile_vec_rm_in == packed_bfp4b_tile_vec_tile_in);
 
-        printf("MT: unpacked_bfp4b_tile_vec_rm_out.size() = %ld\n", unpacked_bfp4b_tile_vec_rm_out.size());
-        printf("MT: fp32_vec.size() = %ld\n", fp32_vec.size());
         TT_FATAL(unpacked_bfp4b_tile_vec_rm_out.size() == fp32_vec.size());
         for (int rm_idx = 0; rm_idx < fp32_vec.size(); rm_idx++) {
             float golden = fp32_vec.at(rm_idx);
