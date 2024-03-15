@@ -187,7 +187,7 @@ inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t fac
     TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0);
 }
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool pack_dense = false /*not used*/>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize(std::uint32_t block_rt_dim, std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t block_c_index = 0) {
 
     const std::uint32_t output_id = get_output_id(output);
