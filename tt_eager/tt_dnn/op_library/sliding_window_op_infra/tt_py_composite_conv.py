@@ -247,7 +247,13 @@ def determine_per_core_block_config(
             padded_input_channels % act_c_num_blocks == 0
         ), "Cannot parallelize conv as a 2d systolic array. Input channels must be divisible by act_c_num_blocks."
     out_block_h_ntiles = per_core_out_matrix_height_ntiles
-    assert out_block_h_ntiles % act_block_h_ntiles == 0, "act_block_h must evenly divide out_block_h"
+    assert out_block_h_ntiles % act_block_h_ntiles == 0, (
+        "act_block_h must evenly divide out_block_h"
+        + "out_block_h_ntiles: "
+        + str(out_block_h_ntiles)
+        + " act_block_h_ntiles:"
+        + str(act_block_h_ntiles)
+    )
     weight_block_w_ntiles = per_core_out_matrix_width_ntiles
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
         act_block_h_ntiles, weight_block_w_ntiles
