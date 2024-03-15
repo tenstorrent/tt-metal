@@ -42,7 +42,8 @@ void DeviceModule(py::module &m_device) {
             "Convert a logical core coordinate into a physical worker core coordinate")
         .def("enable_program_cache", &Device::enable_program_cache, "Enable caching for all programs sent to this device")
         .def("disable_and_clear_program_cache", &Device::disable_and_clear_program_cache, "Disable and clear program cache for this device")
-        .def("num_program_cache_entries", &Device::num_program_cache_entries, "Number of entries in the program cache for this device");
+        .def("num_program_cache_entries", &Device::num_program_cache_entries, "Number of entries in the program cache for this device")
+        .def("enable_async", &Device::enable_async);
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;

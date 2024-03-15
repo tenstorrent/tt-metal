@@ -49,7 +49,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
 
 template <typename T>
-std::vector<T> slice(std::vector<T> const &v, int m, int n);
+std::vector<T> slice_vec(std::vector<T> const &v, int m, int n);
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
                     TT_ASSERT(false, "Core not in specified core ranges");
                 }
                 auto write_size = num_reqs_at_a_time * 512;
-                auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
+                auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
                 tt_metal::detail::WriteToDeviceL1(device, core, cb_addr, sliced_input);
                 input_offset += (num_tiles_per_core) * 512;
             }
@@ -353,7 +353,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 }
 
 template <typename T>
-std::vector<T> slice(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -463,7 +463,7 @@ bool validation(
             tt_metal::detail::ReadFromDeviceL1(
                 device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
             auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto sliced_input = slice(
+            auto sliced_input = slice_vec(
                 input_bf16,
                 (input_offset + num_tiles_per_core - num_reqs_at_a_time) * constants::TILE_HW,
                 (input_offset + num_tiles_per_core) * constants::TILE_HW - 1);
@@ -494,7 +494,7 @@ bool validation(
             uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
 
             auto write_size = num_reqs_at_a_time * 512;
-            auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
+            auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
             for (int block = 0; block < num_blocks; ++block) {
                 for (int req = 0; req < num_reqs_at_a_time * 512; ++req) {
                     auto index = input_offset + block * (num_reqs_at_a_time * 512) + req;

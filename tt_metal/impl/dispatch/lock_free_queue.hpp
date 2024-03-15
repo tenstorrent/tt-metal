@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include "tt_metal/common/assert.hpp"
 
@@ -29,8 +30,16 @@ class LockFreeQueue {
         }
 
     public:
+        // Optional - Set these if the worker and parent thread state needs to be tracked
+        std::atomic<uint64_t> worker_thread_id = 0;
+        std::atomic<uint64_t> parent_thread_id = 0;
         LockFreeQueue() : head(new Node), tail(head.load()) {}
-
+        LockFreeQueue(LockFreeQueue&& other) {
+            head.store(other.head.load());
+            tail.store(other.tail.load());
+            worker_thread_id.store(other.worker_thread_id.load());
+            parent_thread_id.store(other.parent_thread_id.load());
+        }
         void push(const T& value) {
             std::shared_ptr<T> newData(std::make_shared<T>(value));
             Node* newNode = new Node;

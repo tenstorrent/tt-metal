@@ -21,7 +21,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -304,7 +304,7 @@ int main(int argc, char **argv) {
                     }
 
                     auto sliced_tensor =
-                        slice(tensors[tensors_idx].get_values(), (index - cb_tiles) * 1024, index * 1024 - 1);
+                        slice_vec(tensors[tensors_idx].get_values(), (index - cb_tiles) * 1024, index * 1024 - 1);
 
                     if (print_tensor) {
                         print_vec(

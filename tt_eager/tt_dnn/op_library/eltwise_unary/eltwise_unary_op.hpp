@@ -454,10 +454,16 @@ namespace primary {
 
 inline Tensor relu(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;       // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
-    return operation::run(
-               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config, fp32_dest_acc_en}, {input_tensor})
-        .at(0);
+    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    operation::launch_op(
+        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;       // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
+            return operation::run(
+               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config}, {input_tensor});
+        },
+    {input_tensor}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace primary

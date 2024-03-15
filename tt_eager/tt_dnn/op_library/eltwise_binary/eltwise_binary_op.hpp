@@ -168,7 +168,6 @@ constexpr auto logical_or = make_eltwise_binary<BinaryOpType::LOGICAL_OR>{};
 namespace operations {
 
 namespace primary {
-
 // TODO: in_place should not take output args
 inline Tensor add(
     const Tensor &input_tensor_a,
