@@ -158,7 +158,111 @@ class TtLlamaMLP_optimized(nn.Module):
             )
         return x_multichip
 
-    def forward(self, x: list) -> list:
+    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        shape = x[0].shape
+        # Decode should have input tensor of shape (1, seqlen=1, batch, hidden_size)
+        # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
+        if shape[1] == 1:
+            return self.decode_forward(x)
+        else:
+            return self.prefill_forward(x)
+
+    def prefill_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        hidden_states = []
+        w1_outs = []
+        w3_outs = []
+        for i in range(len(x)):
+            w1_outs.append(
+                # tt_lib.operations.primary.matmul_1d(
+                #     x[i],
+                #     self.w1_list[i],
+                #     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
+                #     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                #     output_dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
+                #     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                # )
+                ttnn.linear(
+                    x[i],
+                    self.w1_list[i],
+                    activation="silu",
+                    # core_grid=self.grid,
+                    # use_1d_systolic_array=True,
+                    # memory_config=shard,
+                    # compute_kernel_config=self.kernel_config,
+                )
+            )
+        for i in range(len(x)):
+            w3_outs.append(
+                # tt_lib.operations.primary.matmul_1d(
+                #     x[i],
+                #     self.w3_list[i],
+                #     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+                #     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                #     output_dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
+                #     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                # )
+                ttnn.linear(
+                    x[i],
+                    self.w3_list[i],
+                    # core_grid=self.grid,
+                    # use_1d_systolic_array=True,
+                    # memory_config=shard,
+                    # compute_kernel_config=self.kernel_config,
+                )
+            )
+            x[i].deallocate(True)
+
+        for i in range(len(w1_outs)):
+            hidden_states.append(
+                # tt_lib.tensor.mul(w1_outs[i], w3_outs[i], output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
+                ttnn.mul(w1_outs[i], w3_outs[i], memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
+            )
+            w1_outs[i].deallocate(True)
+            w3_outs[i].deallocate(True)
+
+        for i in range(len(hidden_states)):
+            # Put w2_inputs in DRAM
+            hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
+                hidden_states[i], output_mem_config=self.model_config["L1_MEMCFG"]
+            )
+
+        if self.emulated:
+            hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+        else:
+            hidden_states = tt_lib.tensor.all_gather(
+                hidden_states,
+                dim=3,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
+            )
+
+        # Put AllGather results in L1 Sharded
+        # for i in range(len(hidden_states)):
+        #     hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
+        #         hidden_states[i], sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
+        #     )
+
+        for i in range(len(hidden_states)):
+            # hidden_states[i] = tt_lib.operations.primary.matmul_1d(
+            #     hidden_states[i],
+            #     self.w2_list[i],
+            #     program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
+            #     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            #     output_dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
+            #     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+            # )
+            hidden_states[i] = ttnn.linear(
+                hidden_states[i],
+                self.w2_list[i],
+                # core_grid=self.grid,
+                # use_1d_systolic_array=True,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
+                # compute_kernel_config=self.kernel_config,
+            )
+
+        return hidden_states
+
+    def decode_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = []
         w1_outs = []
         w3_outs = []
