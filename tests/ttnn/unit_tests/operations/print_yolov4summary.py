@@ -329,6 +329,7 @@ def custom_summary_to_csv(model, input_size, csv_file, batch_size=-1, device="cu
                 "Padding",
                 "Dilation",
                 "Groups",
+                "TTNN conv2d unit test inputs",
             ]
         )
         for layer in summary:
