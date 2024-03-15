@@ -105,7 +105,8 @@ void kernel_main() {
         input_stick_idx_stride_w,
     };
 
-    #define NOC_MINIMUM_READ_SIZE 32
+    #define NOC_MINIMUM_READ_SIZE (32)
+    #define INDEX_SIZE (4)
 
     uint32_t end_id = start_id + num_sticks;
 
@@ -130,6 +131,7 @@ void kernel_main() {
                     index_index = output_stick_idx % index_size;
                     is_first_index = false;
                 }
+                #ifdef TILIZE_INDEX
                 uint32_t index_noc_id = index_index / TILE_HEIGHT;
                 if (dim == 0) {
                     index_noc_addr = get_noc_addr(index_noc_id, index0);
@@ -151,6 +153,28 @@ void kernel_main() {
                 else index_dim_offset = index_tile_idx + 256 - 16;
 
                 uint32_t index_val = index_l1_ptr[index_dim_offset];
+                #endif
+                #ifdef ROW_MAJOR_INDEX
+                uint32_t noc_offset = ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
+                if (dim == 0) {
+                    index_noc_addr = get_noc_addr(0, index0, noc_offset);
+                }
+                if (dim == 1) {
+                    index_noc_addr = get_noc_addr(0, index1, noc_offset);
+                }
+                if (dim == 2) {
+                    index_noc_addr = get_noc_addr(0, index2, noc_offset);
+                }
+                noc_async_read(index_noc_addr, index_l1_addr, NOC_MINIMUM_READ_SIZE);
+                noc_async_read_barrier();
+
+                volatile tt_l1_ptr uint32_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+
+                uint32_t index_dim_offset = (index_index * INDEX_SIZE - noc_offset) / INDEX_SIZE;
+                uint32_t index_val = index_l1_ptr[index_dim_offset];
+
+                #endif
 
                 input_stick_idx += index_val * input_stick_idx_stride;
             } else {
