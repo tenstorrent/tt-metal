@@ -23,9 +23,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
-#ifndef COMPILE_FOR_ERISC
-#include "debug/dprint.h"
-#endif
+#include "debug/assert.h"
 
 extern uint8_t noc_index;
 
@@ -154,14 +152,9 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
-    if (cb_interface[operand].fifo_wr_ptr >= cb_interface[operand].fifo_limit) {
+    ASSERT(cb_interface[operand].fifo_wr_ptr <= cb_interface[operand].fifo_limit);
+    if (cb_interface[operand].fifo_wr_ptr == cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        #ifndef COMPILE_FOR_ERISC
-        if (cb_interface[operand].fifo_wr_ptr > cb_interface[operand].fifo_limit) {
-            DPRINT << "BAD STATE" << ENDL();
-            while(true);
-        }
-        #endif
         cb_interface[operand].fifo_wr_ptr -= cb_interface[operand].fifo_size;
     }
 }
@@ -199,7 +192,8 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
-    if (cb_interface[operand].fifo_rd_ptr >= cb_interface[operand].fifo_limit) {
+    ASSERT(cb_interface[operand].fifo_rd_ptr <= cb_interface[operand].fifo_limit);
+    if (cb_interface[operand].fifo_rd_ptr == cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
         cb_interface[operand].fifo_rd_ptr -= cb_interface[operand].fifo_size;
     }
