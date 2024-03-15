@@ -41,6 +41,9 @@ def create_test_function(file_name):
     working_splitted = splitted[-3].split("_")[-1]
     test_name = f"test_{working_splitted}_{splitted[-2]}_{basename}"
 
+    if test_name.endswith("_test"):
+        test_name = test_name[: -len("_test")]
+
     test_sweep.__name__ = test_name
     return test_sweep
 
