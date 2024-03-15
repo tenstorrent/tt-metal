@@ -1617,7 +1617,7 @@ def abs(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.abs(t0)
+    t1 = ttnn.abs(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1633,7 +1633,7 @@ def acos(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.acos(t0)
+    t1 = ttnn.acos(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1649,7 +1649,7 @@ def acosh(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.acosh(t0)
+    t1 = ttnn.acosh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1665,7 +1665,7 @@ def asin(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.asin(t0)
+    t1 = ttnn.asin(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -1681,7 +1681,7 @@ def asinh(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.asinh(t0)
+    t1 = ttnn.asinh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -2010,7 +2010,7 @@ def repeat_interleave(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.repeat_interleave(t0, repeat, dim)
+    t1 = ttnn.repeat_interleave(t0, repeat, dim)  # memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -2048,8 +2048,9 @@ def groupnorm_noweights(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttnn.group_norm(t0, num_groups=1, weight=None, bias=None)
+    t1 = ttnn.group_norm(
+        t0, num_groups=1, weight=None, bias=None, memory_config=memory_config_to_ttnn(output_mem_config)
+    )
 
     return ttnn_tensor_to_torch(t1)
 
@@ -2070,7 +2071,7 @@ def groupnorm(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttnn.group_norm(t0, num_groups=1, weight=t1, bias=t2)
+    t3 = ttnn.group_norm(t0, num_groups=1, weight=t1, bias=t2, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t3)
 

@@ -25,7 +25,7 @@ using namespace tt_metal;
 struct MorehGroupNorm {
     uint32_t num_groups;
     float eps;
-    std::vector<bool> are_needed_outputs;
+    std::vector<bool> are_required_outputs;
     MemoryConfig output_mem_config;
     MemoryConfig mean_mem_config;
     MemoryConfig rstd_mem_config;
@@ -46,12 +46,12 @@ struct MorehGroupNorm {
         std::vector<Tensor> &output_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple(
-        "num_groups", "eps", "are_needed_outputs", "output_mem_config", "mean_mem_config", "rstd_mem_config");
+        "num_groups", "eps", "are_required_outputs", "output_mem_config", "mean_mem_config", "rstd_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->num_groups),
             std::cref(this->eps),
-            std::cref(this->are_needed_outputs),
+            std::cref(this->are_required_outputs),
             std::cref(this->output_mem_config),
             std::cref(this->mean_mem_config),
             std::cref(this->rstd_mem_config));
@@ -74,7 +74,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
     float eps,
     const std::optional<const Tensor> gamma = std::nullopt,
     const std::optional<const Tensor> beta = std::nullopt,
-    const std::vector<bool> &are_needed_outputs = std::vector<bool>{true, false, false},
+    const std::vector<bool> &are_required_outputs = std::vector<bool>{true, false, false},
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
