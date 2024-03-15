@@ -63,7 +63,7 @@ inline void reduce_h_fused(
     constexpr uint32_t num_output_tiles = out_ntiles_c * effective_nblocks;
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 2 /*fixme 1*/ : 2;
     constexpr uint32_t num_out_rows = 1;
-    cb_reserve_back(out_cb_id, out_ntiles_c * effective_nblocks);
+    cb_reserve_back(out_cb_id, 1);
     tile_regs_acquire();
     for (uint32_t out_elem_i = 0; out_elem_i < effective_nblocks; ++ out_elem_i) {
         cb_wait_front(in_cb_id, 1);
@@ -79,7 +79,7 @@ inline void reduce_h_fused(
     pack_untilize_dst<num_output_tiles>(out_cb_id, 1/*out_subblock_h*/, 0, num_out_rows, num_faces_in_tile);  /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
 
-    cb_push_back(out_cb_id, out_ntiles_c * effective_nblocks);
+    cb_push_back(out_cb_id, 1);
 }
 
 namespace NAMESPACE {

@@ -26,33 +26,35 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_1d_systolic, bias, untilize_out",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_1d_systolic, bias, untilize_out, fuse_relu",
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
-        (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, True, False),
+        (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, True, False, False),
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, False),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, False, False),
         # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, True, False),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, True, False),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, True, False),
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, True, False, False),
+        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, True, False, False),
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, True, False, False),
         # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, True, False),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, True, False),
+        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, True, False, False),
+        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, True, False, False),
         # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, True, False),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, True, False),
+        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, True, False, False),
+        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, True, False, False),
         # sd conv
-        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, False),
+        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, False, False),
         # Small conv
-        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, False),
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, False, False),
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, False, True),
         # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, False, True, False), # Asserts #5323
         # Untilize out
-        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, True),
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, False, True),
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, True),
-        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, True),
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, True, False),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, False, True, False),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, True, False),
+        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, True, False),
+        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, True, True),
     ),
 )
 @pytest.mark.parametrize(
@@ -88,6 +90,7 @@ def test_optimized_conv_v2(
     is_1d_systolic,
     bias,
     untilize_out,
+    fuse_relu,
 ):
     if input_channels == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
@@ -133,6 +136,9 @@ def test_optimized_conv_v2(
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
     )
+
+    if fuse_relu:
+        out_golden = torch.nn.ReLU()(out_golden)
 
     conv_params = [output_channels, input_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, 1, 1]
     conv_output_shape = compute_conv_output_shape(conv_params, conv_input_shape_nhwc)
@@ -183,6 +189,7 @@ def test_optimized_conv_v2(
         math_fidelity=math_fidelity,
         deallocate_activation=True,
         output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
+        fuse_relu=fuse_relu,
     )
 
     conv_input = tt_lib.tensor.Tensor(
@@ -266,6 +273,9 @@ def test_simple(
         bias=conv_bias_pyt.reshape(-1) if bias else None,
     )
 
+    if fuse_relu:
+        out_golden = torch.nn.ReLU()(out_golden)
+
     conv_params = [output_channels, input_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, 1, 1]
     conv_output_shape = compute_conv_output_shape(conv_params, conv_input_shape_nhwc)
     logger.info(f"Conv output shape - {conv_output_shape}")
@@ -316,6 +326,7 @@ def test_simple(
         math_fidelity=math_fidelity,
         deallocate_activation=True,
         output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
+        fuse_relu=fuse_relu,
     )
 
     conv_input_pyt_nhwc = conv_input_pyt_nhwc.reshape(

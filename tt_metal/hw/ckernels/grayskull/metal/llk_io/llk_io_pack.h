@@ -74,7 +74,8 @@ template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
     std::uint32_t output = operand;
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE<true>((uint)pack_dst_format[output]);
+    //std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE<true>((uint)pack_dst_format[output]);
+    std::uint32_t num_words = num_tiles * cb_interface[output].fifo_page_size;
 
     cb_interface[output].fifo_wr_ptr += num_words;
     cb_interface[output].fifo_wr_tile_ptr = 0;
