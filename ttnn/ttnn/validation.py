@@ -49,8 +49,8 @@ def validate_input_tensor(
     if tensor.dtype not in dtypes:
         raise RuntimeError(f"{operation_name}: Tensor must be of type {dtypes}, but got {tensor.dtype}")
 
-    # if tensor.layout not in layouts:
-    #     raise RuntimeError(f"{operation_name}: Tensor must be of layout {layouts}, but got {tensor.layout}")
+    if tensor.layout not in layouts:
+        raise RuntimeError(f"{operation_name}: Tensor must be of layout {layouts}, but got {tensor.layout}")
 
     if can_be_on_device and can_be_on_cpu:
         pass
