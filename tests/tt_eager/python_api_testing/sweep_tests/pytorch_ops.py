@@ -1996,9 +1996,10 @@ def preprocessing_model_bert_3(x, *args, **kwargs):
 
 
 def preprocessing_model_bert_4(x, *args, **kwargs):
-    torch.manual_seed(234)
+    torch.manual_seed(0)
     model_name = "phiyodr/bert-large-finetuned-squad2"
-    # prepare inputs
+
+    # set parameters
     batch_size = x.shape[0]
     sequence_size = x.shape[1]
     num_hidden_layers = 1
@@ -2014,15 +2015,16 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
 
     # set inputs
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
-    torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.int32)
+    torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = None
 
-    # torch_hidden_states = x
-    # sequence_size = x.shape[1]
-    # torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
-
     # run model
-    # torch_output, *_ = model(torch_hidden_states, attention_mask=torch_attention_mask)
-    torch_output = model(torch_input_ids, token_type_ids=torch_token_type_ids, attention_mask=torch_attention_mask)
+    torch_output = model(
+        torch_input_ids,
+        token_type_ids=torch_token_type_ids,
+        position_ids=torch_position_ids,
+        attention_mask=torch_attention_mask,
+    )
 
     return torch_output.start_logits
