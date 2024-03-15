@@ -11,6 +11,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  models:
+  models-unit-tests:
+    needs: build-artifact
     uses: ./.github/workflows/models-post-commit.yaml
     secrets: inherit
