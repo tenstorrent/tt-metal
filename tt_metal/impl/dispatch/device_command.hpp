@@ -215,7 +215,7 @@ class DeviceCommand {
 
     struct packet_ {
         CommandHeader header;
-        std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND - DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER> data;
+        std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND - DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER> data{};
     };
 
     packet_ packet;
