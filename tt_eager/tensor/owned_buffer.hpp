@@ -15,7 +15,7 @@ namespace owned_buffer {
 
 template<typename T>
 struct Buffer {
-
+    explicit Buffer() = default;
     explicit Buffer(std::shared_ptr<std::vector<T>>&& shared_vector) :
         shared_vector_(shared_vector),
         pointer_for_faster_access_(shared_vector->data()),
@@ -39,7 +39,7 @@ struct Buffer {
 
     inline void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
     inline const void* data() const noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
-
+    inline uint32_t use_count() const noexcept { return this->shared_vector_.use_count(); }
    private:
     std::shared_ptr<std::vector<T>> shared_vector_;
     T* pointer_for_faster_access_;

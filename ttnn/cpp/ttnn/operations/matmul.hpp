@@ -51,8 +51,8 @@ inline ttnn::Tensor matmul(
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
 
-    const auto input_tensor_a_shape = input_tensor_a.shape;
-    const auto input_tensor_b_shape = input_tensor_b.shape;
+    const auto input_tensor_a_shape = input_tensor_a.get_shape();
+    const auto input_tensor_b_shape = input_tensor_b.get_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -69,7 +69,7 @@ inline ttnn::Tensor matmul(
     auto output_tensor = tt::operations::primary::matmul(
         input_tensor_a_4d, input_tensor_b_4d, program_config, memory_config, dtype, compute_kernel_config);
 
-    while (output_tensor.shape.rank() != input_tensor_a_shape.rank()) {
+    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
     return output_tensor;
@@ -84,8 +84,8 @@ inline ttnn::Tensor matmul(
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
 
-    const auto input_tensor_a_shape = input_tensor_a.shape;
-    const auto input_tensor_b_shape = input_tensor_b.shape;
+    const auto input_tensor_a_shape = input_tensor_a.get_shape();
+    const auto input_tensor_b_shape = input_tensor_b.get_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -108,7 +108,7 @@ inline ttnn::Tensor matmul(
     };
 
     auto output_tensor = compute_interlevead();
-    while (output_tensor.shape.rank() != input_tensor_a_shape.rank()) {
+    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
     return output_tensor;
@@ -126,8 +126,8 @@ inline ttnn::Tensor linear(
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
 
-    const auto input_tensor_a_shape = input_tensor_a.shape;
-    const auto input_tensor_b_shape = input_tensor_b.shape;
+    const auto input_tensor_a_shape = input_tensor_a.get_shape();
+    const auto input_tensor_b_shape = input_tensor_b.get_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -150,7 +150,7 @@ inline ttnn::Tensor linear(
     auto output_tensor = tt::operations::primary::matmul(
         input_tensor_a_4d, input_tensor_b_4d, bias_4d, program_config, memory_config, dtype, compute_kernel_config);
 
-    while (output_tensor.shape.rank() != input_tensor_a_shape.rank()) {
+    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
     return output_tensor;
@@ -168,8 +168,8 @@ inline ttnn::Tensor linear(
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
 
-    const auto input_tensor_a_shape = input_tensor_a.shape;
-    const auto input_tensor_b_shape = input_tensor_b.shape;
+    const auto input_tensor_a_shape = input_tensor_a.get_shape();
+    const auto input_tensor_b_shape = input_tensor_b.get_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -207,7 +207,7 @@ inline ttnn::Tensor linear(
         }
     }
 
-    while (output_tensor.shape.rank() != input_tensor_a_shape.rank()) {
+    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
     return output_tensor;
