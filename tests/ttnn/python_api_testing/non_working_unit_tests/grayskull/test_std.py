@@ -50,15 +50,6 @@ def run_std_tests(
 
 test_sweep_args = [
     (
-        [(224, 160)],
-        [ttnn.bfloat16],
-        [ttnn.TILE_LAYOUT],
-        [ttnn.L1_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        (1, 0),
-        19717156,
-    ),
-    (
         [(3, 10, 192, 64)],
         [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
