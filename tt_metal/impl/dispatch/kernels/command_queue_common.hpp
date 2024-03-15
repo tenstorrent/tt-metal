@@ -6,6 +6,7 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "debug/assert.h"
 
 #define ATTR_ALIGNL1 __attribute__((aligned(L1_ALIGNMENT)))
 struct db_cb_config_t {
@@ -93,7 +94,8 @@ void multicore_cb_push_back(
     db_cb_config->recv += num_to_write;
     db_cb_config->wr_ptr_16B += db_cb_config->page_size_16B * num_to_write;
 
-    if (db_cb_config->wr_ptr_16B >= consumer_fifo_16b_limit) {
+    ASSERT(db_cb_config->wr_ptr_16B <= consumer_fifo_16b_limit);
+    if (db_cb_config->wr_ptr_16B == consumer_fifo_16b_limit) {
         db_cb_config->wr_ptr_16B -= db_cb_config->total_size_16B;
     }
 
@@ -122,7 +124,8 @@ void multicore_cb_pop_front(
     db_cb_config->ack += num_to_write;
     db_cb_config->rd_ptr_16B += page_size_16B * num_to_write;
 
-    if (db_cb_config->rd_ptr_16B >= consumer_fifo_limit_16B) {
+    ASSERT(db_cb_config->rd_ptr_16B <= consumer_fifo_limit_16B);
+    if (db_cb_config->rd_ptr_16B == consumer_fifo_limit_16B) {
         db_cb_config->rd_ptr_16B -= db_cb_config->total_size_16B;
     }
 
