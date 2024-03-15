@@ -11,6 +11,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  ttnn:
+  ttnn-unit-tests:
+    needs: build-artifact
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
