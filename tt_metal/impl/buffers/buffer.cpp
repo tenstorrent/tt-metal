@@ -270,7 +270,6 @@ void Buffer::deallocate() {
     // Mark as deallocated
     this->size_ = 0;
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    // Asynchronously deallocate
     detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
     detail::DeallocateBuffer(this);
 }

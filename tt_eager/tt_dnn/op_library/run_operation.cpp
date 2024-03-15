@@ -268,6 +268,15 @@ std::vector<Tensor> run(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    // Async Mode: Asserts to ensure that tensors are populated before running op
+    for (const Tensor& tensor : input_tensors) {
+        TT_ASSERT(tensor.metadata_populated(), "Input tensors must be populated before running op.");
+    }
+    for (auto& tensor : optional_input_tensors) {
+        if (tensor.has_value()) {
+            TT_ASSERT(tensor.value().metadata_populated(), "Input tensors must be populated before running op.");
+        }
+    }
     if (detail::any_tensor_on_multi_device(input_tensors)) {
         return detail::decorate_device_operation(detail::run_multi_device_operation)(
             std::make_optional(std::ref(queue)), operation, input_tensors, optional_input_tensors, optional_output_tensors);
@@ -281,6 +290,15 @@ std::vector<Tensor> run(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    // Async Mode: Asserts to ensure that tensors are populated before running op
+    for (const Tensor& tensor : input_tensors) {
+        TT_ASSERT(tensor.metadata_populated(), "Input tensors must be populated before running op.");
+    }
+    for (auto& tensor : optional_input_tensors) {
+        if (tensor.has_value()) {
+            TT_ASSERT(tensor.value().metadata_populated(), "Input tensors must be populated before running op.");
+        }
+    }
     if (detail::any_tensor_on_multi_device(input_tensors)) {
         return detail::decorate_device_operation(detail::run_multi_device_operation)(
             std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);
@@ -454,6 +472,80 @@ std::vector<Tensor> run_with_autoformat(
     }
 
     return output_tensors;
+}
+
+void launch_op(
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> op_func,
+    const std::vector<Tensor> input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>> optional_input_tensors
+) {
+    // Send host side op compile and run to the worker queue
+    // Asserts to validate inputs and outputs - This API is only to be used for tensors on device. Inputs/Outputs cannot be on host.
+    auto& workers = output_tensors.at(0).workers;
+    for (auto& output_tensor : output_tensors) {
+        TT_FATAL(output_tensor.workers.size(), "Worker threads must be specified for outputs populated by launch_op. This API can only be used for creating output tensors on device.");
+        TT_FATAL(output_tensor.workers == workers, "Worker threads must be consistent across all outputs populated by launch_op.");
+        // Populate device storage outside of thread, so that downstream
+        // functions running in main can get storage type without blocking
+        if (workers.size() == 1) {
+            output_tensor.tensor_attributes->storage = DeviceStorage();
+        }
+        else {
+            output_tensor.tensor_attributes->storage = MultiDeviceStorage();
+        }
+    }
+
+    for (const auto& input : input_tensors) {
+        TT_FATAL(input.storage_type() == StorageType::DEVICE or input.storage_type() == StorageType::MULTI_DEVICE, "All inputs must be on device when launc_op is called");
+    }
+
+    for (auto& input : optional_input_tensors) {
+        if (input.has_value()) {
+            TT_FATAL(input.value().storage_type() == StorageType::DEVICE or input.value().storage_type() == StorageType::MULTI_DEVICE, "All inputs must be on device when launch_op is called");
+        }
+    }
+    // Record ref counts for all tensors before pushing to worker queue.
+    std::vector<uint32_t> input_tensor_ref_count = {};
+    std::vector<uint32_t> optional_input_tensor_ref_count = {};
+    std::vector<uint32_t> output_tensor_ref_count = {};
+
+    for (int i = 0; i < input_tensors.size(); i++) {
+        input_tensor_ref_count.push_back(input_tensors[i].tensor_attributes->record_main_thread_ref_count());
+    }
+    for (int i = 0; i < optional_input_tensors.size(); i++) {
+        if (optional_input_tensors[i].has_value()) {
+            optional_input_tensor_ref_count.push_back(optional_input_tensors[i].value().tensor_attributes->record_main_thread_ref_count());
+        }
+        else {
+            optional_input_tensor_ref_count.push_back(0);
+        }
+    }
+    for (int i = 0; i < output_tensors.size(); i++) {
+        output_tensor_ref_count.push_back(output_tensors[i].tensor_attributes->record_main_thread_ref_count());
+    }
+
+    // Async mode changes for tensor-parallel execution not mainlined. Use the first worker thread.
+    workers.at(0)->push_work([op_func, optional_input_tensors, inputs = input_tensors, outputs = output_tensors] () mutable {
+        auto local_tensors = op_func(inputs, optional_input_tensors);
+        // Populate output tensors
+        for (int i = 0; i < local_tensors.size(); i++) {
+            outputs.at(i).populate_buffers_and_metadata(local_tensors.at((i)));
+        }
+    });
+
+    // Update ref counts of all tensors after push was performed (done only in main thread).
+    for (int i = 0; i < input_tensors.size(); i++) {
+        input_tensors[i].tensor_attributes->update_main_thread_ref_count(workers.at(0), input_tensor_ref_count[i]);
+    }
+    for (int i = 0; i < optional_input_tensors.size(); i++) {
+        if (optional_input_tensors[i].has_value()) {
+            optional_input_tensors[i].value().tensor_attributes->update_main_thread_ref_count(workers.at(0), optional_input_tensor_ref_count[i]);
+        }
+    }
+    for (int i = 0; i < output_tensors.size(); i++) {
+        output_tensors[i].tensor_attributes->update_main_thread_ref_count(workers.at(0), output_tensor_ref_count[i]);
+    }
 }
 
 }
