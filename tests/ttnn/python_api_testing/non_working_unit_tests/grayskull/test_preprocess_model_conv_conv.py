@@ -46,7 +46,7 @@ def run_preprocessing_model_conv_conv_tests(
 
         # create and run TTNN model
         ttnn_model = TTNNConvConv(parameters)
-        output_tensor = run_conv_conv(ttnn_model, x)
+        tt_result = run_conv_conv(ttnn_model, x)
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
@@ -61,26 +61,15 @@ def run_preprocessing_model_conv_conv_tests(
     assert success
 
 
-# ,16934480,(),error,"TT_THROW @ tt_metal/impl/program/program.cpp:492: tt::exception
-
 test_sweep_args = [
     (
-        [(4, 64, 160, 64)],
+        [(4, 64, 224, 224)],
         [ttnn.bfloat16],
         [ttnn.ROW_MAJOR_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
-        16934480,
+        10177486,
     ),
-    # (
-    #     [(3, 10, 192, 64)],
-    #     [ttnn.bfloat16],
-    #     [ttnn.TILE_LAYOUT],
-    #     [ttnn.DRAM_MEMORY_CONFIG],
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     (2,),
-    #     18539618,
-    # ),
 ]
 
 
