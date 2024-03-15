@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks moreh_arange_(
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_FATAL(output_buffers.size() == 1);
 
         auto src_dram_buffer = output_buffers.at(0);
 
@@ -125,8 +125,8 @@ operation::ProgramWithCallbacks moreh_arange_(
 }
 
 void MorehArange::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_ASSERT(this->step > 0 || this->step < 0, "step must be nonzero");
-    TT_ASSERT(
+    TT_FATAL(this->step > 0 || this->step < 0, "step must be nonzero");
+    TT_FATAL(
         ((this->step > 0) && (this->end >= this->start)) || ((this->step < 0) && (this->end <= this->start)),
         "upper bound and larger bound inconsistent with step sign");
 
