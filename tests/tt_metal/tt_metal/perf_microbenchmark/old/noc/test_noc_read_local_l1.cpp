@@ -21,7 +21,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
                         device, core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto sliced_tensor =
-                        slice(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
+                        slice_vec(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
 
                     if (print_tensor) {
                         print_vec(
