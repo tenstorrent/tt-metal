@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd);
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm(
+std::vector<std::optional<Tensor>> moreh_groupnorm(
     const Tensor &input,
     uint32_t num_groups,
     float eps,

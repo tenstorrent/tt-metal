@@ -168,7 +168,7 @@ operation::ProgramWithCallbacks MorehGroupNorm::create_program(
     return moreh_groupnorm_impl(input, this->num_groups, this->eps, gamma, beta, output, mean, rstd);
 }
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm(
+std::vector<std::optional<Tensor>> moreh_groupnorm(
     const Tensor &input,
     uint32_t num_groups,
     float eps,
@@ -194,24 +194,24 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm(
         {gamma, beta},
         {output, mean, rstd});
 
-    std::vector<std::variant<Tensor, char *>> result;
+    std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
-    result.push_back(outputs.at(0));
+    result.push_back(std::make_optional<Tensor>(outputs.at(0)));
 
     if (are_needed_outputs.at(1)) {
-        result.push_back(outputs.at(1));
+        result.push_back(std::make_optional<Tensor>(outputs.at(1)));
         if (are_needed_outputs.at(2)) {
-            result.push_back(outputs.at(2));
+            result.push_back(std::make_optional<Tensor>(outputs.at(2)));
         } else {
-            result.push_back(nullptr);
+            result.push_back(std::nullopt);
         }
     } else {
-        result.push_back(nullptr);
+        result.push_back(std::nullopt);
         if (are_needed_outputs.at(2)) {
-            result.push_back(outputs.at(1));
+            result.push_back(std::make_optional<Tensor>(outputs.at(1)));
         } else {
-            result.push_back(nullptr);
+            result.push_back(std::nullopt);
         }
     }
 

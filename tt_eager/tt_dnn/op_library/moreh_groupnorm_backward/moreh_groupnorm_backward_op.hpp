@@ -8,7 +8,6 @@
 #include <optional>
 #include <tuple>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "tt_dnn/op_library/run_operation.hpp"
@@ -106,7 +105,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad);
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
@@ -119,7 +118,7 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_gr
     const MemoryConfig &gamma_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const MemoryConfig &beta_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward(
+std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
