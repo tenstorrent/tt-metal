@@ -68,8 +68,7 @@ Tensor moreh_groupnorm_backward_input_grad(
 
 struct MorehGroupNormBackwardGammaBetaGrad {
     uint32_t num_groups;
-    bool gamma_requires_grad;
-    bool beta_requires_grad;
+    std::vector<bool> are_required_outputs;
     MemoryConfig gamma_grad_mem_config;
     MemoryConfig beta_grad_mem_config;
 
@@ -84,13 +83,12 @@ struct MorehGroupNormBackwardGammaBetaGrad {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "num_groups", "gamma_requires_grad", "beta_requires_grad", "gamma_grad_mem_config", "beta_grad_mem_config");
+    static constexpr auto attribute_names =
+        std::make_tuple("num_groups", "are_required_outputs", "gamma_grad_mem_config", "beta_grad_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->num_groups),
-            std::cref(this->gamma_requires_grad),
-            std::cref(this->beta_requires_grad),
+            std::cref(this->are_required_outputs),
             std::cref(this->gamma_grad_mem_config),
             std::cref(this->beta_grad_mem_config));
     }
@@ -111,8 +109,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t num_groups,
-    bool gamma_requires_grad,
-    bool beta_requires_grad,
+    const std::vector<bool> &are_required_outputs,
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt,
     const MemoryConfig &gamma_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
