@@ -513,6 +513,11 @@ Tensor argmin(
     bool all = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor batch_mul(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 }  // namespace tt_metal
 
 }  // namespace tt

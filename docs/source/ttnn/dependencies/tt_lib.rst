@@ -825,6 +825,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.argmin
 
+.. autofunction:: tt_lib.tensor.batch_mul
+
 Backward Operations
 ===================
 

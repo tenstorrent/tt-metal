@@ -1570,6 +1570,33 @@ Tensor argmin(
     const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _argmin)(input_a, dim, all, output_mem_config);
 }
+
+
+Tensor _batch_mul(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+
+    const Shape shape_a = input_a.get_legacy_shape();
+    const Shape shape_b = input_b.get_legacy_shape();
+    Tensor in_a = input_a;
+    Tensor in_b = input_b;
+    Shape shape({1, 1, 1, 1});
+    if (shape_a[0] > shape_b[0])
+    {
+        shape[0] = shape_a[0];
+        in_b = repeat(input_b, shape, output_mem_config);
+    }
+    else
+    {
+        shape[0] = shape_b[0];
+        in_a = repeat(input_a, shape, output_mem_config);
+    }
+    return mul(in_a, in_b, std::nullopt, output_mem_config);
+}
+Tensor batch_mul(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _batch_mul)(input_a, input_b, output_mem_config);
+}
 }  // namespace tt_metal
 
 }  // namespace tt
