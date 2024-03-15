@@ -119,18 +119,21 @@ std::vector<Tensor> MorehGroupNorm::create_output_tensors(
     std::vector<Tensor> result;
     result.reserve(3);
 
+    // output
     if (output_tensors.at(0).has_value()) {
         result.push_back(output_tensors.at(0).value());
     } else {
         result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->output_mem_config));
     }
 
+    // mean
     if (output_tensors.at(1).has_value()) {
         result.push_back(output_tensors.at(1).value());
     } else if (this->are_required_outputs.at(1)) {
         result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, this->mean_mem_config));
     }
 
+    // rstd
     if (output_tensors.at(2).has_value()) {
         result.push_back(output_tensors.at(2).value());
     } else if (this->are_required_outputs.at(2)) {
@@ -181,7 +184,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
     const MemoryConfig &output_mem_config,
     const MemoryConfig &mean_mem_config,
     const MemoryConfig &rstd_mem_config) {
-    TT_ASSERT(are_required_outputs.at(0) == true, "output is always needed.");
+    TT_ASSERT(are_required_outputs.at(0) == true, "output is always required.");
     const auto &outputs = operation::run(
         MorehGroupNorm{
             .num_groups = num_groups,
