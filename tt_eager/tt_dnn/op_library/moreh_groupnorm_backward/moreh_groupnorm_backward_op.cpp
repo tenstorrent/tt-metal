@@ -245,7 +245,7 @@ operation::ProgramWithCallbacks MorehGroupNormBackwardGammaBetaGrad::create_prog
         output_grad, input, mean, rstd, this->num_groups, gamma_grad, beta_grad);
 }
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
@@ -257,7 +257,7 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_gr
     const std::optional<const Tensor> beta_grad,
     const MemoryConfig &gamma_grad_mem_config,
     const MemoryConfig &beta_grad_mem_config) {
-    std::vector<std::variant<Tensor, char *>> dg_db;
+    std::vector<std::optional<Tensor>> dg_db;
     dg_db.reserve(2);
 
     TT_ASSERT(gamma_requires_grad || beta_requires_grad, "At least one of gamma or beta must require grad.");
@@ -274,21 +274,21 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward_gamma_beta_gr
         {gamma_grad, beta_grad});
 
     if (gamma_requires_grad) {
-        dg_db.push_back(std::move(dgamma_dbeta[0]));
+        dg_db.push_back(std::make_optional<Tensor>(std::move(dgamma_dbeta.at(0))));
         if (beta_requires_grad) {
-            dg_db.push_back(std::move(dgamma_dbeta[1]));
+            dg_db.push_back(std::make_optional<Tensor>(std::move(dgamma_dbeta.at(1))));
         } else {
-            dg_db.push_back(nullptr);
+            dg_db.push_back(std::nullopt);
         }
     } else {
-        dg_db.push_back(nullptr);
-        dg_db.push_back(std::move(dgamma_dbeta[0]));
+        dg_db.push_back(std::nullopt);
+        dg_db.push_back(std::make_optional<Tensor>(std::move(dgamma_dbeta.at(0))));
     }
 
     return std::move(dg_db);
 }
 
-std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward(
+std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
@@ -302,7 +302,7 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward(
     const MemoryConfig &input_grad_mem_config,
     const MemoryConfig &gamma_grad_mem_config,
     const MemoryConfig &beta_grad_mem_config) {
-    std::vector<std::variant<Tensor, char *>> result;
+    std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
     const auto input_requires_grad = are_needed_outputs.at(0);
@@ -313,7 +313,7 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward(
         result.push_back(moreh_groupnorm_backward_input_grad(
             output_grad, input, mean, rstd, num_groups, gamma, input_grad, input_grad_mem_config));
     } else {
-        result.push_back(nullptr);
+        result.push_back(std::nullopt);
     }
 
     if (gamma_requires_grad || beta_requires_grad) {
@@ -334,8 +334,8 @@ std::vector<std::variant<Tensor, char *>> moreh_groupnorm_backward(
         result.push_back(std::move(dgamma_dbeta[1]));
 
     } else {
-        result.push_back(nullptr);
-        result.push_back(nullptr);
+        result.push_back(std::nullopt);
+        result.push_back(std::nullopt);
     }
 
     return std::move(result);
