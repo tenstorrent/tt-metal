@@ -375,10 +375,23 @@ def custom_summary_to_csv(model, input_size, csv_file, batch_size=-1, device="cu
                 )
             except Exception as E:
                 print(E)
+                writer.writerow(
+                    [
+                        layer,
+                        str(summary[layer]["input_shape"]),
+                        str(summary[layer]["output_shape"]),
+                        "{0:,}".format(summary[layer]["nb_params"]),
+                        str(summary[layer].get("kernel_size", "")),
+                        str(summary[layer].get("stride", "")),
+                        str(summary[layer].get("padding", "")),
+                        str(summary[layer].get("dilation", "")),
+                        str(summary[layer].get("groups", "")),
+                    ]
+                )
 
 
 # Create an instance of YOLOv4 model
 model = YOLOv4()
 input_size = (3, 480, 640)
 dummy_input = torch.zeros((1,) + input_size)
-custom_summary_to_csv(model, dummy_input.size(), "model_summary_addedcol.csv", device="cpu")
+custom_summary_to_csv(model, dummy_input.size(), "model_summary_full_myYolov4.csv", device="cpu")
