@@ -192,7 +192,7 @@ void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
 
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
 template <uint8_t buffer_id, uint8_t other_buffer_id, bool sender_is_issue_path>
-FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding) {
+FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding, tt_l1_ptr uint32_t* remote_issue_cmd_slots) {
     volatile tt_l1_ptr uint32_t *eth_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
 
@@ -240,6 +240,13 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
         }
         // TODO: add timer to restrict this
     }
+
+    // Decrement available remote cmd slot on local SRC
+    if constexpr(sender_is_issue_path) {
+        *remote_issue_cmd_slots += 1;
+    } else {
+        *remote_issue_cmd_slots -= 1;
+    }
     routing_info->src_sent_valid_cmd = 0;
     noc_semaphore_inc(
         ((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr),
@@ -279,7 +286,7 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
 
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
 template <uint8_t buffer_id, uint8_t other_buffer_id, bool sender_is_issue_path>
-FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding) {
+FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding, tt_l1_ptr uint32_t* remote_issue_cmd_slots) {
     volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
     volatile tt_l1_ptr uint32_t *eth_dst_db_semaphore_addr =
@@ -332,6 +339,13 @@ FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
     internal_::ack_fd_packet(buffer_id);
 
     routing_info->dst_acked_valid_cmd = 0;
+
+    // Increment available issue slot on remote DST
+    if constexpr(sender_is_issue_path) {
+        *remote_issue_cmd_slots -= 1;
+    } else {
+        *remote_issue_cmd_slots += 1;
+    }
 
     for (uint32_t i = 0; i < num_buffer_transfers; i++) {
         const uint32_t num_pages = command_ptr[2];
