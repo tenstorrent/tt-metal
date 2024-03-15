@@ -1,19 +1,21 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import torch
-from loguru import logger
 
+from loguru import logger
 import math
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, pad_by_zero
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    precompute_freqs as tt_precompute_freqs,
+    precompute_freqs,
     freqs_to_rotation_matrix,
-    gather_rotary_emb as tt_gather_rotary_emb,
+    gather_rotary_emb,
     get_weight_cache_path,
+    generate_rot_emb,
 )
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
@@ -82,111 +84,95 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
             for i in range(self.num_device_groups)
         ]
 
-    def prepare_inputs(self, x_all, start_pos):
-        """
-        Prepare inputs for decode mode. Assume that current token is at
-        start_pos, and KV cache has valid data up to start_pos.
-        x: (batch, seq, hidden_dim)
-        start_pos: int
-        """
-        assert x_all.size(2) == self.hidden_size
-        assert len(x_all.size()) == 3
-        batch_all = x_all.size(0)
-        seq_len = x_all.size(1)
+    def prepare_inputs(self, x, start_pos):
+        # Only called by decoder tests
+        assert x.size(2) == self.hidden_size
+        assert len(x.size()) == 3
+
+        batch = x.size(0)
+        seq_len = x.size(1)
         assert seq_len == 1, "Only supporting decode mode"
+        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+        assert x.size() == (seq_len, 1, batch, self.hidden_size)
 
-        all_xs, all_rot_mats, all_attn_masks = [], [], []
-
-        for i in range(self.num_device_groups):
-            # index out batch for each device groups
-            devices = self.device_groups[i]
-            x = x_all[i * self.batch_size_per_device_group : (i + 1) * self.batch_size_per_device_group]
-            batch = x.size(0)
-
-            # prepare inputs for each attention module
-            x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-            rot_mat = self.attentions[0].get_rotation_mat(
-                dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
+        x_multichip = []
+        for i in range(self.num_devices):
+            x_multichip.append(
+                torch2tt_tensor(
+                    x.clone(),
+                    self.devices[i],
+                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                )
             )
-            rot_mat = rot_mat[:, :1]
+        for i in range(self.num_devices):
+            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+                x_multichip[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
 
-            padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (batch, seq_len, self.attentions[0].padded_local_heads, padded_layer_past_len)
-            attn_mask = torch.zeros(*attn_mask_shape)
-            attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+        attn_batch = batch // 4
 
-            # expected shapes:
-            # x: (seq_len, 1, batch, hidden_dim)
-            # start_pos: int
-            # rot_mat: [1, 1, head_dim, head_dim]
-            # attn_mask: [batch, seq_len, n_heads, padded_layer_past_len]
-            assert x.size() == (seq_len, 1, batch, self.hidden_size)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-            assert attn_mask.size() == attn_mask_shape
-            xs, rot_mats, attn_masks = [], [], []
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-            for i in range(self.num_devices_per_group):
-                device = devices[i]
-                xs.append(
-                    pad_by_zero(  # padded x_tt to seq_len, 1, 32, hidden_dim
-                        x.clone(),
-                        device,
-                        tt_dtype=self.model_config["LN_ATTN_OUTPUT_DTYPE"],
-                    )[0]
+        position_ids = torch.ones(seq_len, attn_batch, dtype=torch.long) * start_pos
+        rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+        rot_mat = gather_rotary_emb(rot_emb, position_ids)[:, :1]
+        assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+        rot_mats = []
+        for i in range(self.num_devices):
+            rot_mats.append(
+                torch2tt_tensor(
+                    rot_mat.clone(),
+                    self.devices[i],
+                    tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
+                    tt_dtype=self.model_config["ROT_MAT_DTYPE"],
                 )
-                rot_mats.append(
-                    torch2tt_tensor(
-                        rot_mat.clone(),
-                        device,
-                        tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
-                        tt_dtype=self.model_config["ROT_MAT_DTYPE"],
-                    )
-                )
-                attn_masks.append(
-                    torch2tt_tensor(
-                        attn_mask.clone(),
-                        device,
-                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
-                    )
-                )
-            for i in range(self.num_devices_per_group):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
-                )
-                # attn_masks[i] is [8, 1, 32, 128]
-                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
-                )
+            )
 
-            # if emulated, use only the first copy of xs per group
-            if self.emulated:
-                first_x = xs[0]
-                [x.deallocate(True) for x in xs[1:]]
-                xs = [first_x for _ in range(self.num_devices_per_group)]
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask_shape = (1, seq_len, 32, padded_layer_past_len)
+        attn_mask = torch.zeros(*attn_mask_shape)
+        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+        assert attn_mask.size() == attn_mask_shape
+        attn_masks = []
+        for i in range(self.num_devices):
+            attn_masks.append(
+                torch2tt_tensor(
+                    attn_mask.clone(),
+                    self.devices[i],
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],  # BFLOAT16_DTYPE currently pushes faster
+                )
+            )
+        repeat_shape = (attn_batch, 1, 1, 1)
 
-            # extend to the all_xs, all_rot_mats, all_attn_masks
-            all_xs.extend(xs)
-            all_rot_mats.extend(rot_mats)
-            all_attn_masks.extend(attn_masks)
+        for i in range(self.num_devices):
+            attn_masks[i] = tt_lib.tensor.repeat(
+                attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+            )
+        # Put attn_mask on the device with the sharded config
+        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = padded_layer_past_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-        # if emulated, use only the first copy rot_mats and attn_masks
+        for i in range(self.num_devices):
+            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_masks[i], sharded_mem_config=attention_mask_memconfig
+            )
+
         if self.emulated:
-            first_rot_mat, first_attn_mask = all_rot_mats[0], all_attn_masks[0]
-            [rot_mat.deallocate(True) for rot_mat in all_rot_mats[1:]]
-            [attn_mask.deallocate(True) for attn_mask in all_attn_masks[1:]]
-            all_rot_mats = [first_rot_mat for _ in range(self.num_devices)]
-            all_attn_masks = [first_attn_mask for _ in range(self.num_devices)]
+            # save l1 space by sharing the same input across "devices"
+            for i in range(1, self.num_devices):
+                x_multichip[i].deallocate(True)
+                rot_mats[i].deallocate(True)
+                attn_masks[i].deallocate(True)
+                x_multichip[i] = x_multichip[0]
+                rot_mats[i] = rot_mats[0]
+                attn_masks[i] = attn_masks[0]
 
         return (
-            all_xs,
+            x_multichip,
             start_pos,
-            all_rot_mats,
-            all_attn_masks,
+            rot_mats,
+            attn_masks,
         )
 
     def forward(
@@ -200,6 +186,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         all_attn_outputs = []
         # First calculate attention for each device group
         for group_id in range(self.num_device_groups):
+            # fetch input per group
             devices = self.device_groups[group_id]
             xs_group = xs[group_id * self.num_devices_per_group : (group_id + 1) * self.num_devices_per_group]
             rot_mats_group = rot_mats[
@@ -208,9 +195,29 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
             attn_masks_group = attn_masks[
                 group_id * self.num_devices_per_group : (group_id + 1) * self.num_devices_per_group
             ]
+
+            # QKV projection
             query_layer, key_layer, value_layer = self.attentions[group_id].attn_qkv(xs_group, rot_mats_group)
+
+            # Each attention group is responsible for different batch ids
+            batch_offset = self.batch_size_per_device_group * group_id
+            for i in range(len(query_layer)):
+                # Unpad the batch dimension to original batch if the original batch is not 32
+                query_layer[i] = tt_lib.tensor.unpad(
+                    query_layer[i],
+                    [batch_offset, 0, 0, 0],
+                    [
+                        batch_offset + self.batch_size_per_device_group - 1,
+                        0,
+                        31,
+                        self.head_dim - 1,
+                    ],
+                    output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                )
+
+            # Attention
             outputs_group = self.attentions[group_id].attn_mqa(
-                query_layer, key_layer, value_layer, start_pos, attn_masks_group
+                query_layer, key_layer, value_layer, start_pos, attn_masks_group, batch_offset=batch_offset
             )
             all_attn_outputs.append(outputs_group)
         # Do all gather across device groups before selfout
@@ -224,5 +231,18 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         for group_id in range(self.num_device_groups):
             all_attn_outputs[group_id] = self.attentions[group_id].attn_selfout(all_attn_outputs[group_id])
 
+        if self.emulated:
+            for group_id in range(self.num_device_groups):
+                all_attn_outputs[group_id] = tt_all_gather_torch(all_attn_outputs[group_id], dim=-1)
+
         # flatten the all_attn_outputs and return
-        return [output for outputs_group in all_attn_outputs for output in outputs_group]
+        all_attn_outputs = [output for outputs_group in all_attn_outputs for output in outputs_group]
+
+        if self.emulated:
+            # FOR BRINGUP! Outputs are Interaved, Shard them
+            for i in range(len(all_attn_outputs)):
+                all_attn_outputs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    all_attn_outputs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
+                )
+
+        return all_attn_outputs

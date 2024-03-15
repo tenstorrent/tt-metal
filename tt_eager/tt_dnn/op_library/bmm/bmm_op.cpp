@@ -73,9 +73,9 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const DeviceComputeKernelConfig& compute_kernel_config
 )  {
 
-    const auto& in_a_shape = input_tensors.at(0).shape;
-    const auto& in_b_shape = input_tensors.at(1).shape;
-    const auto& out_shape = output_tensors.at(0).shape;
+    const auto& in_a_shape = input_tensors.at(0).get_shape();
+    const auto& in_b_shape = input_tensors.at(1).get_shape();
+    const auto& out_shape = output_tensors.at(0).get_shape();
 
     const auto& t = output_tensors.at(0);
     if(t.storage_type() != StorageType::DEVICE) {

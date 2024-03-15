@@ -190,27 +190,52 @@ class TtLlamaMLP_galaxy(nn.Module):
     def prepare_inputs(self, x):
         batch, seq_len = 32, 1
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        # Split the input tensor into 4 chunks
-        xs = torch.chunk(x, self.frac_grid[0], dim=-1)
+        x_multichip = []
+        for i in range(self.num_devices):
+            x_multichip.append(
+                torch2tt_tensor(
+                    x.clone(),
+                    self.devices[i],
+                    tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                    tt_memory_config=self.model_config["L1_MEMCFG"],
+                )
+            )
+        for i in range(self.num_devices):
+            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+                x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+            )
+        return x_multichip
 
-        x_32chips = []
+    def prepare_inputs_mlp(self, x_multichip):
+        # len(x) = 32, each is 1 x 1 x 32 x 8k sharded on a single chip
+        assert len(x_multichip) == 32
+        batch, seq_len = 32, 1
+        for i in range(len(x_multichip)):
+            assert x_multichip[i].shape == (seq_len, 1, batch, self.hidden_size)
+            x_multichip[i] = tt_lib.tensor.sharded_to_interleaved(
+                x_multichip[i], output_mem_config=self.model_config["L1_MEMCFG"]
+            )
         for FF1_group in self.FF1_groups:
             for chunk_id, device_id in enumerate(FF1_group):
                 # logger.info(f"Preparing input for FF1 on device {device_id} with chunk {chunk_id}")
-                x_32chips.append(
-                    torch2tt_tensor(
-                        xs[chunk_id].clone(),
-                        self.devices[device_id],
-                    )
+                start = chunk_id * self.hidden_size // 4
+                end = start + self.hidden_size // 4
+                x_multichip[device_id] = tt_lib.tensor.unpad(
+                    x_multichip[device_id],
+                    [0, 0, 0, start],
+                    [
+                        seq_len - 1,
+                        0,
+                        batch - 1,
+                        end - 1,
+                    ],
+                    output_mem_config=self.model_config["L1_MEMCFG"],
                 )
 
-        for i in range(self.num_devices):
-            x_32chips[i] = tt_lib.tensor.interleaved_to_sharded(
-                x_32chips[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
-            )
-        return x_32chips
+        return x_multichip
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: list) -> list:
+        x = self.prepare_inputs_mlp(x)
         hidden_states_32chips = []
         w1_32chips = []
         w3_32chips = []
@@ -340,17 +365,25 @@ class TtLlamaMLP_galaxy(nn.Module):
                 )
 
         # Select the first chip of each column to get the full output
-        hidden_states_width_sharded_by_4 = [chip_column[0] for chip_column in hidden_states_32chips]
-        return hidden_states_width_sharded_by_4
+        # hidden_states_width_sharded_by_4 = [chip_column[0] for chip_column in hidden_states_32chips]
+        # return hidden_states_width_sharded_by_4
         # TODO: Do a all_gather along x axis to let every chip have a full activation?
-        # hidden_states_32chips = [item for sublist in hidden_states_32chips for item in sublist]
+        hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
 
-        # # Transform back to the original pattern
-        # hidden_states_32chips = [hidden_states_32chips[i::self.frac_grid[1]] for i in range(self.frac_grid[1])]
+        # Transform back to the original pattern
+        hidden_states_32chips = [hidden_states_32chips[i :: self.frac_grid[1]] for i in range(self.frac_grid[1])]
 
-        # if self.emulated:
-        #     for i in range(len(hidden_states_32chips)):
-        #         hidden_states_32chips[i] = tt_all_gather_torch(hidden_states_32chips[i], dim=-1)
-        #     hidden_states_32chips = hidden_states_32chips[0][0]
+        if self.emulated:
+            for i in range(len(hidden_states_32chips)):
+                hidden_states_32chips[i] = tt_all_gather_torch(hidden_states_32chips[i], dim=-1)
 
-        # return hidden_states_32chips
+        hidden_states_32chips = [chip for column_chips in hidden_states_32chips for chip in column_chips]
+
+        if self.emulated:
+            # FOR BRINGUP! Outputs are Interaved, Shard them
+            for i in range(len(hidden_states_32chips)):
+                hidden_states_32chips[i] = tt_lib.tensor.interleaved_to_sharded(
+                    hidden_states_32chips[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+                )
+
+        return hidden_states_32chips

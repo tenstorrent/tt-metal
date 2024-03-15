@@ -721,8 +721,10 @@ inline void print_datum(std::ostream& ss, bfloat16 datum) {
     print_datum(ss, datum.to_float());
 }
 
+inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
+
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
-constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = std::strlen(TENSOR_TYPE_STRING) + 1;
+constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
 
 static constexpr auto TAB = "    ";
 static constexpr auto TAB_MINUS_1 = "   ";

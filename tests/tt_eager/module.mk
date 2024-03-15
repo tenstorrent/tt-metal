@@ -32,12 +32,13 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/tensors/test_host_device_loopback \
 		 tests/tt_eager/tensors/test_raw_host_memory_pointer \
 		 tests/tt_eager/tensors/test_sharded_loopback \
+		 tests/tt_eager/tensors/test_async_tensor_apis \
 		 tests/tt_eager/integration_tests/test_bert \
 
 TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))
 
 TT_EAGER_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
-TT_EAGER_TESTS_LDFLAGS = $(TT_METAL_TESTS_LDFLAGS) $(TT_LIB_LDFLAGS)
+TT_EAGER_TESTS_LDFLAGS = $(TT_METAL_TESTS_LDFLAGS) $(TT_LIB_LDFLAGS) -lgtest -lgtest_main
 
 TT_EAGER_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.o))
 TT_EAGER_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.d))

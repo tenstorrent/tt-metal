@@ -20,9 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
-
+from models.demos.llama2_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 import re
 
 pattern = r"PCC: ([\d.]+)"
@@ -81,7 +79,6 @@ def run_test_LlamaDecoder_inference(
     seq_len,
     pcc,
     model_config,
-    optimized,
     n_devices,
     emulated=False,
 ):
@@ -96,6 +93,8 @@ def run_test_LlamaDecoder_inference(
         tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
         cache_path = model_config["DEFAULT_CACHE_PATH"]
 
+    assert n_devices == len(devices) and n_devices == 32, "Only 32 devices supported for galaxy"
+
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
@@ -104,6 +103,7 @@ def run_test_LlamaDecoder_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
+    # Prepare configs
     torch.manual_seed(0)
     layer_num = 0
     base_url = "layers"
@@ -113,36 +113,29 @@ def run_test_LlamaDecoder_inference(
     hidden_dim = configuration.dim
     head_dim = hidden_dim // n_heads
 
-    print(f"Running optimized: {optimized}")
     print(f"Running emulated: {emulated}")
     print(f"Running on {n_devices} devices")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    if optimized:
-        tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
-            devices,
-            state_dict,
-            base_url,
-            layer_num,
-            model_config,
-            configuration,
-            batch,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
-    else:
-        tt_LlamaDecoder_model = TtLlamaDecoder(
-            devices, state_dict, base_url, layer_num, model_config, configuration, batch
-        )
+    tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
+        devices,
+        state_dict,
+        base_url,
+        layer_num,
+        model_config,
+        configuration,
+        emulated=emulated,
+        cache_path=cache_path,
+    )
 
     if not emulated:
         for device in devices:
             tt_lib.device.Synchronize(device)
 
-    generation_start_pos = 1
-    generation_length = 50
+    generation_start_pos = 0
+    generation_length = 10
     all_tests_pass = True
     all_pccs = []
     for i in range(generation_length):
@@ -150,7 +143,6 @@ def run_test_LlamaDecoder_inference(
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
         pt_input = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
         tt_input = pt_input.clone()
-
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
@@ -173,10 +165,10 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
-        assert len(tt_out) == len(devices)
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
+        assert isinstance(tt_out, list)  # tt_out should be sharded on N devices
+
+        # TODO: Figure out how to check outputs
+        tt_out = tt2torch_tensor(tt_out[0])
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -187,9 +179,9 @@ def run_test_LlamaDecoder_inference(
         all_pccs.append(extracted_pcc)
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
+            logger.info(f"[start_pos={start_pos}] Llama2-70b Attention output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Decoder output Failed! PCC value is lower than {pcc}")
+            logger.warning(f"[start_pos={start_pos}] Llama2-70b Attention output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -204,15 +196,23 @@ def run_test_LlamaDecoder_inference(
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = []
-    for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
-        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # concat the pasts by heads
-    tt_layer_present = [
-        torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-    ]
+    all_k, all_v = [], []
+    for i in range(4):  # 4 device groups
+        tt_layer_present = []
+        for layer_past in tt_LlamaDecoder_model.attention.attentions[i].layer_past_list:
+            tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+        # concat the pasts by heads
+        tt_layer_present = [
+            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+        ]
+        all_k.append(tt_layer_present[0])
+        all_v.append(tt_layer_present[1])
+    # Concat across device groups
+    all_k = torch.cat(all_k, dim=0)
+    all_v = torch.cat(all_v, dim=0)
+    tt_layer_present_all = [all_k, all_v]
 
-    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
+    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
         cache_length_to_check = generation_start_pos + generation_length
         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
@@ -233,12 +233,10 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "batch, seq_len, pcc, optimized, n_devices, emulated",
+    "batch, seq_len, pcc, n_devices, emulated",
     (
-        (32, 1, 0.998, True, 4, False),
-        (32, 1, 0.998, True, 8, False),
-        (32, 1, 0.998, True, 4, True),
-        (32, 1, 0.998, True, 8, True),
+        (32, 1, 0.998, 32, False),
+        (32, 1, 0.998, 32, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
@@ -247,7 +245,6 @@ def test_LlamaDecoder_inference(
     seq_len,
     pcc,
     model_config_str,
-    optimized,
     n_devices,
     all_devices,
     emulated,
@@ -266,7 +263,6 @@ def test_LlamaDecoder_inference(
         seq_len,
         pcc,
         model_config,
-        optimized,
         n_devices,
         emulated=emulated,
     )

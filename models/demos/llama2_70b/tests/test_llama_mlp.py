@@ -2,19 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
 from pathlib import Path
-
+import torch
+from torch import nn
 import tt_lib
+import ttnn
+
 from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    # get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -98,8 +99,6 @@ def run_test_LlamaMLP_inference(
                 emulated=emulated,
                 cache_path=cache_path,
             )
-            tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
-
         else:
             # TT hardware execution -------------------------------------------------------------
             tt_LlamaMLP_model = TtLlamaMLP_optimized(
@@ -113,14 +112,7 @@ def run_test_LlamaMLP_inference(
                 cache_path=cache_path,
             )
 
-            # TODO: Put input sharded in L1
-            tt_mlp_input = [
-                torch2tt_tensor(
-                    tt_inp.clone(),
-                    device,
-                )
-                for device in devices
-            ]
+        tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
     else:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP(
@@ -135,10 +127,8 @@ def run_test_LlamaMLP_inference(
 
     if n_devices == 32:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
-        assert len(tt_out) == 4
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
-        tt_out = tt_out[..., :28672]
+        assert len(tt_out) == 32
+        tt_out = tt2torch_tensor(tt_out[0])
     else:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
         assert len(tt_out) == len(devices)

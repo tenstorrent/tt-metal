@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
 from pathlib import Path
-
+import torch
+from torch import nn
 import tt_lib
+import ttnn
 
 from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -19,8 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
 from models.demos.llama2_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
 
 
@@ -112,6 +111,7 @@ def run_test_LlamaAttention_inference(
     head_dim = hidden_dim // n_heads
 
     print(f"Running emulated: {emulated}")
+    print(f"Running on {n_devices} devices")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
@@ -165,10 +165,7 @@ def run_test_LlamaAttention_inference(
         )
 
         assert isinstance(tt_out, list)  # tt_out should be sharded on N devices
-        tt_outs = [
-            tt2torch_tensor(t) for t in tt_out[:8]
-        ]  # Only take the output of the first 8 devices (the first device group), as output is copied accross device groups
-        tt_out = torch.cat(tt_outs, dim=-1)
+        tt_out = tt2torch_tensor(tt_out[0])
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -242,18 +239,19 @@ def test_LlamaAttention_inference(
     pcc,
     model_config_str,
     n_devices,
-    pcie_devices,
+    all_devices,
     emulated,
 ):
+    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str, num_devices=n_devices)
-    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices and not emulated:
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaAttention_inference(
-        pcie_devices[:n_devices],
+        devices,
         batch,
         seq_len,
         pcc,
