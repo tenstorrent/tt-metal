@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-l1_loss_sum:
+  - ttnn-mse_loss:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -21,7 +21,7 @@ test-list:
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT8_B", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: l1_loss_sum_sweep.csv
+      output-file: mse_loss_sweep.csv

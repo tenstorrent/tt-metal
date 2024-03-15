@@ -2182,7 +2182,7 @@ def l1_loss_sum(
 
     t2 = ttnn.l1_loss(t0, t1, loss_mode="sum", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
 
 
 def l1_loss_mean(
@@ -2204,7 +2204,7 @@ def l1_loss_mean(
 
     t2 = ttnn.l1_loss(t0, t1, loss_mode="mean", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
 
 
 def l1_loss(
@@ -2226,7 +2226,7 @@ def l1_loss(
 
     t2 = ttnn.l1_loss(t0, t1, loss_mode="none", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
 
 
 def mse_loss_sum(
@@ -2248,7 +2248,7 @@ def mse_loss_sum(
 
     t2 = ttnn.mse_loss(t0, t1, loss_mode="sum", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
 
 
 def mse_loss_mean(
@@ -2270,7 +2270,7 @@ def mse_loss_mean(
 
     t2 = ttnn.mse_loss(t0, t1, loss_mode="mean", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
 
 
 def mse_loss(
@@ -2292,4 +2292,4 @@ def mse_loss(
 
     t2 = ttnn.mse_loss(t0, t1, loss_mode="none", memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1)
+    return ttnn_tensor_to_torch(t2)
