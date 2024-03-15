@@ -44,6 +44,9 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
         }
     }
 
+    auto index_layout = index_tensors.front().get_layout();
+    bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);
+
     if (is_w_index_exist) {
         // compute index info
         IndexInfo index_info[4] = {0};
@@ -126,6 +129,12 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         std::map<string, string> reader_defines;
         std::map<string, string> writer_defines;
+
+        if (is_row_major_index) {
+            reader_defines["ROW_MAJOR_INDEX"] = 1;
+        } else {
+            reader_defines["TILIZE_INDEX"] = 1;
+        }
 
         auto reader_kernel_id = CreateReadKernel(
             program,
@@ -375,6 +384,12 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
 
         std::map<string, string> reader_defines;
         std::map<string, string> writer_defines;
+
+        if (is_row_major_index) {
+            reader_defines["ROW_MAJOR_INDEX"] = 1;
+        } else {
+            reader_defines["TILIZE_INDEX"] = 1;
+        }
 
         auto reader_kernel_id = CreateReadKernel(
             program,

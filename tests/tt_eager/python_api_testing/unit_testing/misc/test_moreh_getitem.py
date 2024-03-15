@@ -224,7 +224,14 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
         100,
     ),
 )
-def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
+@pytest.mark.parametrize(
+    "row_major_index",
+    (
+        True,
+        False,
+    ),
+)
+def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major_index, device):
     shape, index_dim = shape_index_dim
     torch.manual_seed(2)
 
@@ -234,7 +241,6 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
         tt_dtype = ttl.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
-    x = torch.arange(0, x.numel()).reshape(shape).to(dtype)
 
     dev_x = (
         ttl.tensor.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttl.tensor.Layout.TILE).to(device)
@@ -242,13 +248,16 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
 
     idx_value_max = shape[index_dim] - 1
     idx = torch.randint(0, idx_value_max, (index_size,))
-    dev_idx = (
-        ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
-        .reshape(1, 1, 1, index_size)
-        .pad_to_tile(float("nan"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    if row_major_index:
+        dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32).to(device)
+    else:
+        dev_idx = (
+            ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
+            .reshape(1, 1, 1, index_size)
+            .pad_to_tile(float("nan"))
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
 
     if index_dim == 0:
         tt_cpu = x[idx]
@@ -297,7 +306,14 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, device):
         100,
     ),
 )
-def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, device):
+@pytest.mark.parametrize(
+    "row_major_index",
+    (
+        True,
+        False,
+    ),
+)
+def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_major_index, device):
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
@@ -317,13 +333,16 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, device
     for index_dim in index_dims:
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(0, idx_value_max, (index_size,))
-        dev_idx = (
-            ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
-            .reshape(1, 1, 1, index_size)
-            .pad_to_tile(float("nan"))
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+        if row_major_index:
+            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32).to(device)
+        else:
+            dev_idx = (
+                ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
+                .reshape(1, 1, 1, index_size)
+                .pad_to_tile(float("nan"))
+                .to(ttl.tensor.Layout.TILE)
+                .to(device)
+            )
         indices.append(idx)
         dev_indices.append(dev_idx)
 
@@ -371,7 +390,14 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, device
         100,
     ),
 )
-def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, device):
+@pytest.mark.parametrize(
+    "row_major_index",
+    (
+        True,
+        False,
+    ),
+)
+def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_major_index, device):
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
@@ -391,13 +417,16 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, devi
     for index_dim in index_dims:
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(0, idx_value_max, (index_size,))
-        dev_idx = (
-            ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
-            .reshape(1, 1, 1, index_size)
-            .pad_to_tile(float("nan"))
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+        if row_major_index:
+            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32).to(device)
+        else:
+            dev_idx = (
+                ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
+                .reshape(1, 1, 1, index_size)
+                .pad_to_tile(float("nan"))
+                .to(ttl.tensor.Layout.TILE)
+                .to(device)
+            )
         indices.append(idx)
         dev_indices.append(dev_idx)
 
@@ -440,7 +469,14 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, devi
         100,
     ),
 )
-def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, device):
+@pytest.mark.parametrize(
+    "row_major_index",
+    (
+        True,
+        False,
+    ),
+)
+def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_major_index, device):
     shape, index_dims = shape_index_dims
     torch.manual_seed(2)
 
@@ -460,13 +496,16 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, devic
     for index_dim in index_dims:
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(0, idx_value_max, (index_size,))
-        dev_idx = (
-            ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
-            .reshape(1, 1, 1, index_size)
-            .pad_to_tile(float("nan"))
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+        if row_major_index:
+            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32).to(device)
+        else:
+            dev_idx = (
+                ttl.tensor.Tensor(idx, ttl.tensor.DataType.UINT32)
+                .reshape(1, 1, 1, index_size)
+                .pad_to_tile(float("nan"))
+                .to(ttl.tensor.Layout.TILE)
+                .to(device)
+            )
         indices.append(idx)
         dev_indices.append(dev_idx)
 
