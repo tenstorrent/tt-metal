@@ -48,7 +48,7 @@ def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
 test_sweep_args = [
     (
         [(224, 128), (224, 128)],
-        [ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.bfloat8_b, ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
