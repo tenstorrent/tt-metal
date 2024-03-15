@@ -80,18 +80,33 @@ def run_test_LlamaMLP_inference(
     pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
 
-    # TT hardware execution -------------------------------------------------------------
-    if n_devices == 32:
-        tt_LlamaMLP_model = TtLlamaMLP_galaxy(
-            devices,
-            state_dict,
-            BASE_URL,
-            UNIT_TEST_LAYER_NUM,
-            configuration.dim,
-            model_config,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
+    if optimized:
+        if n_devices == 32:
+            tt_LlamaMLP_model = TtLlamaMLP_galaxy(
+                devices,
+                state_dict,
+                base_url,
+                layer_num,
+                configuration.dim,
+                model_config,
+                emulated=emulated,
+                cache_path=cache_path,
+            )
+        else:
+            assert seq_len == 1, "Prefill is only supported for optimized"
+            # TT hardware execution -------------------------------------------------------------
+            tt_LlamaMLP_model = TtLlamaMLP_optimized(
+                devices,
+                state_dict,
+                base_url,
+                layer_num,
+                configuration.dim,
+                model_config,
+                emulated=emulated,
+                cache_path=cache_path,
+            )
+
+        tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
     else:
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
             devices,
@@ -150,11 +165,11 @@ def run_test_LlamaMLP_inference(
     "batch, seq_len",
     (
         (32, 1),
-        # (1, 128),
+        (32, 128),
     ),
     ids=(
         "decode",
-        # "prefill"
+        "prefill"
     ),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
