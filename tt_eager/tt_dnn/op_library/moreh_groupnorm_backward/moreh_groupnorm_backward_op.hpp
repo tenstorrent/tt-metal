@@ -124,7 +124,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t num_groups,
-    const std::vector<bool> &are_needed_outputs,
+    const std::vector<bool> &are_required_outputs,
     const std::optional<const Tensor> gamma = std::nullopt,
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<const Tensor> gamma_grad = std::nullopt,
