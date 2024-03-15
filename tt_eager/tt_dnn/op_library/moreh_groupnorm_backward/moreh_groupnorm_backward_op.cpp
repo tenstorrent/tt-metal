@@ -207,15 +207,20 @@ std::vector<Tensor> MorehGroupNormBackwardGammaBetaGrad::create_output_tensors(
     std::vector<Tensor> result;
     result.reserve(2);
 
+    const auto gamma_requires_grad = this->are_required_outputs.at(0);
+    const auto beta_requires_grad = this->are_required_outputs.at(1);
+
+    // gamma_grad
     if (output_tensors.at(0).has_value()) {
         result.push_back(output_tensors.at(0).value());
-    } else if (this->gamma_requires_grad) {
+    } else if (gamma_requires_grad) {
         result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->gamma_grad_mem_config));
     }
 
+    // beta_grad
     if (output_tensors.at(1).has_value()) {
         result.push_back(output_tensors.at(1).value());
-    } else if (this->beta_requires_grad) {
+    } else if (beta_requires_grad) {
         result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, this->beta_grad_mem_config));
     }
 
@@ -232,9 +237,12 @@ operation::ProgramWithCallbacks MorehGroupNormBackwardGammaBetaGrad::create_prog
     std::optional<Tensor> gamma_grad = std::nullopt;
     std::optional<Tensor> beta_grad = std::nullopt;
 
-    if (this->gamma_requires_grad) {
+    const auto gamma_requires_grad = this->are_required_outputs.at(0);
+    const auto beta_requires_grad = this->are_required_outputs.at(1);
+
+    if (gamma_requires_grad) {
         gamma_grad = std::make_optional<Tensor>(output_tensors.at(0));
-        if (this->beta_requires_grad) {
+        if (beta_requires_grad) {
             beta_grad = std::make_optional<Tensor>(output_tensors.at(1));
         }
     } else {
@@ -251,27 +259,28 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t num_groups,
-    bool gamma_requires_grad,
-    bool beta_requires_grad,
+    const std::vector<bool> &are_required_outputs,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
     const MemoryConfig &gamma_grad_mem_config,
     const MemoryConfig &beta_grad_mem_config) {
-    std::vector<std::optional<Tensor>> dg_db;
-    dg_db.reserve(2);
+    const auto gamma_requires_grad = are_required_outputs.at(0);
+    const auto beta_requires_grad = are_required_outputs.at(1);
 
     TT_ASSERT(gamma_requires_grad || beta_requires_grad, "At least one of gamma or beta must require grad.");
 
     const auto &dgamma_dbeta = operation::run(
         MorehGroupNormBackwardGammaBetaGrad{
             .num_groups = num_groups,
-            .gamma_requires_grad = gamma_requires_grad,
-            .beta_requires_grad = beta_requires_grad,
+            .are_required_outputs = std::move(are_required_outputs),
             .gamma_grad_mem_config = std::move(gamma_grad_mem_config),
             .beta_grad_mem_config = std::move(beta_grad_mem_config)},
         {output_grad, input, mean, rstd},
         {},
         {gamma_grad, beta_grad});
+
+    std::vector<std::optional<Tensor>> dg_db;
+    dg_db.reserve(2);
 
     if (gamma_requires_grad) {
         dg_db.push_back(std::make_optional<Tensor>(std::move(dgamma_dbeta.at(0))));
@@ -323,15 +332,14 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
             mean,
             rstd,
             num_groups,
-            gamma_requires_grad,
-            beta_requires_grad,
+            {gamma_requires_grad, beta_requires_grad},
             gamma_grad,
             beta_grad,
             gamma_grad_mem_config,
             beta_grad_mem_config);
 
-        result.push_back(std::move(dgamma_dbeta[0]));
-        result.push_back(std::move(dgamma_dbeta[1]));
+        result.push_back(std::move(dgamma_dbeta.at(0)));
+        result.push_back(std::move(dgamma_dbeta.at(1)));
 
     } else {
         result.push_back(std::nullopt);
