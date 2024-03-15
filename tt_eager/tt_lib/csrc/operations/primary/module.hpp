@@ -797,16 +797,10 @@ void py_module(py::module& m_primary) {
         py::arg("end"),
         py::arg("step"),
         py::arg("any").noconvert(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
+        py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs an arange operation. Returns an output tensor.");
-
-    m_primary.def(
-        "moreh_arange_inplace",
-        &moreh_arange_inplace,
-        py::arg("input_tensor").noconvert(),
-        py::arg("start"),
-        py::arg("end"),
-        py::arg("step"),
         "Performs an arange operation. Returns an output tensor.");
 
     m_primary.def(
