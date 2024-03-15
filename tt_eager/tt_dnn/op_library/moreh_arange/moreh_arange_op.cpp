@@ -21,13 +21,13 @@ namespace primary {
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks moreh_arange_(
-    const Tensor &input, float start, float end, float step, const CoreRange core_range) {
+    const Tensor &output, float start, float end, float step, bool untilize_out, const CoreRange core_range) {
     // split work
     // N and C are always 1
     // H is always TILE_HEIGHT
-    auto shape = input.get_legacy_shape();
-    auto W = shape[3];
-    auto Wt = W / TILE_WIDTH;
+    auto shape = output.get_legacy_shape();
+    auto W = shape[-1];
+    auto Wt = div_up(W, TILE_WIDTH);
 
     uint32_t units_to_divide = Wt;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
@@ -36,10 +36,12 @@ operation::ProgramWithCallbacks moreh_arange_(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, units_to_divide);
 
+    auto element_size = output.element_size();
+
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     CreateCircularBuffer(
         program,
@@ -50,13 +52,24 @@ operation::ProgramWithCallbacks moreh_arange_(
         });
 
     // create read/wrtie kernel
-    bool dst_is_dram = input.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
     std::map<string, string> writer_defines;
 
+    if (output.get_dtype() == DataType::BFLOAT16) {
+        writer_defines["OUTPUT_DTYPE_BFLOAT16"] = 1;
+    }
+    if (output.get_dtype() == DataType::UINT32) {
+        writer_defines["OUTPUT_DTYPE_UINT32"] = 1;
+    }
+    if (output.get_dtype() == DataType::FLOAT32) {
+        writer_defines["OUTPUT_DTYPE_FLOAT32"] = 1;
+    }
+
     auto kernel_id = CreateWriteKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
+        untilize_out ? "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
+        : "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
         all_cores,
         {dst_is_dram},
         writer_defines);
@@ -77,11 +90,12 @@ operation::ProgramWithCallbacks moreh_arange_(
         }
 
         vector<uint32_t> writer_args = {
-            input.buffer()->address(),
+            output.buffer()->address(),
             tile_offset,
             num_tiles_per_core,
             *reinterpret_cast<uint32_t *>(&start),
-            *reinterpret_cast<uint32_t *>(&step)};
+            *reinterpret_cast<uint32_t *>(&step),
+            element_size};
 
         SetRuntimeArgs(program, kernel_id, core, writer_args);
 
@@ -92,9 +106,9 @@ operation::ProgramWithCallbacks moreh_arange_(
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
-        TT_ASSERT(input_buffers.size() == 1);
+        TT_ASSERT(output_buffers.size() == 1);
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_dram_buffer = output_buffers.at(0);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};
@@ -110,75 +124,101 @@ operation::ProgramWithCallbacks moreh_arange_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-void MorehArange::validate(const std::vector<Tensor> &input_tensors) const {
+void MorehArange::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_ASSERT(this->step > 0 || this->step < 0, "step must be nonzero");
     TT_ASSERT(
         ((this->step > 0) && (this->end >= this->start)) || ((this->step < 0) && (this->end <= this->start)),
         "upper bound and larger bound inconsistent with step sign");
+
+    TT_FATAL(this->output_dtype != DataType::BFLOAT8_B, "moreh arange not support bfloat8_b dtype");
+
+    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+        // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
+        return;
+    }
+    TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensor");
+
+    auto output_tensor = output_tensors.front().value();
+    auto output_memory_layout = output_tensor.memory_config().memory_layout;
+    auto output_layout = output_tensor.get_layout();
+
+    TT_FATAL(output_memory_layout == TensorMemoryLayout::INTERLEAVED);
+
+    if (this->untilize_out){
+        TT_FATAL(output_layout == Layout::ROW_MAJOR);
+    } else {
+        TT_FATAL(output_layout == Layout::TILE);
+    }
 }
 
 std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    if (this->inplace) {
-        return {};
-    } else {
-        // return size is ceil((end - start) / step)
-        uint32_t num_elems = static_cast<uint32_t>(ceil(((this->end - this->start) / this->step)));
-        Shape output_shape = {1, 1, TILE_HEIGHT, ((num_elems + TILE_WIDTH - 1) / TILE_WIDTH) * TILE_WIDTH};
+    // return size is ceil((end - start) / step)
+    uint32_t num_elems = static_cast<uint32_t>(ceil(((this->end - this->start) / this->step)));
+
+    if (this->untilize_out) {
+        Shape output_shape = {num_elems};
+
         return {output_shape};
     }
+    Shape output_shape = {1, 1, TILE_HEIGHT, round_up(num_elems, TILE_WIDTH)};
+    return {output_shape};
 }
 
-std::vector<Tensor> MorehArange::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    if (this->inplace) {
-        return {};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, DataType::BFLOAT16, Layout::TILE, this->output_mem_config);
+std::vector<Tensor> MorehArange::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0).value()};
     }
+
+    auto dtype = input_tensors.at(0).get_dtype();
+    auto layout = (this->untilize_out) ? Layout::ROW_MAJOR : Layout::TILE;
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, layout, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehArange::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
+
     return moreh_arange_(
-        this->inplace ? input_tensors.at(0) : output_tensors.at(0),
+        output_tensors.at(0),
         this->start,
         this->end,
         this->step,
+        this->untilize_out,
         this->core_range);
 }
 
-Tensor moreh_arange(float start, float end, float step, const Tensor &any, const MemoryConfig &output_mem_config) {
+Tensor moreh_arange(
+    float start,
+    float end,
+    float step,
+    const Tensor &any,
+    std::optional<Tensor> output_tensor,
+    bool untilize_out,
+    std::optional<DataType> output_dtype,
+    const MemoryConfig &output_mem_config) {
     auto device = any.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    return operation::run(
-               MorehArange{
-                   .start = start,
-                   .end = end,
-                   .step = step,
-                   .core_range = all_cores,
-                   .output_mem_config = output_mem_config,
-                   .inplace = false},
-               {any})
-        .at(0);
-}
 
-Tensor moreh_arange_inplace(Tensor &input_tensor, float start, float end, float step) {
-    auto device = input_tensor.device();
-    auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
+    auto default_output_dtype = DataType::BFLOAT16;
 
-    operation::run(
-        MorehArange{
-            .start = start,
-            .end = end,
-            .step = step,
-            .core_range = all_cores,
-            .output_mem_config = input_tensor.memory_config(),
-            .inplace = true},
-        {input_tensor});
-    return input_tensor;
+    output_tensor = operation::run(
+                        MorehArange{
+                            .start = start,
+                            .end = end,
+                            .step = step,
+                            .untilize_out = untilize_out,
+                            .output_dtype = output_dtype.value_or(default_output_dtype),
+                            .core_range = all_cores,
+                            .output_mem_config = output_mem_config,
+                            },
+                        {any},
+                        {},
+                        {output_tensor})
+                        .at(0);
+
+    return output_tensor.value();
 }
 
 }  // namespace primary
