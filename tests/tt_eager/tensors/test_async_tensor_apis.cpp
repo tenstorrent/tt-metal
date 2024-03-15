@@ -9,6 +9,7 @@
 #include "tensor/owned_buffer.hpp"
 #include "tensor/owned_buffer_functions.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "common/bfloat16.hpp"
 #include "common/constants.hpp"
 
@@ -54,6 +55,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         readback_tensor.set_shape(thread_local_tensor.get_shape());
         readback_tensor.set_dtype(thread_local_tensor.get_dtype());
         readback_tensor.set_layout(thread_local_tensor.get_layout());
+        readback_tensor.set_metadata_populated();
         // Ensure that the readback buffer is owned inside and outside the lambda
         std::visit([](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
@@ -91,6 +93,59 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(Shape({1, 1, 32, 128})));
+}
+
+TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
+    Device* device = this->devices_[0];
+    // Don't run in async mode until eltwise binary is made async
+    // device->set_worker_mode(Device::WorkerQueueMode::ASYNCHRONOUS);
+    // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
+    std::size_t input_a_addr = 0;
+    std::size_t input_b_addr = 0;
+    std::size_t input_c_addr = 0;
+    std::size_t output_1_addr = 0;
+    std::size_t output_2_addr = 0;
+
+    for (int i = 0; i < 5; i++) {
+        // Initialize tensors and move them to DRAM
+        Tensor input_tensor_a = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor input_tensor_b = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor input_tensor_c = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor output_tensor_device = mul(add(input_tensor_a, input_tensor_b), input_tensor_c);
+        Tensor output_tensor_device_2 = sub(output_tensor_device, input_tensor_c);
+
+        EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1024, 1024})));
+        EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
+
+        Tensor output_tensor_host = output_tensor_device_2.cpu();
+        // Test tensor deallocation in async mode: deallocate tensors after using them
+        if (i == 0) {
+            input_a_addr = std::get<DeviceStorage>(input_tensor_a.get_storage()).buffer->address();
+            input_b_addr = std::get<DeviceStorage>(input_tensor_b.get_storage()).buffer->address();
+            input_c_addr = std::get<DeviceStorage>(input_tensor_c.get_storage()).buffer->address();
+            output_1_addr = std::get<DeviceStorage>(output_tensor_device.get_storage()).buffer->address();
+            output_2_addr = std::get<DeviceStorage>(output_tensor_device_2.get_storage()).buffer->address();
+        }
+        else {
+            EXPECT_EQ(std::get<DeviceStorage>(input_tensor_a.get_storage()).buffer->address(), input_a_addr);
+            EXPECT_EQ(std::get<DeviceStorage>(input_tensor_b.get_storage()).buffer->address(), input_b_addr);
+            EXPECT_EQ(std::get<DeviceStorage>(input_tensor_c.get_storage()).buffer->address(), input_c_addr);
+            EXPECT_EQ(std::get<DeviceStorage>(output_tensor_device.get_storage()).buffer->address(), output_1_addr);
+            EXPECT_EQ(std::get<DeviceStorage>(output_tensor_device_2.get_storage()).buffer->address(), output_2_addr);
+        }
+        input_tensor_a.deallocate();
+        input_tensor_b.deallocate();
+        input_tensor_c.deallocate();
+        output_tensor_device.deallocate();
+        output_tensor_device_2.deallocate();
+        // Verify output data
+        auto& buf = std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(output_tensor_host.get_storage()).buffer);
+        EXPECT_EQ(buf.use_count(), 1);
+        for (int j = 0; j < 1024 * 1024; j++) {
+            EXPECT_EQ(bfloat16(buf[j]), bfloat16(static_cast<float>(2 * i * i - i)));
+        }
+    }
+    // device->set_worker_mode(Device::WorkerQueueMode::SYNCHRONOUS);
 }
 
 TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
@@ -140,6 +195,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             readback_tensor.set_shape(thread_local_tensor.get_shape());
             readback_tensor.set_dtype(thread_local_tensor.get_dtype());
             readback_tensor.set_layout(thread_local_tensor.get_layout());
+            readback_tensor.set_metadata_populated();
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
             // This is because we explictly pass in the buffer to a new tensor_attr object
             std::visit([](auto&& storage) {
