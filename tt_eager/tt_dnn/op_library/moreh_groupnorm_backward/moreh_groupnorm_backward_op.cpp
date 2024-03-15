@@ -294,7 +294,7 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t num_groups,
-    const std::vector<bool> &are_needed_outputs,
+    const std::vector<bool> &are_required_outputs,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> input_grad,
     const std::optional<const Tensor> gamma_grad,
@@ -305,9 +305,9 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward(
     std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
-    const auto input_requires_grad = are_needed_outputs.at(0);
-    const auto gamma_requires_grad = are_needed_outputs.at(1);
-    const auto beta_requires_grad = are_needed_outputs.at(2);
+    const auto input_requires_grad = are_required_outputs.at(0);
+    const auto gamma_requires_grad = are_required_outputs.at(1);
+    const auto beta_requires_grad = are_required_outputs.at(2);
 
     if (input_requires_grad) {
         result.push_back(moreh_groupnorm_backward_input_grad(

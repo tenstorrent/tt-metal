@@ -127,13 +127,13 @@ std::vector<Tensor> MorehGroupNorm::create_output_tensors(
 
     if (output_tensors.at(1).has_value()) {
         result.push_back(output_tensors.at(1).value());
-    } else if (this->are_needed_outputs.at(1)) {
+    } else if (this->are_required_outputs.at(1)) {
         result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, this->mean_mem_config));
     }
 
     if (output_tensors.at(2).has_value()) {
         result.push_back(output_tensors.at(2).value());
-    } else if (this->are_needed_outputs.at(2)) {
+    } else if (this->are_required_outputs.at(2)) {
         result.push_back(create_device_tensor(output_shapes.at(2), dtype, layout, device, this->rstd_mem_config));
     }
 
@@ -151,13 +151,13 @@ operation::ProgramWithCallbacks MorehGroupNorm::create_program(
     std::optional<Tensor> mean = std::nullopt;
     std::optional<Tensor> rstd = std::nullopt;
 
-    if (this->are_needed_outputs.at(1)) {
+    if (this->are_required_outputs.at(1)) {
         mean = std::make_optional<Tensor>(output_tensors.at(1));
-        if (this->are_needed_outputs.at(2)) {
+        if (this->are_required_outputs.at(2)) {
             rstd = std::make_optional<Tensor>(output_tensors.at(2));
         }
     } else {
-        if (this->are_needed_outputs.at(2)) {
+        if (this->are_required_outputs.at(2)) {
             rstd = std::make_optional<Tensor>(output_tensors.at(1));
         }
     }
@@ -174,19 +174,19 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
     float eps,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
-    const std::vector<bool> &are_needed_outputs,
+    const std::vector<bool> &are_required_outputs,
     const std::optional<const Tensor> output,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const MemoryConfig &output_mem_config,
     const MemoryConfig &mean_mem_config,
     const MemoryConfig &rstd_mem_config) {
-    TT_ASSERT(are_needed_outputs.at(0) == true, "output is always needed.");
+    TT_ASSERT(are_required_outputs.at(0) == true, "output is always needed.");
     const auto &outputs = operation::run(
         MorehGroupNorm{
             .num_groups = num_groups,
             .eps = eps,
-            .are_needed_outputs = std::move(are_needed_outputs),
+            .are_required_outputs = std::move(are_required_outputs),
             .output_mem_config = std::move(output_mem_config),
             .mean_mem_config = std::move(mean_mem_config),
             .rstd_mem_config = std::move(rstd_mem_config)},
@@ -199,16 +199,16 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
 
     result.push_back(std::make_optional<Tensor>(outputs.at(0)));
 
-    if (are_needed_outputs.at(1)) {
+    if (are_required_outputs.at(1)) {
         result.push_back(std::make_optional<Tensor>(outputs.at(1)));
-        if (are_needed_outputs.at(2)) {
+        if (are_required_outputs.at(2)) {
             result.push_back(std::make_optional<Tensor>(outputs.at(2)));
         } else {
             result.push_back(std::nullopt);
         }
     } else {
         result.push_back(std::nullopt);
-        if (are_needed_outputs.at(2)) {
+        if (are_required_outputs.at(2)) {
             result.push_back(std::make_optional<Tensor>(outputs.at(1)));
         } else {
             result.push_back(std::nullopt);
