@@ -429,7 +429,7 @@ void Device::compile_command_queue_programs() {
                         {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
                         {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
                     };
-                    std::vector<uint32_t> eth_tunneller_compile_args = {true};
+                    std::vector<uint32_t> eth_tunneller_compile_args = {true, num_tensix_command_slots};
                     std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
@@ -602,7 +602,7 @@ void Device::compile_command_queue_programs() {
                 {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
                 {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
             };
-            std::vector<uint32_t> eth_tunneller_compile_args = {false}; // SENDER is ISSUE
+            std::vector<uint32_t> eth_tunneller_compile_args = {false, num_tensix_command_slots}; // SENDER is ISSUE
             std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
             tt::tt_metal::CreateKernel(
                 *command_queue_program_ptr,
