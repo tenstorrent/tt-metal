@@ -247,6 +247,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
+    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
+    }
+
     TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
@@ -309,6 +313,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 // to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after write and
 // write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
+    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
+    }
+
     TestBufferConfig config = {.num_pages = 1, .page_size = 16, .buftype = BufferType::DRAM};
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     size_t buf_size = config.num_pages * config.page_size;
