@@ -1,18 +1,10 @@
-name: "[post-commit] ttnn unit tests"
+name: "[internal] ttnn unit tests impl"
 
 on:
   workflow_call:
-  workflow_dispatch:
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    secrets: inherit
   ttnn:
-    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

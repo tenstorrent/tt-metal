@@ -4,6 +4,12 @@ on:
   workflow_call:
 
 jobs:
+  fd-ttnn-tests:
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit
+  fd-model-tests:
+    uses: ./.github/workflows/models-post-commit.yaml
+    secrets: inherit
   fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -24,8 +30,6 @@ jobs:
           {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 2 },
           {name: misc group 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 3 },
           {name: misc group 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 4 },
-          {name: ttnn, cmd: ./tests/scripts/run_python_ttnn_tests.sh},
-          {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
           {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
           {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
         ]
