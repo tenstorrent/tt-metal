@@ -643,7 +643,7 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         >>> print(tensor[0,0,:3])
         Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
     """
-    if tensor.layout == layout:
+    if tensor.layout == layout and (dtype is None or dtype == tensor.dtype):
         return tensor
 
     supported_layout_mapping = {
