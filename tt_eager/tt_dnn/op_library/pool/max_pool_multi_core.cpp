@@ -759,14 +759,17 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
-    uint32_t out_cb_pagesize = tile_size(out_df);
-    uint32_t out_cb_npages = out_ntiles_c * nblocks * multi_buffering_factor;    // there is just one row of channels after reduction
+    //uint32_t out_cb_pagesize = tile_size(out_df);
+    //uint32_t out_cb_npages = out_ntiles_c * nblocks * multi_buffering_factor;    // there is just one row of channels after reduction
+    uint32_t out_cb_pagesize =  output.shard_spec().value().shape[1] * out_nbytes;    // there is just one row of channels after reduction
+    uint32_t out_cb_npages = output.shard_spec().value().shape[0];
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
-		.set_page_size(out_cb_id, out_cb_pagesize);
+		.set_page_size(out_cb_id, out_cb_pagesize).set_globally_allocated_address(*output.buffer());;
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     log_debug(LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     TT_FATAL(output.memory_config().is_sharded());
+    /*
     auto shard_shape = output.shard_spec().value().shape;
     uint32_t sharded_out_num_pages = output.shard_spec().value().shape[0];
     uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
@@ -775,18 +778,19 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
     auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
     log_debug(LogOp, "CB {} :: PS = {}, NP = {}", sharded_out_cb_id, sharded_out_cb_page_size, sharded_out_num_pages);
+    */
 
     #if 1
     {   // debug
-        log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
-        log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
+        //log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
+        //log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
         log_debug(LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug(LogOp, "in_reader_indices_cb :: PS = {}, NP = {}", in_reader_indices_cb_pagesize, in_reader_indices_cb_npages);
         log_debug(LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug(LogOp, "in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
         log_debug(LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
-        log_debug(LogOp, "sharded_out_cb :: PS = {}, NP = {}", sharded_out_cb_page_size, sharded_out_num_pages);
+        //log_debug(LogOp, "sharded_out_cb :: PS = {}, NP = {}", sharded_out_cb_page_size, sharded_out_num_pages);
         log_debug(LogOp, "in_addr: {}", src_dram_buffer->address());
         log_debug(LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
         log_debug(LogOp, "out_addr: {}", dst_dram_buffer->address());
@@ -856,6 +860,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     /**
      * Writer Kernel: output cb -> output rows
      */
+    /*
     std::map<string, string> writer_defines;
     writer_defines["SHARDED_OUT"] = "1";
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
@@ -877,6 +882,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                         writer_kernel_fname,
                                         all_cores,
                                         writer_config);
+    */
 
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
@@ -917,6 +923,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     SetRuntimeArgs(program, reader_kernel, all_cores, reader_rt_args);
 
+    /*
     uint32_t curr_out_stick_id = 0; // track output sticks with batch folded in
     for (int32_t i = 0; i < ncores; ++ i) {
         CoreCoord core(i % ncores_w, i / ncores_w); // logical
@@ -924,9 +931,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
         curr_out_stick_id += out_nhw_per_core;
     }
+    */
 
     auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
+            //reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
+            reader_kernel, raw_in_cb, in_reader_indices_cb, cb_out, ncores, ncores_w
         ]
     (
         const void* operation,
@@ -942,6 +951,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         auto dst_buffer = output_tensors.at(0).buffer();
         bool out_sharded = output_tensors.at(0).is_sharded();
 
+        /*
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
@@ -949,12 +959,13 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                 runtime_args[0] = dst_buffer->address();
             }
         }
+        */
         if (input_sharded) {
             UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb, *reader_indices_buffer);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_out, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
