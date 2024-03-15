@@ -63,6 +63,9 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
         TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-2]);
+        // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
+        if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32);
+        else TT_FATAL(this->batch_offset == 0);
     }
 }
 
@@ -85,14 +88,14 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
-                return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx);
+                return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset);
             }
         case UpdateCacheOpParallelizationStrategy::SINGLE_CORE:
         default:
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_single_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
-                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx);
+                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset);
             }
     };
     return {};
@@ -120,6 +123,7 @@ tt::stl::reflection::Attributes UpdateCache::attributes() const {
         {"batch_idx", this->batch_idx},
         {"update_idx", this->update_idx},
         {"op_type", this->op_type},
+        {"batch_offset", this->batch_offset},
     };
 }
 

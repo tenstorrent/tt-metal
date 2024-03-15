@@ -57,27 +57,41 @@ struct OpPerformanceModel {
 
     OpPerformanceModel(std::vector<Tensor> input_tensors, std::vector<Tensor> output_tensors, int ideal_compute_cycles) {
 
+        const auto& t = input_tensors.at(0);
+        const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
+
         this->ideal_compute_cycles = ideal_compute_cycles;
 
-        // GS clock rate
-        this->ideal_compute_ns = std::ceil(ideal_compute_cycles / 1.2);
-
-        auto tensor_ns = [](const Tensor& t) {
-            int size_bytes = t.volume() * t.element_size();
-            if(t.memory_config().buffer_type == BufferType::DRAM) {
-                return size_bytes / 96.0 / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
-            }
-            else if(t.memory_config().buffer_type == BufferType::L1) {
-                return size_bytes / 786.0 / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
-            }
-            return 0.0;
-        };
+        float clock_rate_ghz = (arch == ARCH::WORMHOLE_B0) ? 1.0 : 1.2;
+        this->ideal_compute_ns = std::ceil(ideal_compute_cycles / clock_rate_ghz);
 
         // GS L1 Bisection bandwidth
         // 655 B/cycle = sqrt(108) * 32 B/cycle * 2
-        // 786 GB/s
+        // 655 * 1.2Ghz = 786 GB/s
         // GS DRAM bandwidth
         // 96 GB/s = 12 GB/s * 8 channels
+
+        // WH L1 Bisection bandwidth
+        // 512 B/cycle = sqrt(64) * 32 B/cycle * 2
+        // 512 * 1ghz clk
+        // WH DRAM bandwidth
+        // 258 GB/s = 21.5 GB/s * 6 channels * 2 banks
+
+        float peak_dram_bw = (arch == ARCH::WORMHOLE_B0) ? 6 * 2 * 21.5 : 96.0;
+
+        float noc_l1_bisection_bw = (arch == ARCH::WORMHOLE_B0) ? 512.0 : 786.0;
+
+        auto tensor_ns = [peak_dram_bw, noc_l1_bisection_bw](const Tensor& t) {
+            int size_bytes = t.volume() * t.element_size();
+            if(t.memory_config().buffer_type == BufferType::DRAM) {
+                return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+            }
+            else if(t.memory_config().buffer_type == BufferType::L1) {
+                return 1.0f; // TODO: figure out better modelling scheme for L1->L1 Transfers
+                //return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+            }
+            return 0.0f;
+        };
 
         for(const auto & t: input_tensors) {
             this->inputs_bytes.push_back(t.volume() * t.element_size());
@@ -92,7 +106,6 @@ struct OpPerformanceModel {
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
-
 
         this->ideal_ns = std::max(this->ideal_compute_ns, this->ideal_bandwidth_ns);
     }

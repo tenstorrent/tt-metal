@@ -18,8 +18,10 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
+#include "tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
+
 
 namespace tt::tt_metal::detail{
 
@@ -55,7 +57,7 @@ namespace tt::tt_metal::detail{
 
                 Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,UINT32 and UINT16.
+                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32 and UINT16.
 
                 Output tensor will be on device, in same layout, and have the given data type.
 
@@ -508,6 +510,13 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert(),
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
+
+        //MOE ops
+        m_tensor.def("indexed_fill", &indexed_fill,
+            py::arg("batch_id"), py::arg("input_a"), py::arg("input_b"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("dim") = 0,
+            R"doc(Replaces batch of input in input_b denoted by batch_ids into input_a)doc"
+        );
+
 
         // Multi-Device ops
         m_tensor.def("all_gather", &all_gather,

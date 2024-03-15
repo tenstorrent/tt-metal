@@ -100,13 +100,8 @@ struct TileSliceHostDev {
 enum TypedU32_ARRAY_Format {
     TypedU32_ARRAY_Format_INVALID,
 
-    TypedU32_ARRAY_Format_Raw, // Print as raw u32 array
-
-    TypedU32_ARRAY_Format_TensixRegister_FP16_A,
-    TypedU32_ARRAY_Format_TensixRegister_FP16_B,
-    TypedU32_ARRAY_Format_TensixRegister_TF32,
-    TypedU32_ARRAY_Format_TensixRegister_FP32,
-    TypedU32_ARRAY_Format_TensixRegister_INT32,
+    TypedU32_ARRAY_Format_Raw,                                     // A raw uint32_t array
+    TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, // Array of numbers with format specified in subtype
 
     TypedU32_ARRAY_Format_COUNT,
 };

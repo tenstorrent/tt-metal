@@ -72,7 +72,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor`.
 
@@ -162,7 +162,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 
@@ -230,7 +230,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
 
@@ -325,7 +325,7 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
 

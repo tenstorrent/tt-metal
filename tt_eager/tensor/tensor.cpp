@@ -408,6 +408,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
         {DataType::FLOAT32, &tensor_impl::get_raw_host_data_ptr<float>},
         {DataType::UINT32, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::BFLOAT8_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
+        {DataType::BFLOAT4_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::UINT16, &tensor_impl::get_raw_host_data_ptr<uint16_t>},
     };
     return dispatch_map.at(tensor.get_dtype())(tensor);

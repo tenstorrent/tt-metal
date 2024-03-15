@@ -15,7 +15,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-
 template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_mask()
 {
@@ -32,5 +31,6 @@ inline void calculate_mask()
         dst_reg++;
     }
 }
+
 }  // namespace sfpu
 }  // namespace ckernel

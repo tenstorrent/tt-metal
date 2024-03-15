@@ -261,11 +261,10 @@ ttnn has a python decorator that optionally enables features during run-time. Th
 
 The following environment variable can be set in order to completely disable these features.
 
-.. code-block:: bash
+.. code-block:: python
 
     import torch
     import ttnn
-
 
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
@@ -277,3 +276,40 @@ The following environment variable can be set in order to completely disable the
     ttnn.print_l1_buffers()
 
     ttnn.close_device(device)
+
+
+
+13. Register pre- and/or post-operation hooks
+---------------------------------------------
+
+.. code-block:: python
+
+    import torch
+    import ttnn
+
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+
+    torch_input_tensor = torch.rand((1, 32, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def pre_hook_to_print_args_and_kwargs(operation, args, kwargs):
+        print(f"Pre-hook called for {operation.name}. Args: {args}, kwargs: {kwargs}")
+
+    def post_hook_to_print_output(operation, args, kwargs, output):
+        print(f"Post-hook called for {operation.name}. Output: {output}")
+
+    with ttnn.register_pre_operation_hook(pre_hook_to_print_args_and_kwargs), ttnn.register_post_operation_hook(post_hook_to_print_output):
+        ttnn.exp(input_tensor) * 2 + 1
+
+    ttnn.close_device(device)
+
+
+
+14. Query all operations
+------------------------
+
+.. code-block:: python
+
+    import ttnn
+    ttnn.query_operations()

@@ -63,6 +63,62 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     return 0;
 }
 
+namespace {
+using namespace tt;
+using namespace tt::tt_metal;
+operation::OpPerformanceModel create_op_performance_model_for_matmul(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor> &output_tensors,
+    const DeviceComputeKernelConfig& compute_kernel_config
+)  {
+
+    const auto& in_a_shape = input_tensors.at(0).shape;
+    const auto& in_b_shape = input_tensors.at(1).shape;
+    const auto& out_shape = output_tensors.at(0).shape;
+
+    const auto& t = output_tensors.at(0);
+    if(t.storage_type() != StorageType::DEVICE) {
+        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+    const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
+    const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
+
+    // Calculate number of mul/add operations
+    // TODO: add bias modeling
+    int64_t num_mul_adds_per_elem = in_a_shape[3] * 2; // 1 multiply and 1 add per element
+    int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[2] * out_shape[3] * out_shape[1] * out_shape[0];
+
+    MathFidelity math_fidelity = MathFidelity::Invalid;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+    }, compute_kernel_config);
+
+
+    int ideal_dev_clock_cycles = std::ceil(((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) * (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+
+    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
+#if 0
+    tt::log_info(tt::LogOp, "Matmul PerfModel:");
+    tt::log_info(tt::LogOp, "\t Batch: ({}, {})", out_shape[0], out_shape[1]);
+    tt::log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[2], in_a_shape[3]);
+    tt::log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[2], in_b_shape[3]);
+    tt::log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[2], out_shape[3]);
+    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+#endif
+    return result;
+    }
+}
 namespace bmm_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
@@ -558,6 +614,13 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
 
 }
 
+operation::OpPerformanceModel Matmul::create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor> &output_tensors
+    ) const {
+        return ::create_op_performance_model_for_matmul(input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config);
+}
 MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
@@ -1241,46 +1304,7 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const {
-
-    const auto& in_a_shape = input_tensors.at(0).get_legacy_shape();
-    const auto& in_b_shape = input_tensors.at(1).get_legacy_shape();
-    const auto& out_shape = output_tensors.at(0).get_legacy_shape();
-
-    // GS Specific parameters
-    int num_cores = 9 * 12;
-    int tensix_mul_adds_per_cycle_lofi = 2048;
-
-    // Calculate number of mul/add operations
-    // TODO: add bias modeling
-    int64_t num_mul_adds_per_elem = in_a_shape[3] * 2; // 1 multiply and 1 add per element
-    int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[2] * out_shape[3] * out_shape[1] * out_shape[0];
-
-    MathFidelity math_fidelity = MathFidelity::Invalid;
-
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            math_fidelity = compute_kernel_config.math_fidelity;
-        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            math_fidelity = compute_kernel_config.math_fidelity;
-        } else {
-            TT_FATAL("arch not supported");
-        }
-    }, this->compute_kernel_config);
-
-
-    int ideal_dev_clock_cycles = std::ceil(((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) * (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
-
-    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
-#if 0
-    tt::log_info(tt::LogOp, "Matmul PerfModel:");
-    tt::log_info(tt::LogOp, "\t Batch: ({}, {})", out_shape[0], out_shape[1]);
-    tt::log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[2], in_a_shape[3]);
-    tt::log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[2], in_b_shape[3]);
-    tt::log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[2], out_shape[3]);
-    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
-#endif
-    return result;
+    return ::create_op_performance_model_for_matmul(input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config);
 }
 
 }  // namespace primary

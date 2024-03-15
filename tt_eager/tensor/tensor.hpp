@@ -12,6 +12,7 @@
 
 #include "common/bfloat16.hpp"
 #include "common/bfloat8.hpp"
+#include "common/bfloat4.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "tensor/types.hpp"

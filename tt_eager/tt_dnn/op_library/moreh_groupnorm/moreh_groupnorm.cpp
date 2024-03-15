@@ -43,11 +43,11 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const Tensor &input,
     uint32_t num_groups,
     float eps,
-    Tensor &output,
-    Tensor &mean,
-    Tensor &rstd,
     const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta) {
+    const std::optional<const Tensor> beta,
+    Tensor &output,
+    const std::optional<const Tensor> mean,
+    const std::optional<const Tensor> rstd) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -92,8 +92,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
 
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
-    const bool mean_has_value = true;
-    const bool rstd_has_value = true;
+    const bool mean_has_value = mean.has_value();
+    const bool rstd_has_value = rstd.has_value();
 
     constexpr uint32_t MAX_BLOCK_SIZE = 8;
     const uint32_t block_size = get_block_size(num_inner_tiles, MAX_BLOCK_SIZE);
@@ -253,8 +253,8 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const auto input_addr = input.buffer()->address();
 
     const auto output_addr = output.buffer()->address();
-    const auto mean_addr = mean.buffer()->address();
-    const auto rstd_addr = rstd.buffer()->address();
+    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
 
     const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
     const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;

@@ -140,6 +140,7 @@ def bert(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -152,7 +153,8 @@ def bert(
     token_type_embeddings = torch.nn.functional.embedding(
         token_type_ids, parameters.embeddings.token_type_embeddings.weight
     )
-    hidden_states = word_embeddings + token_type_embeddings
+    position_embeddings = torch.nn.functional.embedding(position_ids, parameters.embeddings.position_embeddings.weight)
+    hidden_states = word_embeddings + token_type_embeddings + position_embeddings
 
     *_, hidden_size = hidden_states.shape
     hidden_states = torch.nn.functional.layer_norm(
@@ -177,6 +179,7 @@ def bert_for_question_answering(
     config,
     input_ids,
     token_type_ids,
+    position_ids,
     attention_mask,
     *,
     parameters,
@@ -186,6 +189,7 @@ def bert_for_question_answering(
         config,
         input_ids,
         token_type_ids,
+        position_ids,
         attention_mask,
         parameters=parameters[name],
     )

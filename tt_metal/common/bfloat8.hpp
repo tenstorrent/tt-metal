@@ -13,59 +13,12 @@
 #include "common/logger.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "blockfloat_common.hpp"
 
 using namespace std;
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat8_b {};
-
-inline uint8_t get_max_exp(const vector<uint32_t> &vec, bool is_exp_a) {
-    TT_ASSERT(vec.size() == 16);
-    uint32_t max = 0;
-
-    for (int i = 0; i < 16; ++i) {
-        // mask & shift out exp
-        uint32_t exp = (vec[i] & 0x7f800000) >> 23;
-
-        if (is_exp_a) {
-            int32_t se = static_cast<int32_t>(exp);
-            // need to rebias from 127 to 15
-            se = se - 127 + 15;
-
-            if (se > 31) {
-                se = 31;
-            }
-            else if (se < 0) {
-                se = 0;
-            }
-
-            exp = static_cast<uint32_t>(se);
-        }
-
-        if (exp > max) {
-            max = exp;
-        }
-    }
-    return max;
-}
-
-inline uint32_t get_exp_dword(const vector<uint8_t> &vec) {
-    TT_ASSERT(vec.size() == 4);
-
-    uint32_t tmp = 0;
-    for(int i = 0; i < 4; ++i) {
-        tmp = tmp | ((vec[i] & 0xff) << (i*8));
-    }
-    return tmp;
-}
-
-inline uint32_t get_byte(uint32_t word, uint32_t index) {
-    TT_ASSERT(index < 4);
-    uint32_t mask = 0xff << (8 * index);
-    uint32_t masked = word & mask;
-    masked = masked >> (8 * index);
-    return masked;
-}
 
 template <bool truncate_bfp_mantissa=false>
 inline uint8_t convert_u32_to_bfp8(uint32_t input, uint32_t shared_exp, bool is_exp_a) {

@@ -1,0 +1,17 @@
+name: "[post-commit] models tests"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  models-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/models-post-commit.yaml
+    secrets: inherit

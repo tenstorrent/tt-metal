@@ -1,0 +1,17 @@
+name: "[post-commit] ttnn unit tests"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  ttnn-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit

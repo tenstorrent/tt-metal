@@ -19,14 +19,16 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
     )
 
 
-@ttnn.register_operation(name="ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors)
+@ttnn.register_operation(
+    name="ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors, is_method=True
+)
 # TODO(arakhmati): add proper fallback
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
@@ -147,7 +149,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -287,11 +289,11 @@ def from_torch(
     """
 
     shape_with_padding = None
-    if dtype == ttnn.bfloat8_b:
+    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if len(tensor.shape) < 2:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b requires at least 2 dimensions!")
+            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
         if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b requires TILE_LAYOUT!")
+            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT)
         shape_with_padding = tensor.shape
@@ -330,7 +332,7 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -413,7 +415,7 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -461,7 +463,7 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -500,7 +502,7 @@ def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -537,7 +539,7 @@ def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -612,7 +614,7 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -653,7 +655,7 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         raise RuntimeError(f"Unsupported layout conversion from {tensor.layout} to {layout}")
 
     is_on_device = ttnn.is_tensor_storage_on_device(tensor)
-    if is_on_device and tensor.dtype not in {ttnn.bfloat16, ttnn.bfloat8_b}:
+    if is_on_device and tensor.dtype not in {ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b}:
         raise RuntimeError("ttnn.to_layout: Only bfloat16 and bfloat8_b are supported on device")
 
     def requires_padding_change(layout, shape):
@@ -805,7 +807,7 @@ def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -846,7 +848,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -883,7 +885,7 @@ def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwar
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,

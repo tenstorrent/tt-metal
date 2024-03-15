@@ -18,6 +18,7 @@
 #include "tools/profiler/profiler_state.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "common/executor.hpp"
 
 using namespace std;
 using namespace tt;
@@ -428,7 +429,7 @@ void JitBuildState::compile_one(const string& log_file,
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
     if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
+        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
     if (!tt::utils::run_command(cmd, log_file, false)) {
@@ -437,15 +438,15 @@ void JitBuildState::compile_one(const string& log_file,
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
-    tt::utils::ThreadManager manager;
-
+    std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        manager.start([this, &log_file, &out_dir, settings, i]() {
+        events.emplace_back( detail::async ([this, &log_file, &out_dir, settings, i] {
             this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
-        });
+        } ) );
     }
 
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -591,37 +592,37 @@ void jit_build(const JitBuildState& build,
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
-    tt::utils::ThreadManager manager;
+    std::vector<std::shared_future<void>> events;
 
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
         auto& build = build_set[i];
-        manager.start([build, settings, &kernel_in_path]() {
+        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        });
+        } ) );
     }
-
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
-    tt::utils::ThreadManager manager;
+    std::vector<std::shared_future<void>> events;
 
     for (size_t i = 0; i < build_subset.size; ++i) {
         // Capture the necessary objects by reference
         auto& build = build_subset.build_ptr[i];
-        manager.start([build, settings, &kernel_in_path]() {
+        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        });
+        } ) );
     }
-
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
 }
 
 } // namespace tt_metal

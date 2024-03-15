@@ -1,0 +1,51 @@
+name: "[internal] models tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  models:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          # E150
+          {arch: grayskull, runs-on: ["grayskull"], name: E150},
+          # N150
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
+          # N300
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
+        ]
+        test-group: [
+          {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
+        ]
+    name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      CONFIG: ci
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: 60
+        run: |
+          source $HOME/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}

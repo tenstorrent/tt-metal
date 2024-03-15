@@ -5,11 +5,10 @@ on:
   workflow_call:
 
 jobs:
-  build-and-upload:
+  build-gh:
     strategy:
-      fail-fast: false
       matrix:
-        config: [debug, assert, release, ci]
+        config: [debug, release, ci]
         arch: [grayskull, wormhole_b0]
         os: [ubuntu-20.04]
     env:
@@ -31,14 +30,27 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: make build
-      - name: Build all tt-metal tests
+      - name: Build tt-metal tests
         # Does not work yet
         if: ${{ matrix.config != 'release' }}
         run: make tests
-      - name: Remove unnecessary artifacts
-        run: rm -rf build/python_env build/obj build/git_hooks
-      - name: Upload libraries as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
-          path: build
+  build-self-hosted:
+    strategy:
+      matrix:
+        config: [assert]
+        arch: [grayskull, wormhole_b0]
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ${{ matrix.config }}
+      # So we can get all the makefile output we want
+      SILENT: 0
+    runs-on: build
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal libraries
+        run: make build
+      - name: Build tt-metal tests
+        run: make tests

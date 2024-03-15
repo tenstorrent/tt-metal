@@ -62,6 +62,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_reduce_hw \
 		 tests/tt_metal/test_untilize_eltwise_binary \
 		 tests/tt_metal/test_bfp8_conversion \
+		 tests/tt_metal/test_bfp4_conversion \
 		 tests/tt_metal/tt_dispatch/test_enqueue_program \
 		 tests/tt_metal/test_core_range_set \
 		 tests/tt_metal/test_compile_sets_kernel_binaries \

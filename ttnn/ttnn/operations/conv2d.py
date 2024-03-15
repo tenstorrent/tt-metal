@@ -127,18 +127,20 @@ class Conv2d:
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-    @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
+    @ttnn.register_operation(
+        name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
+    )
     def __call__(self, activation: ttnn.Tensor):
         return self.conv(activation)
 
     @ttnn.register_operation(
-        name="ttnn.Conv2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: True
+        name="ttnn.Conv2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
     )
     def copy_input_to_device(self, input: ttnn.Tensor):
         return self.conv.copy_input_to_device(input)
 
     @ttnn.register_operation(
-        name="ttnn.Conv2d.copy_output_from_device", validate_input_tensors=lambda *args, **kwargs: True
+        name="ttnn.Conv2d.copy_output_from_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
     )
     def copy_output_from_device(self, output: ttnn.Tensor):
         return self.conv.copy_output_from_device(output)

@@ -9,7 +9,6 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_template.h"
-#include "metal_ckernel_sfpu.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu.h"
 #include "llk_math_common.h"
@@ -44,65 +43,22 @@ inline void llk_math_calculate_sfpu(
         _calculate_tanh_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::hardtanh) {
         _calculate_hardtanh_<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
-    } else if constexpr (operation == SfpuType::rsqrt) {
-        //param0 = true -> approximate fast mode
-        //         false -> high precision mode
-        // The algorithm uses Newton's method based on no.of iteration better approximation can be calculated
-        if ( param0 ) {
-            calculate_rsqrt<true, ITERATIONS, 10>();
-        } else {
-            calculate_rsqrt<false, ITERATIONS, 25>();
-        }
-    } else if constexpr (operation == SfpuType::sigmoid) {
-        calculate_sigmoid<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::sigmoid_appx) {
-        calculate_sigmoid_appx<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::tanh_derivative) {
         _calculate_tanh_derivative_<APPROXIMATION_MODE, SfpuType_PARAM, ITERATIONS>();
     } else if constexpr (operation == SfpuType::dropout) {
         _calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
-    } else if constexpr (operation == SfpuType::power) {
-        calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);
     } else if constexpr (operation == SfpuType::square) {
         _calculate_square_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::log) {
         _calculate_log_<APPROXIMATION_MODE, false, ITERATIONS>(param0);
     } else if constexpr (operation == SfpuType::log_with_base) {
         _calculate_log_<APPROXIMATION_MODE, true, ITERATIONS>(param0);
-    } else if constexpr (
-        (operation == SfpuType::equal_zero) ||
-        (operation == SfpuType::not_equal_zero) ||
-        (operation == SfpuType::less_than_zero) ||
-        (operation == SfpuType::greater_than_equal_zero) ||
-        (operation == SfpuType::less_than_equal_zero) ||
-        (operation == SfpuType::greater_than_zero)) {
-        calculate_comp<APPROXIMATION_MODE, operation, ITERATIONS>(8); //BFLOAT16 - exp
     } else if constexpr (operation == SfpuType::clamp) {
         _calculate_clamp_<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
     } else if constexpr (operation == SfpuType::abs) {
         _calculate_abs_<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::sign) {
-        calculate_sign<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::max) {
         _calculate_max_<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::min) {
-        calculate_min<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::exp2) {
-        calculate_exp2<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::heaviside) {
-        calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(param0);
-    } else if constexpr (operation == SfpuType::expm1) {
-        calculate_expm1<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::asin) {
-        calculate_asin<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::acos) {
-        calculate_acos<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::atan) {
-        calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::signbit) {
-        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::silu) {
-        calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
     }
     //erf, erfc are dispatched directly.
 
