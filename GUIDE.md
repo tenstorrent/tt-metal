@@ -1,3 +1,53 @@
+```
+#include <cstdint>
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/tile_move_copy.h"
+
+#define ELTWISE_OP
+#define ELTWISE_OP_CODE
+
+namespace NAMESPACE {
+void MAIN {
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+
+    constexpr auto cb_in0 = tt::CB::c_in0;
+    constexpr auto cb_in1 = tt::CB::c_in1;
+    constexpr auto cb_out0 =  tt::CB::c_out0;
+
+    binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
+    binary_op_specific_init<true>(ELTWISE_OP_CODE);
+
+    for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
+
+        cb_wait_front(cb_in0, per_core_block_size);
+        cb_wait_front(cb_in1, per_core_block_size);
+
+        tile_regs_acquire();
+        for(uint32_t i = 0; i < per_core_block_size; ++i)
+        {
+            ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for(uint32_t i = 0; i < per_core_block_size; ++i)
+        {
+            pack_tile(i, cb_out0);
+        }
+        tile_regs_release();
+
+        cb_pop_front(cb_in0, per_core_block_size);
+        cb_pop_front(cb_in1, per_core_block_size);
+        cb_push_back(cb_out0, per_core_block_size);
+    }
+
+}
+}
+```
+
+
+
 <img width="1470" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/6ea0cefc-6109-4579-8470-7a620f45b314">
 
 
