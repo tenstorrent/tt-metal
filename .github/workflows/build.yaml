@@ -5,18 +5,23 @@ on:
   workflow_call:
 
 jobs:
-  build-gh:
+  build-lib:
     strategy:
       matrix:
-        config: [debug, release, ci]
+        config: [
+          { type: debug, runs-on: ubuntu-20.04 },
+          { type: release, runs-on: ubuntu-20.04 },
+          { type: assert, runs-on: build },
+        ]
         arch: [grayskull, wormhole_b0]
         os: [ubuntu-20.04]
     env:
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.config }}
+      CONFIG: ${{ matrix.config.type }}
       # So we can get all the makefile output we want
       SILENT: 0
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.config.runs-on }}
+    name: build ${{ matrix.config.type }} ${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/install-metal-deps
@@ -30,15 +35,25 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: make build
-      - name: Build tt-metal tests
-        # Does not work yet
-        if: ${{ matrix.config != 'release' }}
-        run: make tests
-  build-self-hosted:
+      - name: Remove unnecessary artifacts
+        run: |
+          rm -rf build/python_env build/git_hooks
+          find build/ -name *.so -or -name *.a -or -name *.o | xargs strip -d
+      - name: 'Tar files'
+        run: tar -cvf ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar build
+      - name: Upload libraries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config.type }}
+          path: ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar
+  build-cpptest:
     strategy:
       matrix:
-        config: [assert]
+        config: [debug, release, assert]
         arch: [grayskull, wormhole_b0]
+        os: [ubuntu-20.04]
+    needs: build-lib
+    name: build cpptest ${{ matrix.config }} ${{ matrix.arch }}
     env:
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ${{ matrix.config }}
@@ -50,7 +65,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal libraries
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
       - name: Build tt-metal tests
+        # Does not work yet
+        if: ${{ matrix.config != 'release' }}
         run: make tests
