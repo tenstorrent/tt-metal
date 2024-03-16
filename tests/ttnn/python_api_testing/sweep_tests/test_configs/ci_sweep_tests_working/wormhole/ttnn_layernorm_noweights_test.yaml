@@ -7,7 +7,7 @@ test-list:
         interval: [32, 32]
         #num-dims: [2]
         num-shapes: 1
-        num-samples: 64
+        num-samples: 128
         args-sampling-strategy: "all"
         method: ttnn-layernorm_noweights
       env:
