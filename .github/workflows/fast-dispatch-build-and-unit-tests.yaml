@@ -26,10 +26,9 @@ jobs:
         ]
         test-group: [
           {name: fallback-backward-loss-ops, cmd: ./tests/scripts/run_python_unit_test_ops.sh},
-          {name: misc group 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 1 },
-          {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 2 },
-          {name: misc group 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 3 },
-          {name: misc group 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 4 --group 4 },
+          {name: misc group 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 1 },
+          {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 2 },
+          {name: misc group 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 3 },
           {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
           {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
         ]
