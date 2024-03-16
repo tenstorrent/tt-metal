@@ -17,11 +17,12 @@ void MAIN {
 
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
+        // wait for a block of tiles in each of input CBs
         cb_wait_front(cb_in0, per_core_block_size);
         cb_wait_front(cb_in1, per_core_block_size);
 
         tile_regs_acquire(); // acquire 8 tile registers
-        // fill them with data
+        // add a block of tiles
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             add_tiles(cb_in0, cb_in1, i, i, i);
@@ -29,14 +30,18 @@ void MAIN {
         tile_regs_commit(); // signal the packer 
 
         tile_regs_wait(); // packer waits here
+        // pack a block of tiles
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             pack_tile(i, cb_out0);
         }
         tile_regs_release(); // packer releases
 
+        // pop a block of tiles from each of input CBs 
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
+
+        // push a block of tiles to output CB
         cb_push_back(cb_out0, per_core_block_size);
     }
 
