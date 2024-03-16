@@ -69,6 +69,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     // TODO: Support non-multiple case
     TT_FATAL(in_nsticks_per_core == input_nsticks_per_core, "Input sticks per shard {} should be same as input sticks per core {}", in_nsticks_per_core, input_nsticks_per_core);
     TT_FATAL(out_nsticks_per_core == output_nsticks_per_core, "Output sticks per shard {} should be same as output sticks per core {}", out_nsticks_per_core, output_nsticks_per_core);
+    TT_FATAL(input_nsticks_per_core % in_w == 0);
 
     // CBs
 
@@ -109,12 +110,21 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     std::vector<uint32_t> writer_compile_time_args = {
         in_cb_id,
         out_cb_id,
+        false,
     };
     auto writer_kernel_fname = std::string("tt_eager/tt_dnn/op_library/upsample/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto writer_kernel =
         CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
-    // no reader kernel
+    std::vector<uint32_t> reader_compile_time_args = {
+        in_cb_id,
+        out_cb_id,
+        true,
+    };
+    auto reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/upsample/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
+    auto reader_kernel =
+        CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+
     // no compute kernel
 
     // runtime args
@@ -122,7 +132,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t writer_nargs = 7;
     vector<uint32_t> writer_rt_args(writer_nargs);
     writer_rt_args[0] = input_stick_nbytes;
-    writer_rt_args[1] = input_nsticks_per_core;
+    writer_rt_args[1] = input_nsticks_per_core / in_w;
     writer_rt_args[2] = scale_factor_h;
     writer_rt_args[3] = scale_factor_w;
     writer_rt_args[4] = in_w;
@@ -136,6 +146,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
                 CoreCoord core_coord(core_x, core); // logical
                 writer_rt_args[6] = start_input_stick_id;
                 SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+                SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
             }
             start_input_stick_id += input_nsticks_per_core;
         }
@@ -144,6 +155,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
             CoreCoord core_coord(core % ncores_x, core / ncores_x); // logical
             writer_rt_args[6] = start_input_stick_id;
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
