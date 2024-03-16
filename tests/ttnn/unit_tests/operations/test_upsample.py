@@ -11,14 +11,14 @@ import torch.nn as nn
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
 
 
 TILE_WIDTH = 32
 
 
-def get_shard_grid_from_num_cores(ncores: Union[int, Tuple[int, int]]) -> ttnn.experimental.tensor.CoreRangeSet:
-    max_grid_size = (9, 12)  ## (y, x)
+def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -> ttnn.experimental.tensor.CoreRangeSet:
+    device_grid = device.compute_with_storage_grid_size()
+    max_grid_size = (device_grid.y, device_grid.x)
     if isinstance(ncores, int):
         if ncores % max_grid_size[1] == 0:
             core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
@@ -62,7 +62,6 @@ def get_shard_grid_from_num_cores(ncores: Union[int, Tuple[int, int]]) -> ttnn.e
         raise ValueError("Invalid ncores")
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -105,7 +104,6 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
     assert isequal
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -114,6 +112,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [2, 1280, 8, 8],  # 512x512
         [2, 1280, 16, 16],
         [1, 64, 132, 10],
+        [1, 32, 8, 8],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2])
@@ -137,7 +136,8 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
 
     ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
     ncores = None
-    max_grid_size = (9, 12)  ## (y, x)
+    device_grid = device.compute_with_storage_grid_size()
+    max_grid_size = (device_grid.y, device_grid.x)
     if shard_strategy == ttnn.ShardStrategy.HEIGHT:
         ## nsticks per shard should be divisible by in_w
         max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
@@ -180,7 +180,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     #     use_height_and_width_as_shard_shape=False   ##shard_strategy == ttnn.ShardStrategy.HEIGHT,
     # )
 
-    shard_grid = get_shard_grid_from_num_cores(ncores)
+    shard_grid = get_shard_grid_from_num_cores(device, ncores)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
