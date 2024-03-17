@@ -291,6 +291,7 @@ void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uin
 
     uint32_t base_addr_words = base_addr / sizeof(uint32_t);
     uint32_t page_size_words = page_size / sizeof(uint32_t);
+    const uint32_t bank_id = 0; // No interleaved pages here.
 
     // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
     TT_ASSERT(start_page < num_dram_banks_g);
@@ -303,8 +304,8 @@ void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uin
             for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
                 for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
                     CoreCoord core(x, y);
-                    worker_data[core].data.push_back(dram_data_map.at(dram_bank_id)[bank_offset + j]);
-                    worker_data[core].valid.push_back(workers.contains(core));
+                    worker_data[core][0].data.push_back(dram_data_map.at(dram_bank_id)[bank_offset + j]);
+                    worker_data[core][0].valid.push_back(workers.contains(core));
                 }
             }
         }
@@ -354,6 +355,7 @@ void gen_linear_read_cmd(Device *device,
                          uint32_t offset = 0) {
 
     vector<uint32_t> dispatch_cmds;
+    const uint32_t bank_id = 0; // No interleaved pages here.
 
     gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, addr, length);
 
@@ -374,12 +376,12 @@ void gen_linear_read_cmd(Device *device,
             for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
                 CoreCoord core(x, y);
                 if (core == worker_core) {
-                    uint32_t datum = worker_data[core].data[offset + i];
-                    worker_data[core].data.push_back(datum);
-                    worker_data[core].valid.push_back(true);
+                    uint32_t datum = worker_data[core][bank_id].data[offset + i];
+                    worker_data[core][bank_id].data.push_back(datum);
+                    worker_data[core][bank_id].valid.push_back(true);
                 } else {
-                    worker_data[core].data.push_back(0);
-                    worker_data[core].valid.push_back(false);
+                    worker_data[core][bank_id].data.push_back(0);
+                    worker_data[core][bank_id].valid.push_back(false);
                 }
             }
         }
@@ -678,7 +680,7 @@ void gen_smoke_test(Device *device,
     gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 2048);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
-    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 32, worker_data[worker_core].data.size() - 32 / sizeof(uint32_t));
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 32, worker_data[worker_core][0].data.size() - 32 / sizeof(uint32_t));
 }
 
 void gen_prefetcher_cmds(Device *device,
@@ -916,11 +918,12 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
+
         worker_data_t worker_data;
+        const uint32_t bank_id = 0; // No interleaved pages here.
         for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
             for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                one_worker_data_t one;
-                worker_data.insert({CoreCoord(x, y), one});
+                worker_data[CoreCoord(x,y)][bank_id] = one_worker_data_t();
             }
         }
 
