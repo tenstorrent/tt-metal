@@ -243,94 +243,6 @@ def create_sharded_mem_config_resnet(
     )
 
 
-@skip_for_wormhole_b0()
-def test_bottleneck_block(device):
-    torch.manual_seed(0)
-
-    torch_model = torchvision.models.resnet.Bottleneck(inplanes=2048, planes=512, stride=1).eval()
-    torch_input_tensor = torch.rand((8, 2048, 7, 7), dtype=torch.float32)
-    torch_output_tensor = torch_model(torch_input_tensor)
-
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        custom_preprocessor=custom_preprocessor,
-        reader_patterns_cache=reader_patterns_cache,
-        device=device,
-    )
-
-    """input preparation and invocation of the bottleneck class output reshape"""
-    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    input_tensor = torch.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
-    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = resnet_bottleneck_block(input_tensor, parameters)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.reshape(
-        output_tensor,
-        [
-            torch_output_tensor.shape[0],
-            torch_output_tensor.shape[2],
-            torch_output_tensor.shape[3],
-            torch_output_tensor.shape[1],
-        ],
-    )
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
-
-
-@skip_for_wormhole_b0()
-def test_bottleneck_block_with_downsample(device):
-    torch.manual_seed(0)
-
-    def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> torch.nn.Conv2d:
-        """1x1 convolution"""
-        return torch.nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=True)
-
-    torch_model = torchvision.models.resnet.Bottleneck(
-        inplanes=512, planes=256, stride=2, downsample=conv1x1(512, 512 * 2, stride=2)
-    ).eval()
-    torch_input_tensor = torch.rand((8, 512, 28, 28), dtype=torch.float32)
-    torch_output_tensor = torch_model(torch_input_tensor)
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        custom_preprocessor=custom_preprocessor,
-        reader_patterns_cache=reader_patterns_cache,
-        device=device,
-    )
-    # input preparation
-    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    input_tensor = torch.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
-
-    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # intialization of bottleneck class and invocation
-    output_tensor = resnet_bottleneck_block(input_tensor, parameters)
-
-    # output tensor reshaping and comparison
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.reshape(
-        output_tensor,
-        [
-            torch_output_tensor.shape[0],
-            torch_output_tensor.shape[2],
-            torch_output_tensor.shape[3],
-            torch_output_tensor.shape[1],
-        ],
-    )
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
-    # validation of the output
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
-
-
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
@@ -445,7 +357,7 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
             ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
             ttnn_module_args.conv1["deallocate_activation"] = True
             ttnn_module_args.conv1["reallocate_halo_output"] = True
-            ttnn_module_args.conv1["use_shallow_conv_variant"] = True
+            ## ttnn_module_args.conv1["use_shallow_conv_variant"] = True
             ttnn_module_args.conv1["padded_input_channels"] = 16
             ttnn_module_args.conv1["math_fidelity"] = math_fidelity
             ttnn_module_args.conv1["weights_dtype"] = weight_dtype

@@ -4,6 +4,11 @@
 
 import ttnn
 
+from models.utility_functions import (
+    is_wormhole_b0,
+    is_grayskull,
+)
+
 
 def resnet_basic_block(x, *, parameters):
     identity = x
@@ -94,7 +99,9 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
     if x is not identity:
         ttnn.deallocate(identity)
 
-    if layer is not None and module is not None and layer == 2 and module == 1:
+    if (layer is not None and module is not None) and (
+        (layer == 2 and module == 1) or (layer == 1 and module == 1 and is_wormhole_b0())
+    ):
         out = ttnn.experimental.tensor.move_sharded(out)
 
     return out
