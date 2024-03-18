@@ -4,7 +4,6 @@
 
 import os
 from loguru import logger
-from pathlib import Path
 import re
 from typing import Tuple
 import torch
@@ -22,9 +21,9 @@ UNIT_TEST_GENERATION_LENGTH = 20
 
 
 def get_llama_path(devices, model_config, n_devices, emulated):
-    ckpt_dir = os.getenv("LLAMA_CKPT_DIR", model_config["DEFAULT_CKPT_DIR"])
-    tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", model_config["DEFAULT_TOKENIZER_PATH"])
-    cache_path = Path(os.getenv("LLAMA_CACHE_PATH", model_config["DEFAULT_CACHE_PATH"]))
+    ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
+    tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
+    cache_path = model_config["DEFAULT_CACHE_PATH"]
 
     assert os.path.exists(
         ckpt_dir
