@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <atomic>
 #include <fstream>
+#include <string>
 namespace tt::tt_metal {
 
 class Program;
@@ -47,7 +48,7 @@ void DisableMemoryReports();
  * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
  * | device        | The device for which memory stats will be dumped. | const Device *  |                                                        | True     |
  * */
-void DumpDeviceMemoryState(const Device *device);
+void DumpDeviceMemoryState(const Device *device, std::string prefix="");
 
 class MemoryReporter {
    public:
@@ -58,7 +59,7 @@ class MemoryReporter {
 
     void flush_program_memory_usage(const Program &program, const Device *device);
 
-    void dump_memory_usage_state(const Device *device) const;
+    void dump_memory_usage_state(const Device *device, std::string prefix="") const;
 
     static void toggle(bool state);
     static MemoryReporter& inst();

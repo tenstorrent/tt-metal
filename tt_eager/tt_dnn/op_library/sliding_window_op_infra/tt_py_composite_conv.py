@@ -19,7 +19,12 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     get_hash_from_sliding_window_op_params,
     calculate_shard_grid,
 )
-from tt_lib.utils import _nearest_32, _nearest_y
+from tt_lib.utils import (
+    _nearest_32,
+    _nearest_y,
+    find_closest_largest_divisor,
+    find_closest_largest_divisor_with_num_padding,
+)
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -27,13 +32,6 @@ import tt_lib as ttl
 import torch
 import math
 import warnings
-
-
-def find_closest_largest_divisor(num: int, start_divisor: int):
-    divisor = start_divisor
-    while num % divisor != 0:
-        divisor = divisor - 1
-    return divisor
 
 
 def find_closest_common_largest_divisor(num1: int, num2: int, start_divisor: int):
@@ -84,15 +82,6 @@ def compute_conv_output_height_width(input_height, input_width, sliding_window_o
     output_height = ((int)((input_height - filter_h + 2 * pad_h) / stride_h)) + 1
     output_width = ((int)((input_width - filter_w + 2 * pad_w) / stride_w)) + 1
     return output_height, output_width
-
-
-def find_closest_largest_divisor_with_num_padding(num: int, start_divisor: int):
-    divisor = start_divisor
-    padded_num = _nearest_y(num, divisor)
-    while (padded_num - num) >= (int)(padded_num / divisor):
-        divisor = divisor - 1
-        padded_num = _nearest_y(num, divisor)
-    return divisor
 
 
 def determine_parallel_config(
@@ -419,6 +408,8 @@ class TTPyCompositeConv(TTPyOp):
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
+        self.per_core_out_matrix_height = self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
+        self.per_core_out_matrix_width = self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32
         self.parallel_config = self.opt_conv_parall_conf_auto
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
@@ -816,8 +807,11 @@ class TTPyCompositeConv(TTPyOp):
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
                 # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
+                import ttnn
+
                 bias_untiled = bias_untiled.to_torch()
-                bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
+                bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
+                # bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
                 bias_on_device = bias_.to(device) if move_weights_to_device else bias_
             self.bias = bias_on_device
         else:

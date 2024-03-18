@@ -135,16 +135,17 @@ void DeviceModule(py::module &m_device) {
         Disables generation of memory allocation statistics reports in tt-metal
     )doc");
 
-    m_device.def("DumpDeviceMemoryState", &detail::DumpDeviceMemoryState, R"doc(
+    m_device.def("DumpDeviceMemoryState", &detail::DumpDeviceMemoryState, py::arg().noconvert(), py::arg("prefix").noconvert() = std::string(""), R"doc(
         Generates reports to dump device memory state. Three reports are generated:
-        - `l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
-        - `memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
-        - `detailed_memory_usage.csv` expands on the memory usage summary report by including each memory block address, size, and allocation status
+        - `<prefix>l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
+        - `<prefix>memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
+        - `<prefix>detailed_memory_usage.csv` expands on the memory usage summary report by including each memory block address, size, and allocation status
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
         | device           | Device to dump memory state for  | tt_lib.device.Device  |             | Yes      |
+        | prefix           | Dumped report filename prefix    | str                   |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 

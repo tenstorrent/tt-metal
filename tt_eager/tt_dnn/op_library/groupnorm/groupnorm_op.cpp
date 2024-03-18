@@ -153,6 +153,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t datum_size_bytes = 2; // bfloat16
     // tile sizes
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -162,10 +163,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t per_core_M = a.shard_spec().value().shape[0];
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
-    uint32_t per_core_Nt = per_core_N / TILE_WIDTH;
-    uint32_t per_core_N_padded = per_core_N;
-    // uint32_t per_core_N_padded = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
-    uint32_t per_core_Nt_padded = per_core_N_padded / TILE_WIDTH;
+    uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
+    // uint32_t per_core_N = per_core_N % TILE_WIDTH != 0 ? int(ceil(double(per_core_N) / double(TILE_WIDTH)) * TILE_WIDTH) : per_core_N;
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t H = shape[2] * num_batches;
@@ -176,7 +175,9 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     // grid
     uint32_t num_cores_c = grid_size.x;
     uint32_t num_cores_r = grid_size.y;
-    uint32_t num_cores = num_cores_c * num_cores_r;
+    // uint32_t num_cores = num_cores_c * num_cores_r;
+    auto all_cores = a.shard_spec().value().grid;
+    uint32_t num_cores = all_cores.num_cores();
     auto shard_orientation = a.shard_spec().value().orientation;
     // split each batch into multiple cores
     uint32_t num_shards_r = H / per_core_M;
@@ -187,12 +188,39 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
+    TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
+    if (per_core_N != W) {
+        if (shard_orientation == ShardOrientation::COL_MAJOR) {
+            TT_ASSERT(per_core_N * num_cores_r == W);
+            TT_ASSERT(per_core_M * num_cores_c == H);
+        } else {
+            TT_ASSERT(per_core_N * num_cores_c == W);
+            TT_ASSERT(per_core_M * num_cores_r == H);
+        }
+    }
+
+    TT_ASSERT(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+
+    TT_ASSERT(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
+    TT_ASSERT(H % per_core_M == 0 && "H dim must be divisible by per_core_M");
+    TT_ASSERT(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
+    if (num_batches >= num_shards_r) {
+        TT_ASSERT(num_batches % num_shards_r == 0 && "num_batches must be divisible by number of cores in a full column");
+    } else {
+        TT_ASSERT(num_shards_r % num_batches == 0 && "number of cores in a full column must be divisible by num_batches");
+    }
+    if (num_groups >= num_shards_c) {
+        TT_ASSERT(num_groups % num_shards_c == 0 && "num_groups must be divisible by number of cores in a full row");
+    } else {
+        TT_ASSERT(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
+    }
+
     // subblock
-    bool is_channel_divisible_by_tile = true;
+    bool is_channel_divisible_by_tile = (num_datum_row_per_group % TILE_WIDTH == 0);
     uint32_t block_wt = per_core_Nt / num_groups_per_core;
     if (per_core_Nt % num_groups_per_core != 0) {
         block_wt = per_core_Nt / num_groups_per_core + 1;
-        is_channel_divisible_by_tile = false;
     }
 
     uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
@@ -209,12 +237,11 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", per_core_M / num_batches_per_core);
     log_debug(tt::LogOp, "num_nz_rows_per_tile: {}", num_nz_rows_per_tile);
     log_debug(tt::LogOp, "per_core_M: {}", per_core_M);
     log_debug(tt::LogOp, "per_core_N: {}", per_core_N);
-    log_debug(tt::LogOp, "per_core_N_padded: {}", per_core_N_padded);
-    log_debug(tt::LogOp, "per_core_Nt_padded: {}", per_core_Nt_padded);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
@@ -272,7 +299,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles = per_core_Nt_padded * per_core_Mt;
+    uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t interm_block_tiles = block_ht * block_wt;
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -300,7 +327,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
 
-    log_debug(tt::LogOp, "per_core_Nt_padded: {}", per_core_Nt_padded);
+    log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt: {}", per_core_Mt);
     log_debug(tt::LogOp, "in0_CB_tiles: {}", in0_CB_tiles);
     log_debug(tt::LogOp, "in0_CB_size: {}", in0_CB_size);
@@ -317,17 +344,21 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
-    CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    // CoreRange all_cores(
+    //     {(std::size_t) start_core_x, (std::size_t) start_core_y},
+    //     {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords;
-    for (int i=0; i < num_cores_r * num_cores_c; ++i) {
-        if (shard_orientation == ShardOrientation::ROW_MAJOR) {
-            core_coords.push_back(CoreCoord{i % num_cores_c, i / num_cores_c});
-        } else {
-            core_coords.push_back(CoreCoord{i / num_cores_r, i % num_cores_r});
-        }
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_c, num_cores_r, shard_orientation == ShardOrientation::ROW_MAJOR);
+    // std::vector<CoreCoord> core_coords;
+    // for (int i=0; i < num_cores_r * num_cores_c; ++i) {
+    //     if (shard_orientation == ShardOrientation::ROW_MAJOR) {
+    //         core_coords.push_back(CoreCoord{i % num_cores_c, i / num_cores_c});
+    //     } else {
+    //         core_coords.push_back(CoreCoord{i / num_cores_r, i % num_cores_r});
+    //     }
+    // }
+    for (int i=0; i < core_coords.size(); ++i) {
+        log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
     std::vector<std::vector<CoreCoord> > core_coords2D;
     if (shard_orientation == ShardOrientation::ROW_MAJOR) {
@@ -365,11 +396,17 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for (int i=0; i < num_cores_r * num_cores_c; ++i) {
+    for (auto& coord : mcast_sender_core_ranges) {
+        log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start.x, coord.start.y);
+    }
+    for (int i=0; i < num_cores; ++i) {
         // not found in mcast sender
         if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges.end()) {
             mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
+    }
+    for (auto& coord : mcast_receiver_core_ranges) {
+        log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start.x, coord.start.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
@@ -377,7 +414,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     std::vector<std::vector<CoreCoord> > mcast_groups;
     int group_index = -1;
     if (is_height_sharding) {
-        for (int i=0; i < num_cores_r * num_cores_c; ++i) {
+        for (int i=0; i < num_cores; ++i) {
             if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges.end()) {
                 group_index += 1;
             }
@@ -397,6 +434,11 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
                 }
                 mcast_groups[group_index].push_back(core_coords2D[i][j]);
             }
+        }
+    }
+    for (int i=0; i < mcast_groups.size(); ++i) {
+        for (int j=0; j < mcast_groups[i].size(); ++j) {
+            log_debug(tt::LogOp, "mcast group: {} coord: {} {}", i, mcast_groups[i][j].x, mcast_groups[i][j].y);
         }
     }
     // how many cores in a mcast group
@@ -422,39 +464,42 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) num_cores_per_mcast_group,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_last_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
-        (std::uint32_t) TILE_WIDTH
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
+        (std::uint32_t) TILE_WIDTH,
+        (std::uint32_t) datum_size_bytes
     };
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t) reduce_receiver_semaphore,
         (std::uint32_t) reduce_sender_semaphore,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_per_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
         (std::uint32_t) TILE_WIDTH
     };
+    tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC writer_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_sender_unary_sharded_gn.cpp",
         mcast_sender_cores,
-        tt_metal::ReaderDataMovementConfig(reader_mcast_sender_compile_time_args, reader_mcast_sender_defines)
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
     );
     KernelHandle reader_mcast_receiver_kernels_id = -1;
     if (use_mcast) {
@@ -462,7 +507,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
             program,
             "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn.cpp",
             mcast_receiver_cores,
-            tt_metal::ReaderDataMovementConfig(reader_mcast_receiver_compile_time_args, reader_mcast_receiver_defines)
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
         );
     }
 
@@ -476,17 +521,17 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         (std::uint32_t) is_dram(gamma),
         (std::uint32_t) is_dram(beta),
         (std::uint32_t) gamma_beta_num_cols_tile_per_core,
-        (std::uint32_t) per_core_N_padded,
+        (std::uint32_t) per_core_N,
         (std::uint32_t) is_channel_divisible_by_tile,
         (std::uint32_t) num_datum_row_per_group % TILE_WIDTH,    // num_cols_per_group
         (std::uint32_t) num_datum_row_per_group,    // group_offset
         (std::uint32_t) num_nz_rows_per_tile, // num_rows_per_batch
-        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N_padded,
+        (std::uint32_t) (per_core_M / num_batches_per_core) * per_core_N,
         (std::uint32_t) num_groups_per_core,
         (std::uint32_t) num_batches_per_core,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_wt,
-        (std::uint32_t) per_core_N_padded * num_nz_rows_per_tile,
+        (std::uint32_t) per_core_N * num_nz_rows_per_tile,
         (std::uint32_t) TILE_WIDTH
     };
 
@@ -522,7 +567,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         program,
         writer_kernel,
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_mcast_sender_compile_time_args, writer_defines)
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = writer_noc, .compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
     );
     // defines
     std::map<string, string> eltwise_binary_defines;
@@ -730,10 +775,13 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
                 CoreCoord mcast_start = device->worker_core_from_logical_core(mcast_group_mid.front());
                 CoreCoord mcast_end = device->worker_core_from_logical_core(mcast_group_mid.back());
 
-                if ((mcast_start.x < mcast_end.x) or (mcast_start.y < mcast_end.y)) {
+                // if ((mcast_start.x < mcast_end.x) or (mcast_start.y < mcast_end.y)) {
+                //     std::swap(mcast_start, mcast_end);
+                // }
+
+                if (reader_noc == NOC::NOC_1) {
                     std::swap(mcast_start, mcast_end);
                 }
-
                 std::vector<uint32_t> mcast_sender_args;
                 mcast_sender_args.push_back(not mcast_group_first.empty());
                 mcast_sender_args.push_back(not mcast_group_last.empty());
@@ -743,37 +791,52 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
                 mcast_sender_args.push_back(mcast_end.y);
                 if (not mcast_group_first.empty()) {
                     mcast_sender_args.push_back(mcast_group_mid.size());
+                    log_debug(tt::LogOp, "mcast mid group size: {}", mcast_group_mid.size());
                 } else {
                     mcast_sender_args.push_back(mcast_group_mid.size() - 1); // mcast w/o itself
+                    log_debug(tt::LogOp, "mcast mid group size: {}", mcast_group_mid.size() - 1);
                 }
+
+                log_debug(tt::LogOp, "mcast mid group start coord: {} {} end coord: {} {}", mcast_start.x, mcast_start.y, mcast_end.x, mcast_end.y);
+
 
                 if (not mcast_group_first.empty()) {
                     CoreCoord mcast_first_start = device->worker_core_from_logical_core(mcast_group_first.front());
                     CoreCoord mcast_first_end = device->worker_core_from_logical_core(mcast_group_first.back());
 
-                    if ((mcast_first_start.x < mcast_first_end.x) or (mcast_first_start.y < mcast_first_end.y)) {
-                        std::swap(mcast_first_start, mcast_first_end);
+                    // if ((mcast_first_start.x < mcast_first_end.x) or (mcast_first_start.y < mcast_first_end.y)) {
+                    //     std::swap(mcast_first_start, mcast_first_end);
+                    // }
+                    if (reader_noc == NOC::NOC_1) {
+                        std::swap(mcast_start, mcast_end);
                     }
-
                     mcast_sender_args.push_back(mcast_first_start.x);
                     mcast_sender_args.push_back(mcast_first_start.y);
                     mcast_sender_args.push_back(mcast_first_end.x);
                     mcast_sender_args.push_back(mcast_first_end.y);
                     mcast_sender_args.push_back(mcast_group_first.size() - 1); // mcast w/0 itself
+
+                    log_debug(tt::LogOp, "mcast first group start coord: {} {} end coord: {} {}", mcast_first_start.x, mcast_first_start.y, mcast_first_end.x, mcast_first_end.y);
+                    log_debug(tt::LogOp, "mcast first group size: {}", mcast_group_first.size() - 1);
                 }
                 if (not mcast_group_last.empty()) {
                     CoreCoord mcast_last_start = device->worker_core_from_logical_core(mcast_group_last.front());
                     CoreCoord mcast_last_end = device->worker_core_from_logical_core(mcast_group_last.back());
 
-                    if ((mcast_last_start.x < mcast_last_end.x) or (mcast_last_start.y < mcast_last_end.y)) {
-                        std::swap(mcast_last_start, mcast_last_end);
+                    // if ((mcast_last_start.x < mcast_last_end.x) or (mcast_last_start.y < mcast_last_end.y)) {
+                    //     std::swap(mcast_last_start, mcast_last_end);
+                    // }
+                    if (reader_noc == NOC::NOC_1) {
+                        std::swap(mcast_start, mcast_end);
                     }
-
                     mcast_sender_args.push_back(mcast_last_start.x);
                     mcast_sender_args.push_back(mcast_last_start.y);
                     mcast_sender_args.push_back(mcast_last_end.x);
                     mcast_sender_args.push_back(mcast_last_end.y);
                     mcast_sender_args.push_back(mcast_group_last.size());
+
+                    log_debug(tt::LogOp, "mcast last group start coord: {} {} end coord: {} {}", mcast_last_start.x, mcast_last_start.y, mcast_last_end.x, mcast_last_end.y);
+                    log_debug(tt::LogOp, "mcast last group size: {}", mcast_group_last.size());
                 }
 
                 // add all coords within a group
@@ -790,6 +853,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
                 tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
 
             } else { // mcast receiver
+                log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
                 std::vector<uint32_t> mcast_receiver_args;
                 mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).x);
                 mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).y);
