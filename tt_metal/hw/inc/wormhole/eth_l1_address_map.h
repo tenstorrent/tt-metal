@@ -30,8 +30,10 @@ struct address_map {
   static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
   static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = 0x10e94;  // See dev_msgs.h and dev_mem_map.h for restrictions
-  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_MEM_MAILBOX_BASE + 128 + 12;
+  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = COMMAND_Q_BASE - 128;
+  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR - 256;
+  // Extra 12 bytes is to make sure that the launch message is properly aligned.
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = PRINT_BUFFER_ER - 128 - 12;
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 

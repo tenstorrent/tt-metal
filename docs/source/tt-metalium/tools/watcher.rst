@@ -152,3 +152,38 @@ The resulting message will be printed on the command line (and watcher log):
 
     INFO     | Paused cores: (x=1,y=1):brisc
     Press ENTER to unpause core(s) and continue...
+
+Ring Buffer
+-----------
+A small ring buffer is available on each core, accessible via the `WATCHER_RING_BUFFER_PUSH()` macro.
+This ring buffer has 31 `uint32_t` elements, and when more than the max amounts of elements
+are pushed into the buffer, the oldest are overwritten. When the watcher is disabled, the ring
+buffer is still present, but any writes to it are compiled out. An example of pushing data to the
+ring buffer, and the resulting log is shown below.
+
+Important: the ring buffer does not have any synchronization for writes between difference RISCs on
+the same core. Calling `WATCHER_RING_BUFFER_PUSH()` from different RISCs in the same core at the same time
+is undefined behaviour.
+
+.. code-block::
+
+    #include "debug/ring_buffer.h"
+
+    void kernel_main() {
+        for (uint32_t idx = 0; idx < 40; idx++) {
+            WATCHER_RING_BUFFER_PUSH(idx+1);
+        }
+    }
+
+The contents of the ring buffer for each core (if values have been written) will be shown in the
+watcher log:
+
+.. code-block::
+
+    # The ring buffer has a size of 31 elements, therefore writing 40 entries into the buffer will
+    # result a wraparound, with the latest written entry being in index 8.
+    Core (x=1,y=1):    R,R,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:1|0|0 debug_ring_buffer(latest_written_idx=8)=
+        [0x00000021,0x00000021,0x00000022,0x00000023,0x00000024,0x00000025,0x00000026,0x00000027,
+         0x00000028,0x0000000a,0x0000000b,0x0000000c,0x0000000d,0x0000000e,0x0000000f,0x00000010,
+         0x00000011,0x00000012,0x00000013,0x00000014,0x00000015,0x00000016,0x00000017,0x00000018,
+         0x00000019,0x0000001a,0x0000001b,0x0000001c,0x0000001d,0x0000001e,0x0000001f]
