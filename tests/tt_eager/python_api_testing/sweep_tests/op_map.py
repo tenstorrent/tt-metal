@@ -510,6 +510,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_polyval,
         "pytorch_op": pytorch_ops.polyval,
     },
+    "ttnn-eltwise-polyval": {
+        "tt_lib_op": ttnn_ops.eltwise_polyval,
+        "pytorch_op": pytorch_ops.polyval,
+    },
     "eltwise-mac": {
         "tt_lib_op": tt_lib_ops.eltwise_mac,
         "pytorch_op": pytorch_ops.mac,
