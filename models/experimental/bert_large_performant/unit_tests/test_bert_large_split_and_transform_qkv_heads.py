@@ -9,9 +9,7 @@ from loguru import logger
 import numpy as np
 
 import tt_lib as ttl
-from models.utility_functions import (
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc, skip_for_grayskull
 import torch
 
 
@@ -120,6 +118,7 @@ def test_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_me
     run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config)
 
 
+@skip_for_grayskull("watcher error, see issue #6487")
 def test_split_query_key_value_and_split_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)

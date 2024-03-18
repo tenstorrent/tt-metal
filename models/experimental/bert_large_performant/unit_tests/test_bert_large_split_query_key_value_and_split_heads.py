@@ -8,9 +8,7 @@ from loguru import logger
 import numpy as np
 
 import tt_lib as ttl
-from models.utility_functions import (
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc, skip_for_grayskull
 import torch
 
 
@@ -85,6 +83,7 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
 import pytest
 
 
+@skip_for_grayskull("watcher error, see issue #6487")
 @pytest.mark.parametrize(
     "out_mem_config",
     (
