@@ -103,7 +103,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces) {
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     constexpr uint32_t outerloop = 1;
-    const uint32_t innerloop = (num_faces>2) ? num_faces/2 : ((num_faces>1) ? 2 : 1);
+    const uint32_t innerloop = (num_faces>2) ? num_faces/2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
     tmp.program(instrn_buffer);
 }
@@ -114,7 +114,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     std::uint32_t src_format_A = (std::uint32_t)unpack_src_format[operandA_id];
     std::uint32_t dst_format_A = (std::uint32_t)unpack_dst_format[operandA_id];
 
-    const std::uint32_t block_c_dim = ct_dim * TILE_C_DIM;
+    const std::uint32_t block_c_dim = ct_dim * ((num_faces > 2) ? num_faces/2 : num_faces) * FACE_C_DIM;
 
     // Override default settings
     unpack_config_u config = {0};
@@ -149,7 +149,7 @@ inline void llk_unpack_tilizeA_B(
                                                    // Offset address is in 16B words
                                                    // Datum count = tile_index*16 (/16 to get word count)
     std::uint32_t bot_face_offset_address =
-        SCALE_DATUM_SIZE(unpack_srca_format, block_ct_dim*TILE_C_DIM);  //*16 rows / 16 to get 16B word aligned address
+        SCALE_DATUM_SIZE(unpack_srca_format, block_ct_dim*((num_faces > 2) ? num_faces/2 : num_faces));  //*16 rows / 16 to get 16B word aligned address
 
     //Set Tile address for Src B
     //Src B just does rowmajor unpack, with z counters incremented for every face
