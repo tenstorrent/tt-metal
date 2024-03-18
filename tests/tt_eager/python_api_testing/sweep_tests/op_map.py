@@ -735,12 +735,20 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_min,
         "pytorch_op": pytorch_ops.min,
     },
+    "ttnn-min": {
+        "tt_lib_op": ttnn_ops.ttnn_min,
+        "pytorch_op": pytorch_ops.ttnn_min,
+    },
     "eltwise-min-bw": {
         "tt_lib_op": tt_lib_ops.eltwise_min_bw,
         "pytorch_op": pytorch_ops.min_bw,
     },
     "eltwise-max": {
         "tt_lib_op": tt_lib_ops.eltwise_max,
+        "pytorch_op": pytorch_ops.max,
+    },
+    "ttnn-eltwise-max": {
+        "tt_lib_op": ttnn_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
     },
     "eltwise-max-bw": {
@@ -1087,8 +1095,16 @@ op_map = {
         "tt_lib_op": tt_lib_ops.activation_geglu,
         "pytorch_op": pytorch_ops.activation_geglu,
     },
+    "ttnn-activation_geglu": {
+        "tt_lib_op": ttnn_ops.activation_geglu,
+        "pytorch_op": pytorch_ops.activation_geglu,
+    },
     "activation_swiglu": {
         "tt_lib_op": tt_lib_ops.activation_swiglu,
+        "pytorch_op": pytorch_ops.activation_swiglu,
+    },
+    "ttnn-activation_swiglu": {
+        "tt_lib_op": ttnn_ops.activation_swiglu,
         "pytorch_op": pytorch_ops.activation_swiglu,
     },
     "groupnorm-noweights": {
@@ -1655,5 +1671,9 @@ op_map = {
     "ttnn-logaddexp": {
         "tt_lib_op": ttnn_ops.logaddexp,
         "pytorch_op": pytorch_ops.logaddexp,
+    },
+    "ttnn-rotary-embedding": {
+        "tt_lib_op": ttnn_ops.rotary_embedding,
+        "pytorch_op": pytorch_ops.rotary_embedding,
     },
 }
