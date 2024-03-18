@@ -153,9 +153,11 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
         if all(eos_reached):
             break
 
-        # print the generated text
-        text = tokenizer.decode(tokens[0, prev_pos].tolist())
-        logger.info(f"Loop {cur_pos-1} user 0: {text}. Skipping other user printouts for test mode.\n")
+        # Decode the entire sequence generated so far and log it
+        text = tokenizer.decode(
+            tokens[0, : cur_pos + 1].tolist()
+        )  # text = tokenizer.decode(tokens[0, prev_pos].tolist())
+        logger.info(f"Loop {cur_pos-1} user 0: {text}\n")
 
         # profiling
         latencies.append(time() - start)
