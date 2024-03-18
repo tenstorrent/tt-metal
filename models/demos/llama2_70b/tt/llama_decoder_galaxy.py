@@ -27,6 +27,7 @@ class TtLlamaDecoder_galaxy:
         layer_num,
         model_config,
         configuration,
+        batch,
         emulated=False,
         load_weights=True,
         cache_path=None,

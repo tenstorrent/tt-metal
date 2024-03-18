@@ -2,12 +2,52 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from loguru import logger
+from pathlib import Path
+import re
 from typing import Tuple
 import torch
 from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
+
+MAX_SEQ_LEN = 4096
+BASE_URL = "layers"
+UNIT_TEST_N_LAYER = 1
+UNIT_TEST_LAYER_NUM = 0
+UNIT_TEST_START_POS = 1  # 0 is low for test_decoder: 0.9986
+UNIT_TEST_GENERATION_LENGTH = 20
+
+
+def get_llama_path(devices, model_config, n_devices, emulated):
+    ckpt_dir = os.getenv("LLAMA_CKPT_DIR", model_config["DEFAULT_CKPT_DIR"])
+    tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", model_config["DEFAULT_TOKENIZER_PATH"])
+    cache_path = Path(os.getenv("LLAMA_CACHE_PATH", model_config["DEFAULT_CACHE_PATH"]))
+
+    assert os.path.exists(ckpt_dir), f"Checkpoint directory {ckpt_dir} does not exist"
+    assert os.path.exists(tokenizer_path), f"Tokenizer file {tokenizer_path} does not exist"
+    assert os.path.exists(cache_path), f"Cache directory {cache_path} does not exist"
+
+    logger.info(f"Checkpoint directory: {ckpt_dir}")
+    logger.info(f"Tokenizer file: {tokenizer_path}")
+    logger.info(f"Cache directory: {cache_path}")
+
+    if emulated:
+        logger.info(f"Running emulated, replicating on {n_devices} devices")
+        devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
+    else:
+        logger.info(f"Running on {n_devices} devices on T3000 chips")
+
+    return devices, ckpt_dir, tokenizer_path, cache_path
+
+
+def extract_pcc_from_log(log):
+    pattern = r"PCC: ([\d.]+)"
+    extracted_pcc = re.search(pattern, log)
+    extracted_pcc = float(extracted_pcc.group(1))
+    return extracted_pcc
 
 
 def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices, cache_id=None):
