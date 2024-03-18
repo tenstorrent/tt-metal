@@ -832,12 +832,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            bf16_one_u32,
-                                            nblocks};
     uint32_t in_nbytes_c_log2 = (uint32_t) std::log2((float) in_nbytes_c);
-    std::vector<uint32_t> reader_rt_args = {
+    std::vector<uint32_t> reader_ct_args = {
                                             out_nhw_per_core,
                                             kernel_size_h,
                                             kernel_size_w,
@@ -848,7 +844,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             in_cb_page_padded * in_cb_npages / tile_w,
                                             input_shape[3],
                                             nblocks,
-                                            };
+                                            input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            bf16_one_u32,
+                                            nblocks};
+
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
                                             .compile_args = reader_ct_args};
@@ -917,12 +917,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                               compute_kernel_fname,
                                               core_range,
                                               compute_config);
-
-    /**
-     * Set runtime args
-     */
-
-    SetRuntimeArgs(program, reader_kernel, all_cores, reader_rt_args);
 
     /*
     uint32_t curr_out_stick_id = 0; // track output sticks with batch folded in
