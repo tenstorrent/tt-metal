@@ -956,6 +956,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.transpose_cw,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=-1),
     },
+    "sum": {
+        "tt_lib_op": tt_lib_ops.sum,
+        "pytorch_op": pytorch_ops.sum,
+    },
+    "ttnn-sum": {
+        "tt_lib_op": ttnn_ops.sum,
+        "pytorch_op": pytorch_ops.sum,
+    },
     "sum-0": {
         "tt_lib_op": partial(tt_lib_ops.sum, dim=0),
         "pytorch_op": partial(pytorch_ops.sum, dim=0),
