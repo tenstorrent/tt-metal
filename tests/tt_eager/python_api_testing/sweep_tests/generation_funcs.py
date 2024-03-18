@@ -1931,3 +1931,31 @@ def gen_softplus_args(
         dtype,
     ):
         yield input_info
+
+
+def gen_min_max_dim_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0,
+    high=4,
+    dtype=torch.int,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "dim",
+        low,
+        high,
+        dtype,
+    ):
+        rank = len(input_shapes[0])
+        choices = [(rank - 1,), (rank - 2,)]
+        idx = np.random.choice(len(choices), 1)
+        dims = choices[idx.item()]
+
+        input_info.update({"dim": dims})
+        yield input_info
