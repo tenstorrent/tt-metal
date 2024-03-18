@@ -275,8 +275,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
-    uint32_t out_cb_pagesize = tile_size(out_df);
-    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
+    uint32_t out_cb_pagesize =  tile_size(out_df) * out_ntiles_c * out_nelems;
+    uint32_t out_cb_npages = multi_buffering_factor;
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);

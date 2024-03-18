@@ -51,7 +51,7 @@ void kernel_main() {
     #endif
 
     for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
-        cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_wait_front(out_cb_id, 1);
         uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
         for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
             // Write as tiled tensor, need to handle each face.
@@ -95,7 +95,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         // kernel_profiler::mark_time(14);
-        cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_pop_front(out_cb_id, 1);
     }
     #ifdef SHARDED_OUT
     cb_push_back(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
