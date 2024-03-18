@@ -96,6 +96,7 @@ class cross_attention_upblock2d:
                 )
 
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=1)
+            ttnn.deallocate(on_dev_res_hidden_states)
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,

@@ -25,6 +25,12 @@ FORCE_INLINE void generate_zero_mask_fill_partial_rows(const uint32_t cb_id, con
                     for (uint32_t j = 0; j < num_cols; ++j) {
                         ptr[face_offset + i + j] = 0x3f80;
                     }
+                    for (uint32_t j = num_cols; j < 16; ++j) {
+                        ptr[face_offset + i + j] = 0;
+                    }
+                    for (uint32_t j = 0; j < 16; ++j) {
+                        ptr[face_offset + 256 + i + j] = 0;
+                    }
                 } else {
                     for (uint32_t j = 0; j < 16; ++j) {
                         ptr[face_offset + i + j] = 0x3f80;
@@ -33,6 +39,17 @@ FORCE_INLINE void generate_zero_mask_fill_partial_rows(const uint32_t cb_id, con
                     for (uint32_t j = 0; j < num_cols - 16; ++j) {
                         ptr[face_offset + 256 + i + j] = 0x3f80;
                     }
+                    for (uint32_t j = num_cols - 16; j < 16; ++j) {
+                        ptr[face_offset + 256 + i + j] = 0;
+                    }
+                }
+            } else {
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + i + j] = 0;
+                }
+
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + 256 + i + j] = 0;
                 }
             }
             row++;
@@ -62,6 +79,14 @@ FORCE_INLINE void generate_zero_mask_fill_full_rows(const uint32_t cb_id, const 
                 for (uint32_t j = 0; j < 16; ++j) {
                     ptr[face_offset + 256 + i + j] = 0x3f80;
                 }
+            } else {
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + i + j] = 0;
+                }
+
+                for (uint32_t j = 0; j < 16; ++j) {
+                    ptr[face_offset + 256 + i + j] = 0;
+                }
             }
             row++;
         }
@@ -80,6 +105,14 @@ FORCE_INLINE void generate_zero_mask(const uint32_t cb_id, const uint32_t num_co
         for (uint32_t j = 0; j < num_cols; ++j) {
             ptr[j] = 0x3f80;
         }
+
+        for (uint32_t j = num_cols; j < 16; ++j) {
+            ptr[j] = 0;
+        }
+
+        for (uint32_t j = 0; j < 16; ++j) {
+            ptr[256 + j] = 0;
+        }
     } else {
         for (uint32_t j = 0; j < 16; ++j) {
             ptr[j] = 0x3f80;
@@ -87,6 +120,10 @@ FORCE_INLINE void generate_zero_mask(const uint32_t cb_id, const uint32_t num_co
 
         for (uint32_t j = 0; j < num_cols - 16; ++j) {
             ptr[256 + j] = 0x3f80;
+        }
+
+        for (uint32_t j = num_cols - 16; j < 16; ++j) {
+            ptr[256 + j] = 0;
         }
     }
 
@@ -167,11 +204,11 @@ void kernel_main() {
         generate_zero_mask(cb_zero_mask, num_cols_per_group);
     }
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(6) == 1
+    #define stick_size_is_pow2 get_compile_time_arg_val(18) == 1
     #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(19);
     #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t page_size = get_compile_time_arg_val(19);
     #endif
 
     if constexpr(fuse_gamma) {

@@ -18,6 +18,7 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_2d_
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
+import math
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -142,10 +143,13 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
     torch_output = model(input, timestep=timestep, encoder_hidden_states=encoder_hidden_states.squeeze(0)).sample
-
+    padded_in_channels = math.ceil(in_channels / 16) * 16
+    input = torch.nn.functional.pad(input, (0, 0, 0, 0, 0, padded_in_channels - in_channels))
+    input = torch.permute(input, (0, 2, 3, 1))  # permute from NCHW to NHWC
+    input = torch.reshape(input, (1, 1, batch_size * input_height * input_width, padded_in_channels))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat16)
 
     ttnn_timestep = ttnn.from_torch(ttnn_timestep, ttnn.bfloat16)
     ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT)
