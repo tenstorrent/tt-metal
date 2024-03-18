@@ -30,19 +30,6 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
         detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
 
-        // TODO @tt-aho: Add default args back
-        m_tensor.def("add_without_autoformat", &add_without_autoformat,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(),
-            py::arg("fused_activations") = std::nullopt,
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("output_dtype").noconvert() = std::nullopt,
-            py::arg("in_place") = false,
-            R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
-
-            Auto formatting is disabled. Both input tensors must have TILE layout. Output tensor will have TILE layout.)doc"
-        );
-
-
         // *** eltwise unary ***
         detail::bind_unary_op(m_tensor, "identity", identity, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
@@ -187,12 +174,6 @@ namespace tt::tt_metal::detail {
             py::arg("unary_chain"),
             R"doc(Returns tensor with the unary op chain applied to all of elements of the input tensor ``{0}``.)doc",
             R"doc("Unary op chain", "Vector<FusibleActivation>", "At least 1 activation")doc"
-        );
-
-        detail::bind_unary_op(m_tensor, "relu_without_autoformat", &relu_without_autoformat,
-            R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.
-
-            Auto formatting is disabled. Input tensor must have TILE layout. Output tensor will have TILE layout.)doc"
         );
 
         // *** bcast binary tied to unary ***
