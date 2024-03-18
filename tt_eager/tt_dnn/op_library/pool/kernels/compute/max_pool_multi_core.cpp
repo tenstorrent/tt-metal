@@ -59,13 +59,12 @@ inline void reduce_h_fused(
     const uint32_t in_ntiles_hwc,
     const uint32_t out_cb_id) {
 
-    constexpr uint32_t effective_nblocks = is_partial_tile ? 1 : nblocks;
-    constexpr uint32_t num_output_tiles = out_ntiles_c * effective_nblocks;
-    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 2 /*fixme 1*/ : 2;
+    constexpr uint32_t num_output_tiles = out_ntiles_c * nblocks;
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
     cb_reserve_back(out_cb_id, 1);
     tile_regs_acquire();
-    for (uint32_t out_elem_i = 0; out_elem_i < effective_nblocks; ++ out_elem_i) {
+    for (uint32_t out_elem_i = 0; out_elem_i < nblocks; ++ out_elem_i) {
         cb_wait_front(in_cb_id, 1);
         unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
@@ -105,7 +104,8 @@ void MAIN {
 
     // const uint32_t TILE_WIDTH = 32;
     const bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 2 /*fixme 1*/ : 2;
+    static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile);
