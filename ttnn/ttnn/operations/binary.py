@@ -508,7 +508,7 @@ def add_and_apply_activation(
         }
         fused_activations = activations_map[activation]
 
-    output = ttnn.experimental.tensor.add_without_autoformat(
+    output = ttnn.experimental.operations.primary.add(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
@@ -559,7 +559,7 @@ def add_and_apply_activation_(
         }
         fused_activations = activations_map[activation]
 
-    output = ttnn.experimental.tensor.add_without_autoformat(
+    output = ttnn.experimental.operations.primary.add(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
