@@ -104,6 +104,7 @@ def run_test_FalconMLP_inference(
     (
         ("decode", 32, 1),
         ("prefill", 1, 32),
+        ("prefill", 1, 64),
     ),
 )
 @pytest.mark.parametrize(

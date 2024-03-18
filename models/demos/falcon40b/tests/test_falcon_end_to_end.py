@@ -398,9 +398,10 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 2, 32, 0),
+        ("prefill", 2, 64, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "decode_batch32"],
+    ids=["prefill_seq32", "prefill_seq64", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
