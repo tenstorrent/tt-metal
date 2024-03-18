@@ -1225,7 +1225,7 @@ def conv(x, y, *args, **kwargs):
 
 
 def activation_glu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", -1)
     return torch.nn.functional.glu(x, dim)
 
 
