@@ -1779,25 +1779,43 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     TT_RISC_ASSERT(false, "K=2 not supported!");
                     break;
                 case 1:
-                    ld_dist = (ld_offset < 16) ? 4*ld_offset : 2*ld_offset;
-                    while (datums_compared < total_datums_to_compare) {
-                        // Groups of 16 datums being sorted at the same time
-                        if (init_rebuild) {
-                            TT_REPLAY(0, 28, 1, 1);
-                            bitonic_topk_load16(ld_offset, ld_dist);
-                            bitonic_topk_ph1_st2_to_1();
-                            bitonic_topk_store16<true>(ld_offset, ld_dist);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            init_rebuild = false;
-                        } else {
-                            TT_REPLAY(0, 28, 0, 0);
+                    if (m_iter >= 2) {
+                        while (datums_compared < total_datums_to_compare) {
+                            // Groups of 8 datums being sorted at the same time
+                            if (init_rebuild) {
+                                TT_REPLAY(0, 24, 1, 1);
+                                bitonic_topk_load8(0, ld_offset);
+                                bitonic_topk_ph1_st2_to_1();
+                                bitonic_topk_store8(0, ld_offset);
+                                bitonic_topk_inc_x8_dest(64,false);
+                                init_rebuild = false;
+                            } else {
+                                TT_REPLAY(0, 24, 0, 0);
+                            }
+                            datums_compared += 16;
                         }
-                        datums_compared += 16;
+                        break;
+                    } else {
+                        ld_dist = (ld_offset < 16) ? 4*ld_offset : 2*ld_offset;
+                        while (datums_compared < total_datums_to_compare) {
+                            // Groups of 16 datums being sorted at the same time
+                            if (init_rebuild) {
+                                TT_REPLAY(0, 28, 1, 1);
+                                bitonic_topk_load16(ld_offset, ld_dist);
+                                bitonic_topk_ph1_st2_to_1();
+                                bitonic_topk_store16<true>(ld_offset, ld_dist);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                TTI_INCRWC(0, 8, 0, 0);
+                                init_rebuild = false;
+                            } else {
+                                TT_REPLAY(0, 28, 0, 0);
+                            }
+                            datums_compared += 16;
+                        }
+                        break;
                     }
-                    break;
                 case 2:
                     while (datums_compared < total_datums_to_compare) {
                         // Groups of 16 datums being sorted at the same time
