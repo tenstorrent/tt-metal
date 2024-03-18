@@ -51,30 +51,30 @@ ALWI bool fill_with_val_async(uint32_t local_src_addr, uint32_t begin_addr, int3
  * Max-pool 2D.
  */
 void kernel_main() {
-    const uint32_t reader_nindices = get_arg_val<uint32_t>(0);
-    const uint32_t window_h = get_arg_val<uint32_t>(1);
-    const uint32_t window_w = get_arg_val<uint32_t>(2);
+    const uint32_t reader_nindices = get_compile_time_arg_val(0);
+    const uint32_t window_h = get_compile_time_arg_val(1);
+    const uint32_t window_w = get_compile_time_arg_val(2);
 
-    const int32_t pad_w = get_arg_val<int32_t>(3);
+    const int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes, multiple of 32
-    const uint32_t in_nbytes_c = get_arg_val<uint32_t>(4);
-    const uint32_t in_nbytes_c_log2 = get_arg_val<uint32_t>(5);
+    const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
+    const uint32_t in_nbytes_c_log2 = get_compile_time_arg_val(5);
 
     // input tensor height / width / channels
-    const int32_t in_w = get_arg_val<int32_t>(6);
-    const uint32_t in_cb_nsticks = get_arg_val<uint32_t>(7);
+    const int32_t in_w = get_compile_time_arg_val(6);
+    const uint32_t in_cb_nsticks = get_compile_time_arg_val(7);
 
-    const uint32_t in_c = get_arg_val<uint32_t>(8);
-    const uint32_t nblocks = get_arg_val<uint32_t>(9);
+    const uint32_t in_c = get_compile_time_arg_val(8);
+    const uint32_t nblocks = get_compile_time_arg_val(9);
 
-    //static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
+    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
     constexpr uint32_t TILE_WIDTH = 32;
 
     // compile time args
     // value of 1 in bf16 in a uin32_t
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
