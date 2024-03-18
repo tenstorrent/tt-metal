@@ -86,8 +86,6 @@ jobs:
       create-tag,
       create-changelog,
       build-eager-package,
-      release-run-frequent-slow-dispatch,
-      release-run-frequent-fast-dispatch,
     ]
     strategy:
       matrix:
