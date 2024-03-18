@@ -8,6 +8,8 @@ from typing import Optional, Union
 import ttnn
 
 import tt_lib as ttl
+from tt_lib.utils import find_closest_largest_divisor, find_closest_largest_divisor_with_num_padding
+import math
 
 
 def _torch_layer_norm(
@@ -197,6 +199,73 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     return output_tensor
 
 
+# group norm helper function
+def determine_expected_group_norm_sharded_config_and_grid_size(
+    *, device, num_channels, num_groups, input_nhw, is_height_sharded
+):
+    assert num_channels % num_groups == 0
+    assert num_channels % 32 == 0  # TODO: remove this later
+    group_size = num_channels // num_groups
+    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
+    device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
+    max_num_cores = device_grid_size[0] * device_grid_size[1]
+    input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
+    num_cores_nhw = (
+        find_closest_largest_divisor(input_nhw_paddedto32 // 32, max_num_cores)
+        if is_height_sharded
+        else find_closest_largest_divisor_with_num_padding(input_nhw_paddedto32 // 32, device_grid_size[0])
+    )
+    if is_height_sharded:
+        num_cores_channels = 1
+    else:
+        num_cores_channels = device_grid_size[1]
+        num_channels_tiles = num_channels // 16
+        while (num_channels_tiles % num_cores_channels != 0) or (
+            ((num_channels // num_cores_channels) % group_size) != 0
+        ):
+            num_cores_channels -= 1
+            assert num_cores_channels > 0
+    input_nhw_padded_to_ncores = math.ceil(input_nhw / (num_cores_nhw * 32)) * (num_cores_nhw * 32)
+    gn_in_channels_per_core = num_channels // num_cores_channels
+    assert gn_in_channels_per_core % 16 == 0
+    gn_nhw_per_core = input_nhw_padded_to_ncores // num_cores_nhw
+    if is_height_sharded:
+        grid_size = [
+            device_grid_size[0] if num_cores_nhw >= device_grid_size[0] else num_cores_nhw,
+            math.ceil(num_cores_nhw / device_grid_size[0]),
+        ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
+        assert (
+            num_cores_nhw <= grid_size[0] * grid_size[1]
+        ), "Error: For height sharding, num_cores_nhw must be <= grid size"
+    else:
+        grid_size = [num_cores_nhw, num_cores_channels]
+    shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COLUMN_MAJOR
+    return ttnn.create_sharded_memory_config(
+        (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
+        ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        shard_strategy,
+        shard_orientation,
+        halo=False,
+        use_height_and_width_as_shard_shape=True,
+    ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
+
+
+def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
+    import torch
+
+    def find_ceil_divisible_by_32(n):
+        return ((n + 31) // 32) * 32
+
+    values_per_chunk = num_channels // num_groups
+    zeros_to_insert = find_ceil_divisible_by_32(values_per_chunk) - values_per_chunk
+    input_tensor = input_tensor.view(-1, values_per_chunk)
+    input_tensor = torch.nn.functional.pad(input_tensor, (0, zeros_to_insert))
+    input_tensor = input_tensor.flatten()
+    input_tensor = input_tensor[: num_channels + zeros_to_insert * (num_channels // values_per_chunk)]
+    return input_tensor.reshape(1, 1, -1, 32)
+
+
 def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
     import torch
 
@@ -217,7 +286,7 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
         bias = ttnn.to_torch(bias)
         if len(bias.shape) == 2:
             bias = bias[0]
-
+    print("Starting gn functional torch")
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 

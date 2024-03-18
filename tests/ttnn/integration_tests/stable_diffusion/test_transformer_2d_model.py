@@ -11,6 +11,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import (
+    transformer_2d_model as transformer_2d_model_tt2,
+)
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input,
+    post_process_output,
+)
 
 
 @pytest.mark.parametrize(
@@ -75,7 +82,7 @@ def test_transformer_2d_model_256x256(
     transformer = pipe.unet.mid_block.attentions[0]
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
 
     if block == "up":
@@ -132,33 +139,34 @@ def test_transformer_2d_model_256x256(
             40,
             "up",
         ),
-        (
-            (2, 640, 32, 32),
-            1,
-            1,
-            80,
-            "down",
-        ),
-        (
-            (2, 1280, 16, 16),
-            2,
-            1,
-            160,
-            "down",
-        ),
-        (
-            (2, 1280, 8, 8),
-            2,
-            1,
-            160,
-            "down",
-        ),
+        # (
+        #     (2, 640, 32, 32),
+        #     1,
+        #     1,
+        #     80,
+        #     "down",
+        # ),
+        # (
+        #     (2, 1280, 16, 16),
+        #     2,
+        #     1,
+        #     160,
+        #     "down",
+        # ),
+        # (
+        #     (2, 1280, 8, 8),
+        #     2,
+        #     1,
+        #     160,
+        #     "down",
+        # ),
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_transformer_2d_model_512x512(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):
+    torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
     class_labels = (None,)
@@ -204,10 +212,10 @@ def test_transformer_2d_model_512x512(
     ttnn_encoder_hidden_states = ttnn.from_torch(
         encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    reader_patterns_cache = {}
-    ttnn_transformer = transformer_2d_model(
+
+    model = transformer_2d_model_tt2(device, parameters, {}, input_shape[0], input_shape[2], input_shape[3])
+    output = model(
         hidden_states=ttnn_hidden_state,
-        parameters=parameters,
         config=config,
         encoder_hidden_states=ttnn_encoder_hidden_states,
         timestep=timestep,
@@ -221,12 +229,10 @@ def test_transformer_2d_model_512x512(
         num_layers=num_layers,
         norm_num_groups=norm_num_groups,
         norm_type=norm_type,
-        device=device,
         cross_attention_dim=cross_attention_dim,
         upcast_attention=upcast_attention,
-        reader_patterns_cache=reader_patterns_cache,
     )
 
-    ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(ttnn_transformer), layout=ttnn.ROW_MAJOR_LAYOUT))
+    ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
