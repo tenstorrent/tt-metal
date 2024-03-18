@@ -548,6 +548,7 @@ void py_module(py::module& m_primary) {
         &moreh_bmm,
         py::arg("input").noconvert(),
         py::arg("mat2").noconvert(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_bmm operation.
@@ -560,6 +561,7 @@ void py_module(py::module& m_primary) {
         py::arg("mat2").noconvert(),
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("mat2_grad").noconvert() = std::nullopt,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_bmm_backward operation.

@@ -18,6 +18,7 @@ using namespace tt_metal;
 Tensor moreh_bmm(
     const Tensor& input,
     const Tensor& mat2,
+    std::optional<Tensor> output_tensor = std::nullopt,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

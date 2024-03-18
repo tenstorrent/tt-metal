@@ -11,7 +11,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
+inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2, std::optional<Tensor> output_tensor) {
     const auto& a_shape = input.get_legacy_shape();
     const auto& b_shape = mat2.get_legacy_shape();
 
@@ -19,17 +19,17 @@ inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
     TT_ASSERT(b_shape[0] == 1, "mat2 must be a 3D tensor");
 }
 
-Tensor moreh_bmm_(const Tensor& input, const Tensor& mat2, const MemoryConfig& mem_config) {
-    moreh_bmm_validate(input, mat2);
-    return moreh_matmul(input, mat2, std::nullopt, false, false, mem_config);
+Tensor moreh_bmm_(const Tensor& input, const Tensor& mat2, std::optional<Tensor> output_tensor, const MemoryConfig& mem_config) {
+    moreh_bmm_validate(input, mat2, output_tensor);
+    return moreh_matmul(input, mat2, output_tensor, false, false, mem_config);
 }
 
-Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, const MemoryConfig& output_mem_config) {
+Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, std::optional<Tensor> output_tensor, const MemoryConfig& output_mem_config) {
     TT_ASSERT(
         input.storage_type() == StorageType::DEVICE && mat2.storage_type() == StorageType::DEVICE,
         "input tensors need to be on device");
 
-    return moreh_bmm_(input, mat2, output_mem_config);
+    return moreh_bmm_(input, mat2, output_tensor, output_mem_config);
 }
 
 }  // namespace primary

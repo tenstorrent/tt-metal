@@ -19,8 +19,9 @@ using namespace tt_metal;
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mat2,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> mat2_grad = std::nullopt,
+    std::optional<Tensor> input_grad = std::nullopt,
+    std::optional<Tensor> mat2_grad = std::nullopt,
+    std::optional<Tensor> output_tensor = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
