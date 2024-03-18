@@ -19,6 +19,7 @@ from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from models.utility_functions import get_devices_for_t3000
+from models.demos.llama2_70b.tt.llama_common import get_llama_path
 
 
 def main(args):
@@ -56,12 +57,13 @@ def build_generator(args):
     if args.implementation == "tt":
         generator.model = TtLlamaModelForGeneration(
             reference_model=generator.model,
-            pcie_devices=args.pcie_devices,
+            devices=args.devices,
             n_devices=args.n_devices,
             model_config=args.model_config,
             n_layers=args.num_layers,
             batch=args.max_batch_size,
             emulated=args.emulated,
+            cache_path=args.cache_path,
         )
     return generator
 
@@ -233,24 +235,25 @@ class Args:
         self,
         # model args
         implementation="meta",
-        ckpt_dir="/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/",
-        tokenizer_path="/proj_sw/user_dev/llama-data/tokenizer.model",
+        ckpt_dir="/home/llama-data-repacked-2/llama-2-70b/",
+        tokenizer_path="/home/llama-data/tokenizer.model",
         skip_model_load=False,
         max_batch_size=32,
         num_layers=None,
         max_seq_len=4096,
         # Generation args
-        num_tokens=10,
+        num_tokens=100,
         prompts_file="models/demos/llama2_70b/demo/data/multi_prompt.json",
-        output_at_end=False,
-        top_p=0.9,
-        top_k=10,
+        output_at_end=True,
+        top_p=1,
+        top_k=1,
         temperature=1.0,
         # TT args
-        pcie_devices=None,
-        n_devices=4,
+        devices=None,
+        n_devices=8,
         emulated=False,
         model_config=None,
+        cache_path=None,
     ):
         self.implementation = implementation
         self.ckpt_dir = ckpt_dir
@@ -265,10 +268,11 @@ class Args:
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
-        self.pcie_devices = pcie_devices
+        self.devices = devices
         self.n_devices = n_devices
         self.emulated = emulated
         self.model_config = model_config
+        self.cache_path = cache_path
 
 
 def construct_arg(**kwargs):
@@ -277,64 +281,27 @@ def construct_arg(**kwargs):
 
 @pytest.mark.parametrize("num_layers", (1, 2, 4, 8, 10, 20, None))
 @pytest.mark.parametrize(
-    "implementation, ckpt_dir, tokenizer_path, skip_model_load, max_batch_size, max_seq_len, emulated",
+    "implementation, skip_model_load, n_devices, emulated",
     [
         (
             "tt",
-            "/home/llama-data-repacked-2/llama-2-70b/",
-            "/home/llama-data/tokenizer.model",
             False,
-            32,
-            4096,
+            8,
             False,
         ),
         (
             "meta",
-            "/home/llama-data-repacked-2/llama-2-70b/",
-            "/home/llama-data/tokenizer.model",
             False,
-            32,
-            4096,
+            8,
             False,
-        ),
-        (
-            "meta",
-            "/home/llama-data/llama-2-7b/llama-2-7b/",
-            "/home/llama-data/tokenizer.model",
-            False,
-            32,
-            4096,
-            False,
-        ),
-        (
-            "tt",
-            "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/",
-            "/proj_sw/user_dev/llama-data/tokenizer.model",
-            False,
-            32,
-            4096,
-            True,
-        ),
-        (
-            "meta",
-            "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/",
-            "/proj_sw/user_dev/llama-data/tokenizer.model",
-            False,
-            32,
-            4096,
-            True,
-        ),
-        (
-            "meta",
-            "/proj_sw/user_dev/llama-data/llama-2-7b/llama-2-7b/",
-            "/proj_sw/user_dev/llama-data/tokenizer.model",
-            False,
-            32,
-            4096,
-            True,
         ),
     ],
-    ids=["tt-70b", "meta-70b", "meta-7b", "tt-70b-emulated", "meta-70b-emulated", "meta-7b-emulated"],
+    ids=["tt-70b-T3000", "meta-70b"],
+)
+@pytest.mark.parametrize(
+    "max_batch_size, max_seq_len",
+    ((32, 4096),),
+    ids=("decode",),
 )
 @pytest.mark.parametrize(
     "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
@@ -344,15 +311,11 @@ def construct_arg(**kwargs):
     ],
     ids=["greedy", "sampling"],
 )
-@pytest.mark.parametrize(
-    "n_devices",
-    (4, 8),
-)
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_demo(
     # model args
+    model_config_str,
     implementation,
-    ckpt_dir,
-    tokenizer_path,
     skip_model_load,
     max_batch_size,
     num_layers,
@@ -371,7 +334,7 @@ def test_LlamaModel_demo(
     emulated,
 ):
     ## Get model config
-    model_config = get_model_config("BFLOAT16-DRAM", num_devices=n_devices)
+    model_config = get_model_config(model_config_str, num_devices=n_devices)
     devices = get_devices_for_t3000(all_devices, n_devices)
 
     compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -379,6 +342,8 @@ def test_LlamaModel_demo(
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
 
     args = construct_arg(
         implementation=implementation,
@@ -394,9 +359,10 @@ def test_LlamaModel_demo(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        pcie_devices=devices,
+        devices=devices,
         n_devices=n_devices,
         emulated=emulated,
         model_config=model_config,
+        cache_path=cache_path,
     )
     main(args)

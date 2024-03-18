@@ -6,32 +6,20 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
+
 import copy
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
-from pathlib import Path
+from models.demos.llama2_70b.tt.llama_common import BASE_URL
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, reference_model, pcie_devices, n_devices, model_config, n_layers, batch, emulated=False):
-        ## Get devices
-        devices = pcie_devices[:n_devices]
-        if emulated:
-            device = devices[0]
-            devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-            cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
-        else:
-            cache_path = model_config["DEFAULT_CACHE_PATH"]
-
+    def __init__(
+        self, reference_model, devices, n_devices, model_config, n_layers, batch, emulated=False, cache_path=None
+    ):
         ## Get state dict
-        reference_model.eval()
         state_dict = reference_model.state_dict()
-        base_url = "layers"
         configuration = copy.deepcopy(reference_model.params)
-        n_heads = configuration.n_heads
-        n_kv_heads = configuration.n_kv_heads
-        hidden_dim = configuration.dim
-        head_dim = hidden_dim // n_heads
 
         # Cache Weights setup
         if n_layers == None:
@@ -47,7 +35,7 @@ class TtLlamaModelForGeneration:
         self.tt_model = TtLlamaModel(
             devices,
             state_dict,
-            base_url,
+            BASE_URL,
             n_layers,
             model_config,
             configuration,

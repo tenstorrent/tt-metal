@@ -26,9 +26,15 @@ def get_llama_path(devices, model_config, n_devices, emulated):
     tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", model_config["DEFAULT_TOKENIZER_PATH"])
     cache_path = Path(os.getenv("LLAMA_CACHE_PATH", model_config["DEFAULT_CACHE_PATH"]))
 
-    assert os.path.exists(ckpt_dir), f"Checkpoint directory {ckpt_dir} does not exist"
-    assert os.path.exists(tokenizer_path), f"Tokenizer file {tokenizer_path} does not exist"
-    assert os.path.exists(cache_path), f"Cache directory {cache_path} does not exist"
+    assert os.path.exists(
+        ckpt_dir
+    ), f"Checkpoint directory {ckpt_dir} does not exist, please use export LLAMA_CKPT_DIR=..."
+    assert os.path.exists(
+        tokenizer_path
+    ), f"Tokenizer file {tokenizer_path} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
+    assert os.path.exists(
+        cache_path
+    ), f"Cache directory {cache_path} does not exist, please use export LLAMA_CACHE_PATH=..."
 
     logger.info(f"Checkpoint directory: {ckpt_dir}")
     logger.info(f"Tokenizer file: {tokenizer_path}")
