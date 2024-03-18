@@ -248,6 +248,7 @@ def test_simple(
     bias = False
     config = None  # {"act_reshard_num_cores_nhw": 2}
     debug = True
+    fuse_relu = False
 
     assert output_channels % 32 == 0
     torch.manual_seed(0)
