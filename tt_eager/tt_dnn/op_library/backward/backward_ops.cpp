@@ -1688,6 +1688,27 @@ std::vector<Tensor> real_bw(const Tensor& grad, const Tensor& input, const Memor
 
 #undef CHECK_FOR_COMPLEX
 
+std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor digamma_result = mul(grad, digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor digamma_result_2 = mul(grad, digamma(add_unary(-0.5 , input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+
+    Tensor grad_result = add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
+
+    digamma_result = mul(grad, digamma(add_unary(-1.0 , input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_result = add(grad_result, digamma_result, std::nullopt, output_mem_config);
+
+    digamma_result = mul(grad, digamma(add_unary(-1.5 , input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_result = add(grad_result, digamma_result, std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _multigammaln_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt

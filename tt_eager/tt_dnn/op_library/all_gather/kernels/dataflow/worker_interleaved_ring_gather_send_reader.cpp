@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr uint32_t output_addr_offset = get_compile_time_arg_val(20);
     constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(21);
     constexpr uint32_t sem_addr = get_compile_time_arg_val(22);
+    constexpr bool is_clockwise_direction = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t ID = get_compile_time_arg_val(24);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
 
@@ -78,21 +80,43 @@ void kernel_main() {
 
     // num_transfers = num_devices - 1
     for (uint32_t i = 1; i < num_transfers; ++i) {
-        if (input_ring_idx == 0) {
-            input_ring_idx = num_transfers;
-            if constexpr(output_addr_offset != 0) {
-                d.bank_base_address += last_output_addr_offset;
-            }
-            if constexpr(output_page_offset != 0) {
-                output_base_page_idx += last_output_page_offset;
+        if (is_clockwise_direction) {
+            if (input_ring_idx == 0) {
+                input_ring_idx = num_transfers;
+                if constexpr(output_addr_offset != 0) {
+                    d.bank_base_address += last_output_addr_offset;
+                }
+                if constexpr(output_page_offset != 0) {
+                    output_base_page_idx += last_output_page_offset;
+                }
+            } else {
+                input_ring_idx--;
+                if constexpr(output_addr_offset != 0) {
+                    d.bank_base_address -= output_addr_offset;
+                }
+                if constexpr(output_page_offset != 0) {
+                    output_base_page_idx -= output_page_offset;
+                }
             }
         } else {
-            input_ring_idx--;
-            if constexpr(output_addr_offset != 0) {
-                d.bank_base_address -= output_addr_offset;
-            }
-            if constexpr(output_page_offset != 0) {
-                output_base_page_idx -= output_page_offset;
+            if (input_ring_idx == num_transfers) {//0) {
+                input_ring_idx = 0;
+                if constexpr(output_addr_offset != 0) {
+                    d.bank_base_address -= last_output_addr_offset;
+                    // d.bank_base_address = last_output_addr_offset;
+                }
+                if constexpr(output_page_offset != 0) {
+                    output_base_page_idx -= last_output_page_offset;
+                    // output_base_page_idx = last_output_page_offset;
+                }
+            } else {
+                input_ring_idx++;
+                if constexpr(output_addr_offset != 0) {
+                    d.bank_base_address += output_addr_offset;
+                }
+                if constexpr(output_page_offset != 0) {
+                    output_base_page_idx += output_page_offset;
+                }
             }
         }
         output_page_idx = output_base_page_idx;
@@ -111,8 +135,5 @@ void kernel_main() {
             read_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
         }
     }
-    // TODO: Debug why this is needed, or else readback from host seems to happen before kernels have finished?
-    // This can go on either worker sender core
-    // This doesn't work just calling the regular barriers that use the set noc_index
-    // ncrisc_noc_full_sync();
+
 }

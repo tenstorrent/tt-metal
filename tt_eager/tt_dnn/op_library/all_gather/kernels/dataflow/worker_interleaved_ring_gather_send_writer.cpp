@@ -7,6 +7,7 @@
 #include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 void kernel_main() {
+
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t eth_sender_l1_base_addr = get_arg_val<uint32_t>(1);
     const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(2);
@@ -57,6 +58,8 @@ void kernel_main() {
     // Used to signal eth sender that data is available. This is different per writer core
     const uint64_t eth_l1_sender_semaphore_addr = get_noc_addr(eth_sender_noc_x, eth_sender_noc_y, eth_sender_l1_sem_addr);
 
+    uint32_t ID = (my_y[0] << 16) | my_x[0];
+
     if constexpr(num_full_chunks > 0) {
         for (uint32_t c = 0; c < num_full_chunks; ++c) {
             noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
@@ -66,6 +69,7 @@ void kernel_main() {
             noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
         }
     }
+
     if constexpr(rem_num_pages > 0) {
         noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
         noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
@@ -90,4 +94,5 @@ void kernel_main() {
             noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
         }
     }
+
 }
