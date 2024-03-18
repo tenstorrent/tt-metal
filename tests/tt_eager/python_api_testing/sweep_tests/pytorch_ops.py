@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import tt_lib as ttl
 import ttnn
 import torch
 from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
@@ -951,6 +952,12 @@ def min(x, y, *args, **kwargs):
     return torch.min(x, y)
 
 
+def ttnn_min(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    print(f"PT: {dim[0]}")
+    return torch.min(x, dim=dim[0], keepdim=True).values
+
+
 def min_bw(x, y, z, *args, **kwargs):
     grad_data = x
     in_data = y
@@ -1248,7 +1255,7 @@ def activation_geglu(x, *args, **kwargs):
 
 
 def activation_swiglu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", -1)
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.silu(b)
     # return torch.matmul(a,torch.nn.functional.silu(b))
@@ -1846,3 +1853,38 @@ def mse_loss_mean(x, y, *args, **kwargs):
     # return torch.nn.functional.upsample(x, scale_factor=2)
     torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
     return torch_output_tensor
+
+
+def rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
+    seq_len = x.shape[-2]
+    if token_idx is None:
+        cos = cos_cached[:, :, :seq_len, ...]
+        sin = sin_cached[:, :, :seq_len, ...]
+    else:
+        cos = cos_cached[:, :, token_idx : token_idx + 1, ...]
+        sin = sin_cached[:, :, token_idx : token_idx + 1, ...]
+
+    x_embed = (x * cos) + (rotate_half(x) * sin)
+    return x_embed
+
+
+def rotary_embedding(x, *args, **kwargs):
+    torch.manual_seed(0)
+
+    cache_size = 2048
+    input_dtype = ttl.tensor.DataType.BFLOAT16
+    sincos_dtype = ttl.tensor.DataType.BFLOAT16
+
+    sin_cos_shape = (1, 1, cache_size, 64)
+    cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
+    sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
+
+    pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
+
+    return pt_out[0]
