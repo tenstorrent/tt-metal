@@ -4,7 +4,6 @@
 
 import pytest
 from loguru import logger
-from pathlib import Path
 import torch
 from torch import nn
 import tt_lib
@@ -13,7 +12,6 @@ import ttnn
 from models.demos.llama2_70b.reference.llama.llama import Llama
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -21,7 +19,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.demos.llama2_70b.tt.llama_common import (
+    get_llama_path,
+    MAX_SEQ_LEN,
+    BASE_URL,
+    UNIT_TEST_N_LAYER,
+    UNIT_TEST_LAYER_NUM,
+)
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):
@@ -43,99 +48,80 @@ def run_test_LlamaMLP_inference(
     seq_len,
     pcc,
     model_config,
-    optimized,
     n_devices,
     emulated=False,
 ):
-    if emulated:
-        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
-        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
-        device = devices[0]
-        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-        cache_path = model_config["DEFAULT_CACHE_PATH"]
+    # Prepare paths and devices
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
 
+    # Prepare configs
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=False
+        ckpt_dir,
+        tokenizer_path,
+        max_seq_len=MAX_SEQ_LEN,
+        max_batch_size=batch,
+        n_layers=UNIT_TEST_N_LAYER,
+        skip_model_load=False,
     ).model
     hugging_face_reference_model.eval()
-    configuration = hugging_face_reference_model.params
     state_dict = hugging_face_reference_model.state_dict()
-    layer_num = 0
+    print(state_dict.keys())
+    torch.manual_seed(0)
+    configuration = hugging_face_reference_model.params
 
     # Prepare input
-    torch.manual_seed(0)
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
-    pt_inp_normed = hugging_face_reference_model.layers[layer_num].ffn_norm(pt_inp)
-
+    pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
     pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
     tt_inp = pt_inp_normed.clone()
 
-    print(state_dict.keys())
-    base_url = "layers"
-
     # PyTorch output --------------------------------------------------------------------
-    pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, layer_num)
+    pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    print(f"Compute grid size: {compute_grid_size}")
-    print(f"Running optimized: {optimized}")
-    print(f"Running emulated: {emulated}")
-    print(f"Running on {n_devices} devices")
 
-    if optimized:
-        if n_devices == 32:
-            tt_LlamaMLP_model = TtLlamaMLP_galaxy(
-                devices,
-                state_dict,
-                base_url,
-                layer_num,
-                configuration.dim,
-                model_config,
-                emulated=emulated,
-                cache_path=cache_path,
-            )
-        else:
-            # TT hardware execution -------------------------------------------------------------
-            tt_LlamaMLP_model = TtLlamaMLP_optimized(
-                devices,
-                state_dict,
-                base_url,
-                layer_num,
-                configuration.dim,
-                model_config,
-                emulated=emulated,
-                cache_path=cache_path,
-            )
-
-        tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
-    else:
-        # TT hardware execution -------------------------------------------------------------
-        tt_LlamaMLP_model = TtLlamaMLP(
+    # TT hardware execution -------------------------------------------------------------
+    if n_devices == 32:
+        tt_LlamaMLP_model = TtLlamaMLP_galaxy(
             devices,
             state_dict,
-            base_url,
-            layer_num,
+            BASE_URL,
+            UNIT_TEST_LAYER_NUM,
             configuration.dim,
             model_config,
+            emulated=emulated,
+            cache_path=cache_path,
         )
-        tt_mlp_input = [torch2tt_tensor(tt_inp.clone(), device) for device in devices]
+    else:
+        tt_LlamaMLP_model = TtLlamaMLP_optimized(
+            devices,
+            state_dict,
+            BASE_URL,
+            UNIT_TEST_LAYER_NUM,
+            configuration.dim,
+            model_config,
+            emulated=emulated,
+            cache_path=cache_path,
+        )
+
+    tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
+
+    if not emulated:
+        for device in devices:
+            tt_lib.device.Synchronize(device)
 
     if n_devices == 32:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
-        assert len(tt_out) == 32
+        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
+        assert len(tt_out) == len(devices)
         tt_out = tt2torch_tensor(tt_out[0])
     else:
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
+        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
         tt_outs = [tt2torch_tensor(o) for o in tt_out]
         tt_out = torch.cat(tt_outs, dim=-1)
 
-    logger.info(comp_allclose(pytorch_out, tt_out))
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
 
@@ -146,26 +132,36 @@ def run_test_LlamaMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "batch, seq_len, pcc, optimized, n_devices, emulated",
+    "n_devices, emulated",
     (
-        (32, 1, 0.9999, True, 4, False),
-        (32, 1, 0.9999, True, 8, False),
-        (32, 1, 0.9999, True, 4, True),
-        (32, 1, 0.9999, True, 8, True),
-        (32, 1, 0.9999, False, 4, False),
-        (32, 1, 0.9999, False, 8, False),
-        (32, 1, 0.9999, False, 4, True),
-        (32, 1, 0.9999, False, 8, True),
-        (32, 1, 0.9999, True, 32, True),
+        (8, False),
+        (8, True),
+        (32, True),
+    ),
+    ids=(
+        "8chip-T3000",
+        "8chip-emulated",
+        "32chip-emulated",
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    (
+        (32, 1),
+        # (1, 128),
+    ),
+    ids=(
+        "decode",
+        # "prefill"
+    ),
+)
+@pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
 def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    optimized,
     model_config_str,
     n_devices,
     all_devices,
@@ -185,7 +181,6 @@ def test_LlamaMLP_inference(
         seq_len,
         pcc,
         model_config,
-        optimized,
         n_devices,
         emulated,
     )
