@@ -22,6 +22,7 @@
 #include "tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 #include "tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
 
 
@@ -511,6 +512,14 @@ namespace tt::tt_metal::detail{
         );
 
 
+        m_tensor.def("interleaved_to_sharded_partial", py::overload_cast<const Tensor &, const std::variant<CoreCoord, CoreRangeSet>, std::array<uint32_t, 2>, const uint32_t, const uint32_t, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded_partial),
+         py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts a part of tensor from interleaved to sharded memory layout)doc");
+
+        m_tensor.def("sharded_to_interleaved_partial", &sharded_to_interleaved_partial,
+            py::arg("input"), py::arg("cache_tensor"), py::arg("num_slices"), py::arg("slice_index"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts a partial tensor from sharded_to_interleaved memory layout)doc"
+        );
 
         // Multi-Device ops
         m_tensor.def("all_gather", &all_gather,

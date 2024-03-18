@@ -6,6 +6,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/all_gather/multi_core/all_gather_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/sharded/sharded_op.cpp \
 	tt_eager/tt_dnn/op_library/sharded/multi_core/sharded_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/sharded_partial/sharded_op_partial.cpp \
+	tt_eager/tt_dnn/op_library/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/copy_op.cpp \
 	tt_eager/tt_dnn/op_library/copy/single_core/copy_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/multi_core/copy_op_multi_core.cpp \

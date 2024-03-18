@@ -927,9 +927,7 @@ void Matmul::validate(
                         uint32_t per_core_M = program_config.per_core_M;
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-                        // No padding
-                        TT_FATAL(M % per_core_M == 0);
-                        TT_FATAL(M / per_core_M == input_tensor_a.shard_spec().value().grid.num_cores());
+                        TT_FATAL(div_up(M, per_core_M) == input_tensor_a.shard_spec().value().grid.num_cores());
                         TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                         TT_FATAL(K == program_config.in0_block_w);
                         TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
@@ -941,10 +939,7 @@ void Matmul::validate(
                         uint32_t per_core_M = program_config.per_core_M;
                         uint32_t per_core_N = program_config.per_core_N;
 
-                        // No padding
-                        TT_FATAL(M % per_core_M == 0);
                         TT_FATAL(N == per_core_N);
-
                         TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1);
                     }
                 }
