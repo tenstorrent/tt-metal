@@ -17,8 +17,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
+
     // ublocks size defined in tiles
-    uint32_t ublock_size_tiles = 1;
+    constexpr uint32_t ublock_size_tiles = 1;
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
@@ -33,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_block_base_offset = is_dram_base_offset + num_tensors;
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
     volatile tt_l1_ptr uint32_t * arg_ptr = (volatile tt_l1_ptr uint32_t*) get_arg_addr(src_addr_base_idx);
-    for (uint32_t i = 0; i < num_tensors; i++) {
+    for (uint32_t i = 0; i < num_tensors; ++i) {
         uint32_t src_addr  = arg_ptr[i];
         is_dram[i] = (bool)arg_ptr[is_dram_base_offset + i];
         num_tiles_per_block[i] = arg_ptr[num_tiles_per_block_base_offset + i];
@@ -55,7 +56,7 @@ void kernel_main() {
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (uint32_t i = 0; i < num_tiles; ++i) {
         cb_reserve_back(cb_id_in, ublock_size_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
         if (is_dram[curr_tensor]) {
