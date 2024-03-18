@@ -1366,8 +1366,8 @@ inline void bitonic_topk_load8(uint offset, uint dist) {
     TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, ld_offset + dist);
     
      // Load 16 consecutive indices
-    TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
-    TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    TT_SFPLOAD(p_sfpu::LREG4, 6, ADDR_MOD_3, dst_indices_offset + ld_offset);            // How to load indices ? This is unpacked directly to dest!
+    TT_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
 
 }
 
@@ -1382,8 +1382,8 @@ inline void bitonic_topk_store8(uint offset, uint dist) {
     TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, ld_offset + dist);
     
      // Load 16 consecutive indices
-    TT_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
-    TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG4, 6, ADDR_MOD_3, dst_indices_offset + ld_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TT_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
 
 }
 
@@ -1403,15 +1403,15 @@ inline void bitonic_topk_load16(uint dist0, uint dist1) {
     }
     
      // Load 16 consecutive indices
-    TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TTI_SFPLOAD(p_sfpu::LREG4, 6, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + 12);
+        TTI_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, 6, ADDR_MOD_3, dst_indices_offset + 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, 6, ADDR_MOD_3, dst_indices_offset + 12);
     } else {
-        TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG6, 6, ADDR_MOD_3, dst_indices_offset + dist1);
+        TT_SFPLOAD(p_sfpu::LREG7, 6, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
     }
 }
 
@@ -1432,15 +1432,15 @@ inline void bitonic_topk_store16(uint dist0, uint dist1) {
     }
     
      // Load 16 consecutive indices
-    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
+    TTI_SFPSTORE(p_sfpu::LREG4, 6, ADDR_MOD_3, dst_indices_offset + 0);      // How to load indices ? This is unpacked directly to dest!
     if ((dist0 == 4) && (dist1 == 8)) {
-        TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPSTORE(p_sfpu::LREG7, 0, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + 4);
+        TTI_SFPSTORE(p_sfpu::LREG6, 6, ADDR_MOD_3, dst_indices_offset + 8);
+        TTI_SFPSTORE(p_sfpu::LREG7, 6, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + 12);
     } else {
-        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPSTORE(p_sfpu::LREG7, 0, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG5, 6, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG6, 6, ADDR_MOD_3, dst_indices_offset + dist1);
+        TT_SFPSTORE(p_sfpu::LREG7, 6, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
     }
 }
 
