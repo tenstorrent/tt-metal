@@ -2006,7 +2006,6 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
 
     # get torch model
     config = transformers.BertConfig.from_pretrained(model_name)
-    config.position_embedding_type = "none"
     if num_hidden_layers is not None:
         config.num_hidden_layers = num_hidden_layers
     else:
