@@ -1855,26 +1855,24 @@ def mse_loss_mean(x, y, *args, **kwargs):
     return torch_output_tensor
 
 
-def rotate_half(x):
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
-    seq_len = x.shape[-2]
-    if token_idx is None:
-        cos = cos_cached[:, :, :seq_len, ...]
-        sin = sin_cached[:, :, :seq_len, ...]
-    else:
-        cos = cos_cached[:, :, token_idx : token_idx + 1, ...]
-        sin = sin_cached[:, :, token_idx : token_idx + 1, ...]
-
-    x_embed = (x * cos) + (rotate_half(x) * sin)
-    return x_embed
-
-
 def rotary_embedding(x, *args, **kwargs):
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
+        seq_len = x.shape[-2]
+        if token_idx is None:
+            cos = cos_cached[:, :, :seq_len, ...]
+            sin = sin_cached[:, :, :seq_len, ...]
+        else:
+            cos = cos_cached[:, :, token_idx : token_idx + 1, ...]
+            sin = sin_cached[:, :, token_idx : token_idx + 1, ...]
+
+        x_embed = (x * cos) + (rotate_half(x) * sin)
+        return x_embed
+
     torch.manual_seed(0)
 
     cache_size = 2048
