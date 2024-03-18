@@ -15,6 +15,7 @@
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
@@ -85,6 +86,20 @@ namespace tt::tt_metal::detail{
                 "dim", "dimension of concat", "int", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
+
+        m_tensor.def("repeat", &tt::tt_metal::repeat,
+            py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``size``. The rank of ``size`` should be less than or equal to the rank of tensor ``input_a``.
+
+                    Output tensor will have same data type as input.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "size", "The number of times to repeat this tensor along each dimension", "List[Int]", "Positive repetition values", "Yes"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                )doc");
 
         m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&>(&assign),
             py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(

@@ -485,12 +485,6 @@ Tensor power_fp(
     float exponent,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// repeat a input tensor @input_a as specified by the number of dimensions
-Tensor repeat(
-    const Tensor& input_a,
-    const Shape& shape,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor pow(
     const Tensor& input_a,
     float exponent,
