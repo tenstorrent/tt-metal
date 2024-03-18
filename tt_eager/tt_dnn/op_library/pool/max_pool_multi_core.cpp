@@ -672,9 +672,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
+    uint32_t tile_w = constants::TILE_WIDTH;
     if (input_shape[3] < constants::TILE_WIDTH) {
-        TT_FATAL(constants::TILE_WIDTH % input_shape[3] == 0);
-        nblocks = constants::TILE_WIDTH / input_shape[3];
+        TT_FATAL(input_shape[3] == 16);
+        tile_w = constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = ceil((float) out_w / nblocks);
 
@@ -844,7 +845,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             in_nbytes_c,
                                             in_nbytes_c_log2,
                                             in_w,
-                                            input_shape[3] < constants::TILE_WIDTH ? in_cb_page_padded * multi_buffering_factor : in_cb_page_padded * in_cb_npages / constants::TILE_WIDTH,
+                                            in_cb_page_padded * in_cb_npages / tile_w,
                                             input_shape[3],
                                             nblocks,
                                             };

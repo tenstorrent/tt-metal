@@ -151,7 +151,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
 
     const std::uint32_t operand_id = get_operand_id(operandA); // Use operandA to get operand_id tile dims must be the same for both operands
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
+    const bool narrow_tile = (num_faces == 1) || get_operand_narrow_tile(operand_id);
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -186,7 +186,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
     //const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
+    const bool narrow_tile = (num_faces == 1) ||get_operand_narrow_tile(operandA_id);
 
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format[operandA_id], tile_index_a) << (narrow_tile ? 0 : 1);
