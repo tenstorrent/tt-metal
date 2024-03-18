@@ -22,6 +22,9 @@
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
+#include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/debug_ring_buffer_common.h"
+
 namespace tt {
 namespace watcher {
 
@@ -340,6 +343,34 @@ static void dump_pause_status(
     }
 }
 
+static void dump_ring_buffer(FILE *f, Device *device, CoreCoord core) {
+    uint64_t buf_addr = RING_BUFFER_ADDR;
+    if (tt::llrt::is_ethernet_core(core, device->id()))
+        buf_addr = eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR;
+    auto from_dev = tt::llrt::read_hex_vec_from_core(
+        device->id(),
+        core,
+        buf_addr,
+        RING_BUFFER_SIZE
+    );
+    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(from_dev[0]));
+    if (ring_buf_data->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX)
+        return;
+
+    // Latest written idx is one less than the index read out of L1.
+    string out = fmt::format(" debug_ring_buffer(latest_written_idx={})=[", ring_buf_data->current_ptr);
+    for (int idx = 0; idx < RING_BUFFER_ELEMENTS; idx++) {
+        out += fmt::format("0x{:08x},", ring_buf_data->data[idx]);
+        if (idx % 8 == 7) {
+            out += "\n\t ";
+        }
+    }
+    // Remove the last comma
+    out.pop_back();
+    out += "] ";
+    fprintf(f, "%s", out.c_str());
+}
+
 static void dump_run_state(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, uint32_t state) {
     char code = 'U';
     if (state == RUN_MSG_INIT) code = 'I';
@@ -517,6 +548,7 @@ static void dump_core(
         dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
         dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
         dump_pause_status(core, &mbox_data->pause_status, paused_cores);
+        dump_ring_buffer(f, device, core);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -705,6 +737,12 @@ void watcher_init(Device *device) {
         pause_data->flags[idx] = 0;
     }
 
+    // Initialize debug ring buffer to a known init val, we'll check against this to see if any
+    // data has been written.
+    std::vector<uint32_t> debug_ring_buf_init_val(RING_BUFFER_SIZE / sizeof(uint32_t), 0);
+    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(debug_ring_buf_init_val[0]));
+    ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -715,6 +753,7 @@ void watcher_init(Device *device) {
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(assert_status));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_pause_init_val, GET_MAILBOX_ADDRESS_HOST(pause_status));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_ring_buf_init_val, RING_BUFFER_ADDR);
         }
     }
 
@@ -744,6 +783,12 @@ void watcher_init(Device *device) {
             physical_core,
             debug_pause_init_val,
             GET_ETH_MAILBOX_ADDRESS_HOST(pause_status)
+        );
+        tt::llrt::write_hex_vec_to_core(
+            device->id(),
+            physical_core,
+            debug_ring_buf_init_val,
+            eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR
         );
     }
 

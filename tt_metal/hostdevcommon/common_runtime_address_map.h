@@ -49,6 +49,9 @@ constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_
 constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
 constexpr static std::uint32_t PRINT_BUFFER_IDLE_ER = PRINT_BUFFER_START; // Idle ERISC
 
+// Debug ring buffer, shared between all cores
+constexpr static std::uint32_t RING_BUFFER_ADDR = PRINT_BUFFER_START + PRINT_BUFFER_MAX_SIZE;
+constexpr static std::uint32_t RING_BUFFER_SIZE = 128;
 
 // Breakpoint regions
 constexpr static std::uint32_t NCRISC_BREAKPOINT = PRINT_BUFFER_START; //107 * 1024
@@ -85,7 +88,7 @@ constexpr static std::uint32_t TRISC2_BP_LNUM = TRISC2_BP_LNUM_MACRO;
 constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 
 // Dispatch message address
-constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = PRINT_BUFFER_START + PRINT_BUFFER_MAX_SIZE;
+constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = RING_BUFFER_ADDR + RING_BUFFER_SIZE;
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR_RESERVATION = 32;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = DISPATCH_MESSAGE_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION;
 
