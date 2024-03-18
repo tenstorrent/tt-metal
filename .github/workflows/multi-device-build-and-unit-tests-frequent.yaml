@@ -1,4 +1,4 @@
-name: "Frequent multi-nebula unit tests"
+name: "Frequent multi-nebula regression tests"
 
 on:
   workflow_dispatch:

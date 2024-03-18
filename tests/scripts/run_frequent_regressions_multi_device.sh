@@ -16,3 +16,13 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
+
+# Llama2_70b related cached files and tests (the test should parse env variables similar to these)
+export LLAMA_CKPT_DIR=/opt/cache/llama2_70b_cache/llama-data-repacked-2/llama-2-70b/
+export LLAMA_TOKENIZER_PATH=/opt/cache/llama2_70b_cache/llama-data/tokenizer.model
+export LLAMA_CACHE_PATH=/opt/cache/llama2_70b_cache/llama-data-cache/weights-cache-2
+
+pytest models/demos/llama2_70b/tests/test_llama_mlp.py::test_LlamaMLP_inference[BFLOAT16-DRAM-32-1-0.9999-True-8-False]
+pytest models/demos/llama2_70b/tests/test_llama_attention.py::test_LlamaAttention_inference[BFLOAT16-DRAM-32-1-0.9997-True-8-False]
+pytest models/demos/llama2_70b/tests/test_llama_decoder.py::test_LlamaDecoder_inference[BFLOAT16-DRAM-32-1-0.998-True-8-False]
+pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[BFLOAT16-DRAM-32-1-True-8-False-0.999-1]
