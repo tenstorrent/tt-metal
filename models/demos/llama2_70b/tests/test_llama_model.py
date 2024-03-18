@@ -4,7 +4,6 @@
 
 import pytest
 from loguru import logger
-from pathlib import Path
 import torch
 from torch import nn
 import tt_lib
@@ -15,6 +14,7 @@ from sklearn.metrics import top_k_accuracy_score
 import numpy as np
 
 from models.demos.llama2_70b.reference.llama.llama import Llama
+from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -22,13 +22,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_model import TtLlamaModel
-from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-
-import re
-
-pattern = r"PCC: ([\d.]+)"
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.demos.llama2_70b.tt.llama_common import (
+    get_llama_path,
+    extract_pcc_from_log,
+    MAX_SEQ_LEN,
+    BASE_URL,
+    UNIT_TEST_START_POS,
+    UNIT_TEST_GENERATION_LENGTH,
+)
 
 
 class PytorchLlamaModel(torch.nn.Module):
@@ -61,30 +63,17 @@ def run_test_LlamaModel_inference(
     seq_len,
     pcc,
     model_config,
-    optimized,
     n_layers,
     n_devices,
     emulated=False,
 ):
-    if emulated:
-        # ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
-        # tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
-        # cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
-        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-        cache_path = model_config["DEFAULT_CACHE_PATH"]
-        device = devices[0]
-        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-        cache_path = model_config["DEFAULT_CACHE_PATH"]
-
-    max_seq_len = 4096
+    # Prepare paths and devices
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    logger.info(f"Running num_layer: {n_layers}")
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=max_seq_len,
+        max_seq_len=MAX_SEQ_LEN,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=False,
@@ -92,47 +81,31 @@ def run_test_LlamaModel_inference(
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
-
     torch.manual_seed(0)
-    base_url = "layers"
     configuration = hugging_face_reference_model.params
-    n_heads = configuration.n_heads
-    n_kv_heads = configuration.n_kv_heads
-    hidden_dim = configuration.dim
-    head_dim = hidden_dim // n_heads
-
-    print(f"Running optimized: {optimized}")
-    print(f"Running emulated: {emulated}")
-    print(f"Running on {n_devices} devices")
-    print(f"Running with {n_layers} layers")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
-    # TT model -------------------------------------------------------------
-    if optimized:
-        tt_model = TtLlamaModel_optimized(
-            devices,
-            state_dict,
-            base_url,
-            n_layers,
-            model_config,
-            configuration,
-            batch,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
-    else:
-        tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
+    # TT model -------------------------------------------------------------------------
+    tt_model = TtLlamaModel_optimized(
+        devices,
+        state_dict,
+        BASE_URL,
+        n_layers,
+        model_config,
+        configuration,
+        batch,
+        emulated=emulated,
+        cache_path=cache_path,
+    )
 
     for device in devices:
         tt_lib.device.Synchronize(device)
 
-    generation_start_pos = 1
-    generation_length = 40
+    generation_start_pos = UNIT_TEST_START_POS
+    generation_length = UNIT_TEST_GENERATION_LENGTH
     all_tests_pass = True
-    all_pccs = []
-    all_top1 = []
-    all_top5 = []
+    all_pccs, all_top1, all_top5 = [], [], []
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -165,7 +138,6 @@ def run_test_LlamaModel_inference(
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
 
-        # breakpoint()
         tt_outs = [tt2torch_tensor(o) for o in tt_out]
         tt_out = torch.cat(tt_outs, dim=-1)
         tt_out = tt_out[..., : configuration.vocab_size]
@@ -176,9 +148,7 @@ def run_test_LlamaModel_inference(
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
-        extracted_pcc = re.search(pattern, output_pcc)
-        extracted_pcc = float(extracted_pcc.group(1))
-        all_pccs.append(extracted_pcc)
+        all_pccs.append(extract_pcc_from_log(output_pcc))
 
         kl_divs = scipy.stats.entropy(
             torch.nn.functional.softmax(pytorch_out, dim=-1), torch.nn.functional.softmax(tt_out, dim=-1), axis=-1
@@ -246,6 +216,7 @@ def run_test_LlamaModel_inference(
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "pcc, n_layers",
     (
@@ -262,12 +233,25 @@ def run_test_LlamaModel_inference(
     ),
 )
 @pytest.mark.parametrize(
-    "batch, seq_len, optimized, n_devices, emulated",
+    "n_devices, emulated",
     (
-        (32, 1, True, 4, False),
-        (32, 1, True, 8, False),
-        (32, 1, True, 4, True),
-        (32, 1, True, 8, True),
+        (8, False),
+        (8, True),
+    ),
+    ids=(
+        "8chip-T3000",
+        "8chip-emulated",
+    ),
+)
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    (
+        (32, 1),
+        # (1, 128),
+    ),
+    ids=(
+        "decode",
+        # "prefill"
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
@@ -276,11 +260,9 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     model_config_str,
-    optimized,
     n_layers,
     n_devices,
     all_devices,
-    # device,
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
@@ -297,7 +279,6 @@ def test_LlamaModel_inference(
         seq_len,
         pcc,
         model_config,
-        optimized,
         n_layers,
         n_devices,
         emulated,
