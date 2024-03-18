@@ -1059,6 +1059,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.activation_glu,
         "pytorch_op": pytorch_ops.activation_glu,
     },
+    "ttnn-activation_glu": {
+        "tt_lib_op": ttnn_ops.activation_glu,
+        "pytorch_op": pytorch_ops.activation_glu,
+    },
     "activation_reglu": {
         "tt_lib_op": tt_lib_ops.activation_reglu,
         "pytorch_op": pytorch_ops.activation_reglu,
