@@ -27,7 +27,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // Transpose and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -39,7 +38,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             }
         }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -83,7 +81,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
         /////////////////////
 
         // Transpose and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -95,7 +92,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             }
         }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -134,7 +130,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
         const uint num_row_tiles = (num_faces > 1) ? num_faces/2 : 1;
         for (uint row_tile = 0; row_tile < num_row_tiles; row_tile++) {
             // Transpose and pool
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -150,7 +145,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                 TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
                 if constexpr (type == PoolType::MAX) {
                     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 } else {
@@ -167,7 +161,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
         for (int tile = 0; tile < 3; tile++) {
             // Wait and pool
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 4);
             } else {
@@ -180,7 +173,6 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
             }
         }
         // Wait and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 4);
         } else {
