@@ -727,6 +727,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_mul_bw,
         "pytorch_op": pytorch_ops.mul_bw,
     },
+    "ttnn-eltwise-minimum": {
+        "tt_lib_op": ttnn_ops.eltwise_minimum,
+        "pytorch_op": pytorch_ops.minimum,
+    },
     "eltwise-min": {
         "tt_lib_op": tt_lib_ops.eltwise_min,
         "pytorch_op": pytorch_ops.min,
