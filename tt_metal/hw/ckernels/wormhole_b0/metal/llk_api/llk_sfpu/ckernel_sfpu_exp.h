@@ -7,6 +7,7 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "noc_nonblocking_api.h"
+#include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include <limits>
 
@@ -18,36 +19,6 @@ namespace ckernel
 {
 namespace sfpu
 {
-
-
-
-sfpi_inline vFloat sfpu_exp(vFloat val)
-{
-    // If exponent is > -1 extract it and replace with -1
-    vInt exp = exexp(val);
-    v_if (exp >= 0) {
-        val = setexp(val, 126);
-    }
-    v_endif;
-
-    // Run series in Horner form
-    vFloat tmp = val * vConst0p8373 + s2vFloat16b(0.863281);
-    val = val * tmp + vConst1;
-
-    v_if (exp >= 0) {
-        val = val * val;
-        for (int s_iter = 0; s_iter < 7; s_iter++) {
-            exp = exp - 1;
-            // Narrow predication on each loop
-            v_and(exp >= 0);
-            val = val * val;
-        }
-    }
-    v_endif;
-
-    return val;
-}
-
 
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN=false, int ITERATIONS=8>
 void calculate_exponential(uint exp_base_scale_factor = 0)
@@ -87,10 +58,10 @@ void calculate_exponential(uint exp_base_scale_factor = 0)
         else
         {
             // Force sign to 0 (make number positive)
-            vFloat result = sfpu_exp(setsgn(val, 0));
+            vFloat result = _sfpu_exp_(setsgn(val, 0));
 
             v_if (val < 0) {
-                result = sfpu_reciprocal(result);
+                result = _sfpu_reciprocal_(result);
             }
             v_endif;
 
@@ -136,7 +107,7 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
     else
     {
         // Force sign to 0 (make number positive)
-        out = sfpu_exp(setsgn(in, 0));
+        out = _sfpu_exp_(setsgn(in, 0));
 
         v_if (in < 0) {
             out = sfpu_reciprocal(out);
@@ -178,7 +149,7 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
     else
     {
         // Force sign to 0 (make number positive)
-        out = sfpu_exp(setsgn(val, 0));
+        out = _sfpu_exp_(setsgn(val, 0));
         v_if (val < 0) {
             out = sfpu_reciprocal(out);
         }
@@ -189,17 +160,7 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
 
 template <bool APPROXIMATION_MODE>
 void exp_init() {
-
-    if constexpr (APPROXIMATION_MODE) {
-        vConstFloatPrgm0 = 1.442695f; // ln2_recip
-        vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
-        vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
-    }
-    else{
-        vConstFloatPrgm0 = 1.442695f; // ln2_recip
-        vConstFloatPrgm1 = 2.0f;
-        vConstFloatPrgm2 = 0.863281f;
-    }
+    _init_exponential_<APPROXIMATION_MODE>();
 }
 
 } // namespace sfpu

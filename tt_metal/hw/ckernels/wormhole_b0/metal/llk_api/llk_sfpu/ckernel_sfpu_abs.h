@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include "ckernel_sfpu_abs.h"
 
 using namespace sfpi;
 
@@ -16,13 +17,7 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs()
 {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat v = dst_reg[0];
-        dst_reg[0] = sfpi::abs(v);
-        dst_reg++;
-    }
+    _calculate_abs_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
 }
 
 }  // namespace sfpu
