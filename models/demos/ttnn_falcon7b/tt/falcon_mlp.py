@@ -2,26 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from torch import nn
 import ttnn
 
 
-class TtFalconMLP(nn.Module):
-    def __init__(
-        self,
-        device,
-        model_config,
-        parameters,
-    ):
+class TtFalconMLP:
+    def __init__(self, device, model_config, parameters):
         super().__init__()
         self.device = device
         self.model_config = model_config
         self.dense_h_to_4h_weights = parameters.dense_h_to_4h.weight
         self.dense_4h_to_h_weights = parameters.dense_4h_to_h.weight
 
-    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
-        # TODO: l1-packing
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         ff1_linear = ttnn.linear(
             x,
             self.dense_h_to_4h_weights,
@@ -36,7 +28,13 @@ class TtFalconMLP(nn.Module):
             memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             use_1d_systolic_array=True,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                packer_l1_acc=True,
+            ),
         )
         ttnn.deallocate(ff1_linear)
 
         return ff2_linear
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
