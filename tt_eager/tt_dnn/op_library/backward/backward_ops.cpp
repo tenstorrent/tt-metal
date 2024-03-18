@@ -1964,6 +1964,41 @@ std::vector<Tensor> complex_mul_bw(const Tensor& grad, const Tensor& input, cons
     return operation::decorate_as_composite(__func__, _complex_mul_bw)(grad, input, other, output_mem_config);
 }
 
+// complex add
+// self: grad, other: grad * alpha
+std::vector<Tensor> _complex_add_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor grad_b = mul_unary(grad, alpha, output_mem_config );
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_add_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_add_bw)(grad, input, other, alpha, output_mem_config);
+}
+
+// complex sub
+// self: grad, other: -grad * alpha
+std::vector<Tensor> _complex_sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    UnaryWithParam op1 {UnaryOpType::NEG};
+    UnaryWithParam op2 {UnaryOpType::MUL_UNARY_SFPU, alpha};
+    Tensor grad_b = unary_chain( grad, {op1, op2}, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_sub_bw)(grad, input, other, alpha, output_mem_config);
+}
 #undef CHECK_FOR_COMPLEX
 
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
