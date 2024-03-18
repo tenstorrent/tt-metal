@@ -136,7 +136,7 @@ void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_facto
 template <bool APPROXIMATION_MODE>
 inline void _init_exponential_()
 {
-    if (APPROXIMATION_MODE) {
+    if constexpr (APPROXIMATION_MODE) {
         vConstFloatPrgm0 = 1.442695f; // ln2_recip
         vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
         vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
