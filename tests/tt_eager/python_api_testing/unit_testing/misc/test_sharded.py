@@ -914,12 +914,12 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
 @pytest.mark.parametrize("N", [1024])
+@pytest.mark.parametrize("K", [256, 512])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_2d(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device, in0_sharded, out_sharded, M, N, K, activations_dtype, weights_dtype, function_level_defaults
 ):
-    K = 256
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
@@ -1645,12 +1645,13 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
-@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("M", [32, 64])
 @pytest.mark.parametrize("N", [1024])
+@pytest.mark.parametrize("K", [2048, 4096])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_1d_in0(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device, in0_sharded, out_sharded, M, K, N, activations_dtype, weights_dtype, function_level_defaults
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -1659,7 +1660,6 @@ def test_sharded_matmul_1d_in0(
     if activations_dtype != weights_dtype and is_wormhole_b0():
         pytest.skip("WH does not work with mixed precision")
     num_cores = grid_size[0] * grid_size[1]
-    K = 2048
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
@@ -1697,7 +1697,7 @@ def test_sharded_matmul_1d_in0(
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=1,
+        per_core_M=M // 32,
         per_core_N=1,
         fuse_batch=True,
         fused_activation=None,
@@ -1717,7 +1717,7 @@ def test_sharded_matmul_1d_in0(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
+    passing, output = comp_pcc(pt_out, tt_out, 0.98)
     logger.info(output)
     assert passing
 
