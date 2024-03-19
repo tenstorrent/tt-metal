@@ -2728,4 +2728,99 @@ def empty(
     t1 = ttnn.empty(x.shape, device, memory_config=memory_config_to_ttnn(output_mem_config))
 
     result = ttnn_tensor_to_torch(t1)
-    return torch.ones(result.shape)
+    return ttnn_tensor_to_torch(t1)
+
+
+def attention_softmax_nomask_2(
+    x,
+    y,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    y[y <= 0.50] = 0
+    y[y > 0.50] = 1
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    if scalar < 0:
+        scalar = -scalar
+
+    t2 = ttnn.transformer.attention_softmax_(t0, head_size=scalar, attention_mask=None)
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def attention_softmax_2(
+    x,
+    y,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    y[y <= 0.50] = 0
+    y[y > 0.50] = 1
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    if scalar < 0:
+        scalar = -scalar
+
+    t2 = ttnn.transformer.attention_softmax_(t0, head_size=scalar, attention_mask=t1)
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def zeros(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    # t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.zeros(
+        x.shape,
+        device=device,
+        dtype=dtype_to_ttnn(dtype[0]),
+        layout=layout_to_ttnn(layout[0]),
+        memory_config=memory_config_to_ttnn(output_mem_config),
+    )
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def zeros_like(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.zeros_like(
+        t0,
+        memory_config=memory_config_to_ttnn(output_mem_config),
+    )
+
+    return ttnn_tensor_to_torch(t1)
