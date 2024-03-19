@@ -258,6 +258,8 @@ void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout , "Input and output memory layout must match");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED || input_tensor_a.is_sharded(), "Interleaved and sharded supported");
 }
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -284,6 +286,9 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
+        case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
+            return eltwise_unary_multi_core_height_or_block_sharded(input_tensor, output_tensor, this->op_chain);
+            break;
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain);
             break;
@@ -297,7 +302,9 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
 UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    if (num_tiles > 1) {
+    if(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED)
+        return UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE;
+    else if (num_tiles > 1) {
         return UnaryOpParallelizationStrategy::MULTI_CORE;
     }
     else{
