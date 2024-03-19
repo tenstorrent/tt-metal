@@ -7,13 +7,14 @@ import math
 from typing import Union, Tuple
 from loguru import logger
 import torch
-import torch.nn as nn
+
+# import torch.nn as nn
 
 # import tt_lib
 import tt_lib as ttl
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 from tt_lib.utils import (
     _nearest_y,
@@ -102,14 +103,12 @@ def run_elt_silu_relu(
         input_2d_height_padded = _nearest_y(input_2d_height, shard_grid[0] * 32)
         shard_height = math.ceil(input_2d_height_padded / shard_grid[0])
         shard_width = math.ceil(input_2d_width / shard_grid[1])
-        # shard_orientation = ttnn.ShardOrientation.COLUMN_MAJOR
         shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
     elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
         input_2d_height_padded = _nearest_y(input_2d_height, ncores * 32)
         shard_height = math.ceil(input_2d_height_padded / ncores)
         shard_width = input_2d_width
-        # shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
         shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
 
@@ -129,11 +128,11 @@ def run_elt_silu_relu(
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
     ##op computation
     if op == "silu":
-        torch_silu = nn.SiLU()
+        torch_silu = torch.nn.SiLU()
         torch_result = torch_silu(input)
         output_tensor = ttnn.silu(input_tensor, memory_config=in_sharded_mem_config)
     elif op == "relu":
-        torch_relu = nn.ReLU()
+        torch_relu = torch.nn.ReLU()
         torch_result = torch_relu(input)
         output_tensor = ttnn.relu(input_tensor, memory_config=in_sharded_mem_config)
 

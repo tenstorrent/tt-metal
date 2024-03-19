@@ -113,7 +113,7 @@ struct UnaryWithParam {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->param)); }
 };
 
-enum class UnaryOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
+enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE=2 };
 
 struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
@@ -136,6 +136,8 @@ struct EltwiseUnary {
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor& input_tensor);
 
+operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
 operation::ProgramWithCallbacks eltwise_unary_single_core(
