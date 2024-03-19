@@ -153,8 +153,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
             break;
         case DebugErisc:
             risc = "erisc";
-            // TODO: Once #5917 is fixed, remove this hack
-            kernel = "blank";
+            debug_status = "*,X,X,X,X";
             break;
         default:
             break;
