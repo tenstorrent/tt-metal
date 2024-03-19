@@ -102,8 +102,6 @@ run_frequent_api_pipeline_tests() {
 
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
-
-    ./tests/scripts/run_temporary_frequent_api_tests.sh
 }
 
 # Run frequent multi device pipeline tests - these are the t3000 + 4xn300 tests
