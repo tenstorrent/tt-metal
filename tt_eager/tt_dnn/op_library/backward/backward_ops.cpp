@@ -727,7 +727,7 @@ std::vector<Tensor> _ldexp_bw(const Tensor& grad, const Tensor& input, const Ten
     std::vector<Tensor> grad_tensor;
     Tensor tpow_o = mul(grad, rpow(other, 2.0, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(tpow_o);
-    Tensor result = mul(grad, mul(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = mul(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -980,7 +980,7 @@ std::vector<Tensor> atanh_bw(const Tensor& grad, const Tensor& input, const Memo
 // result: grad * (-self * self + 1).rsqrt()
 std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(grad, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(input, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
