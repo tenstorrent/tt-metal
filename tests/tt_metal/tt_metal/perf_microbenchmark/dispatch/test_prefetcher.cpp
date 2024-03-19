@@ -760,13 +760,13 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_buf_base = L1_UNRESERVED_BASE;
+        uint32_t l1_buf_base = L1_UNRESERVED_BASE + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE);
         TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
         uint32_t dispatch_buffer_base = l1_buf_base;
         uint32_t dev_hugepage_base = 0;
         uint32_t prefetch_q_base = l1_buf_base;
-        uint32_t prefetch_q_rd_ptr_addr = l1_buf_base - 4; // XXXXX hacks and hacks and hacks
+        uint32_t prefetch_q_rd_ptr_addr = L1_UNRESERVED_BASE;
         uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(uint16_t);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
