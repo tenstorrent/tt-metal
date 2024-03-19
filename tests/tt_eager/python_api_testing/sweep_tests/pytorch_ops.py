@@ -1890,3 +1890,8 @@ def rotary_embedding(x, *args, **kwargs):
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
 
     return pt_out[0]
+
+
+def ttnn_empty(x, *args, **kwargs):
+    result = torch.empty(x.shape)
+    return torch.ones(result.shape)
