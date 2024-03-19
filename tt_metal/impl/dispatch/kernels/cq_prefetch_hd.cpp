@@ -25,6 +25,7 @@ constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(9);
 constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(10);
 constexpr uint32_t scratch_db_base = get_compile_time_arg_val(11);
 constexpr uint32_t scratch_db_size = get_compile_time_arg_val(12);
+constexpr uint32_t dispatch_sync_sem = get_compile_time_arg_val(13);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -388,6 +389,19 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
+uint32_t process_stall(uint32_t cmd_ptr) {
+
+    static uint32_t count = 0;
+
+    count++;
+
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_sync_sem);
+    while (*sem_addr != count);
+
+    return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+}
+
 void kernel_main() {
 
     uint32_t cmd_ptr = cmddat_q_base;
@@ -423,6 +437,7 @@ void kernel_main() {
 
         case CQ_PREFETCH_CMD_STALL:
             DPRINT << "stall" << ENDL();
+            cmd_ptr = process_stall(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_DEBUG:

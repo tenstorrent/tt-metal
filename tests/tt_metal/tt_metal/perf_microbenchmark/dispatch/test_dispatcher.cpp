@@ -252,15 +252,18 @@ int main(int argc, char **argv) {
         }
 
         constexpr uint32_t dispatch_cb_sem = 0;
+        constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
 
         std::vector<uint32_t> dispatch_compile_args =
             {l1_buf_base,
              log_dispatch_buffer_page_size_g,
              dispatch_buffer_size_g / dispatch_buffer_page_size_g,
              dispatch_cb_sem,
-             dispatch_buffer_size_blocks_g
+             dispatch_buffer_size_blocks_g,
+             prefetch_sync_sem,
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,
@@ -270,6 +273,7 @@ int main(int argc, char **argv) {
              l1_buf_base,
              (uint32_t)(cmds.size() * sizeof(uint32_t)) / dispatch_buffer_page_size_g,
              prefetcher_page_batch_size_g,
+             prefetch_sync_sem,
             };
 
         auto sp1 = tt_metal::CreateKernel(

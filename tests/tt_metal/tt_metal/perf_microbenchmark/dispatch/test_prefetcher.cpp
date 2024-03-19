@@ -816,7 +816,10 @@ int main(int argc, char **argv) {
         };
 
         constexpr uint32_t dispatch_cb_sem = 0;
+        constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+        tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -825,6 +828,7 @@ int main(int argc, char **argv) {
              DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
              dispatch_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
+             prefetch_sync_sem,
         };
 
         std::vector<uint32_t> prefetch_compile_args = {
@@ -840,7 +844,8 @@ int main(int argc, char **argv) {
              cmddat_q_base,
              cmddat_q_size_g,
              scratch_db_base,
-             scratch_db_size_g
+             scratch_db_size_g,
+             prefetch_sync_sem,
         };
 
         auto sp1 = tt_metal::CreateKernel(
