@@ -7,12 +7,12 @@ from loguru import logger
 import torch
 import pytest
 import math
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
-@skip_for_wormhole_b0()
+# @skip_for_wormhole_b0()
 ## max-pool params:
 ## kernel_h, kernel_w
 ## stride_h, stride_w
@@ -112,6 +112,9 @@ def test_run_max_pool(
 
     if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
         pytest.skip("This case runs out of memory on Grayskull")
+
+    if in_n >= 16 and in_c >= 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0:
+        pytest.skip("This case runs out of memory on Wormhole b0")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
