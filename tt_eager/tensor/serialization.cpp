@@ -64,7 +64,7 @@ OwnedStorage load_owned_storage(ifstream& input_stream) {
 }
 
 OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
-    if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B) {
+    if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
         return load_owned_storage<T>(input_stream);
     } else if (data_type == DataType::UINT16) {
