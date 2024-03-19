@@ -138,6 +138,32 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
 }
 
+Tensor Tensor::to(DeviceMesh *device_mesh, const MemoryConfig &mem_config) const {
+    ZoneScoped;
+
+    if (storage_type() == StorageType::MULTI_DEVICE_HOST) {
+        auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(this->get_storage());
+        std::vector<DeviceBuffer> device_buffers;
+
+        for (int i = 0; i < host_storage.buffers.size(); ++i) {
+            Device& target_device = device_mesh->get_device(i);
+            auto shard = Tensor{OwnedStorage{host_storage.buffers[i]},  host_storage.shapes[i], this->get_dtype(), this->get_layout()};
+            shard = shard.to(&target_device, mem_config);
+            device_buffers.push_back(std::get<DeviceStorage>(shard.get_storage()).buffer);
+        }
+        return Tensor(
+            MultiDeviceStorage{std::move(device_buffers), host_storage.shapes},
+            this->get_shape(),
+            this->get_dtype(),
+            this->get_layout());
+    } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(this->get_storage())) {
+        return *this; // already on device
+    }
+
+    TT_THROW("Tensor::to(...) requires the tensor the be multi-device tensor.");
+    return *this;
+}
+
 Tensor Tensor::cpu(bool blocking) const {
     ZoneScoped;
     if (storage_type() == StorageType::OWNED) {

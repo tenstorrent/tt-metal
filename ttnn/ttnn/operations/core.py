@@ -448,10 +448,7 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     """
 
     def impl(tensor, device, *, memory_config):
-        if isinstance(device, ttnn.DeviceMesh):
-            return ttnn.to_device_mesh(tensor, device, memory_config=memory_config)
-        else:
-            return tensor.to(device, memory_config)
+        return tensor.to(device, memory_config)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
         tensor, device, memory_config=memory_config
@@ -490,8 +487,6 @@ def from_device(tensor):
     """
 
     def impl(tensor):
-        if ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.MULTI_DEVICE):
-            return ttnn.from_device_mesh(tensor)
         return tensor.cpu()
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)

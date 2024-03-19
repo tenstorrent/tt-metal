@@ -65,6 +65,10 @@ struct Tensor {
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(
+        DeviceMesh *device_mesh,
+        const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+
+    Tensor to(
         CommandQueue &queue,
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
     Tensor to(Layout target_layout) const;

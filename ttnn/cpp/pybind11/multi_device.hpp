@@ -27,8 +27,6 @@ void py_module(py::module& module) {
         "open_device_mesh", &open_device_mesh, py::kw_only(), py::arg("device_grid"), py::arg("device_ids"));
 
     module.def("close_device_mesh", &close_device_mesh, py::arg("device_mesh"), py::kw_only());
-    module.def("to_device_mesh", &to_device_mesh, py::arg("tensor"), py::arg("device_mesh"), py::arg("memory_config"), py::kw_only());
-    module.def("from_device_mesh", &from_device_mesh, py::arg("tensor"), py::kw_only());
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
 }

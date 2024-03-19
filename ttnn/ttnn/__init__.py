@@ -33,7 +33,7 @@ if TTNN_ENABLE_FAST_RUNTIME_MODE:
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
-from ttnn._ttnn.multi_device import to_device_mesh, from_device_mesh, get_device_tensors, aggregate_as_tensor
+from ttnn._ttnn.multi_device import get_device_tensors, aggregate_as_tensor
 
 from ttnn.types import (
     TILE_SIZE,

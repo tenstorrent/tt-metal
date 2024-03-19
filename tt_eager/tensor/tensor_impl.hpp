@@ -339,10 +339,7 @@ inline DeviceBuffer to_device_buffer(
 //                                         .to()
 // ======================================================================================
 template <typename T>
-inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
-    if (tensor.storage_type() != StorageType::DEVICE) {
-        return tensor;
-    }
+inline Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
@@ -358,6 +355,26 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
     }
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
     return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+}
+
+
+template <typename T>
+inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
+    if (tensor.storage_type() == StorageType::DEVICE) {
+        return to_host_helper<T>(tensor, blocking);
+    } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+        auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
+        std::vector<OwnedBuffer> host_buffers;
+
+        for (int i = 0; i < device_storage.buffers.size(); ++i) {
+            auto shard = Tensor{DeviceStorage{device_storage.buffers[i]}, device_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()};
+            shard = to_host_helper<T>(shard, blocking);
+            host_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
+        }
+        return Tensor(MultiDeviceHostStorage{std::move(host_buffers), device_storage.shapes}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout());
+    } else {
+        return tensor;
+    }
 }
 
 template <typename T>
