@@ -16,6 +16,21 @@ namespace tt {
 
 namespace tt_metal {
 
+// Utility function
+uint32_t calculate_starting_idx_h (const Tensor& tensor, uint32_t num_slices, uint32_t slice_index) {
+    if (num_slices <= 1) {
+        return 0;
+    }
+
+    uint32_t num_tiles_height = tensor.volume() / tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_width = tensor.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
+
+    uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
+    uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
+    return starting_tile_in_slice;
+}
+
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
     tt_metal::Program program{};
 
@@ -134,18 +149,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             tt_metal::ComputeConfig{});
     }
 
-    uint32_t curr_idx_h = 0, curr_idx_w = 0;
-    if (num_slices > 1) {
-        // For I->S partial
-        uint32_t num_tiles_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
-        uint32_t num_tiles_width = input.get_legacy_shape()[-1] / TILE_WIDTH;
-        uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
-
-        uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
-        uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
-
-        curr_idx_h = starting_tile_in_slice;
-    }
+    uint32_t curr_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
@@ -389,18 +394,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
-    uint32_t curr_idx_h = 0, curr_idx_w = 0;
-    if (num_slices > 1) {
-        // For S->I partial
-        uint32_t num_tiles_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
-        uint32_t num_tiles_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
-        uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
-
-        uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
-        uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
-
-        curr_idx_h = starting_tile_in_slice;
-    }
+    uint32_t curr_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
