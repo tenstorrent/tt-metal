@@ -30,7 +30,6 @@ void __attribute__((section("erisc_l1_code"))) kernel_launch() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-   // erisc_info->unused_arg2 += 213;
     kernel_main();
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
     mailboxes->launch.run = RUN_MSG_DONE;
