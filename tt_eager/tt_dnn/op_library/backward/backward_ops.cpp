@@ -835,9 +835,10 @@ std::vector<Tensor> concat_bw(const Tensor& grad, const Tensor& input, const Ten
 }
 
 
+
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul_unary(grad, 1.0/6);
+    Tensor grad_a = where(logical_or(lte_unary(input, -3, output_mem_config), gte_unary(input, 3, output_mem_config), std::nullopt, output_mem_config), zeros_like(input, output_mem_config), mul_unary(grad, 1.0/6), output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
