@@ -69,7 +69,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
-    uint32_t in2_block_tiles = per_core_M * in0_block_w;
+    uint32_t in2_block_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    uint32_t in0_shard_height_in_tiles = 0;
+    if (in0_is_sharded) {
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+    }
+
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
@@ -196,6 +204,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  (num_x),
             (std::uint32_t)  (num_y),
             (std::uint32_t)  (transpose_mcast),
+            (std::uint32_t)  (in0_shard_width_in_tiles),
+            (std::uint32_t)  (in0_shard_height_in_tiles),
+            (std::uint32_t)  (in0_block_w),
             // batch args
             (std::uint32_t)  B // batch
         };
@@ -433,20 +444,24 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // Create circular buffers
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-		.set_page_size(src0_cb_index, in0_single_tile_size);
+        .set_page_size(src0_cb_index, in0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src0_cb_index, in0_single_tile_size, in0_CB_size / in0_single_tile_size, in0_CB_size);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-		.set_page_size(src1_cb_index, in1_single_tile_size);
+        .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src1_cb_index, in1_single_tile_size, in1_CB_size / in1_single_tile_size, in1_CB_size);
 
     uint32_t src2_cb_index = 2;
     CBHandle cb_src2 = 0;
+
     if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+        log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src2_cb_index, in0_single_tile_size, in2_CB_size / in0_single_tile_size, in2_CB_size);
     }
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -469,6 +484,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             .set_page_size(interm0_cb_index, interm0_single_tile_size);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", interm0_cb_index, interm0_single_tile_size, interm0_CB_size / interm0_single_tile_size, interm0_CB_size);
     } else {
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
@@ -484,6 +500,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", output_cb_index, output_single_tile_size, out_CB_size / output_single_tile_size, out_CB_size);
 
     // CB for bias
     if (bias_buffer != nullptr) {
@@ -491,6 +508,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         tt_metal::CircularBufferConfig cb_src3_config = tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
 		    .set_page_size(src3_cb_index, bias_single_tile_size);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
+        log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src3_cb_index, bias_single_tile_size, in3_CB_size / bias_single_tile_size, in3_CB_size);
     }
 
     // Parameters for last row, col, or block
