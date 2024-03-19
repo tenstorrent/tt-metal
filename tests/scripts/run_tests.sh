@@ -165,13 +165,7 @@ run_stress_post_commit_pipeline_tests() {
 
     # Run for 23.5h to allow next run to kick off
     RUNTIME_MAX=84600
-
-    if [[ $tt_arch == "grayskull" ]]; then
-        suite_duration=2700
-    elif [[ $tt_arch == "wormhole_b0" ]]; then
-        suite_duration=900
-    fi
-
+    suite_duration=4500
     max_duration=$((RUNTIME_MAX-suite_duration))
     iter=1
     while [ $SECONDS -lt $max_duration ]; do
