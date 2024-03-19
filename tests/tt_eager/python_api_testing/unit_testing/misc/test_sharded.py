@@ -286,6 +286,7 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
     grid_size = device.compute_with_storage_grid_size()
     if num_cores > (grid_size.x * grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {grid_size}")
+    grid_size = (8, 8)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     height_shard_spec = [2 * 32, 32]  # [2, 1] in tiles
@@ -441,10 +442,10 @@ def test_sharded_partial_op(
     output_dtype,
     function_level_defaults,
 ):
-    grid_size = device.compute_with_storage_grid_size()
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
     in0_shape = [1, 1, H, 64]
     W = in0_shape[-1]
 
@@ -513,10 +514,10 @@ def test_block_sharded_partial_op(
     output_dtype,
     function_level_defaults,
 ):
-    grid_size = device.compute_with_storage_grid_size()
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
     in0_shape = [1, 1, H, W]
     W = in0_shape[-1]
 
@@ -594,10 +595,10 @@ def test_partial_sharded_op_binary(
     output_dtype,
     function_level_defaults,
 ):
-    grid_size = device.compute_with_storage_grid_size()
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
     in0_shape = [1, 1, H, 96]
     in1_shape = in0_shape
     W = in0_shape[-1]
@@ -672,15 +673,9 @@ def test_partial_sharded_op_binary(
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
-@pytest.mark.parametrize("H, num_cores", [[128, 64]])
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
-    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
-)
+@pytest.mark.parametrize("H, num_cores", [[25088, 98]])
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_binary(
     device,
     in0_sharded,
@@ -724,7 +719,7 @@ def test_sharded_binary(
         in0_t = ttl.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
-            [H // 2, W],
+            [H // num_cores, W],
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
@@ -733,7 +728,7 @@ def test_sharded_binary(
         in1_t = ttl.tensor.interleaved_to_sharded(
             in1_t,
             grid_size,
-            [H // 2, W],
+            [H // num_cores, W],
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )

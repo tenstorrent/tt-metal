@@ -228,6 +228,11 @@ def test_falcon7b_attnention_sliced(
     num_cores,
     function_level_defaults,
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+
     query_layer_shape = [1, 71, seq_len, 64]
     key_layer_transposed_shape = [1, 1, 64, seq_len]
     attention_mask_shape = [1, 71, seq_len, seq_len]
@@ -289,7 +294,7 @@ def test_falcon7b_attnention_sliced(
         for i in range(num_slices):
             slice = ttl.tensor.interleaved_to_sharded_partial(
                 reference_query_layer,
-                device.compute_with_storage_grid_size(),
+                grid_size,
                 mm_activations_height_shard_spec,
                 num_slices,  # num_slices
                 i,  # slice_index
@@ -298,7 +303,7 @@ def test_falcon7b_attnention_sliced(
             )
 
             program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                compute_with_storage_grid_size=grid_size,
                 in0_block_w=2,
                 per_core_M=tiles_per_shard,
                 per_core_N=32,
@@ -323,7 +328,7 @@ def test_falcon7b_attnention_sliced(
 
             attn_mask_slice = ttl.tensor.interleaved_to_sharded_partial(
                 attention_mask,
-                device.compute_with_storage_grid_size(),
+                grid_size,
                 mm_output_height_shard_spec,
                 num_slices,
                 i,
@@ -331,14 +336,19 @@ def test_falcon7b_attnention_sliced(
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
 
-            mm_slice = ttl.tensor.add_without_autoformat(
-                mm_slice, attn_mask_slice, output_mem_config=height_sharded_memory_config, in_place=True
+            mm_slice = ttl.operations.primary.add(
+                mm_slice,
+                attn_mask_slice,
+                fused_activations=None,
+                output_mem_config=height_sharded_memory_config,
+                output_dtype=ttl.tensor.DataType.BFLOAT16,
+                in_place=True,
             )
 
             attn_mask_slice.deallocate()
 
             softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                compute_with_storage_grid_size=grid_size,
                 subblock_w=1,
                 block_h=mm_output_height_shard_spec[0] // 32,
                 block_w=mm_output_height_shard_spec[1] // 32,
@@ -370,7 +380,5 @@ def test_falcon7b_attnention_sliced(
         attn_weights_torch = tt2torch_tensor(attn_weights)
         passing, output = comp_pcc(mm_out_torch, attn_weights_torch)
 
-    if not passing:
-        print(output)
-
+    print(output)
     assert passing

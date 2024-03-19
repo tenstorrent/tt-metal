@@ -16,7 +16,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& input, Tensor& output) {
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.get_legacy_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
+        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -135,6 +135,17 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
     }
 
     uint32_t curr_idx_h = 0, curr_idx_w = 0;
+    if (num_slices > 1) {
+        // For I->S partial
+        uint32_t num_tiles_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
+        uint32_t num_tiles_width = input.get_legacy_shape()[-1] / TILE_WIDTH;
+        uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
+
+        uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
+        uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
+
+        curr_idx_h = starting_tile_in_slice;
+    }
 
     const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
@@ -256,7 +267,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& input, Tensor& output) {
+operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -282,7 +293,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+        uint32_t num_units_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -379,6 +390,18 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
     uint32_t curr_idx_h = 0, curr_idx_w = 0;
+    if (num_slices > 1) {
+        // For S->I partial
+        uint32_t num_tiles_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+        uint32_t num_tiles_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
+        uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
+
+        uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
+        uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
+
+        curr_idx_h = starting_tile_in_slice;
+    }
+
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
         if (input.get_layout() == Layout::TILE) {
@@ -467,7 +490,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
             }
         }
     }
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -475,7 +498,14 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
                                                    const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        Buffer* dst_buffer = nullptr;
+        if (num_slices > 1) {
+            // If we have num_slices > 1, it means that our op is S->I partial.
+            // And currently we store output tensors there as input[1]
+            dst_buffer = input_tensors.at(1).buffer();
+        } else {
+            dst_buffer = output_tensors.at(0).buffer();
+        }
 
         auto shard_spec = input_tensors.at(0).shard_spec().value();
         auto all_cores = shard_spec.grid;

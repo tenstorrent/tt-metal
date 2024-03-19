@@ -19,8 +19,8 @@ enum class ShardedOpParallelizationStrategy { MULTI_CORE = 0 };
 
 enum class ShardedOpType { InterleavedToSharded, ShardedToInterleaved };
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, Tensor &output);
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
+operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor &a, Tensor &output);
 
 struct Sharded {
