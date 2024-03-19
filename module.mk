@@ -79,8 +79,8 @@ BASE_INCLUDES+=-I./ -I./tt_metal/ -I$(UMD_HOME)/
 
 #WARNINGS ?= -Wall -Wextra
 WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
-CC ?= gcc
-CXX ?= g++
+CC=clang-17
+CXX=clang++-17
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
 
