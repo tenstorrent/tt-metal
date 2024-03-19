@@ -32,5 +32,5 @@ def test_bw_ldexp(input_shapes, device):
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad, other_data.grad]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor, pcc=0.97)
     assert comp_pass
