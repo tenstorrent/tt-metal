@@ -339,7 +339,7 @@ class TtLlamaDecoder_galaxy:
         residual = xs_replicated  #  ## FOR BRINGUP!!! residual = xs
         for i in range(self.num_devices):
             output.append(
-                tt_lib.tensor.add_without_autoformat(
+                tt_lib.operations.primary.add(
                     residual[i],
                     attn_outs[i],
                     output_mem_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
@@ -366,7 +366,7 @@ class TtLlamaDecoder_galaxy:
 
         ### residual in place add
         for i in range(self.num_devices):
-            output[i] = tt_lib.tensor.add_without_autoformat(
+            output[i] = tt_lib.operations.primary.add(
                 output[i],
                 ffn_out[i],
                 output_mem_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],

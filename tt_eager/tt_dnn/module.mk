@@ -27,6 +27,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/unpad/unpad_op.cpp \
 	tt_eager/tt_dnn/op_library/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/indexed_fill/indexed_fill_op.cpp \
+	tt_eager/tt_dnn/op_library/non_zero_indices/single_core/non_zero_indices_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.cpp \
 	tt_eager/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
 	tt_eager/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \
 	tt_eager/tt_dnn/op_library/pool/average_pool.cpp \
@@ -162,6 +164,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/concat/multi_core/concat_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/single_core/concat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/concat_op.cpp \
+	tt_eager/tt_dnn/op_library/repeat/multi_core/repeat_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/repeat/single_core/repeat_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/repeat/repeat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \

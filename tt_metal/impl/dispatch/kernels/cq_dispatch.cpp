@@ -201,6 +201,77 @@ void process_write() {
     }
 }
 
+template<bool is_dram>
+FORCE_INLINE
+void process_write_paged() {
+    volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
+
+    uint32_t page_id = cmd->write_paged.start_page;
+    uint32_t base_addr = cmd->write_paged.base_addr;
+    uint32_t page_size = cmd->write_paged.page_size;
+    uint32_t pages = cmd->write_paged.pages;
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    uint32_t write_length = pages * page_size;
+    InterleavedAddrGen<is_dram> addr_gen;
+    addr_gen.bank_base_address = base_addr;
+    addr_gen.page_size = page_size;
+    uint64_t dst_addr_offset = 0; // Offset into page.
+
+    DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size << " dispatch_cb_page_size: " << dispatch_cb_page_size;
+    DPRINT << " start_page: " << page_id << " base_addr: " << HEX() << base_addr << DEC() << ENDL();
+
+    while (write_length != 0) {
+
+        uint32_t xfer_size = page_size > dispatch_cb_page_size ? dispatch_cb_page_size : page_size;
+        uint64_t dst = addr_gen.get_noc_addr(page_id, dst_addr_offset); // XXXX replace this w/ walking the banks to save mul on GS
+
+        // Get a Dispatch page if needed
+        if (data_ptr + xfer_size > cb_fence) {
+            // Check for block completion
+            if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                // Check for dispatch_cb wrap
+                if (rd_block_idx == dispatch_cb_blocks - 1) {
+                    uint32_t orphan_size = dispatch_cb_end - data_ptr;
+                    if (orphan_size != 0) {
+                        noc_async_write(data_ptr, dst, orphan_size);
+                        block_noc_writes_to_clear[rd_block_idx]++;
+                        write_length -= orphan_size;
+                        xfer_size -= orphan_size;
+                        dst_addr_offset += orphan_size;
+                    }
+                    cb_fence = dispatch_cb_base;
+                    data_ptr = dispatch_cb_base;
+                    dst = addr_gen.get_noc_addr(page_id, dst_addr_offset);
+                }
+                move_rd_to_next_block();
+            }
+
+            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+            uint32_t n_pages = dispatch_cb_acquire_pages();
+            cb_fence += n_pages * dispatch_cb_page_size;
+
+            // Release pages for prefetcher
+            // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
+            dispatch_cb_block_release_pages();
+        }
+
+        noc_async_write(data_ptr, dst, xfer_size);
+        block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
+
+        // If paged write is not completed for a page (dispatch_cb_page_size < page_size) then add offset, otherwise incr page_id.
+        if (dst_addr_offset + xfer_size < page_size) {
+            dst_addr_offset += xfer_size;
+        } else {
+            page_id++;
+            dst_addr_offset = 0;
+        }
+
+        write_length -= xfer_size;
+        data_ptr += xfer_size;
+    }
+
+    cmd_ptr = data_ptr;
+}
 
 // Packed write command
 // Layout looks like:
@@ -373,7 +444,12 @@ void kernel_main() {
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
-            DPRINT << "cmd_write_paged" << ENDL();
+            DPRINT << "cmd_write_paged is_dram: " << (uint32_t) cmd->write_paged.is_dram << ENDL();
+            if (cmd->write_paged.is_dram) {
+                process_write_paged<true>();
+            } else {
+                process_write_paged<false>();
+            }
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED:

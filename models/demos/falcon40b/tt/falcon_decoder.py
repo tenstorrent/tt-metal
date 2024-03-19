@@ -232,7 +232,7 @@ class TtFalconDecoderLayer:
         # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
-                tt_lib.tensor.add_without_autoformat(
+                tt_lib.operations.primary.add(
                     residual[i],
                     attention_output[i],
                     output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
@@ -248,7 +248,7 @@ class TtFalconDecoderLayer:
         # dropout_add
         # For inference, this is just add
         for i in range(len(output)):
-            output[i] = tt_lib.tensor.add_without_autoformat(
+            output[i] = tt_lib.operations.primary.add(
                 output[i],
                 mlp_output[i],
                 output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],

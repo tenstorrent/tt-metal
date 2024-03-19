@@ -46,7 +46,7 @@ Tensor moreh_linear_(
         const auto& bias_tensor = bias->get();
         const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
         BcastOpDim bcast_dim = is_shape_scalar(bias_shape) ? BcastOpDim::HW : BcastOpDim::H;
-        return bcast(mm_output, bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
+        return tt::tt_metal::bcast(mm_output, bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
     }
     return mm_output;
 }
