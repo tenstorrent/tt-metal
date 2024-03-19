@@ -119,7 +119,7 @@ run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type
+    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
 }
 
 run_models_performance_bare_metal_pipeline_tests() {
@@ -221,7 +221,7 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
+    elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
