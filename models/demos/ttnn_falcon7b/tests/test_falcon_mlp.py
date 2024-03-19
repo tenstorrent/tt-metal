@@ -28,11 +28,12 @@ def run_test_FalconMLP_inference(
     mlp_input = (torch.rand(batch, 1, seq_len, configuration.hidden_size) * 2) - 1
     model = transformers.models.falcon.modeling_falcon.FalconMLP(configuration).eval()
     torch_output = model(mlp_input)
+    tt_cache_path = get_tt_cache_path(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=create_custom_preprocessor(model_config, device=device),
+        custom_preprocessor=create_custom_preprocessor(model_config, tt_cache_path=tt_cache_path, device=device),
     )
     tt_FalconMLP_model = TtFalconMLP(
         device,

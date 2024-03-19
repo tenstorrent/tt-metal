@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.utility_functions import is_wormhole_b0
 
 
 class TtFalconMLP:
@@ -22,15 +23,14 @@ class TtFalconMLP:
             use_1d_systolic_array=True,
             activation="gelu",
         )
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(packer_l1_acc=True) if is_wormhole_b0() else None
         ff2_linear = ttnn.linear(
             ff1_linear,
             self.dense_4h_to_h_weights,
             memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             use_1d_systolic_array=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                packer_l1_acc=True,
-            ),
+            compute_kernel_config=compute_kernel_config,
         )
         ttnn.deallocate(ff1_linear)
 
