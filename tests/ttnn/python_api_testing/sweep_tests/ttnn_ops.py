@@ -63,9 +63,9 @@ def setup_ttnn_tensor(x, device, layout, input_mem_config, dtype):
 
 
 def ttnn_tensor_to_torch(x, output_mem_config=None):
-    output_tensor = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    # assert output_mem_config == tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    output_tensor = x
+    # output_tensor = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    # output_tensor = ttnn.from_device(output_tensor)
     return ttnn.to_torch(output_tensor)
 
 
@@ -776,6 +776,29 @@ def reshape(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.reshape(t0, reshape_dims)  # , memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
+
+
+def split(
+    x,
+    *args,
+    split_size,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.split(t0, split_size=split_size, dim=dim)  # memory_config=memory_config_to_ttnn(output_mem_config))
+
+    result = []
+
+    for xres in t1:
+        result.append(ttnn_tensor_to_torch(xres))
+
+    return result
 
 
 def gelu(

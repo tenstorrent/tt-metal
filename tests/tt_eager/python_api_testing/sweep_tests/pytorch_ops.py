@@ -1127,6 +1127,10 @@ def reshape(x, *args, reshape_dims, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
+def split(x, *args, split_size, dim, **kwargs):
+    return torch.split(x, split_size, dim)
+
+
 def split_last_dim_two_chunks_tiled(x, *args, **kwargs):
     W = x.shape[-1]
     half = W // 2

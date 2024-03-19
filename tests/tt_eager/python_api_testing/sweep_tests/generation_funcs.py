@@ -737,6 +737,26 @@ def gen_reshape_args(
             break
 
 
+def gen_split_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            maxdim = len(input_shapes[0]) - 1
+            dim = random.randint(-maxdim - 1, maxdim)
+
+            max_split = input_shapes[0][dim] // 2
+            max_split = max(max_split, 1)
+            split_size = random.randint(1, max_split)
+
+            input_info["dim"] = dim
+            input_info["split_size"] = split_size
+            yield input_info
+
+
 def gen_tilize_with_val_padding_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
