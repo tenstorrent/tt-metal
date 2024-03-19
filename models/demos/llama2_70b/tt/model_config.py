@@ -108,6 +108,7 @@ def get_model_config_prefill(model_config_str, num_devices):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
+        "MODE": "prefill",
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "NUM_DEVICES": num_devices,
@@ -351,6 +352,7 @@ def get_model_config_decode(model_config_str, num_devices):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
+        "MODE": "decode",
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "NUM_DEVICES": num_devices,
