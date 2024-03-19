@@ -35,9 +35,9 @@ struct MorehBiasBackward {
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &weight,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> weight_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> bias_grad = std::nullopt,
+    std::optional<const Tensor> input_grad = std::nullopt,
+    std::optional<const Tensor> weight_grad = std::nullopt,
+    std::optional<const Tensor> bias_grad = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

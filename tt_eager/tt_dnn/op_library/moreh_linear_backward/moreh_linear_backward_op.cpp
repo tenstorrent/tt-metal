@@ -49,21 +49,21 @@ inline void moreh_linear_backward_validate(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& weight,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> weight_grad,
-    std::optional<std::reference_wrapper<const Tensor>> bias_grad) {
-    if (input_grad) {
-        const auto& input_grad_tensor = input_grad->get();
+    std::optional<const Tensor> input_grad,
+    std::optional<const Tensor> weight_grad,
+    std::optional<const Tensor> bias_grad) {
+    if (input_grad.has_value()) {
+        const auto& input_grad_tensor = input_grad.value();
         TT_ASSERT(is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
     }
 
-    if (weight_grad) {
-        const auto& weight_grad_tensor = weight_grad->get();
+    if (weight_grad.has_value()) {
+        const auto& weight_grad_tensor = weight_grad.value();
         TT_ASSERT(is_same_shape(weight, weight_grad_tensor), "both tensors should be the same shape");
     }
 
-    if (bias_grad) {
-        const auto& bias_grad_tensor = bias_grad->get();
+    if (bias_grad.has_value()) {
+        const auto& bias_grad_tensor = bias_grad.value();
         TT_ASSERT(
             is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
     }
@@ -73,9 +73,9 @@ inline void moreh_linear_backward_validate(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& weight,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> weight_grad,
-    std::optional<std::reference_wrapper<const Tensor>> bias_grad,
+    std::optional<const Tensor> input_grad,
+    std::optional<const Tensor> weight_grad,
+    std::optional<const Tensor> bias_grad,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
@@ -86,7 +86,7 @@ inline void moreh_linear_backward_validate(
 
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
     if (input_grad) {
-        outputs.push_back(moreh_matmul(output_grad, weight, input_grad->get(), false, false, output_mem_config));
+        outputs.push_back(moreh_matmul(output_grad, weight, input_grad.value(), false, false, output_mem_config));
     } else {
         outputs.push_back(nullptr);
     }
@@ -96,20 +96,20 @@ inline void moreh_linear_backward_validate(
         const auto& temp_weight_grad = moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
         const auto& transposed_weight_grad = transpose(temp_weight_grad, 2, 3);
         // transpose op does not set the transposed shape.
-        auto transposed_weight_grad_shape = weight_grad->get().get_legacy_shape();
+        auto transposed_weight_grad_shape = weight_grad.value().get_legacy_shape();
         transposed_weight_grad_shape[0] = temp_weight_grad.get_legacy_shape()[0];
         transposed_weight_grad_shape[1] = temp_weight_grad.get_legacy_shape()[1];
         const auto& reshaped_weight_grad = transposed_weight_grad.reshape(transposed_weight_grad_shape);
-        std::vector<int64_t> dims {0, 1};
-        moreh_sum(reshaped_weight_grad, weight_grad->get(), dims);
-        outputs.push_back(weight_grad->get());
+        std::vector<int64_t> dims{0, 1};
+        moreh_sum(reshaped_weight_grad, weight_grad.value(), dims);
+        outputs.push_back(weight_grad.value());
     } else {
         outputs.push_back(nullptr);
     }
 
     if (bias_grad) {
-        operation::run(MorehBiasBackward{}, {output_grad, bias_grad->get()});
-        outputs.push_back(bias_grad->get());
+        operation::run(MorehBiasBackward{}, {output_grad, bias_grad.value()});
+        outputs.push_back(bias_grad.value());
     } else {
         outputs.push_back(nullptr);
     }
