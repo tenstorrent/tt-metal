@@ -32,6 +32,7 @@ public:
     DeviceMesh(DeviceMesh &&) = delete;
     DeviceMesh &operator=(DeviceMesh &&) = delete;
 
+    std::vector<Device*> get_devices() const;
     Device &get_device(int queried_device_id);
 
     const DeviceIds get_device_ids() const;
@@ -43,3 +44,9 @@ public:
 }  // namespace multi_device
 
 }  // namespace ttnn
+
+namespace tt {
+namespace tt_metal {
+    using DeviceMesh = ttnn::multi_device::DeviceMesh;
+} // namespace tt_metal
+} // namespace tt
