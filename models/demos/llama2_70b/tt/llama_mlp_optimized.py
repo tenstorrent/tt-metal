@@ -33,6 +33,7 @@ class TtLlamaMLP_optimized(nn.Module):
         self.model_config = model_config
         self.emulated = emulated
         self.cache_path = cache_path
+        self.mode = model_config["MODE"]
 
         self.layer_name = f"{base_url}.{layer_num}"
 
@@ -140,32 +141,45 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
 
     def prepare_inputs(self, x):
-        batch, seq_len = 32, 1
-        assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        x_multichip = []
-        for i in range(self.num_devices):
-            x_multichip.append(
-                torch2tt_tensor(
-                    x.clone(),
-                    self.devices[i],
-                    tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-                    tt_memory_config=self.model_config["L1_MEMCFG"],
+        if self.mode == "decode":
+            batch, seq_len = 32, 1
+            assert x.size() == (seq_len, 1, batch, self.hidden_size)
+            x_multichip = []
+            for i in range(self.num_devices):
+                x_multichip.append(
+                    torch2tt_tensor(
+                        x.clone(),
+                        self.devices[i],
+                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                        tt_memory_config=self.model_config["L1_MEMCFG"],
+                    )
                 )
-            )
-        for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
-                x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
-            )
-        return x_multichip
+            for i in range(self.num_devices):
+                x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+                    x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+                )
+            return x_multichip
+        elif self.mode == "prefill":
+            x_multichip = []
+            for i in range(self.num_devices):
+                x_multichip.append(
+                    torch2tt_tensor(
+                        x.clone(),
+                        self.devices[i],
+                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                    )
+                )
+            return x_multichip
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        shape = x[0].shape
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
-        if shape[1] == 1:
+        if self.mode == "decode":
             return self.decode_forward(x)
-        else:
+        elif self.mode == "prefill":
             return self.prefill_forward(x)
+        else:
+            raise ValueError(f"Invalid mode: {self.mode}")
 
     def prefill_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = []
