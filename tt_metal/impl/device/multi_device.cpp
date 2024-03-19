@@ -37,6 +37,16 @@ Device &DeviceMesh::get_device(int queried_device_id)
 }
 
 
+std::vector<Device*> DeviceMesh::get_devices() const
+{
+    std::vector<Device*> devices;
+    for (const auto& [device_id, device] : managed_devices) {
+        devices.push_back(device.get());
+    }
+    return devices;
+}
+
+
 const DeviceIds DeviceMesh::get_device_ids() const
 {
     DeviceIds device_ids;

@@ -817,10 +817,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "to",
-                [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
-                    return self.to(device, mem_config);
-                },
-                py::arg().noconvert(),
+                py::overload_cast<Device*, const MemoryConfig&>(&Tensor::to, py::const_),
+                py::arg("device").noconvert(),
                 py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
                 py::keep_alive<0, 2>(),
                 R"doc(
@@ -834,6 +832,30 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
                 | arg0      | Device to which tensor will be moved            | tt_lib.device.Device       | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
+            .def(
+                "to", py::overload_cast<DeviceMesh*, const MemoryConfig&>(&Tensor::to, py::const_),
+                py::arg("device_mesh").noconvert(),
+                py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+                py::keep_alive<0, 2>(),
+                R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | DeviceMesh to which tensor will be moved        | tt_lib.device.DeviceMesh   | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
