@@ -121,8 +121,9 @@ struct CQDispatchWritePackedMulticastSubCmd {
 } __attribute__((packed));
 
 struct CQDispatchWaitCmd {
+    uint8_t barrier;          // if true, issue write barrier
+    uint8_t notify_prefetch;    // if true, inc prefetch sem
     uint8_t pad1;
-    uint16_t pad2;
     uint32_t addr;            // address to read
     uint32_t count;           // wait while address is < count
 };

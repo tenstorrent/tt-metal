@@ -16,6 +16,7 @@ constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t cmd_cb_base = get_compile_time_arg_val(4);
 constexpr uint32_t cmd_cb_pages = get_compile_time_arg_val(5);
 constexpr uint32_t page_batch_size = get_compile_time_arg_val(6);
+constexpr uint32_t dispatch_sync_sem = get_compile_time_arg_val(7);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));

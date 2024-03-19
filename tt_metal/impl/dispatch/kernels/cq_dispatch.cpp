@@ -19,6 +19,7 @@ constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
 constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(4);
+constexpr uint32_t prefetch_sync_sem = get_compile_time_arg_val(5);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -403,12 +404,22 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
 static void process_wait() {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
+    uint32_t barrier = cmd->wait.barrier;
+    uint32_t notify_prefetch = cmd->wait.notify_prefetch;
     uint32_t addr = cmd->wait.addr;
     uint32_t count = cmd->wait.count;
+
+    if (barrier) {
+        noc_async_write_barrier();
+    }
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     while (*sem_addr < count); // XXXXX use a wrapping compare
+
+    if (notify_prefetch) {
+        noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, prefetch_sync_sem), 1);
+    }
 }
 
 void kernel_main() {
