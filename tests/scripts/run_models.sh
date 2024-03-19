@@ -53,10 +53,6 @@ env pytest models/experimental/synthetic_gradients/tests -k test_linear
 env pytest models/experimental/synthetic_gradients/tests -k test_block
 env pytest models/experimental/synthetic_gradients/tests -k test_full_inference
 
-env pytest models/experimental/llama_old/tests -k llama_layer_norm
-env pytest models/experimental/llama_old/tests -k llama_mlp
-env pytest models/experimental/llama_old/tests -k llama_decoder
-
 env pytest models/experimental/lenet/tests -k test_lenet_inference
 
 env pytest models/experimental/convnet_mnist/tests -k mnist_inference
@@ -123,8 +119,6 @@ env pytest models/experimental/stable_diffusion/tests -k test_unbatched_stable_d
 env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_12
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_12
-
-env pytest models/experimental/llama_old/tests -k llama_attention
 
 env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32]
 

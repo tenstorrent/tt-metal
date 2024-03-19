@@ -27,8 +27,6 @@ run_perf_models() {
 
         env pytest models/experimental/vit/tests -m $pipeline_type
 
-        env pytest models/experimental/llama_old/tests -m $pipeline_type
-
         env pytest models/experimental/roberta/tests -m $pipeline_type
 
         env pytest models/experimental/t5/tests -m $pipeline_type
