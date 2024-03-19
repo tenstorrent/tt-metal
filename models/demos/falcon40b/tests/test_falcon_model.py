@@ -341,7 +341,7 @@ def test_FalconModel_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
+    use_program_cache,
 ):
     if llm_mode == "prefill":
         if model_config_str == "BFLOAT16-SHARDED":
