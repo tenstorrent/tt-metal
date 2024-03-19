@@ -151,11 +151,6 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg)
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
     }
-
-    // Ethernet cores use a different address for starting the kernel
-    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
-        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-    }
 }
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
     llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
@@ -276,32 +271,30 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+    uint64_t run_mailbox_addr = GET_MAILBOX_ADDRESS_HOST(launch.run);
     if (is_ethernet_core(core, chip_id)) {
-        const auto &readback_vec =
-            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE, sizeof(uint32_t));
-        return (readback_vec[0] == 0);
-    } else {
-        std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
-            constexpr int RUN_MAILBOX_BOGUS = 3;
-            std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-            // read a single uint32_t even though launch.run is smaller than that
-            run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-            uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
-            if (run != run_state && run != RUN_MSG_DONE) {
-                fprintf(
-                    stderr,
-                    "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
-                    run,
-                    run_state,
-                    RUN_MSG_DONE);
-                TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
-            }
-
-            return run == RUN_MSG_DONE;
-        };
-
-        return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
+        run_mailbox_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.run);
     }
+    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+        constexpr int RUN_MAILBOX_BOGUS = 3;
+        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
+        // read a single uint32_t even though launch.run is smaller than that
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        if (run != run_state && run != RUN_MSG_DONE) {
+            fprintf(
+                stderr,
+                "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
+                run,
+                run_state,
+                RUN_MSG_DONE);
+            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+        }
+
+        return run == RUN_MSG_DONE;
+    };
+
+    return get_mailbox_is_done(run_mailbox_addr);
 }
 
 void wait_until_cores_done(chip_id_t device_id,
