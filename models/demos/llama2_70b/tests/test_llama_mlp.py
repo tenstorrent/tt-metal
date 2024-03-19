@@ -72,58 +72,33 @@ def run_test_LlamaMLP_inference(
     # Prepare input
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
-<<<<<<< HEAD
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
-    pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
-=======
-    pt_inp_normed = hugging_face_reference_model.layers[layer_num].ffn_norm(pt_inp)
     if seq_len > 1:
         # shape should be (1, batch, seq_len, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(0)
     else:
         # shape should be (seq_len=1, 1, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
->>>>>>> #6423: Added prefill MLP functionality
     tt_inp = pt_inp_normed.clone()
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
 
-    if optimized:
-        if n_devices == 32:
-            tt_LlamaMLP_model = TtLlamaMLP_galaxy(
-                devices,
-                state_dict,
-                base_url,
-                layer_num,
-                configuration.dim,
-                model_config,
-                emulated=emulated,
-                cache_path=cache_path,
-            )
-        else:
-            # TT hardware execution -------------------------------------------------------------
-            tt_LlamaMLP_model = TtLlamaMLP_optimized(
-                devices,
-                state_dict,
-                base_url,
-                layer_num,
-                configuration.dim,
-                model_config,
-                emulated=emulated,
-                cache_path=cache_path,
-            )
-
-        tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
+    # TT hardware execution -------------------------------------------------------------
+    if n_devices == 32:
+        tt_LlamaMLP_model = TtLlamaMLP_galaxy(
+            devices,
+            state_dict,
+            BASE_URL,
+            UNIT_TEST_LAYER_NUM,
+            configuration.dim,
+            model_config,
+            emulated=emulated,
+            cache_path=cache_path,
+        )
     else:
-<<<<<<< HEAD
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
-=======
-        assert seq_len == 1, "Prefill is only supported for optimized"
-        # TT hardware execution -------------------------------------------------------------
-        tt_LlamaMLP_model = TtLlamaMLP(
->>>>>>> #6423: Added prefill MLP functionality
             devices,
             state_dict,
             BASE_URL,
@@ -179,23 +154,10 @@ def run_test_LlamaMLP_inference(
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
-<<<<<<< HEAD
         (32, 1),
         (32, 128),
     ),
-    ids=(
-        "decode",
-        "prefill"
-=======
-        (32, 1, 0.9999, True, 4, False),
-        (32, 1, 0.9999, True, 8, False),
-        (32, 1, 0.9999, True, 4, True),
-        (32, 1, 0.9999, True, 8, True),
-        (32, 1, 0.9999, True, 32, True),
-        # Prefill Test cases
-        (32, 128, 0.9999, True, 8, True),
->>>>>>> #6423: Added prefill MLP functionality
-    ),
+    ids=("decode", "prefill"),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
 def test_LlamaMLP_inference(
