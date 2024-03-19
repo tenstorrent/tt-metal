@@ -69,7 +69,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
-    uint32_t in2_block_tiles = per_core_M * in0_block_w;
+    uint32_t in2_block_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    uint32_t in0_shard_height_in_tiles = 0;
+    if (in0_is_sharded) {
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+    }
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
@@ -152,6 +159,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)  (num_cores_c),
             (std::uint32_t)  (num_cores_r),
             (std::uint32_t)  (false),
+            (std::uint32_t)  (in0_shard_width_in_tiles),
+            (std::uint32_t)  (in0_shard_height_in_tiles),
+            (std::uint32_t)  (in0_block_w),
+
             // batch args
             (std::uint32_t)  B // batch
         };

@@ -203,8 +203,7 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
 // this API is used by both the reader and writer side of the CB
 // it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
-// TODO: this can be made constexpr?
-inline std::int32_t get_tile_size(const std::int32_t operand) {
+constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
     // L1 16B words
@@ -214,7 +213,7 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words << 4;
 }
 
-inline DataFormat get_dataformat(const std::int32_t operand) {
+constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
     return static_cast<DataFormat>((uint)unpack_src_format[operand]);
 }
 
