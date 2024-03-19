@@ -908,7 +908,8 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
     // Step 5b (Unicast)
     update_program_pages_with_new_page();  // sets src to 0 since unicast signals begins in new page
-    for (const KernelGroup& kernel_group : kernel_group_unicast) {
+    for (KernelGroup& kernel_group : kernel_group_unicast) {
+        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
         if (kernel_group.get_core_type() == CoreType::ETH) {
             auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
             for (const auto& logical_eth_core : kernel->logical_cores()) {
@@ -916,8 +917,8 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
                     get_noc_unicast_encoding(device->physical_core_from_logical_core(logical_eth_core, CoreType::ETH));
                 src = update_program_page_transfers(
                     src,
-                    sizeof(uint32_t),
-                    eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE,
+                    sizeof(launch_msg_t),
+                    GET_ETH_MAILBOX_ADDRESS_HOST(launch),
                     go_signal_page_transfers.at(PageTransferType::UNICAST),
                     num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST),
                     {{dst_noc, 1}});
@@ -975,12 +976,13 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     for (KernelGroup& kernel_group : kernel_group_unicast) {
         if (kernel_group.get_core_type() == CoreType::ETH) {
             auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
-            for (const auto& logical_eth_core : kernel->logical_cores()) {
-                program_pages[program_page_idx] = 1;
-                program_page_idx += 4;  // 16 byte L1 alignment
+            uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
+            for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
+                program_pages[program_page_idx + i] = launch_message_data[i];
             }
+            program_page_idx += sizeof(launch_msg_t) / sizeof(uint32_t);
         } else {
-            TT_ASSERT(false, "All non-ethernet core go signals should be muticasted");
+            TT_ASSERT(false, "All non-ethernet core go signals should be multicasted");
         }
     }
 

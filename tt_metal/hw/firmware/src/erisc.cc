@@ -66,7 +66,7 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
 
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        if (erisc_info->launch_user_kernel == 1) {
+        if (mailboxes->launch.run == RUN_MSG_GO) {
             DEBUG_STATUS('R');
             kernel_profiler::init_profiler();
             kernel_profiler::mark_time(CC_MAIN_START);
