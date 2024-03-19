@@ -187,10 +187,16 @@ class TtLlamaMLP_optimized(nn.Module):
         w3_outs = []
         # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
         for i in range(len(x)):
+            """
+            x[i] is shape [1,32,128,8192]
+            self.w1_list[i] is shape [1,1,8192,4096]
+            """
+
             w1_outs.append(
                 tt_lib.operations.primary.matmul(
                     x[i],
                     self.w1_list[i],
+                    program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                 )
             )
@@ -200,6 +206,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 tt_lib.operations.primary.matmul(
                     x[i],
                     self.w3_list[i],
+                    program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                 )
             )
@@ -223,6 +230,7 @@ class TtLlamaMLP_optimized(nn.Module):
             hidden_states[i] = tt_lib.operations.primary.matmul(
                 hidden_states[i],
                 self.w2_list[i],
+                program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
             )
 

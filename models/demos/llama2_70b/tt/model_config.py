@@ -126,10 +126,17 @@ def get_model_config_prefill(model_config_str, num_devices):
         ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             # math_fidelity=ttl.tensor.MathFidelity.LoFi,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
+        ),
+        "COMPUTE_KERNEL_WOPACKERL1_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         ),
         "L1_MEMCFG": L1_MEMCFG,
         "DRAM_MEMCFG": DRAM_MEMCFG,
@@ -325,6 +332,41 @@ def get_model_config_prefill(model_config_str, num_devices):
             fused_activation=ttl.tensor.FusibleActivation.SILU,
         )
     """
+
+    model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=8,  # how much inner dim you take each time
+        out_subblock_h=1,  # Must be divisible by per_core_M
+        out_subblock_w=8,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        per_core_M=16,  # M / TILE_HEIGHT / Grid_Size
+        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+        transpose_mcast=False,
+        fused_activation=ttl.tensor.FusibleActivation.SILU,
+    )
+
+    model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=8,  # how much inner dim you take each time
+        out_subblock_h=1,  # Must be divisible by per_core_M
+        out_subblock_w=8,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        per_core_M=16,  # M / TILE_HEIGHT / Grid_Size
+        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+    # input0: [1,32,128,32k]
+    # input1: [1,1,32k,1k]
+    model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=8,  # how much inner dim you take each time
+        out_subblock_h=2,  # Must be divisible by per_core_M
+        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        per_core_M=16,  # M / TILE_HEIGHT / Grid_Size
+        per_core_N=4,  # N / TILE_WIDTH / Grid_Size
+        transpose_mcast=False,
+        fused_activation=None,
+    )
 
     return model_config
 
