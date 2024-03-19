@@ -1055,7 +1055,7 @@ class Bottleneck:
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.tensor.relu_without_autoformat
+        self.relu = tt_lib.operations.primary.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -1321,7 +1321,7 @@ class Bottleneck:
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
 
         # logger.info("Running eltwise add")
-        out = tt_lib.tensor.add_without_autoformat(
+        out = tt_lib.operations.primary.add(
             out,
             ds_out,
             fused_activations,
@@ -1613,7 +1613,7 @@ class ResNet(nn.Module):
             self.conv1_params,
             [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
         )
-        self.relu = tt_lib.tensor.relu_without_autoformat
+        self.relu = tt_lib.operations.primary.relu
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.max_pool_reader_patterns_cache = {}
