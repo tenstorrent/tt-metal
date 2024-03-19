@@ -34,7 +34,6 @@ tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
 tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @tt-aho @TT-BrianLiu
 tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tt-rkim @TT-billteng @ttmchiou
-tests/scripts/run_temporary_frequent_api_tests.sh @tt-rkim @aliuTT
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
