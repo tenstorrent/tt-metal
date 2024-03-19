@@ -22,7 +22,7 @@ enum class ShardedOpPartialParallelizationStrategy { MULTI_CORE = 0 };
 enum class ShardedOpPartialType { InterleavedToShardedPartial, ShardedToInterleavedPartial };
 
 
-operation::ProgramWithCallbacks interleaved_to_sharded_partial_multi_core(const Tensor &a, Tensor &output, int num_slices, int slice_index);
+operation::ProgramWithCallbacks interleaved_to_sharded_partial_multi_core(const Tensor &a, const Tensor &output, int num_slices, int slice_index);
 operation::ProgramWithCallbacks sharded_to_interleaved_partial_multi_core(const Tensor &a, const Tensor &output, int num_slices, int slice_index);
 
 struct ShardedPartial {
