@@ -74,9 +74,261 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, num_devices=8):
+def get_model_config(model_config_str, num_devices=8, mode="decode"):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     assert num_devices in (4, 8, 32)
+    assert mode in ("decode", "prefill")
+
+    if mode == "decode":
+        return get_model_config_decode(model_config_str, num_devices)
+    elif mode == "prefill":
+        return get_model_config_prefill(model_config_str, num_devices)
+
+
+def get_model_config_prefill(model_config_str, num_devices):
+    DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1
+    )
+    HEIGHT_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+    )
+    BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
+    BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+
+    # Set default dtype and mem_config based on model_config_str
+    if model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS:
+        dtype_str, mem_config_str = model_config_str.split("-")
+        # TODO: Set default memcfg for BFLOAT16-L1 to L1
+        mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
+        dtype = getattr(ttl.tensor.DataType, dtype_str)
+    else:
+        raise NotImplementedError(f"Model config {model_config_str} is not supported!")
+
+    # Set defaults for dtype and mem_config for all ops
+    model_config = {
+        "DEFAULT_DTYPE": dtype,
+        "DEFAULT_MEMCFG": mem_config,
+        "NUM_DEVICES": num_devices,
+        "MAX_GRID_SIZE": (8, 4),
+        "ALL_GATHER_NUM_LINKS": 1,
+        "DEFAULT_CKPT_DIR": "/home/llama-data-repacked-2/llama-2-70b/",
+        "DEFAULT_TOKENIZER_PATH": "/home/llama-data/tokenizer.model",
+        "DEFAULT_CACHE_PATH": Path("/home/llama-data-cache/weights-cache-2"),
+        "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+        "L1_MEMCFG": L1_MEMCFG,
+        "DRAM_MEMCFG": DRAM_MEMCFG,
+        "BFLOAT16_DTYPE": BFLOAT16_DTYPE,
+        "BFP8_DTYPE": BFP8_DTYPE,
+        "WIDTH_SHARDED_MEMCFG": WIDTH_SHARDED_MEMCFG,
+        "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
+    }
+    model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
+    model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
+
+    # Matmul Weights must always be BFP8_B
+    # Override defaults for certain configs
+    for key in model_config.keys():
+        if "MM_WEIGHTS_DTYPE" in key:
+            model_config[key] = BFP8_DTYPE
+        elif "WEIGHTS_MEMCFG" in key or "BIAS_MEMCFG" in key:
+            model_config[key] = DRAM_MEMCFG
+        elif "LN" in key and ("WEIGHTS_DTYPE" in key or "BIAS_DTYPE" in key):
+            model_config[key] = BFLOAT16_DTYPE
+
+    model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
+    # model_config["KV_CACHE_DTYPE"] = BFLOAT16_DTYPE # HACK:! JUST FOR UPDATE_CACHE TESTING
+
+    hidden_size = model_config_entries["hidden_size"]
+
+    head_dim = model_config_entries["head_dim"]
+    n_heads = model_config_entries["num_attention_heads"]
+    n_kv_heads = model_config_entries["num_kv_heads"]
+
+    batch, seq_len = 32, 1
+    shard_height = batch
+
+    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(7, 3),
+            ),
+        }
+    )
+    # shard_spec_q_heads_cores_grid
+    shard_spec_16_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(7, 1),
+            ),
+        }
+    )
+    shard_spec_8_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(7, 0),
+            ),
+        }
+    )
+    shard_spec_2_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(1, 0),
+            ),
+        }
+    )
+    shard_spec_1_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(0, 0),
+            ),
+        }
+    )
+
+    # Constants based on hidden_dim
+    shard_width_hidden_dim_across_32_cores = hidden_size // 32
+    shard_width_hidden_dim_per_device_across_32_cores = shard_width_hidden_dim_across_32_cores // num_devices
+    shard_width_hidden_dim_across_16_cores = hidden_size // 16
+    shard_width_hidden_dim_across_8_cores = hidden_size // 8
+
+    # Constants based on head_dim
+    total_width_per_group_of_qkv_heads = head_dim * ((n_heads // n_kv_heads) + 2)  # 8 q_heads + 1 k_heads + 1 v_heads
+    n_local_kv_heads = n_kv_heads // num_devices
+    total_width_of_qkv_heads_per_device = total_width_per_group_of_qkv_heads * n_local_kv_heads
+    shard_width_qkv_heads_per_device_across_16_cores = total_width_of_qkv_heads_per_device // 16
+    shard_width_qkv_heads_per_device_across_8_cores = total_width_of_qkv_heads_per_device // 8
+
+    # Constants based on padded_mlp_dim
+    padded_mlp_dim = model_config_entries["padded_mlp_dim"]
+    shared_with_padded_mlp_dim_across_32_cores = padded_mlp_dim // 32
+
+    # Embeddings
+    model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_32_cores_grid,
+            [
+                shard_height,
+                shard_width_hidden_dim_per_device_across_32_cores,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    # Model prepare_inputs
+    model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE
+    if num_devices == 4:
+        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_16_cores_grid,  # Sharded on num_local_heads = n_qheads // num_devices
+                [
+                    shard_height,  # Each core has 32 users
+                    1,  # Dynamic - must set before using this config
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    elif num_devices == 8:
+        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,  # Sharded on batch dim
+                [
+                    shard_height,  # Padded qheads up to 32 == batch size
+                    1,  # Dynamic - must set before using this config
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    elif num_devices == 32:
+        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 0),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    1,  # Dynamic - must set before using this config
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+    model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
+
+    # Example code of using 2d multicast for MLP matmul
+    """
+        model_config["MLP_BLOCK_SHARDED"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 7),
+                        ),
+                    }
+                ),
+                [
+                    512,
+                    1024,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=16,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            transpose_mcast=False,
+            fused_activation=ttl.tensor.FusibleActivation.SILU,
+        )
+    """
+
+    return model_config
+
+
+def get_model_config_decode(model_config_str, num_devices):
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(

@@ -72,8 +72,18 @@ def run_test_LlamaMLP_inference(
     # Prepare input
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
+<<<<<<< HEAD
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
     pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+=======
+    pt_inp_normed = hugging_face_reference_model.layers[layer_num].ffn_norm(pt_inp)
+    if seq_len > 1:
+        # shape should be (1, batch, seq_len, dim)
+        pt_inp_normed = pt_inp_normed.unsqueeze(0)
+    else:
+        # shape should be (seq_len=1, 1, batch, dim)
+        pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+>>>>>>> #6423: Added prefill MLP functionality
     tt_inp = pt_inp_normed.clone()
 
     # PyTorch output --------------------------------------------------------------------
@@ -93,7 +103,6 @@ def run_test_LlamaMLP_inference(
                 cache_path=cache_path,
             )
         else:
-            assert seq_len == 1, "Prefill is only supported for optimized"
             # TT hardware execution -------------------------------------------------------------
             tt_LlamaMLP_model = TtLlamaMLP_optimized(
                 devices,
@@ -108,7 +117,13 @@ def run_test_LlamaMLP_inference(
 
         tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
     else:
+<<<<<<< HEAD
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
+=======
+        assert seq_len == 1, "Prefill is only supported for optimized"
+        # TT hardware execution -------------------------------------------------------------
+        tt_LlamaMLP_model = TtLlamaMLP(
+>>>>>>> #6423: Added prefill MLP functionality
             devices,
             state_dict,
             BASE_URL,
@@ -164,12 +179,22 @@ def run_test_LlamaMLP_inference(
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
+<<<<<<< HEAD
         (32, 1),
         (32, 128),
     ),
     ids=(
         "decode",
         "prefill"
+=======
+        (32, 1, 0.9999, True, 4, False),
+        (32, 1, 0.9999, True, 8, False),
+        (32, 1, 0.9999, True, 4, True),
+        (32, 1, 0.9999, True, 8, True),
+        (32, 1, 0.9999, True, 32, True),
+        # Prefill Test cases
+        (32, 128, 0.9999, True, 8, True),
+>>>>>>> #6423: Added prefill MLP functionality
     ),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
@@ -182,8 +207,9 @@ def test_LlamaMLP_inference(
     all_devices,
     emulated,
 ):
+    mode = "prefill" if seq_len > 1 else "decode"
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, mode=mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(all_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
