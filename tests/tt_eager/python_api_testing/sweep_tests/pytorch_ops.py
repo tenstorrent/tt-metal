@@ -1858,7 +1858,6 @@ def mse_loss_mean(x, y, *args, **kwargs):
     torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
     return torch_output_tensor
 
-
 def rotary_embedding(x, *args, **kwargs):
     def rotate_half(x):
         x1 = x[..., : x.shape[-1] // 2]
@@ -1890,8 +1889,3 @@ def rotary_embedding(x, *args, **kwargs):
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
 
     return pt_out[0]
-
-
-def ttnn_empty(x, *args, **kwargs):
-    result = torch.empty(x.shape)
-    return torch.ones(result.shape)
