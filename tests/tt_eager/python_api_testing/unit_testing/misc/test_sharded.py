@@ -542,7 +542,6 @@ def test_block_sharded_partial_op(
     num_slices = 2
 
     for slice_index in range(num_slices):
-        print("Running slice: ", slice_index)
         in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
@@ -550,6 +549,74 @@ def test_block_sharded_partial_op(
             num_slices,  # num_slices
             slice_index,  # slice_index
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            in0_t_slice,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0
+
+    tt_out = tt2torch_tensor(out_tt_tensor)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+)
+def test_width_sharded_partial_op(
+    device,
+    H,
+    W,
+    num_cores,
+    num_slices,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, W]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    out_initial = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    out_tt_tensor = torch2tt_tensor(
+        out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype
+    )
+
+    width_shard_spec = [H // num_slices, 1 * 32]
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            width_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
