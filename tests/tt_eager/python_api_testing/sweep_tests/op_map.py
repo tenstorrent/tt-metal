@@ -1675,7 +1675,7 @@ op_map = {
     "ttnn-pow": {
         "tt_lib_op": ttnn_ops.pow,
         "pytorch_op": pytorch_ops.power,
-    },
+    }, 
     "ttnn-logaddexp2": {
         "tt_lib_op": ttnn_ops.logaddexp2,
         "pytorch_op": pytorch_ops.logaddexp2,
@@ -1696,4 +1696,17 @@ op_map = {
         "tt_lib_op": ttnn_ops.arange,
         "pytorch_op": pytorch_ops.arange,
     },
+    "ttnn-nextafter": {
+        "tt_lib_op": ttnn_ops.nextafter,
+        "pytorch_op": pytorch_ops.nextafter,
+    },
+    "ttnn-max": {
+        "tt_lib_op": ttnn_ops.max,
+        "pytorch_op": pytorch_ops.max,
+    },
+    "ttnn-empty": {
+        "tt_lib_op": ttnn_ops.empty,
+        "pytorch_op": pytorch_ops.ttnn_empty,
+    },       
 }
+
