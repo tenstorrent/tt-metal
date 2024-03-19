@@ -1921,6 +1921,25 @@ std::vector<Tensor> complex_div_bw(const Tensor& grad, const Tensor& input, cons
     return operation::decorate_as_composite(__func__, _complex_div_bw)(grad, input, other, output_mem_config);
 }
 
+// complex mul
+// grad_input = grad * other.conj()
+// grad_other = grad * input.conj()
+std::vector<Tensor> _complex_mul_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = complex_mul(grad, conj(other,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = complex_mul(grad, conj(input,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_mul_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_mul_bw)(grad, input, other, output_mem_config);
+}
+
 #undef CHECK_FOR_COMPLEX
 
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {

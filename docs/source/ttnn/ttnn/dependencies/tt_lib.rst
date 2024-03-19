@@ -1061,6 +1061,8 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
+    
+.. autofunction:: tt_lib.tensor.complex_mul_bw
 
 .. autofunction:: tt_lib.tensor.complex_div_bw
 
