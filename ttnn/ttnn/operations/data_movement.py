@@ -435,12 +435,10 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
 
     Example::
 
-        >>> tensor = ttnn.repeats(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2, dim=3)), device)
-        >>> print(tensor)
-        tensor([[1, 2],
-        [1, 2],
-        [3, 4],
-        [3, 4]])
+        >>> a = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), device=device, layout=ttnn.TILE_LAYOUT)
+        >>> b = ttnn.repeat_interleave(a, 2, dim=0)
+        >>> print(a.shape, b.shape)
+        ttnn.Shape([2[32], 2[32]]) ttnn.Shape([4[32], 2[32]])
 
     """
 
