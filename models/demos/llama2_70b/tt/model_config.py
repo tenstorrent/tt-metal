@@ -114,9 +114,9 @@ def get_model_config_prefill(model_config_str, num_devices):
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 1,
-        "DEFAULT_CKPT_DIR": "/home/llama-data-repacked-2/llama-2-70b/",
-        "DEFAULT_TOKENIZER_PATH": "/home/llama-data/tokenizer.model",
-        "DEFAULT_CACHE_PATH": Path("/home/llama-data-cache/weights-cache-2"),
+        "DEFAULT_CKPT_DIR": os.getenv("LLAMA_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/"),
+        "DEFAULT_TOKENIZER_PATH": os.getenv("LLAMA_TOKENIZER_PATH", "/home/llama-data/tokenizer.model"),
+        "DEFAULT_CACHE_PATH": Path(os.getenv("LLAMA_CACHE_PATH", "/home/llama-data-cache/weights-cache-2")),
         "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             # math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
