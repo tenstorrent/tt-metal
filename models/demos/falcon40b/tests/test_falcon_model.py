@@ -60,7 +60,9 @@ def run_test_FalconModel_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
+    )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -339,7 +341,7 @@ def test_FalconModel_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     if llm_mode == "prefill":
         if model_config_str == "BFLOAT16-SHARDED":

@@ -99,30 +99,42 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
     }
     return src;
 }
-bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
-    for (const bool use_void_star_api: {true, false}) {
-        size_t buf_size = config.num_pages * config.page_size;
-        Buffer bufa(device, buf_size, config.page_size, config.buftype);
 
-        vector<uint32_t> src = generate_arange_vector(bufa.size());
+template <bool cq_dispatch_only = false>
+void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
 
-        if (use_void_star_api) {
-            EnqueueWriteBuffer(cq, bufa, src.data(), false);
-        } else {
-            EnqueueWriteBuffer(cq, bufa, src, false);
-        }
-        vector<uint32_t> result;
-        if (use_void_star_api) {
+    for (const bool cq_write: {true, false}) {
+        for (const bool cq_read: {true, false}) {
+            if constexpr (cq_dispatch_only) {
+                if (not (cq_write and cq_read)) { continue; }
+            }
+            if (not cq_write and not cq_read) { continue; }
+            size_t buf_size = config.num_pages * config.page_size;
+            Buffer bufa(device, buf_size, config.page_size, config.buftype);
+
+            vector<uint32_t> src = generate_arange_vector(bufa.size());
+
+            if (cq_write) {
+                EnqueueWriteBuffer(cq, bufa, src.data(), false);
+            } else {
+                ::detail::WriteToBuffer(bufa, src);
+            }
+            vector<uint32_t> result;
             result.resize(buf_size / sizeof(uint32_t));
-            EnqueueReadBuffer(cq, bufa, result.data(), true);
-        } else {
-            EnqueueReadBuffer(cq, bufa, result, true);
-        }
 
-        EXPECT_EQ(src, result);
+            if (cq_write and not cq_read) {
+                Finish(cq);
+            }
+
+            if (cq_read) {
+                EnqueueReadBuffer(cq, bufa, result.data(), true);
+            } else {
+                ::detail::ReadFromBuffer(bufa, result);
+            }
+
+            EXPECT_EQ(src, result);
+        }
     }
-    return true;
 }
 
 template <bool blocking>
@@ -292,7 +304,7 @@ namespace dram_tests {
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -303,7 +315,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllDramBanks) {
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -314,7 +326,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRo
             .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -325,7 +337,7 @@ TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
             .page_size = 128,
             .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -333,7 +345,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -342,7 +354,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -353,7 +365,7 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
+    EXPECT_ANY_THROW((local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config)));
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
@@ -384,7 +396,7 @@ TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBu
 
         TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(device, device->command_queue(), config);
     }
 }
 
@@ -471,7 +483,7 @@ namespace l1_tests {
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
     for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -483,7 +495,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1Banks) {
             .page_size = 2048,
             .buftype = BufferType::L1};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -495,7 +507,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
             .page_size = 2048,
             .buftype = BufferType::L1};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -504,7 +516,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForL1) {
 
     for (Device *device : devices_) {
         if (device->is_mmio_capable()) { continue; }
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
@@ -541,7 +553,7 @@ TEST_F(CommandQueueSingleCardFixture, TestLargeBuffer4096BPageSize) {
             .page_size = 4096,
             .buftype = BufferType::L1};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 

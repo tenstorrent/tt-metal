@@ -918,16 +918,28 @@ std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const 
 }
 
 // Softplus
-// grad_self = grad * torch.exp(self) / (1 + torch.exp(self))
-std::vector<Tensor> _softplus_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+// (threshold >= 0) grad_self = grad * torch.exp(beta * self) / (1 + torch.exp(beta * self))
+// (threshold < 0) grad_self = grad * torch.exp(beta * self) / (torch.exp(beta * self) + torch.exp(threshold))
+std::vector<Tensor> _softplus_bw(const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(grad, mul(exp(input, output_mem_config), recip(add1(exp(input, output_mem_config), output_mem_config), output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor exp_beta_self = exp(mul_unary(input, beta, output_mem_config), output_mem_config);
+    Tensor recip_inp = exp_beta_self;
+    if(threshold < 0){
+        Tensor threshold_exp = exp(full_like(input, threshold, output_mem_config) , output_mem_config);
+        recip_inp = add(recip_inp, threshold_exp, std::nullopt, output_mem_config);
+    }
+    else{
+        recip_inp = add1(recip_inp, output_mem_config);
+    }
+    Tensor grad_result = mul(grad, mul(exp_beta_self, recip(recip_inp, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    exp_beta_self.deallocate();
+    recip_inp.deallocate();
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
-std::vector<Tensor> softplus_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+std::vector<Tensor> softplus_bw(const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _softplus_bw)(grad, input, output_mem_config);
+    return operation::decorate_as_composite(__func__, _softplus_bw)(grad, input, beta, threshold, output_mem_config);
 }
 
 std::vector<Tensor> _polygamma_bw(const Tensor& grad, const Tensor& input, int n, const MemoryConfig& output_mem_config) {
@@ -1445,23 +1457,6 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
 std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _log_sigmoid_bw)(grad, input, output_mem_config);
-}
-// maximum
-// self: at::where(self == other, grad / 2, grad).masked_fill_(self < other, 0)
-// other: at::where(self == other, grad / 2, grad).masked_fill_(self > other, 0)
-std::vector<Tensor> _maximum_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor int_res = where(eq(input, other, std::nullopt, output_mem_config), mul_unary(grad, 0.5f, output_mem_config), grad, output_mem_config);
-    Tensor grad_a = where(lt(input, other, std::nullopt, output_mem_config), 0.0, int_res, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = where(lt(other, input, std::nullopt, output_mem_config), 0.0, int_res, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-    int_res.deallocate();
-    return grad_tensor;
-}
-std::vector<Tensor> maximum_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _maximum_bw)(grad, input, other, output_mem_config);
 }
 
 // tanhshrink

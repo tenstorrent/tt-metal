@@ -99,8 +99,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::DIV_UNARY_SFPU:
-            return true;
+        case UnaryOpType::DIV_UNARY_SFPU: return true;
         default: return false;
     }
     return false;
@@ -191,7 +190,6 @@ struct make_eltwise_unary {
     }
 };
 
-
 template <UnaryOpType unary_op_type, typename T = float>
 struct make_eltwise_symmetric_binop_unary_with_param {
     Tensor operator()(
@@ -214,7 +212,7 @@ struct make_eltwise_symmetric_binop_unary_with_param {
     }
 };
 
-template <UnaryOpType unary_op_type,UnaryOpType unary_op_rev_type, typename T = float>
+template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type, typename T = float>
 struct make_eltwise_asymmetric_binop_unary_with_param {
     Tensor operator()(
         const Tensor& input_tensor,
@@ -235,13 +233,6 @@ struct make_eltwise_asymmetric_binop_unary_with_param {
             output_mem_config);
     }
 };
-
-inline Tensor relu_without_autoformat(
-    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return operation::run_without_autoformat(
-               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config}, {input_tensor})
-        .at(0);
-}
 
 inline Tensor sqrt(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
@@ -302,8 +293,10 @@ constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
 constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
-constexpr auto sub_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::SUB_UNARY_SFPU,UnaryOpType::RSUB>{};
-constexpr auto div_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::DIV_UNARY_SFPU,UnaryOpType::RDIV>{};
+constexpr auto sub_unary_sfpu =
+    make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>{};
+constexpr auto div_unary_sfpu =
+    make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>{};
 
 inline Tensor exp(
     const Tensor& input_tensor,
@@ -442,6 +435,21 @@ inline Tensor add1(
 }
 
 }  // namespace tt_metal
+
+namespace operations {
+
+namespace primary {
+
+inline Tensor relu(
+    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return operation::run(
+               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config}, {input_tensor})
+        .at(0);
+}
+
+}  // namespace primary
+
+}  // namespace operations
 
 }  // namespace tt
 
