@@ -144,7 +144,7 @@ namespace NAMESPACE {
 
 void MAIN {
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
+    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
     constexpr uint32_t in_tiled_cb_id = tt::CB::c_intermed0;
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
