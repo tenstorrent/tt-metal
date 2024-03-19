@@ -502,7 +502,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
         input_tensor,
         ranks=(2, 3, 4),
         dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
-        layouts=(ttnn.TILE_LAYOUT,),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
     )
@@ -546,11 +546,11 @@ def repeat(
     device = input_tensor.device()
     layout = input_tensor.layout
     rank = len(input_tensor.shape)
-    if dtype == ttnn.bfloat16 and rank == 4:
+    if rank == 4:
         output_tensor = ttl.tensor.repeat(input_tensor, shape)
         *batch, _, _ = output_tensor.shape
-        *_, h, w = input_tensor.shape
-        *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
+        *_, h, w = output_tensor.shape
+        *_, padded_h, padded_w = output_tensor.shape.with_tile_padding()
 
         output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
         return output_tensor
