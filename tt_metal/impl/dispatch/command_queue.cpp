@@ -143,7 +143,9 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
             uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_cb_size;
-            producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            if (producer_consumer_multiple != 1) {
+                producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            }
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -321,7 +323,9 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
             uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_cb_size;
-            producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            if (producer_consumer_multiple != 1) {
+                producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            }
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
