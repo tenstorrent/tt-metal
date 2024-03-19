@@ -68,18 +68,21 @@ void kernel_main() {
     const uint32_t in_c = get_compile_time_arg_val(8);
     const uint32_t nblocks = get_compile_time_arg_val(9);
 
-    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
-
-    constexpr uint32_t TILE_WIDTH = 32;
+    const uint32_t split_reader = get_compile_time_arg_val(10);
+    const uint32_t reader_id = get_compile_time_arg_val(11);
 
     // compile time args
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
 
-    constexpr uint32_t in_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
+    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
+
+    constexpr uint32_t TILE_WIDTH = 32;
+
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
     constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;    // local input shard
     constexpr uint32_t in_reader_indices_cb_id = tt::CB::c_in3;
+    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
 
     constexpr uint32_t TILE_HW = 1024;
 
@@ -110,7 +113,7 @@ void kernel_main() {
     uint32_t in_w_padded = in_w + 2 * pad_w;
 
     uint32_t npages_to_reserve = nblocks;
-    uint32_t counter = 0;
+    uint32_t counter = reader_id;
     while (counter < reader_nindices) {
         cb_reserve_back(in_cb_id, npages_to_reserve);
 
@@ -125,6 +128,7 @@ void kernel_main() {
                 noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
                 out_l1_write_addr += in_nbytes_c * window_w;
             }
+            if (split_reader) counter++; // interleave the indices
         }
         noc_async_read_barrier();
         cb_push_back(in_cb_id, npages_to_reserve);

@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     uint32_t multi_buffering_factor = 2;
 
     // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_id = CB::c_in1;
+    uint32_t in_scalar_cb_id = CB::c_in4;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
     CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(
@@ -469,7 +469,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             out_w_loop_count,
                                             nbatch,
                                             out_nhw_per_core,
-                                            out_nhw_per_core,
+                                            0, // Split reader
                                             out_nhw_per_core / nblocks,     // loop count with blocks
                                             input_shape[3],
                                             };
@@ -703,8 +703,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     // CBs
     uint32_t multi_buffering_factor = 2;
 
+    uint32_t split_reader = 1;
+
     // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_id = CB::c_in1;
+    uint32_t in_scalar_cb_id = CB::c_in4;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
     CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(
@@ -740,14 +742,23 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     auto in_reader_indices_cb = CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
 
     // reader output == input to tilize
-    uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_0 = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_1 = CB::c_in1;          // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor * nblocks;
-    CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
-		.set_page_size(in_cb_id, in_cb_pagesize);
-    auto in_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
-    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id, in_cb_pagesize, in_cb_npages);
+
+    CircularBufferConfig in_cb_config_0 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_0, in_df}})
+		.set_page_size(in_cb_id_0, in_cb_pagesize);
+    auto in_cb_0 = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_0);
+    log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
+
+    if (split_reader) {
+        CircularBufferConfig in_cb_config_1 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_1, in_df}})
+		.set_page_size(in_cb_id_1, in_cb_pagesize);
+        auto in_cb_1 = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_1);
+        log_debug(LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
+    }
 
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
@@ -833,7 +844,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t in_nbytes_c_log2 = (uint32_t) std::log2((float) in_nbytes_c);
-    std::vector<uint32_t> reader_ct_args = {
+    std::vector<uint32_t> reader0_ct_args = {
                                             out_nhw_per_core,
                                             kernel_size_h,
                                             kernel_size_w,
@@ -844,20 +855,46 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             in_cb_page_padded * in_cb_npages / tile_w,
                                             input_shape[3],
                                             nblocks,
-                                            input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            bf16_one_u32,
-                                            nblocks};
+                                            split_reader, // enable split reader
+                                            0, // split reader id
+                                            bf16_one_u32
+                                            };
 
-    auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
-                                            .noc = NOC::RISCV_0_default,
-                                            .compile_args = reader_ct_args};
+    std::vector<uint32_t> reader1_ct_args = {
+                                            out_nhw_per_core,
+                                            kernel_size_h,
+                                            kernel_size_w,
+                                            pad_w,
+                                            in_nbytes_c,
+                                            in_nbytes_c_log2,
+                                            in_w,
+                                            in_cb_page_padded * in_cb_npages / tile_w,
+                                            input_shape[3],
+                                            nblocks,
+                                            split_reader, // enable split reader
+                                            1, // split reader id
+                                            bf16_one_u32
+                                            };
+
+
     std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
-    auto reader_kernel = CreateKernel(program,
+
+    auto reader0_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
+                                            .noc = NOC::RISCV_0_default,
+                                            .compile_args = reader0_ct_args};
+
+    auto reader0_kernel = CreateKernel(program,
                                         reader_kernel_fname,
                                         all_cores,
-                                        reader_config);
+                                        reader0_config);
 
+    auto reader1_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
+                                            .noc = NOC::RISCV_1_default,
+                                            .compile_args = reader1_ct_args};
+    auto reader1_kernel = split_reader ? CreateKernel(program,
+                                        reader_kernel_fname,
+                                        all_cores,
+                                        reader1_config) : 0;
     /**
      * Writer Kernel: output cb -> output rows
      */
@@ -900,7 +937,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             out_w_loop_count,
                                             nbatch,
                                             out_nhw_per_core,
-                                            out_nhw_per_core,
+                                            split_reader, // enable split reader
                                             out_nhw_per_core / nblocks,     // loop count with blocks
                                             input_shape[3],
                                             };
@@ -930,7 +967,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     auto override_runtime_arguments_callback = [
             //reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
-            reader_kernel, raw_in_cb, in_reader_indices_cb, cb_out, ncores, ncores_w
+            reader0_kernel, reader1_kernel, raw_in_cb, in_reader_indices_cb, cb_out, ncores, ncores_w
         ]
     (
         const void* operation,

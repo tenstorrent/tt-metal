@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t multi_buffering_factor = 2;
 
     // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_id = CB::c_in1;
+    uint32_t in_scalar_cb_id = CB::c_in4;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
     CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, in_df}})
