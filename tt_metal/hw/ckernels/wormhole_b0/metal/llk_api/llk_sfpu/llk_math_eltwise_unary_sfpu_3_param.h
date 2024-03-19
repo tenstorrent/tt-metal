@@ -47,7 +47,7 @@ inline void llk_math_eltwise_unary_sfpu_3_param(
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         }
-    } else {
+    } else if (vector_mode == (int)VectorMode::RC) {
         // Do all four faces, and iterate through all 4 blocks of 4 rows each
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++) {
@@ -55,6 +55,8 @@ inline void llk_math_eltwise_unary_sfpu_3_param(
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         }
+    } else {
+        func(param0, param1, param2);
     }
     math::clear_dst_reg_addr();
 
