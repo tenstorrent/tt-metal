@@ -57,7 +57,9 @@ def run_test_FalconCausalLM_end_to_end(
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
+    )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -396,9 +398,10 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 2, 32, 0),
+        ("prefill", 2, 64, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "decode_batch32"],
+    ids=["prefill_seq32", "prefill_seq64", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
@@ -427,7 +430,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     if llm_mode == "prefill":
         if model_config_str == "BFLOAT16-SHARDED":

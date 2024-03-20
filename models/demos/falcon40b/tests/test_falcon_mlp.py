@@ -46,7 +46,9 @@ def run_test_FalconMLP_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_name, low_cpu_mem_usage=True, num_hidden_layers=1
+    )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -102,6 +104,7 @@ def run_test_FalconMLP_inference(
     (
         ("decode", 32, 1),
         ("prefill", 1, 32),
+        ("prefill", 1, 64),
     ),
 )
 @pytest.mark.parametrize(
@@ -120,7 +123,7 @@ def test_FalconMLP_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)

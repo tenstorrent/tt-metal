@@ -260,12 +260,24 @@ void Device::clear_l1_state() {
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        std::vector<uint32_t> init_erisc_info_vec(
-            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE) / sizeof(uint32_t),
+        // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
+        // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
+        std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
+                sizeof(uint32_t),
             0);
 
         llrt::write_hex_vec_to_core(
-            this->id(), physical_core, init_erisc_info_vec, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(),
+            physical_core,
+            zero_vec_above_tile_header_buffer,
+            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
+
+        std::vector<uint32_t> zero_vec_below_command_q_base(
+            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
+
+        llrt::write_hex_vec_to_core(
+            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
     }
 }
 
@@ -429,7 +441,7 @@ void Device::compile_command_queue_programs() {
                         {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
                         {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
                     };
-                    std::vector<uint32_t> eth_tunneller_compile_args = {true};
+                    std::vector<uint32_t> eth_tunneller_compile_args = {true, num_tensix_command_slots};
                     std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
@@ -602,7 +614,7 @@ void Device::compile_command_queue_programs() {
                 {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
                 {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
             };
-            std::vector<uint32_t> eth_tunneller_compile_args = {false}; // SENDER is ISSUE
+            std::vector<uint32_t> eth_tunneller_compile_args = {false, num_tensix_command_slots}; // SENDER is ISSUE
             std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
             tt::tt_metal::CreateKernel(
                 *command_queue_program_ptr,
@@ -792,7 +804,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     this->initialize_and_launch_firmware();
 
-    watcher_attach(this, build_env_.get_out_root_path());
+    watcher_attach(this);
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;

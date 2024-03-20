@@ -343,6 +343,7 @@ class TTPyCompositeConv(TTPyOp):
         "out_block_w",
         "out_subblock_h",
         "out_subblock_w",
+        "act_reshard_num_cores_nhw",
     ]
 
     def __init__(
@@ -477,6 +478,11 @@ class TTPyCompositeConv(TTPyOp):
                 num_cores_nhw=self.opt_conv_parall_conf_auto.num_cores_nhw,
             )
 
+        if "act_reshard_num_cores_nhw" in conv_blocking_and_parallelization_config_override:
+            sliding_window_op_params = sliding_window_op_params._replace(
+                act_reshard_num_cores_nhw=conv_blocking_and_parallelization_config_override["act_reshard_num_cores_nhw"]
+            )
+
         self.sliding_window_op_params = sliding_window_op_params
         self.move_utwh_output = move_utwh_output
         self.deallocate_input = deallocate_activation
@@ -545,9 +551,19 @@ class TTPyCompositeConv(TTPyOp):
         self.set_output_sharded_memory_config()
 
     def set_input_sharded_memory_config(self):
-        num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-        num_cores_w = self.sliding_window_op_params.num_cores_w
-        num_cores_h = self.sliding_window_op_params.num_cores_h
+        needs_reshard = self.sliding_window_op_params.act_reshard_num_cores_nhw > 0
+        if needs_reshard:
+            num_cores_nhw = self.sliding_window_op_params.act_reshard_num_cores_nhw
+            if self.is_1d_systolic:
+                num_cores_w = min(self.sliding_window_op_params.num_cores_w, num_cores_nhw)
+                num_cores_h = (num_cores_nhw + num_cores_w - 1) // num_cores_w
+            else:
+                num_cores_w = num_cores_nhw
+                num_cores_h = self.sliding_window_op_params.num_cores_h
+        else:
+            num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
+            num_cores_w = self.sliding_window_op_params.num_cores_w
+            num_cores_h = self.sliding_window_op_params.num_cores_h
 
         input_channels = self.input_tensor_shape[3]
         padded_input_channels = (
@@ -564,34 +580,7 @@ class TTPyCompositeConv(TTPyOp):
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
 
-        if self.is_1d_systolic and num_cores_nhw % num_cores_w > 0:
-            assert num_cores_h * num_cores_w > num_cores_nhw
-            first_range_num_cores_h = num_cores_nhw // num_cores_w
-            assert num_cores_nhw % num_cores_w < num_cores_w
-
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(num_cores_w - 1, first_range_num_cores_h - 1),
-                    ),
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, first_range_num_cores_h),
-                        ttl.tensor.CoreCoord((num_cores_nhw % num_cores_w) - 1, first_range_num_cores_h),
-                    ),
-                }
-            )
-        else:
-            if self.is_1d_systolic:
-                assert num_cores_nhw == num_cores_h * num_cores_w
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-                    )
-                }
-            )
-
+        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
         self.input_shard_orientation = (
             ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )
@@ -630,34 +619,7 @@ class TTPyCompositeConv(TTPyOp):
         )
         output_shard_height = (int)(output_size_to_shard_evenly / num_cores_nhw)
 
-        if self.is_1d_systolic and num_cores_nhw % num_cores_w > 0:
-            assert num_cores_h * num_cores_w > num_cores_nhw
-            first_range_num_cores_h = num_cores_nhw // num_cores_w
-            assert num_cores_nhw % num_cores_w < num_cores_w
-
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(num_cores_w - 1, first_range_num_cores_h - 1),
-                    ),
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, first_range_num_cores_h),
-                        ttl.tensor.CoreCoord((num_cores_nhw % num_cores_w) - 1, first_range_num_cores_h),
-                    ),
-                }
-            )
-        else:
-            if self.is_1d_systolic:
-                assert num_cores_nhw == num_cores_h * num_cores_w
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-                    )
-                }
-            )
-
+        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
         self.output_shard_orientation = (
             ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )

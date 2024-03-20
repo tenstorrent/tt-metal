@@ -79,6 +79,9 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     const char *watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
     watcher_append = (watcher_append_str != nullptr);
+
+    // Auto unpause is for testing only, no env var.
+    watcher_auto_unpause = false;
 }
 
 void RunTimeOptions::ParseDPrintEnv() {

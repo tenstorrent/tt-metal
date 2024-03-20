@@ -141,7 +141,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    const uint32_t outerloop = narrow_tile ? 1 : ((num_faces>2) ? num_faces/2 : ((num_faces>1) ? 2 : 1));
+    const uint32_t outerloop = narrow_tile ? 1 : ((num_faces>2) ? num_faces/2 : num_faces);
     constexpr uint32_t innerloop = 1;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
     tmp.program(instrn_buffer);
@@ -155,7 +155,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
+    const std::uint32_t block_c_dim = ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM);
 
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
@@ -195,7 +195,7 @@ inline void llk_unpack_tilizeA_B(
                                                     // Offset address is in 16B words
                                                     // Datum count = tile_index*face_r_dim (/16 to get word count)
 
-    const std::uint32_t block_c_dim_16B = block_ct_dim * (narrow_tile ? FACE_C_DIM/16 : TILE_C_DIM/16);
+    const std::uint32_t block_c_dim_16B = block_ct_dim * ((narrow_tile || (num_faces==1)) ? FACE_C_DIM/16 : TILE_C_DIM/16);
     std::uint32_t bot_face_offset_address =
         SCALE_DATUM_SIZE(unpack_src_format[operandA_id], face_r_dim*block_c_dim_16B);  //*N rows / 16 to get 16B word aligned address
 

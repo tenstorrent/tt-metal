@@ -1,4 +1,4 @@
-name: eager - Package
+name: "[internal] eager - Package on main impl"
 
 on:
   workflow_call:

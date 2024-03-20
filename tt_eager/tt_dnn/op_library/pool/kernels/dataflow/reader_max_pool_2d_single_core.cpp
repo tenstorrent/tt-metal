@@ -114,7 +114,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(6);
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
+    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
 
     constexpr uint32_t TILE_HW = 1024;
 

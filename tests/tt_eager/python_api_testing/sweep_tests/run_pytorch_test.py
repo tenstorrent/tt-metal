@@ -6,6 +6,7 @@ import os
 import csv
 import sys
 import time
+import copy
 import torch
 import argparse
 import yaml
@@ -62,46 +63,23 @@ def make_env_combinations(env_dict):
     return product(*envs)
 
 
-def run_pytorch_test(args):
-    # Create output folder
-    output_folder = Path(args.output_folder_path)
-
-    # if output_folder.exists():
-    #     logger.error(
-    #         f"Directory {output_folder} already exists! Remove this folder or provide a different path to start pytorch tests."
-    #     )
-    #     sys.exit(1)
-
-    if not output_folder.exists():
-        output_folder.mkdir(parents=True)
-        write_to_csv = True
-        logger.info(f"Starting pytorch tests in: {output_folder}. Writing to csv.")
-    else:
-        write_to_csv = False
-        logger.info(f"Not logging results in {output_folder}. Delete that folder to write csv results.")
-
-    ################# PARSE ARGS #################
-    device_id = args.device_id
-    device = tt_lib.device.CreateDevice(device_id)
-    tt_lib.device.SetDefaultDevice(device)
-
-    logger.info(f"Running on device {device_id} for test.")
-
+def generate_test_sweep_parameters(input_test_config, env=""):
     ################# PARSE TEST CONFIGS #################
-    with open(args.input_test_config, "r") as stream:
+    with open(input_test_config, "r") as stream:
         try:
             pytorch_test_configs_yaml = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             logger.error(exc)
+            raise exc
 
     assert "test-list" in pytorch_test_configs_yaml
     pytorch_test_list = pytorch_test_configs_yaml["test-list"]
 
-    default_env_dict = {}
     # Get env variables from CLI
     args_env_dict = {}
-    if args.env != "":
-        envs = args.env.split(" ")
+
+    if env != "":
+        envs = env.split(" ")
         for e in envs:
             if "=" not in e:
                 name = e
@@ -114,8 +92,7 @@ def run_pytorch_test(args):
     if isinstance(pytorch_test_list, dict):
         pytorch_test_list = [pytorch_test_list]
 
-    start_time = time.time()
-    run_id = 0
+    generated_test_sweep_parameters = []
     random.seed(0)
 
     for i in range(len(pytorch_test_list)):
@@ -131,23 +108,13 @@ def run_pytorch_test(args):
             elif args_env_dict:
                 env_dict = args_env_dict
             else:
-                env_dict = default_env_dict
+                env_dict = {}
 
             env_dict_combinations = make_env_combinations(env_dict)
 
             for env_dict in env_dict_combinations:
-                old_env_dict = {}
-                # assert isinstance(env_dict, dict)
-
-                for key, value in env_dict:
-                    old_env_dict[key] = os.environ.pop(key, None)
-
-                    if value != "" and value is not None:
-                        os.environ[key] = value
-
                 shape_dict = test_config["shape"]
                 datagen_dict = test_config["datagen"]
-                results_csv_path = output_folder / test_config["output-file"]
 
                 comparison_dict = test_config["comparison"]
                 comparison_args = comparison_dict.get("args", {})
@@ -228,65 +195,115 @@ def run_pytorch_test(args):
                 for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
                     shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
                 ):
-                    # Moved this here so that we don't need to maintain a hardcoded list of headers per op
-                    skip_header = results_csv_path.exists()
+                    data_seed = random.randint(0, 20000000)
+                    # input_shapes = input_shapes.copy()
 
-                    with open(results_csv_path, "a", newline="") as results_csv:
-                        results_csv_writer = None
+                    parameters = {}
+                    parameters["data_seed"] = data_seed
+                    parameters["input_shapes"] = input_shapes
+                    parameters["env_dict"] = env_dict
+                    parameters["test_name"] = test_name
+                    parameters["generated_test_args"] = generated_test_args
+                    parameters["comparison_func"] = comparison_func
+                    parameters["datagen_funcs"] = datagen_funcs
 
-                        if write_to_csv:
-                            results_csv_writer = csv.DictWriter(results_csv, fieldnames=get_test_fieldnames(["args"]))
-                            if not skip_header:
-                                results_csv_writer.writeheader()
-                                results_csv.flush()
+                    generated_test_sweep_parameters.append(parameters)
 
-                        data_seed = random.randint(0, 20000000)  # int(time.time())
-                        torch.manual_seed(data_seed)
+    return generated_test_sweep_parameters, test_config["output-file"]
 
-                        logger.info(f"Running with shape: {input_shapes} and seed: {data_seed}")
 
-                        test_profiling_key = f"test_sweep_separator - {run_id}"
-                        logger.info(f"Starting profiling test {test_profiling_key}")
-                        tt_lib.profiler.start_profiling(test_profiling_key)
+def run_sweep_test(parameters, device, results_csv_writer=None):
+    data_seed = parameters["data_seed"]
+    input_shapes = parameters["input_shapes"]
+    test_name = parameters["test_name"]
 
-                        test_pass = run_test_and_save_results(
-                            results_csv_writer,
-                            test_name,
-                            input_shapes,
-                            data_seed,
-                            env_dict,
-                            generated_test_args,
-                            op_map[test_name]["tt_lib_op"],
-                            op_map[test_name]["pytorch_op"],
-                            input_shapes,
-                            datagen_funcs,
-                            comparison_func,
-                            generated_test_args,
-                            device,
-                        )
+    torch.manual_seed(parameters["data_seed"])
+    logger.info(f"Running with shape: {input_shapes} and seed: {data_seed}")
 
-                        tt_lib.device.Synchronize(device)
-                        tt_lib.profiler.stop_profiling(test_profiling_key)
-                        logger.info(f"Stopped profiling test {test_profiling_key}")
-                        run_id += 1
+    old_env_dict = {}
 
-                        results_csv.flush()
+    for key, value in parameters["env_dict"]:
+        old_env_dict[key] = os.environ.pop(key, None)
 
-                        # Check if test passed
-                        if args.run_tests_for_ci and not test_pass:
-                            logger.error(f"{test_name} test failed with input shape {input_shapes}.")
-                            sys.exit(1)
+        if value != "" and value is not None:
+            os.environ[key] = value
 
-                # Unset env variables
-                for key, value in old_env_dict.items():
-                    os.environ.pop(key, None)
-                    if value is not None:
-                        os.environ[key] = value
+    test_pass = run_test_and_save_results(
+        results_csv_writer,
+        test_name,
+        input_shapes,
+        data_seed,
+        parameters["env_dict"],
+        parameters["generated_test_args"],
+        op_map[test_name]["tt_lib_op"],
+        op_map[test_name]["pytorch_op"],
+        input_shapes,
+        parameters["datagen_funcs"],
+        parameters["comparison_func"],
+        parameters["generated_test_args"],
+        device,
+    )
+
+    # Unset env variables
+    for key, value in old_env_dict.items():
+        os.environ.pop(key, None)
+        if value is not None:
+            os.environ[key] = value
+
+    return test_pass
+
+
+def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests_for_ci, device):
+    # Create output folder
+    output_folder = Path(output_folder)
+
+    if not output_folder.exists():
+        output_folder.mkdir(parents=True)
+        write_to_csv = True
+        logger.info(f"Starting pytorch tests in: {output_folder}. Writing to csv.")
+    else:
+        write_to_csv = False
+        logger.info(f"Not logging results in {output_folder}. Delete that folder to write csv results.")
+
+    start_time = time.time()
+    run_id = 0
+
+    for parameters in test_sweep_parameters:
+        results_csv_path = output_folder / output_file
+
+        # Moved this here so that we don't need to maintain a hardcoded list of headers per op
+        skip_header = results_csv_path.exists()
+
+        with open(results_csv_path, "a", newline="") as results_csv:
+            results_csv_writer = None
+
+            if write_to_csv:
+                results_csv_writer = csv.DictWriter(results_csv, fieldnames=get_test_fieldnames(["args"]))
+
+                if not skip_header:
+                    results_csv_writer.writeheader()
+                    results_csv.flush()
+
+            test_profiling_key = f"test_sweep_separator - {run_id}"
+            logger.info(f"Starting profiling test {test_profiling_key}")
+            tt_lib.profiler.start_profiling(test_profiling_key)
+
+            test_pass = run_sweep_test(parameters, device, results_csv_writer)
+
+            tt_lib.device.Synchronize(device)
+            tt_lib.profiler.stop_profiling(test_profiling_key)
+            logger.info(f"Stopped profiling test {test_profiling_key}")
+            run_id += 1
+
+            results_csv.flush()
+
+            # Check if test passed
+            if run_tests_for_ci and not test_pass:
+                logger.error(f"{parameters['test_name']} test failed with input shape {parameters['input_shapes']}.")
+                sys.exit(1)
 
     duration = time.time() - start_time
     logger.info(f"Tests run in {duration:.2f}s")
-
-    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":
@@ -324,4 +341,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    run_pytorch_test(args)
+    device_id = args.device_id
+    device = tt_lib.device.CreateDevice(device_id)
+    tt_lib.device.SetDefaultDevice(device)
+
+    logger.info(f"Running on device {device_id} for test.")
+
+    test_sweep_parameters, output_file = generate_test_sweep_parameters(args.input_test_config, args.env)
+    run_sweep_tests(test_sweep_parameters, args.output_folder_path, output_file, args.run_tests_for_ci, device)
+
+    tt_lib.device.CloseDevice(device)

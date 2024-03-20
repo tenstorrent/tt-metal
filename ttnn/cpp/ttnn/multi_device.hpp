@@ -6,10 +6,11 @@
 
 #include <memory>
 
-#include "ttnn/device_pool.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/types.hpp"
 #include "tt_eager/tensor/tensor.hpp"
+#include "tt_metal/impl/device/multi_device.hpp"
+
+using Device = ttnn::Device;
+
 
 namespace ttnn {
 
@@ -18,55 +19,6 @@ namespace multi_device {
 using DeviceGrid = std::pair<int, int>;
 using DeviceIds = std::vector<int>;
 
-class DeviceMesh
-{
-public:
-    DeviceGrid device_grid;
-    std::vector<std::pair<int, std::unique_ptr<Device>>> managed_devices;
-
-    DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids)
-        : device_grid(device_grid)
-    {
-        auto num_requested_devices = device_ids.size();
-        auto num_available_devices = tt::tt_metal::GetNumAvailableDevices();
-        TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
-
-        for (auto device_id : device_ids) {
-            managed_devices.emplace_back(device_id, std::unique_ptr<Device>(CreateDevice(device_id, 1)));
-        }
-    }
-    ~DeviceMesh() = default;
-
-    DeviceMesh(const DeviceMesh &) = delete;
-    DeviceMesh &operator=(const DeviceMesh &) = delete;
-
-    DeviceMesh(DeviceMesh &&) = delete;
-    DeviceMesh &operator=(DeviceMesh &&) = delete;
-
-    Device &get_device(int queried_device_id)
-    {
-        for (const auto& [device_id, device] : managed_devices) {
-            if (device_id == queried_device_id) {
-                return *device;
-            }
-        }
-        TT_THROW("User has provided an invalid device index");
-    }
-
-    const DeviceIds get_device_ids() const
-    {
-        DeviceIds device_ids;
-        for (const auto& [device_id, device] : managed_devices) {
-            device_ids.push_back(device_id);
-        }
-        return device_ids;
-    }
-
-    int num_devices() const
-    {
-        return managed_devices.size();
-    }
-};
 
 inline DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids) {
     return DeviceMesh(device_grid, device_ids);
@@ -79,46 +31,6 @@ inline void close_device_mesh(DeviceMesh &multi_device) {
     }
     multi_device.managed_devices.clear();
 }
-
-ttnn::Tensor to_device_mesh(const ttnn::Tensor& tensor, ttnn::multi_device::DeviceMesh& device_mesh, const ttnn::MemoryConfig& memory_config) {
-
-    if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
-        auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-        std::vector<DeviceBuffer> device_buffers;
-
-        for (int i = 0; i < host_storage.buffers.size(); ++i)
-        {
-            Device& target_device = device_mesh.get_device(i);
-            auto shard = Tensor{OwnedStorage{host_storage.buffers[i]},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()};
-            shard = shard.to(&target_device, memory_config);
-
-            device_buffers.push_back(std::get<DeviceStorage>(shard.get_storage()).buffer);
-        }
-        auto storage = MultiDeviceStorage{std::move(device_buffers), host_storage.shapes};
-        return Tensor(std::move(storage), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
-    } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
-        return tensor; // already on device
-    }
-    TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
-}
-
-ttnn::Tensor from_device_mesh(const ttnn::Tensor& tensor) {
-    if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
-        auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        std::vector<OwnedBuffer> host_buffers;
-
-        for (int i = 0; i < device_storage.buffers.size(); ++i)
-        {
-            auto shard = Tensor{DeviceStorage{device_storage.buffers[i]}, device_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()};
-            shard = shard.cpu();
-            host_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-        }
-        auto storage = MultiDeviceHostStorage{std::move(host_buffers), device_storage.shapes};
-        return Tensor(std::move(storage), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
-    }
-    TT_THROW("Expected tensor to be on MultiDeviceStorage type!");
-}
-
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     std::vector<ttnn::Tensor> tensors;

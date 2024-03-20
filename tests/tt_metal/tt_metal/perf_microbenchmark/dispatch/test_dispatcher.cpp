@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
             "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
             {spoof_prefetch_core},
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = spoof_prefetch_compile_args,
                 .defines = defines
@@ -292,7 +292,7 @@ int main(int argc, char **argv) {
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             {dispatch_core},
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = dispatch_compile_args,
                 .defines = defines

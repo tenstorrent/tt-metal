@@ -11,9 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class ConcatOpParallelizationStrategy {
-    SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE = 2
-};
+enum class ConcatOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE = 2 };
 
 struct Concat {
     uint32_t dim;
@@ -31,13 +29,19 @@ struct Concat {
     }
 };
 
-operation::ProgramWithCallbacks sharded_concat_multi_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
-operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
-operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+operation::ProgramWithCallbacks sharded_concat_multi_core(
+    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+operation::ProgramWithCallbacks concat_multi_core(
+    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
+operation::ProgramWithCallbacks concat_single_core(
+    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
 
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
-Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor concat(
+    std::vector<Tensor> &input_tensors,
+    const std::int64_t dim = 0,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

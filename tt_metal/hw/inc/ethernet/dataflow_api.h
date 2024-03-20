@@ -18,6 +18,17 @@
 
 
 /**
+ * Indicates if the ethernet transaction queue is busy ingesting a command at this moment,
+ *
+ * Return value: bool: true if the queue is ingesting a command and cannot accept a new one
+ * at this specific moment
+ */
+FORCE_INLINE bool eth_txq_is_busy() {
+    return internal_::eth_txq_is_busy(0);
+}
+
+
+/**
  * A blocking call that waits until the value of a local L1 memory address on
  * the Tensix core executing this function becomes equal to a target value.
  * This L1 memory address is used as a semaphore of size 4 Bytes, as a
@@ -116,7 +127,8 @@ void eth_send_bytes(
 
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the local ethernet core to L1 of the connected
- * remote ethernet core. Also, see \a eth_is_receiver_channel_send_done and \a eth_bytes_are_available_on_channel.
+ * remote ethernet core. However, this is only the first half of the sender's part of then transaction. It does not
+ * include the sending of the write completion signature to the receiver.
  *
  * Non-blocking
  *
@@ -132,6 +144,39 @@ void eth_send_bytes(
  * | num_bytes_per_send          | Number of bytes to send per packet                      | uint32_t | 16..1MB     | False    |
 *  | num_bytes_per_send_word_size| num_bytes_per_send shifted right 4                      | uint32_t | 1..256kB    | False    |
  */
+FORCE_INLINE
+void eth_send_bytes_over_channel_payload_only(
+    uint32_t src_addr,
+    uint32_t dst_addr,
+    uint32_t num_bytes,
+    uint32_t channel,
+    uint32_t num_bytes_per_send = 16,
+    uint32_t num_bytes_per_send_word_size = 1) {
+    // assert(channel < 4);
+    uint32_t num_bytes_sent = 0;
+    while (num_bytes_sent < num_bytes) {
+        internal_::eth_send_packet(
+            0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
+        num_bytes_sent += num_bytes_per_send;
+    }
+}
+
+/*
+ * Sends the write completion signal to the receiver ethernet core, for transfers where the payload was already sent.
+ * The second half of a full ethernet send.
+ */
+FORCE_INLINE
+void eth_send_payload_complete_signal_over_channel(uint32_t channel, uint32_t num_bytes) {
+    erisc_info->channels[channel].bytes_sent = num_bytes;
+    erisc_info->channels[channel].receiver_ack = 0;
+    uint32_t addr = ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
+    internal_::eth_send_packet(
+        0,
+        addr,
+        addr,
+    1);
+}
+
 FORCE_INLINE
 void eth_send_bytes_over_channel(
     uint32_t src_addr,

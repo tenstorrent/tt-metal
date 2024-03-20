@@ -56,7 +56,9 @@ def run_test_FalconAttention_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_name, low_cpu_mem_usage=True, num_hidden_layers=1
+    )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -323,17 +325,20 @@ def run_test_FalconAttention_inference(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 1, 32, 0),
+        ("prefill", 1, 64, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "decode_batch32"],
+    ids=["prefill_seq32", "prefill_seq64", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version",
     (("tiiuae/falcon-40b-instruct"),),
+    ids=["falcon_40b"],
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
     [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
+    ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"],
 )
 def test_FalconAttention_inference(
     num_devices,
@@ -349,7 +354,7 @@ def test_FalconAttention_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: enable program cache as soon as multi chip correctness is verified
 ):
     if llm_mode == "prefill" and model_config_str == "BFLOAT16-SHARDED":
         pytest.skip("Prefill is only tested for BFLOAT8_B!")

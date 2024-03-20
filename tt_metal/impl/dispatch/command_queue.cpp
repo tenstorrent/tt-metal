@@ -142,7 +142,10 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
             uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
-            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_data_buffer_size;
+            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_cb_size;
+            if (producer_consumer_multiple != 1) {
+                producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            }
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -319,7 +322,10 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
             uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
-            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_data_buffer_size;
+            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_cb_size;
+            if (producer_consumer_multiple != 1) {
+                producer_consumer_multiple = producer_consumer_multiple / 2 * 2; // To ensure that our CB can broken up into 2
+            }
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -331,7 +337,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
             uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
             uint32_t num_pages_in_data_buffer = pull_and_push_data_buffer_size / padded_page_size;
             // make sure push_and_pull_cb_num_pages is multiple of 4 because we read half this number of pages and write a quarter of this number of pages
-            push_and_pull_cb_num_pages = (num_pages_in_data_buffer / 4)* 4;
+            push_and_pull_cb_num_pages = (num_pages_in_data_buffer / 4) * 4;
         }
 
         uint32_t push_and_pull_cb_size = push_and_pull_cb_num_pages * padded_page_size;

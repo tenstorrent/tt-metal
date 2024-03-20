@@ -10,7 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose
 
 
 def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
@@ -38,7 +38,7 @@ def run_l1_loss_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
     tt_result = tt_result.squeeze(0)
     tt_result = tt_result.squeeze(0)
 
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_allclose(ref_value, tt_result[0, 0], atol=4, rtol=1e-1)
     logger.debug(pcc_value)
     logger.debug(success)
 

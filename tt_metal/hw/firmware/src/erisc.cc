@@ -50,6 +50,10 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
     DEBUG_STATUS('I');
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
+    // Not using firmware_kernel_common_init since it is copying to registers
+    // TODO: need to find free space that routing FW is not using
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
+
     risc_init();
     noc_init();
 
@@ -66,7 +70,7 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
 
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        if (erisc_info->launch_user_kernel == 1) {
+        if (mailboxes->launch.run == RUN_MSG_GO) {
             DEBUG_STATUS('R');
             kernel_profiler::init_profiler();
             kernel_profiler::mark_time(CC_MAIN_START);

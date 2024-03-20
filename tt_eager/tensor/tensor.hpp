@@ -18,6 +18,7 @@
 #include "tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/multi_device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
@@ -61,6 +62,10 @@ struct Tensor {
 
     Tensor to(
         Device *target_device,
+        const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+
+    Tensor to(
+        DeviceMesh *device_mesh,
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(

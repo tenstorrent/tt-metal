@@ -914,8 +914,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.hypot_bw
 
-.. autofunction:: tt_lib.tensor.maximum_bw
-
 .. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_bw
@@ -1057,6 +1055,8 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
+
+.. autofunction:: tt_lib.tensor.multigammaln_bw
 
 Loss Functions
 ==============

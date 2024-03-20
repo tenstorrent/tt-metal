@@ -126,12 +126,11 @@ inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t fac
     );
 }
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool pack_dense = false>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t block_c_index = 0) {
 
     const std::uint32_t output_id = get_output_id(output);
-    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1 + SCALE_DATUM_SIZE(pack_dst_format[output_id], (block_c_index * ((num_faces>1) ? num_faces/2 : 1) * block_ct_dim * FACE_R_DIM))/16;
-
+    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1 + SCALE_DATUM_SIZE(pack_dst_format[output_id], (block_c_index * ((num_faces>2) ? num_faces/2 : num_faces) * block_ct_dim * FACE_C_DIM))/16;
 
     for (std::uint32_t block_rt=0; block_rt<block_rt_dim; block_rt++) {
 
@@ -143,8 +142,7 @@ inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint3
             block_rt*block_ct_dim
         );
 
-        pack_tile_addr += full_ct_dim*(pack_dense ? (std::uint32_t)SCALE_DATUM_SIZE(pack_dst_format[output_id], num_faces*face_r_dim*FACE_C_DIM) :
-                                                    (std::uint32_t)(GET_L1_TILE_SIZE<true>(pack_dst_format[output_id])));
+        pack_tile_addr += full_ct_dim*((std::uint32_t)SCALE_DATUM_SIZE(pack_dst_format[output_id], (num_faces*face_r_dim*FACE_C_DIM)/16));
     }
 }
 
