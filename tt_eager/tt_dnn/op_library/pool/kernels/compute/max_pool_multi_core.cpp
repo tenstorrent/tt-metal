@@ -91,7 +91,7 @@ void MAIN {
     constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
     constexpr uint32_t in_ntiles_hwc = get_compile_time_arg_val(2);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(3);
+    constexpr uint32_t window_hw_padded = get_compile_time_arg_val(3);
     constexpr uint32_t out_h = get_compile_time_arg_val(4);
     constexpr uint32_t out_w = get_compile_time_arg_val(5);
     constexpr uint32_t out_ntiles_c = get_compile_time_arg_val(7);
@@ -114,7 +114,7 @@ void MAIN {
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile, window_size_hw);
+    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile);
     pack_untilize_dst_init_short<num_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
 
     cb_wait_front(in_scalar_cb_id, 1);

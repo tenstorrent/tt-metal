@@ -36,6 +36,17 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
+ALWI bool fill_with_val_async(uint32_t local_src_addr, uint32_t begin_addr, int32_t nrows, uint32_t row_nbytes) {
+    uint32_t curr_addr = begin_addr;
+    uint64_t local_noc_src_addr = get_noc_addr(local_src_addr);
+    for (int32_t row_i = 0; row_i < nrows; ++ row_i) {
+        noc_async_read_one_packet(local_noc_src_addr, curr_addr, row_nbytes);
+        // noc_async_read(local_noc_src_addr, curr_addr, row_nbytes);
+        curr_addr += row_nbytes;
+    }
+    return true;
+}
+
 /**
  * Max-pool 2D.
  */
@@ -73,21 +84,31 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = tt::CB::c_in3;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
 
-    constexpr uint32_t ROW_HW = 64;
+    constexpr uint32_t TILE_HW = 1024;
 
     // Reduce scalar = 1
-    if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
+    cb_reserve_back(in_scalar_cb_id, 1);
 
-        uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
-        // fill 1 row w/ scalar
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        cb_push_back(in_scalar_cb_id, 1);
-    }
+    uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
+    // fill 1 tile w/ scalar
+    fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_HW, bf16_one_u16);
+    cb_push_back(in_scalar_cb_id, 1);
+
+    uint16_t minus_inf = 0xf7ff;
+    // fill one row of in_cb_id rows with -inf
+    uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+    fill_with_val(in_l1_write_addr, in_c, minus_inf);
+    // now replicate the row to fill the entire in_cb_id
+    fill_with_val_async(in_l1_write_addr, in_l1_write_addr + in_nbytes_c, in_cb_nsticks - 1, in_nbytes_c);
+    noc_async_read_barrier();
+
+    // NOTE: batch is folded in
 
     uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+
+    // cb_wait_front(in_reader_indices_cb_id, 1);
 
     uint32_t in_w_padded = in_w + 2 * pad_w;
 
