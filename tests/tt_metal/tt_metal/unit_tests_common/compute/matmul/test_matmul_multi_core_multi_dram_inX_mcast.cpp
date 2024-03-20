@@ -144,6 +144,10 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
+
+    uint32_t in_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
     return {std::move(program), mm_reader_kernel_sender, mm_reader_kernel_receiver, unary_writer_kernel};
 }
 
@@ -274,8 +278,6 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
     uint32_t in0_dram_addr = DRAM_UNRESERVED_BASE;
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
-    uint32_t in_mcast_sender_semaphore_addr = 109600;
-    uint32_t in_mcast_receiver_semaphore_addr = 109632;
 
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
@@ -308,13 +310,8 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
     pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
     log_debug(LogTest, "Copying inputs to dram complete");
 
-    for(int i = 0; i < num_cores_r; i++) {
-        for(int j = 0; j < num_cores_c; j++) {
-            std::vector<uint32_t> invalid = {INVALID};
-            CoreCoord core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
-            tt_metal::detail::WriteToDeviceL1(device, core, in_mcast_sender_semaphore_addr, invalid);
-        }
-    }
+    uint32_t in_mcast_sender_semaphore_addr = program.semaphores()[0].address();
+    uint32_t in_mcast_receiver_semaphore_addr = program.semaphores()[1].address();
 
     log_debug(LogTest, "Writing kernel runtime args to device");
     pass &= write_runtime_args_to_device(
