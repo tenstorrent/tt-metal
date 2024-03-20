@@ -18,7 +18,9 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "queue/queue.hpp"
-
+#ifdef DEBUG
+#include "tt_dnn/op_library/operation_history.hpp"
+#endif
 
 using namespace tt::constants;
 
@@ -62,7 +64,21 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-void Tensor::deallocate(bool force) {
+#ifdef DEBUG
+void Tensor::log_deallocate(const Buffer& buffer, const bool force){
+    const bool deallocation_possible = buffer.can_be_deallocated();
+    if(deallocation_possible){
+        operation_history::append(operation_history::OperationRecord{
+        "Tensor::deallocate", {{"force", fmt::format("{}", force)}, {"deallocation_possible", "true"}}, {}, {}});
+    }
+    else{
+        operation_history::append(operation_history::OperationRecord{
+        "Tensor::deallocate", {{"force", fmt::format("{}", force)}, {"deallocation_possible", "false"}}, {}, {}});
+    }
+}
+#endif
+
+void Tensor::deallocate(const bool force) {
     if (this->tensor_attributes.use_count()) {
         // Check if the attributes didn't get moved to another tensor.
         // If not, we can call the deallocation steps on this tensor.
@@ -78,6 +94,9 @@ void Tensor::deallocate(bool force) {
                             // This tensor can be force deallocated by the user. Automatic memory management policy is to deallocate
                             // this buffer on device when there are no more users: i.e. deallocate called on the last tensor_attributes
                             // ptr owning this buffer (buffer has use_count of 1 and tensor attribute has a single user)
+                            #ifdef DEBUG
+                            log_deallocate(*storage.buffer, force);
+                            #endif
                             DeallocateBuffer(*storage.buffer);
                         }
                         if (force or this->tensor_attributes.use_count() == 1) {
@@ -94,6 +113,9 @@ void Tensor::deallocate(bool force) {
                         for (auto& buffer : storage.buffers) {
                             if (force or (this->tensor_attributes.use_count() == 1 and buffer.use_count() == 1)) {
                                 // Same logic as above for device buffers
+                                #ifdef DEBUG
+                                log_deallocate(*buffer, force);
+                                #endif
                                 DeallocateBuffer(*buffer);
                             }
                             if (force or this->tensor_attributes.use_count() == 1) {

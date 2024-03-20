@@ -177,6 +177,9 @@ struct Tensor {
     }
 
     std::vector<uint32_t> host_page_ordering();
+
+    private:
+        void log_deallocate(const Buffer &, const bool force);
 };
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});

@@ -26,11 +26,21 @@ void OperationHistory::append(OperationRecord&& record) {
 
 template <typename RowType>
 void write_row(std::ofstream& output_file_stream, const std::size_t num_columns, const RowType& row) {
-    TT_ASSERT(row.size() == num_columns);
+    TT_ASSERT(row.size() == num_columns, fmt::format("row.size()=={} and num_columns=={}",row.size(), num_columns));
     for (const auto& element : row) {
-        output_file_stream << '"' << element << '"' << ",";
+        output_file_stream << '"' << element << '"' << "\t";
     }
     output_file_stream << std::endl;
+}
+
+
+
+std::string create_shard_spec_buffers_str(const std::vector<ShardSpecBuffer>& shard_spec_buffers){
+    std::stringstream ss;
+    ss << "[";
+    std::for_each(shard_spec_buffers.begin(), shard_spec_buffers.end(), [&ss](const auto &buffer) { ss << fmt::format("{}", buffer); ss << ";"; });
+    ss << "]";
+    return ss.str();
 }
 
 std::size_t write_header(
@@ -53,6 +63,7 @@ std::size_t write_header(
         column_names.push_back(fmt::format("Input Tensor {} Data Type", input_tensor_index));
         column_names.push_back(fmt::format("Input Tensor {} Layout", input_tensor_index));
         column_names.push_back(fmt::format("Input Tensor {} Memory Config", input_tensor_index));
+        column_names.push_back(fmt::format("Input Tensor {} Shard Spec", input_tensor_index));
     }
 
     write_row(output_file_stream, column_names.size(), column_names);
@@ -95,11 +106,13 @@ void write_record(
             row.push_back(fmt::format("{}", tensor_record.data_type));
             row.push_back(fmt::format("{}", tensor_record.layout));
             row.push_back(fmt::format("{}", tensor_record.memory_config));
+            row.push_back(fmt::format("{}", create_shard_spec_buffers_str(tensor_record.shard_spec_buffers)));
         } else {
             row.push_back("");
             for (auto dimension_index = 0; dimension_index < num_dimensions; dimension_index++) {
                 row.push_back("");
             }
+            row.push_back("");
             row.push_back("");
             row.push_back("");
             row.push_back("");

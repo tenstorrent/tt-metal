@@ -263,16 +263,19 @@ uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) con
     return base_page_address + offset;
 }
 
+bool Buffer::can_be_deallocated() const{
+    return !(this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0);
+}
+
 void Buffer::deallocate() {
-    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0) {
-        return;
+    if (can_be_deallocated()) {
+        // Mark as deallocated
+        this->size_ = 0;
+        TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+        // Asynchronously deallocate
+        detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
+        detail::DeallocateBuffer(this);
     }
-    // Mark as deallocated
-    this->size_ = 0;
-    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    // Asynchronously deallocate
-    detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
-    detail::DeallocateBuffer(this);
 }
 
 Buffer::~Buffer() {

@@ -185,6 +185,10 @@ class Buffer {
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
     uint64_t sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    bool is_sharded_buffer() const {
+        return is_sharded(this->buffer_layout_);
+    }
+
     ShardSpecBuffer shard_spec() const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(shard_parameters_.has_value());
@@ -281,6 +285,7 @@ class Buffer {
         return host_page_to_local_shard_page_mapping_;
     }
 
+    bool can_be_deallocated() const;
 
    private:
     void allocate();

@@ -5,6 +5,7 @@ TENSOR_SRCS = \
 	tt_eager/tensor/types.cpp \
 	tt_eager/tensor/tensor_utils.cpp \
 	tt_eager/tensor/serialization.cpp \
+	tt_eager/tensor/operation_history.cpp \
 
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_DEFINES =

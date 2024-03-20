@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <tt_eager/tensor/tensor.hpp>
+#include <numeric>
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
@@ -138,32 +139,46 @@ std::string operation_type_to_string() {
     }
 }
 
+static std::vector<ShardSpecBuffer> get_shard_spec_buffers(const DeviceBuffer& buffer){
+    return buffer && buffer->is_sharded_buffer() ?  std::vector<ShardSpecBuffer>{buffer->shard_spec()} : std::vector<ShardSpecBuffer>{};
+}
+
+static std::vector<ShardSpecBuffer> get_shard_spec_buffers(const std::vector<DeviceBuffer>& buffers){
+    return std::accumulate(buffers.begin(), buffers.end(), std::vector<ShardSpecBuffer>{},
+                   [](std::vector<ShardSpecBuffer>& acc, const auto &device_storage) {
+                    const auto temp = get_shard_spec_buffers(device_storage);
+                    acc.insert(acc.end(), temp.begin(), temp.end());
+                    return acc;
+                    });
+}
+
+
 static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
     return std::visit(
         [&](const auto& storage) -> operation_history::TensorRecord {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt, {}
                 };
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.memory_config()};
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.memory_config(), get_shard_spec_buffers(storage.buffer)};
             }
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt, {}
                 };
             }
             else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt, get_shard_spec_buffers(storage.buffers)
                 };
             }
             else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt, {}
                 };
             } else {
                 raise_unsupported_storage<T>();
