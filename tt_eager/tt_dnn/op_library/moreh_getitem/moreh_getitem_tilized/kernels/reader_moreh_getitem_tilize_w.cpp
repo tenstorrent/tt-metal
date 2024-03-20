@@ -108,7 +108,8 @@ void kernel_main() {
 
     uint32_t w_index;
 
-    #define NOC_MINIMUM_READ_SIZE 32
+    #define NOC_MINIMUM_READ_SIZE (32)
+    #define INDEX_SIZE (4)
 
     uint32_t end_id = start_id + num_sticks;
     uint32_t index_size_w = output_size_w;
@@ -144,6 +145,8 @@ void kernel_main() {
                     } else {
                         index_noc_id = index_index / TILE_HEIGHT;
                     }
+
+                    #ifdef TILIZE_INDEX
                     if (dim == 0) {
                         index_noc_addr = get_noc_addr(index_noc_id, index0);
                     }
@@ -181,6 +184,39 @@ void kernel_main() {
 
                         input_stick_idx += index_val * input_stick_idx_stride;
                     }
+                    #endif
+                    #ifdef ROW_MAJOR_INDEX
+                    uint32_t noc_offset = ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
+                    if (dim == 0) {
+                        index_noc_addr = get_noc_addr(0, index0, noc_offset);
+                    }
+                    if (dim == 1) {
+                        index_noc_addr = get_noc_addr(0, index1, noc_offset);
+                    }
+                    if (dim == 2) {
+                        index_noc_addr = get_noc_addr(0, index2, noc_offset);
+                    }
+                    if (dim == 3) {
+                        index_noc_addr = get_noc_addr(0, index3, noc_offset);
+                    }
+                    noc_async_read(index_noc_addr, index_l1_addr, NOC_MINIMUM_READ_SIZE);
+                    noc_async_read_barrier();
+
+                    volatile tt_l1_ptr uint32_t* index_l1_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+
+                    uint32_t index_dim_offset = (index_index * INDEX_SIZE - noc_offset) / INDEX_SIZE;
+                    uint32_t index_val = index_l1_ptr[index_dim_offset];
+
+                    if (dim == 3) {
+                        w_index = index_val;
+                        input_stick_idx += index_val / FACE_WIDTH;
+                    }
+                    else {
+                        input_stick_idx += index_val * input_stick_idx_stride;
+                    }
+
+                    #endif
                 } else {
                     uint32_t index_val;
 

@@ -38,6 +38,7 @@ Glossary:
     dt_rank: rank of Δ                  (See [1] Section 3.6 "Parameterization of ∆")
 
 """
+
 from __future__ import annotations
 import json
 import torch
@@ -47,7 +48,7 @@ from einops import rearrange, repeat, einsum
 
 from models.experimental.mamba.reference.args import ModelArgs
 
-from typing import Literal
+from typing import Literal, cast
 
 MambaPretrainedModelName = Literal[
     "state-spaces/mamba-2.8b-slimpj",
@@ -94,6 +95,25 @@ class MambaDecode(nn.Module):
         logits = self.lm_head(x)
 
         return logits
+
+    def generate(self, inputs: torch.Tensor, num_tokens_to_generate: int) -> torch.Tensor:
+        num_tokens_in_full_sequence = num_tokens_to_generate + inputs.shape[1]
+        for idx in range(num_tokens_in_full_sequence - 1):
+            logits = self.forward(inputs[:, idx].unsqueeze(1))
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+            next_token = torch.argmax(probs, dim=-1)
+            if idx >= inputs.shape[1] - 1:
+                inputs = torch.cat([inputs, next_token], dim=1)
+        assert (
+            inputs.shape[1] == num_tokens_in_full_sequence
+        ), f"Expected {num_tokens_in_full_sequence} tokens in the returned result"
+        return inputs
+
+    def initialize_states(self):
+        for layer in self.layers:
+            mixer = cast(MambaBlock, layer.mixer)
+            mixer.prev_hidden_states.zero_()
+            mixer.conv_states.zero_()
 
     @staticmethod
     def from_pretrained(pretrained_model_name: MambaPretrainedModelName, batch_size: int = 1):
@@ -233,7 +253,6 @@ class MambaBlock(nn.Module):
             mamba_inner_ref(), https://github.com/state-spaces/mamba/blob/main/mamba_ssm/ops/selective_scan_interface.py#L311
 
         """
-
         (b, l, d) = x.shape
 
         x_and_res = self.in_proj(x)  # shape (b, l, 2 * d_in)

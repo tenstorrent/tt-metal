@@ -309,6 +309,23 @@ def eltwise_leaky_relu(
     return ttnn_tensor_to_torch(t1)
 
 
+def activation_glu(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.glu(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def eltwise_lerp(
     x,
     y,
@@ -774,6 +791,40 @@ def gelu(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
     t1 = ttnn.gelu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def activation_geglu(
+    x,
+    *args,
+    dim=-1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.geglu(t0, dim, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def activation_swiglu(
+    x,
+    *args,
+    dim=-1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.swiglu(t0, dim, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
 
 
@@ -1606,6 +1657,41 @@ def eltwise_isclose(
     return ttnn_tensor_to_torch(t2)
 
 
+def eltwise_minimum(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.minimum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_polyval(
+    x,
+    *args,
+    coeffs,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.polyval(t0, coeffs, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def abs(
     x,
     *args,
@@ -2137,8 +2223,10 @@ def global_avg_pool2d(
     output_mem_config,
     **kwargs,
 ):
-    input_tensor = torch.permute(x, (0, 2, 3, 1))  # ttnn operates on channels-last tensors
-    input_tensor = ttnn.from_torch(input_tensor, dtype=dtype[0], layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = torch.permute(x, (0, 2, 3, 1))
+    input_tensor = ttnn.from_torch(
+        input_tensor, dtype=dtype[0], layout=layout[0], device=device, memory_config=input_mem_config[0]
+    )
     output_tensor = ttnn.global_avg_pool2d(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
@@ -2158,7 +2246,7 @@ def upsample(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.upsample(t0, scale_factor=scale_factor)
+    t1 = ttnn.upsample(t0, scale_factor=scale_factor, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -2422,5 +2510,88 @@ def logaddexp2(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.logaddexp2(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def sum(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sum(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_max(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.maximum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def ttnn_min(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.min(t0, dim=dim)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def rotary_embedding(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    torch.manual_seed(0)
+
+    cache_size = 2048
+    input_dtype = tt_lib.tensor.DataType.BFLOAT16
+    sincos_dtype = tt_lib.tensor.DataType.BFLOAT16
+
+    sin_cos_shape = (1, 1, cache_size, 64)
+
+    cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
+    sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
+
+    # TTNN -----------------------------------------------
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    cost = setup_ttnn_tensor(cos_cached, device, layout[0], input_mem_config[0], dtype[0])
+    sint = setup_ttnn_tensor(sin_cached, device, layout[0], input_mem_config[0], dtype[0])
+    t2 = ttnn.transformer.rotary_embedding(t0, cost, sint, None, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)

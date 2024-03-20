@@ -22,40 +22,42 @@ void MorehGetitem::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     // validate input tensor
     auto& input_tensor = input_tensors.at(0);
-    auto layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.get_layout();
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.get_dtype();
-    TT_ASSERT(dtype == DataType::UINT32 || dtype == DataType::BFLOAT16);
+    TT_FATAL(dtype == DataType::UINT32 || dtype == DataType::BFLOAT16);
 
     // validate index tensors
     uint32_t index_size = input_tensors.at(1).get_legacy_shape()[-1];
     for (uint32_t i = 1; i < input_tensors.size(); i++) {
         auto& index_tensor = input_tensors.at(i);
-        TT_ASSERT(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-        TT_ASSERT(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
-        TT_ASSERT(index_tensor.get_dtype() == DataType::UINT32);
+        TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
+        TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+        TT_FATAL(index_tensor.get_dtype() == DataType::UINT32);
 
         auto index_shape = index_tensor.get_legacy_shape();
-        if (index_tensor.get_layout() == Layout::ROW_MAJOR) {
-            TT_ASSERT(index_shape.rank() == 1);
-        } else if (index_tensor.get_layout() == Layout::TILE) {
-            TT_ASSERT(index_shape.rank() == 4);
+        auto index_layout = index_tensor.get_layout();
+        if (index_layout == Layout::ROW_MAJOR) {
+            TT_FATAL(index_shape.rank() == 1);
+        } else if (index_layout == Layout::TILE) {
+            TT_FATAL(index_shape.rank() == 4);
         }
-        TT_ASSERT(index_size == index_shape[-1], "The shapes of all index tensors must be identical!");
+        TT_FATAL(!(input_layout == Layout::ROW_MAJOR && index_layout == Layout::TILE), "input layout ROW_MAJOR and index layout TILE not supported");
+        TT_FATAL(index_size == index_shape[-1], "The shapes of all index tensors must be identical!");
     }
 
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (input_layout == Layout::ROW_MAJOR) {
         for (auto dim : this->index_dims) {
-            TT_ASSERT(dim != 3, "getitem for ROW_MAJOR layout not support W index tensor!");
+            TT_FATAL(dim != 3, "getitem for ROW_MAJOR layout not support W index tensor!");
         }
     }
 
     uint32_t dim_start = this->index_dims.front();
     uint32_t i = 0;
     for (auto dim : this->index_dims) {
-        TT_ASSERT(dim_start + i == dim, fmt::format("The value of index_dims={} must be consecutive integers.", this->index_dims));
+        TT_FATAL(dim_start + i == dim, fmt::format("The value of index_dims={} must be consecutive integers.", this->index_dims));
         i++;
     }
 
@@ -63,8 +65,8 @@ void MorehGetitem::validate_with_output_tensors(
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
-    TT_ASSERT(output_tensors.size() == 1, "Must have 1 output tensor");
-    TT_ASSERT(dtype == output_tensors.front().value().get_dtype());
+    TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensor");
+    TT_FATAL(dtype == output_tensors.front().value().get_dtype());
 }
 
 std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -87,9 +89,8 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
         }
 
         auto index = input_tensors.at(1);
-        uint32_t index_size = index.get_legacy_shape()[3];
-        uint32_t index_size_without_padding = index.get_legacy_shape().without_padding()[3];
-        uint32_t padding_back = index_size - index_size_without_padding;
+        uint32_t index_size = index.get_legacy_shape()[-1];
+        uint32_t index_size_without_padding = index.get_legacy_shape().without_padding()[-1];
 
         uint32_t last_dim = this->index_dims.back();
 
@@ -106,7 +107,8 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
         }
 
         if (last_dim == 2 || last_dim == 3) {
-            output_size_vec[last_dim] = index_size;
+            output_size_vec[last_dim] = round_up_to_mul32(index_size);
+            uint32_t padding_back = round_up_to_mul32(index_size_without_padding) - index_size_without_padding;
             dimensions_pads[last_dim] = Padding::PadDimension{.front=0, .back=padding_back};
         } else {
             output_size_vec[last_dim] = index_size_without_padding;
@@ -114,7 +116,6 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
 
         const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
         output_shape = Shape(output_size_vec, padding);
-
     } else {
         // compute output shape
         // ex)
