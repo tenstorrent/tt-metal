@@ -72,6 +72,7 @@ uint32_t dram_pages_to_read_g;
 
 uint32_t bytes_of_data_g = 0;
 bool initialize_device_g = true;
+uint32_t dispatch_wait_addr_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -227,6 +228,9 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
         cmd.relay_inline.stride = round_cmd_size_up(payload_length_bytes + sizeof(CQPrefetchCmd));
         break;
 
+    case CQ_PREFETCH_CMD_STALL:
+        break;
+
     case CQ_PREFETCH_CMD_DEBUG:
         {
             static uint32_t key = 0;
@@ -346,7 +350,8 @@ void gen_linear_read_cmd(Device *device,
                          worker_data_t& worker_data,
                          CoreCoord worker_core,
                          uint32_t addr,
-                         uint32_t length) {
+                         uint32_t length,
+                         uint32_t offset = 0) {
 
     vector<uint32_t> dispatch_cmds;
 
@@ -355,7 +360,7 @@ void gen_linear_read_cmd(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
-    add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr, length);
+    add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr + offset * sizeof(uint32_t), length);
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
@@ -369,7 +374,7 @@ void gen_linear_read_cmd(Device *device,
             for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
                 CoreCoord core(x, y);
                 if (core == worker_core) {
-                    uint32_t datum = worker_data[core].data[i];
+                    uint32_t datum = worker_data[core].data[offset + i];
                     worker_data[core].data.push_back(datum);
                     worker_data[core].valid.push_back(true);
                 } else {
@@ -379,6 +384,39 @@ void gen_linear_read_cmd(Device *device,
             }
         }
     }
+}
+
+void gen_wait_and_stall_cmd(Device *device,
+                            vector<uint32_t>& prefetch_cmds,
+                            vector<uint16_t>& cmd_sizes) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    CQDispatchCmd wait;
+    wait.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+    wait.wait.barrier = true;
+    wait.wait.notify_prefetch = true;
+    wait.wait.addr = dispatch_wait_addr_g;
+    wait.wait.count = 0;
+    add_bare_dispatcher_cmd(dispatch_cmds, wait);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    vector<uint32_t> empty_payload; // don't give me grief, it is just a test
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_STALL, empty_payload);
+}
+
+void gen_dispatcher_delay_cmd(Device *device,
+                              vector<uint32_t>& prefetch_cmds,
+                              vector<uint16_t>& cmd_sizes,
+                              uint32_t count) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    CQDispatchCmd delay;
+    delay.base.cmd_id = CQ_DISPATCH_CMD_DELAY;
+    delay.delay.delay = count;
+    add_bare_dispatcher_cmd(dispatch_cmds, delay);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 }
 
 void gen_dram_test(Device *device,
@@ -577,6 +615,7 @@ void gen_smoke_test(Device *device,
     gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 96);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
+    // Tests sending multiple commands w/ 1 FetchQ entry
     uint32_t combined_size =
         cmd_sizes[cmd_sizes.size() - 1] + cmd_sizes[cmd_sizes.size() - 2] +
         cmd_sizes[cmd_sizes.size() - 3] + cmd_sizes[cmd_sizes.size() - 4];
@@ -594,6 +633,7 @@ void gen_smoke_test(Device *device,
                       0, 0, 32, num_dram_banks_g);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       4, 32, 64, num_dram_banks_g);
+
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       0, 0, 128, 128);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
@@ -602,7 +642,6 @@ void gen_smoke_test(Device *device,
                       5, 32, 2048, num_dram_banks_g * 8 + 1);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       3, 128, 6144, num_dram_banks_g * 8 + 7);
-
 
     // Send inline data to (maybe) multiple cores
     dispatch_cmds.resize(0);
@@ -632,6 +671,14 @@ void gen_smoke_test(Device *device,
     // These tests copy data from earlier tests so can't run first
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr, 32);
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr, 65 * 1024);
+
+    // Test wait/stall
+    gen_dispatcher_delay_cmd(device, prefetch_cmds, cmd_sizes, 1024 * 1024);
+    dispatch_cmds.resize(0);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 2048);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr, 32, worker_data[worker_core].data.size() - 32 / sizeof(uint32_t));
 }
 
 void gen_prefetcher_cmds(Device *device,
@@ -833,6 +880,10 @@ int main(int argc, char **argv) {
         uint32_t dev_hugepage_base = 0;
         uint32_t prefetch_q_base = l1_buf_base;
         uint32_t prefetch_q_rd_ptr_addr = L1_UNRESERVED_BASE;
+        dispatch_wait_addr_g = L1_UNRESERVED_BASE + 16;
+        vector<uint32_t>zero_data(0);
+        llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
+
         uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(uint16_t);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
@@ -879,9 +930,10 @@ int main(int argc, char **argv) {
         };
 
         constexpr uint32_t dispatch_cb_sem = 0;
-        constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+
+        constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
