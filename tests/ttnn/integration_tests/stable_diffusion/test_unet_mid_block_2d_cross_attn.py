@@ -18,7 +18,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mi
     unet_mid_block_2d_cross_attn as tt2_ttnn_unet_mid_block_2d_cross_attn,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -157,7 +157,7 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
 
     hidden_states = torch.randn(hidden_state_shapes)
     temb = torch.randn(temb_shape)
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
+    encoder_hidden_states = torch.rand(encoder_hidden_states_shape)
 
     torch_output = mid_block(
         hidden_states,
@@ -190,7 +190,7 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
     ttnn_temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_temb = ttnn.to_device(ttnn_temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    ttnn_hidden_state = pre_process_input_new(device, ttnn_hidden_state)
+    ttnn_hidden_state = pre_process_input(device, ttnn_hidden_state)
     ttnn_mid_block = model(
         hidden_states=ttnn_hidden_state,
         temb=ttnn_temb,

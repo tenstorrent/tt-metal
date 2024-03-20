@@ -22,7 +22,7 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -217,6 +217,7 @@ def test_cross_attn_up_block_2d_512x512(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
     parameters = parameters.up_blocks[index]
+    _, Cout, Hout, Wout = res_hidden_states_tuple[2]
 
     # synthesize the input
     temb_channels = 1280
@@ -294,11 +295,11 @@ def test_cross_attn_up_block_2d_512x512(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    hidden_state = pre_process_input_new(device, hidden_state)
+    hidden_state = pre_process_input(device, hidden_state)
     res_hidden_states_tuple = (
-        pre_process_input_new(device, res0),
-        pre_process_input_new(device, res1),
-        pre_process_input_new(device, res2),
+        pre_process_input(device, res0),
+        pre_process_input(device, res1),
+        pre_process_input(device, res2),
     )
     op = model(
         hidden_state,
@@ -336,5 +337,10 @@ def test_cross_attn_up_block_2d_512x512(
     )
 
     op = ttnn_to_torch(op)
+    if in_channels == out_channels:
+        op = torch.reshape(op, (N, H, W, Cout))
+    else:
+        op = torch.reshape(op, (N, H * 2, W * 2, Cout))
+    op = op.permute(0, 3, 1, 2)
 
     assert_with_pcc(torch_output, op, 0.84)
