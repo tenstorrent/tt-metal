@@ -13,12 +13,8 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_t
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
-    post_process_output,
-    pre_process_input_new,
-    pad_encoder_hidden_states,
     pad_group_norm_weight,
     permute_conv_parameters,
-    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 
@@ -214,8 +210,8 @@ class transformer_2d_model:
             )
             if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
-            print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
-            print(f"Hidden states shape: {hidden_states.shape}")
+            # print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
+            # print(f"Hidden states shape: {hidden_states.shape}")
             hidden_states = ttnn.group_norm(
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
