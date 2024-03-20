@@ -14,14 +14,14 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], machine-type: "bare_metal"},
-          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
+          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], machine-type: "bare_metal", name: "E150"},
+          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], machine-type: "bare_metal", name: "N300"},
           # E150
-          {arch: grayskull, runs-on: ["grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine", name: "E150"},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], machine-type: "virtual_machine", name: "N150"},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], machine-type: "virtual_machine", name: "N300"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -30,6 +30,7 @@ jobs:
       TT_METAL_WATCHER: 60
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
+    name: ${{ matrix.runner-info.machine-type }} ${{ matrix.runner-info.name }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dyanmic env vars for build
@@ -47,5 +48,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}-${{ matrix.runner-info.name }}
           path: built/watcher.log
