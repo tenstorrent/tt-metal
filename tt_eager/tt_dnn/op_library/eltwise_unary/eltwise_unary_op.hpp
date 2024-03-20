@@ -113,7 +113,7 @@ struct UnaryWithParam {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->param)); }
 };
 
-enum class UnaryOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
+enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE=2 };
 
 struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
@@ -136,6 +136,8 @@ struct EltwiseUnary {
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor& input_tensor);
 
+operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
 operation::ProgramWithCallbacks eltwise_unary_single_core(
@@ -146,6 +148,12 @@ inline Tensor run_eltwise_unary(
     std::vector<UnaryWithParam> ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
+    if(output_mem_config.is_sharded() && (output_mem_config.memory_layout ==
+        TensorMemoryLayout::HEIGHT_SHARDED || output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED)){
+       return operation::run_without_autoformat(
+               EltwiseUnary{ops_chain, output_mem_config}, {input_tensor})
+        .at(0);
+    }
     Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     return operation::run_with_autoformat(

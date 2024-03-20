@@ -1709,6 +1709,35 @@ def gen_repeat_interleave_args(
         yield input_info
 
 
+def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            # max_dim = len(input_shapes[0]) - 1
+            # dim = random.randint(-max_dim-1, max_dim)
+            # For now onlu last dim is supported
+            input_info.update({"dim": -1})
+            yield input_info
+
+
+def gen_dim_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            max_dim = len(input_shapes[0]) - 1
+            dim = random.randint(-max_dim - 1, max_dim)
+            input_info.update({"dim": dim})
+            yield input_info
+
+
 def gen_rmsnorm_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],

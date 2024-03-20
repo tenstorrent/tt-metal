@@ -309,6 +309,23 @@ def eltwise_leaky_relu(
     return ttnn_tensor_to_torch(t1)
 
 
+def activation_glu(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.glu(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def eltwise_lerp(
     x,
     y,
@@ -1606,6 +1623,41 @@ def eltwise_isclose(
     return ttnn_tensor_to_torch(t2)
 
 
+def eltwise_minimum(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.minimum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_polyval(
+    x,
+    *args,
+    coeffs,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.polyval(t0, coeffs, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def abs(
     x,
     *args,
@@ -2424,3 +2476,20 @@ def logaddexp2(
     t2 = ttnn.logaddexp2(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
+
+
+def sum(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sum(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)

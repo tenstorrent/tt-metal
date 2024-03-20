@@ -510,6 +510,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_polyval,
         "pytorch_op": pytorch_ops.polyval,
     },
+    "ttnn-eltwise-polyval": {
+        "tt_lib_op": ttnn_ops.eltwise_polyval,
+        "pytorch_op": pytorch_ops.polyval,
+    },
     "eltwise-mac": {
         "tt_lib_op": tt_lib_ops.eltwise_mac,
         "pytorch_op": pytorch_ops.mac,
@@ -722,6 +726,10 @@ op_map = {
     "eltwise-mul-bw": {
         "tt_lib_op": tt_lib_ops.eltwise_mul_bw,
         "pytorch_op": pytorch_ops.mul_bw,
+    },
+    "ttnn-eltwise-minimum": {
+        "tt_lib_op": ttnn_ops.eltwise_minimum,
+        "pytorch_op": pytorch_ops.minimum,
     },
     "eltwise-min": {
         "tt_lib_op": tt_lib_ops.eltwise_min,
@@ -948,6 +956,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.transpose_cw,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=-1),
     },
+    "sum": {
+        "tt_lib_op": tt_lib_ops.sum,
+        "pytorch_op": pytorch_ops.sum,
+    },
+    "ttnn-sum": {
+        "tt_lib_op": ttnn_ops.sum,
+        "pytorch_op": pytorch_ops.sum,
+    },
     "sum-0": {
         "tt_lib_op": partial(tt_lib_ops.sum, dim=0),
         "pytorch_op": partial(pytorch_ops.sum, dim=0),
@@ -1057,6 +1073,10 @@ op_map = {
     },
     "activation_glu": {
         "tt_lib_op": tt_lib_ops.activation_glu,
+        "pytorch_op": pytorch_ops.activation_glu,
+    },
+    "ttnn-activation_glu": {
+        "tt_lib_op": ttnn_ops.activation_glu,
         "pytorch_op": pytorch_ops.activation_glu,
     },
     "activation_reglu": {
