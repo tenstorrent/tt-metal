@@ -648,34 +648,58 @@ ALWI void silu_tile_init() {
 
 //topK local sort
 /**
- * Implements local sort phase of TopK algorithm
+ * Performs local sort phase of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The local sort phase sorts the data into length-K subsequences of
+ * alternating directions, in place.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note: idist should be set to 0
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            |  | int32    |  | True     |
- * | i_end_phase     |  | int32    |  | True     |
- * | i_start_phase   |  | int32    |  | True     |
- * | i_end_step      |  | int32    |  | True     |
- * | i_start_step    |  | int32    |  | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32    | 0 to 1                                                | True     |
+ * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     |
+ * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
+ * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
+ * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
  */
-ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_phase, int i_end_step, int i_start_step) {
+ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_phase=0, int i_end_step=0, int i_start_step=0) {
     MATH(( llk_math_eltwise_unary_sfpu_topk_local_sort<true, SyncHalf>(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step) ));
 }
 
 //topK merge
 /**
- * Implements merge phase of TopK algorithm
+ * Performs merge phase of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The merge phase combines length-K subsequences that are 2^m_iter apart,
+ * such that the first is left with the K greatest values.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note: idist should be set to 0
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | m_iter          |  | int32    |  | True     |
- * | k               |  | int32    |  | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  */
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     MATH(( llk_math_eltwise_unary_sfpu_topk_merge<true, SyncHalf>(idst, m_iter, k) ));
@@ -683,18 +707,30 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 
 //topK rebuild
 /**
- * Implements rebuild phase of TopK algorithm
+ * Performs rebuild phase of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The rebuild phase sorts the length-K subsequences that are 2^(m_iter+1)
+ * apart, such that they alternate directions.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note: idist should be set to 0
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            |  | bool     |  | True     |
- * | m_iter          |  | int32    |  | True     |
- * | k               |  | int32    |  | True     |
- * | logk            |  | int32    |  | True     |
- * | skip_second     |  | int32    |  | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1                                                | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
+ * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
  */
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     MATH(( llk_math_eltwise_unary_sfpu_topk_rebuild<true, SyncHalf>(idst, idir, m_iter, k, logk, skip_second) ));
