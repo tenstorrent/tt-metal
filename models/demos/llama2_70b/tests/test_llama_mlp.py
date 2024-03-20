@@ -73,7 +73,7 @@ def run_test_LlamaMLP_inference(
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
-    if seq_len > 1:
+    if model_config["LLM_MODE"] == "decode":
         # shape should be (1, batch, seq_len, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(0)
     else:
@@ -155,7 +155,7 @@ def run_test_LlamaMLP_inference(
     "batch, seq_len",
     (
         (32, 1),
-        (32, 128),
+        (1, 128),
     ),
     ids=("decode", "prefill"),
 )
@@ -169,9 +169,9 @@ def test_LlamaMLP_inference(
     all_devices,
     emulated,
 ):
-    mode = "prefill" if seq_len > 1 else "decode"
+    llm_mode = "prefill" if seq_len > 1 else "decode"
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices, mode=mode)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, llm_mode=llm_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(all_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
