@@ -153,10 +153,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
     torch_output = model(input, timestep=timestep, encoder_hidden_states=encoder_hidden_states.squeeze(0)).sample
-    padded_in_channels = math.ceil(in_channels / 16) * 16
-    input = torch.nn.functional.pad(input, (0, 0, 0, 0, 0, padded_in_channels - in_channels))
-    input = torch.permute(input, (0, 2, 3, 1))  # permute from NCHW to NHWC
-    input = torch.reshape(input, (1, 1, batch_size * input_height * input_width, padded_in_channels))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat16)
