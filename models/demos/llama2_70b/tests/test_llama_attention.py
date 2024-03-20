@@ -62,6 +62,22 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
 
         return x, start_pos, freqs_cis, attn_mask
 
+    def prepare_inputs_prefill(self, x, start_pos):
+        """
+        Prepare inputs for decode mode. Assume that current token is at
+        start_pos, and KV cache has valid data up to start_pos.
+        """
+        batch = x.size(0)
+        seq_len = x.size(1)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
+
+        attn_mask = torch.full((seq_len, seq_len), float("-inf"))
+        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask.expand(batch, self.n_heads, -1, -1)
+
+        return x, start_pos, freqs_cis, attn_mask
+
     def forward(self, x, start_pos, freqs_cis, mask):
         """
         x: (batch, seq, hidden_dim)
@@ -137,9 +153,13 @@ def run_test_LlamaAttention_inference(
         for device in devices:
             tt_lib.device.Synchronize(device)
 
-    generation_start_pos = UNIT_TEST_START_POS
-    generation_length = UNIT_TEST_GENERATION_LENGTH
     all_tests_pass, all_pccs = True, []
+    if model_config["LLM_MODE"] == "prefill":
+        generation_start_pos = 0
+        generation_length = 1
+    else:
+        generation_start_pos = UNIT_TEST_START_POS
+        generation_length = UNIT_TEST_GENERATION_LENGTH
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -149,9 +169,14 @@ def run_test_LlamaAttention_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
-            pt_inp_normed, start_pos
-        )
+        if model_config["LLM_MODE"] == "prefill":
+            attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs_prefill(
+                pt_inp_normed, start_pos
+            )
+        else:
+            attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
+                pt_inp_normed, start_pos
+            )
 
         pytorch_out = pytorch_LlamaAttention_model(
             attention_input,
@@ -191,54 +216,56 @@ def run_test_LlamaAttention_inference(
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
-    # Check kv cache
-    # PyTorch output --------------------------------------------------------------------
-    pytorch_layer_present = [
-        pytorch_LlamaAttention_model.attention.cache_k.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_LlamaAttention_model.attention.cache_v.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
-    ]
-    # TT hardware output ----------------------------------------------------------------
-    if n_devices == 32:
-        all_k, all_v = [], []
-        for i in range(4):  # 4 device groups
+    if model_config["LLM_MODE"] == "decode":
+        # Check kv cache
+        # PyTorch output --------------------------------------------------------------------
+        pytorch_layer_present = [
+            pytorch_LlamaAttention_model.attention.cache_k.clone().permute(
+                0, 2, 1, 3
+            ),  # [batch, n_kv_heads, seq, head_dim]
+            pytorch_LlamaAttention_model.attention.cache_v.clone().permute(
+                0, 2, 1, 3
+            ),  # [batch, n_kv_heads, seq, head_dim]
+        ]
+        # TT hardware output ----------------------------------------------------------------
+        if n_devices == 32:
+            all_k, all_v = [], []
+            for i in range(4):  # 4 device groups
+                tt_layer_present = []
+                for layer_past in tt_LlamaAttention_model.attentions[i].layer_past_list:
+                    tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+                # concat the pasts by heads
+                tt_layer_present = [
+                    torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1)
+                    for tt_cache_head in zip(*tt_layer_present)
+                ]
+                all_k.append(tt_layer_present[0])
+                all_v.append(tt_layer_present[1])
+            # Concat across device groups
+            all_k = torch.cat(all_k, dim=0)
+            all_v = torch.cat(all_v, dim=0)
+            tt_layer_present_all = [all_k, all_v]
+        else:
             tt_layer_present = []
-            for layer_past in tt_LlamaAttention_model.attentions[i].layer_past_list:
+            for layer_past in tt_LlamaAttention_model.layer_past_list:
                 tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
             # concat the pasts by heads
-            tt_layer_present = [
+            tt_layer_present_all = [
                 torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
             ]
-            all_k.append(tt_layer_present[0])
-            all_v.append(tt_layer_present[1])
-        # Concat across device groups
-        all_k = torch.cat(all_k, dim=0)
-        all_v = torch.cat(all_v, dim=0)
-        tt_layer_present_all = [all_k, all_v]
-    else:
-        tt_layer_present = []
-        for layer_past in tt_LlamaAttention_model.layer_past_list:
-            tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-        # concat the pasts by heads
-        tt_layer_present_all = [
-            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-        ]
 
-    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
-        cache_length_to_check = generation_start_pos + generation_length
-        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-        logger.info(f"Output: {output_pcc}")
+        for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
+            cache_length_to_check = generation_start_pos + generation_length
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+            logger.info(f"Output: {output_pcc}")
 
-        if does_pass:
-            logger.info(f"KV Cache Passed!")
-        else:
-            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-            all_tests_pass = False
+            if does_pass:
+                logger.info(f"KV Cache Passed!")
+            else:
+                logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+                all_tests_pass = False
 
     if all_tests_pass:
         logger.info("Llama2 Attention output Passed!")
@@ -265,12 +292,9 @@ def run_test_LlamaAttention_inference(
     "batch, seq_len",
     (
         (32, 1),
-        # (1, 128),
+        (1, 128),
     ),
-    ids=(
-        "decode",
-        # "prefill"
-    ),
+    ids=("decode", "prefill"),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9997),))
 def test_LlamaAttention_inference(
@@ -282,8 +306,9 @@ def test_LlamaAttention_inference(
     all_devices,
     emulated,
 ):
+    llm_mode = "prefill" if seq_len > 1 else "decode"
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, llm_mode=llm_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
