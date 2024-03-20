@@ -50,7 +50,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             input_tensor,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
