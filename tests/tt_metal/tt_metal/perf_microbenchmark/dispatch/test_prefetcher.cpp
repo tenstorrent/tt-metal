@@ -479,9 +479,6 @@ void gen_smoke_test(Device *device,
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
 
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
-                      2, 5722848, 53216, 1);
-
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
     vector<uint32_t> rnd_payload;
@@ -872,7 +869,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        log_info(LogTest, "Huagepage buffer size {}", std::to_string(hugepage_buffer_size_g));
+        log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_buffer_size_g));
         log_info(LogTest, "Prefetch prefetch_q entries {}", std::to_string(prefetch_q_entries_g));
         log_info(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
         log_info(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));

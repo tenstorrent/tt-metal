@@ -187,9 +187,8 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DPRINT << "checksum" << checksum << " " << cmd->debug.checksum << ENDL();
         DEBUG_STATUS('!', 'C', 'H', 'K');
-        while(1);
+        ASSERT(0);
     }
 
     return cmd_ptr + cmd->debug.stride;
@@ -253,6 +252,36 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
     return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
+template<uint32_t extra_space, bool test_for_nonzero>
+static uint32_t write_pages_to_dispatcher(uint32_t dispatch_noc_xy,
+                                          uint32_t& dispatch_data_ptr,
+                                          uint32_t& scratch_write_addr,
+                                          uint32_t& amt_to_write) {
+
+    uint32_t page_residual_space = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
+    uint32_t npages = (amt_to_write - page_residual_space + dispatch_cb_page_size + extra_space - 1) / dispatch_cb_page_size;
+
+    // Grabbing all pages at once is ok if scratch_size < 3 * dispatch_cb_block_size
+    if (!test_for_nonzero || npages != 0) {
+        dispatch_cb_acquire_pages(npages);
+    }
+
+    uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+    if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
+        uint32_t last_chunk_size = dispatch_cb_end - dispatch_data_ptr;
+        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+        dispatch_data_ptr = dispatch_cb_base;
+        scratch_write_addr += last_chunk_size;
+        amt_to_write -= last_chunk_size;
+        noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+    }
+
+    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+    dispatch_data_ptr += amt_to_write;
+
+    return npages;
+}
+
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
 // Reading from DRAM has the following characteristics:
 //  - latency is moderately high ~400 cycles on WH
@@ -284,7 +313,6 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
     uint32_t read_length = pages * page_size;
-    uint32_t write_length = pages * page_size;
 
     InterleavedAddrGen<is_dram> addr_gen;
     addr_gen.bank_base_address = base_addr;
@@ -331,29 +359,10 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
         }
 
         // Third step - write from DB
-        uint32_t page_residual_space = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
-        uint32_t npages = (amt_to_write - page_residual_space + dispatch_cb_page_size - 1) / dispatch_cb_page_size;
-        // Grabbing all pages at once is ok if scratch_size < 3 * dispatch_cb_block_size
-        dispatch_cb_acquire_pages(npages);
-        uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
-
-        if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
-            uint32_t last_chunk_size = dispatch_cb_end - dispatch_data_ptr;
-            noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-            dispatch_data_ptr = dispatch_cb_base;
-            scratch_write_addr += last_chunk_size;
-            write_length -= last_chunk_size;
-            amt_to_write -= last_chunk_size;
-            noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
-        }
-
-        noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-        dispatch_data_ptr += amt_to_write;
-
+        uint32_t npages = write_pages_to_dispatcher<0, false>(dispatch_noc_xy, dispatch_data_ptr, scratch_write_addr, amt_to_write);
         dispatch_cb_release_pages(npages);
 
         read_length -= amt_read;
-        write_length -= amt_to_write;
 
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
@@ -361,24 +370,8 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
 
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
-    int32_t amt_to_write = amt_read;
-    uint32_t page_residual_space = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
-    uint32_t npages = (amt_to_write - page_residual_space + dispatch_cb_page_size + CQ_DISPATCH_CMD_SIZE - 1) / dispatch_cb_page_size;
-    if (npages > 0) {
-        dispatch_cb_acquire_pages(npages);
-    }
-    uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
-    if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
-        uint32_t last_chunk_size = dispatch_cb_end - dispatch_data_ptr;
-        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-        dispatch_data_ptr = dispatch_cb_base;
-        scratch_write_addr += last_chunk_size;
-        amt_to_write -= last_chunk_size;
-        noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
-    }
-
-    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-    dispatch_data_ptr += amt_to_write;
+    uint32_t amt_to_write = amt_read;
+    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>(dispatch_noc_xy, dispatch_data_ptr, scratch_write_addr, amt_to_write);
 
     uint32_t pad_to_page = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
     dispatch_data_ptr += pad_to_page;
@@ -458,7 +451,7 @@ void kernel_main() {
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
-            while(1);
+            ASSERT(0);
         }
     }
 
