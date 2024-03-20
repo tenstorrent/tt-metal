@@ -55,6 +55,7 @@ def run_conv(
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant=False,
+    groups=1,
     enable_auto_formatting=False,
     padded_input_channels=None,
     fp32_accum=False,
@@ -62,7 +63,8 @@ def run_conv(
     output_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(0)
-    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    # conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_input_shape = [batch_size, groups * input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
@@ -78,6 +80,7 @@ def run_conv(
         bias=torch_bias_tensor.reshape(-1),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        groups=groups,
     )
     output_shape_nhwc = [
         torch_out_golden_tensor.shape[0],
@@ -122,6 +125,7 @@ def run_conv(
         weights_dtype=weights_dtype,
         conv_blocking_and_parallelization_config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
         enable_auto_formatting=enable_auto_formatting,
         deallocate_activation=True,
         padded_input_channels=padded_input_channels,
@@ -1318,56 +1322,56 @@ def test_yolov4_conv(
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant, groups",
     (
         # yolov4 convs with batch size 1
         # unique convs in yolov4 (complete list) # groups: number
-        (1, 32, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 32
-        (1, 32, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 32
-        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 64
-        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 64
-        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 64
-        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 64
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 128
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 256
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
-        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 512
+        (1, 32, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 32),  # groups: 32
+        (1, 32, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 32),  # groups: 32
+        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 64),  # groups: 64
+        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 64),  # groups: 64
+        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 64),  # groups: 64
+        (1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False, 64),  # groups: 64
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 128, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False, 128),  # groups: 128
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 256, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False, 256),  # groups: 256
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
+        (1, 512, 512, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False, 512),  # groups: 512
     ),
 )
 @pytest.mark.parametrize(
@@ -1402,6 +1406,7 @@ def test_yolov4_conv_groups_larger_than_one(
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant,
+    groups,
     output_layout,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
@@ -1427,6 +1432,7 @@ def test_yolov4_conv_groups_larger_than_one(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
     )
