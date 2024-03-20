@@ -452,9 +452,11 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     count++;
 
+    DEBUG_STATUS('P', 'S', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_sync_sem);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_sync_sem));
     while (*sem_addr != count);
+    DEBUG_STATUS('P', 'S', 'D');
 
     return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }

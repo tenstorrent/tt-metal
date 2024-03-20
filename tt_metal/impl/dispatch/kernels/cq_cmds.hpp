@@ -35,7 +35,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_GO = 6,                 // send go message
     CQ_DISPATCH_CMD_SINK = 7,               // act as a data sink (for testing)
     CQ_DISPATCH_CMD_DEBUG = 8,              // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_TERMINATE = 9,          // quit
+    CQ_DISPATCH_CMD_DELAY = 9,              // insert delay (for testing)
+    CQ_DISPATCH_CMD_TERMINATE = 10,         // quit
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -138,6 +139,12 @@ struct CQDispatchWaitCmd {
     uint32_t count;           // wait while address is < count
 };
 
+struct CQDispatchDelayCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t delay;
+};
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -147,6 +154,7 @@ struct CQDispatchCmd {
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
+        CQDispatchDelayCmd delay;
     } __attribute__((packed));
 };
 
