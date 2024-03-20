@@ -34,11 +34,11 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    uint32_t num_tile_per_core = shard_spec.numel() * datum_size(act_df) /input_tile_size;
-    uint32_t num_tile_per_core_out = out_shard_spec.numel() * datum_size(out_df) /output_tile_size;
-    TT_ASSERT((shard_spec.numel() * datum_size(act_df)) % input_tile_size == 0, "Shard size should be multiple of the TILE_SIZE");
-    TT_ASSERT((out_shard_spec.numel() * datum_size(out_df)) % output_tile_size == 0, "Shard size should be multiple of the TILE_SIZE");
-    TT_ASSERT(num_tile_per_core == num_tile_per_core_out, "Input and output shard size should be same");
+    TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
+    uint32_t shard_size_in_bytes = shard_spec.numel() * datum_size(act_df);
+
+    uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size; //ceil value
+    TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
     uint32_t ncores_x, ncores_nhw;
     if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -89,7 +89,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     std::map<string, string> kernel_defines;
-
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_sharded.cpp",
