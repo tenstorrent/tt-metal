@@ -1078,7 +1078,7 @@ def test_unet_conv_wh(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
     (
         # yolov4 convs with batch size 1
-        # unique convs in yolov4 (complete list) # groups: number
+        # unique convs in yolov4 (complete list) # groups: 1 groups > 1 are commented out for now until they are supported.
         (1, 32, 3, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 1
         (1, 64, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, None, False),  # groups: 1
         (1, 32, 64, 480, 640, 1, 1, 1, 1, 0, 0, True, None, False),  # groups: 1
