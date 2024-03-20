@@ -362,7 +362,7 @@ template <typename T>
 inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         return to_host_helper<T>(tensor, blocking);
-    } else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+    } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
         std::vector<OwnedBuffer> host_buffers;
 
