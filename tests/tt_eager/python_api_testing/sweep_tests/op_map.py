@@ -526,6 +526,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_addcdiv,
         "pytorch_op": pytorch_ops.addcdiv,
     },
+    "eltwise-addcdiv": {
+        "tt_lib_op": tt_lib_ops.eltwise_addcdiv_with_output,
+        "pytorch_op": pytorch_ops.addcdiv,
+    },
     "ttnn-eltwise-addcdiv": {
         "tt_lib_op": ttnn_ops.eltwise_addcdiv,
         "pytorch_op": pytorch_ops.addcdiv,

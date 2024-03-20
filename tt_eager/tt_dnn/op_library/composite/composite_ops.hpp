@@ -158,7 +158,8 @@ Tensor addcdiv(
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(

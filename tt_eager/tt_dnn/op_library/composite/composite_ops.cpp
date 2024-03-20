@@ -810,22 +810,36 @@ Tensor _addcdiv(
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor){
     Tensor t_value = mk_tiled_scalar(value);
     Tensor t_div = mul(input_b, recip(input_c, output_mem_config), std::nullopt, output_mem_config);
     Tensor t_factor = bcast(t_div, t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
     t_div.deallocate();
     t_value.deallocate();
-    Tensor result = add(input_a, t_factor, std::nullopt, output_mem_config);
-    return result;
+    if(output_tensor.has_value())
+    {
+        output_tensor = add(input_a, t_factor, std::nullopt, output_mem_config);
+        return output_tensor.value();
+    }
+    else{
+        return add(input_a, t_factor, std::nullopt, output_mem_config);
+    }
 }
 Tensor addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    if(output_tensor.has_value())
+    {
+        return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config, output_tensor);
+    }
+    else{
+        return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config, std::nullopt);
+    }
 }
 
 // logit(input, eps)=log(input / 1 - input)

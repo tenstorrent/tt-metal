@@ -757,7 +757,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("addcdiv", &addcdiv,
-            py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Performs the element-wise division of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
             by the scalar value ``value`` and adds it to input ``input``.
 
