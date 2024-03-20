@@ -412,13 +412,25 @@ static void process_wait() {
         noc_async_write_barrier();
     }
 
+    DEBUG_STATUS('P', 'W', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     while (*sem_addr < count); // XXXXX use a wrapping compare
+    DEBUG_STATUS('P', 'W', 'D');
 
     if (notify_prefetch) {
-        noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, prefetch_sync_sem), 1);
+        noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, get_semaphore(prefetch_sync_sem)), 1);
     }
+
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
+
+static void process_delay_cmd() {
+
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t count = cmd->delay.delay;
+    for (volatile uint32_t i = 0; i < count; i++);
+    cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 void kernel_main() {
@@ -488,6 +500,11 @@ void kernel_main() {
             DPRINT << "cmd_debug" << ENDL();
             cmd_ptr = process_debug_cmd(cmd_ptr);
             goto re_run_command;
+            break;
+
+        case CQ_DISPATCH_CMD_DELAY:
+            DPRINT << "cmd_delay" << ENDL();
+            process_delay_cmd();
             break;
 
         case CQ_DISPATCH_CMD_TERMINATE:
