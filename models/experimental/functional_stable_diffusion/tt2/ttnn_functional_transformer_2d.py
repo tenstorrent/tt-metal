@@ -14,7 +14,6 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_t
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
-    pre_process_input_new,
     pad_group_norm_weight,
     permute_conv_parameters,
 )

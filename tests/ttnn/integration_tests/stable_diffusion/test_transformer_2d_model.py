@@ -14,10 +14,6 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transfor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import (
     transformer_2d_model as transformer_2d_model_tt2,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input,
-    post_process_output,
-)
 
 
 @pytest.mark.parametrize(
@@ -139,27 +135,27 @@ def test_transformer_2d_model_256x256(
             40,
             "up",
         ),
-        # (
-        #     (2, 640, 32, 32),
-        #     1,
-        #     1,
-        #     80,
-        #     "down",
-        # ),
-        # (
-        #     (2, 1280, 16, 16),
-        #     2,
-        #     1,
-        #     160,
-        #     "down",
-        # ),
-        # (
-        #     (2, 1280, 8, 8),
-        #     2,
-        #     1,
-        #     160,
-        #     "down",
-        # ),
+        (
+            (2, 640, 32, 32),
+            1,
+            1,
+            80,
+            "down",
+        ),
+        (
+            (2, 1280, 16, 16),
+            2,
+            1,
+            160,
+            "down",
+        ),
+        (
+            (2, 1280, 8, 8),
+            2,
+            1,
+            160,
+            "down",
+        ),
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])

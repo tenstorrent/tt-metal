@@ -137,6 +137,7 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
+            enable_auto_formatting=True,
             compute_kernel_config=conv_compute_kernel_config,
         )
         self.down_blocks = []
@@ -225,7 +226,6 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={"act_block_h": 64},
             use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
             deallocate_activation=True,
             compute_kernel_config=conv_compute_kernel_config,
         )
@@ -347,13 +347,15 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
-        sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
-        sample = self.conv_in(sample)
-        # sample = ttnn.reallocate(sample)  # TODO: Test remove
-        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.reshape(sample, (self.batch_size, self.input_height, self.input_width, self.conv_in.out_channels))
-        sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
+        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            self.device,
+            self.conv_in,
+            sample,
+            self.conv_in.batch_size,
+            self.conv_in.output_height,
+            self.conv_in.output_width,
+            self.conv_in.out_channels,
+        )
 
         # con_in completes
 
