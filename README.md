@@ -64,10 +64,9 @@ We also provide tools to review the graphs you create and run in TT-NN.
 ## Running model demos on Grayskull (GS)
 
 We have prepared demos for the following models: [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
-In each model folder the `README.md`
+In each model folder the `README.md` file provides detailed instructions how to run the model demo, with option to use provided inputs in demo folder or to supply your own.
 
-These are some performance metrics for our models running on Grayskull (GS). We constantly improve these
-and publish these metrics on [GitHub
+The demo models have the following performance measured on Grayskull. We publish up to date metrics on [GitHub
 Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-models.yaml).
 
 | Model                            | Batch size          | GS end-to-end throughput [1] | GS on-device throughput [2] | Target GS end-to-end throughput [1] |
@@ -77,14 +76,16 @@ Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-mo
 | TT-NN Falcon-7B decode (t/s)     | 32                  | 135                          | coming soon      | 140                                 |
 | ViT                              | Coming end of March |                              |                             |                                     |
 | U-Net                            | Coming end of March |                              |                             |                                     |
+| T5                               | Coming end of March |                              |                             |                                     |
+| bloom                            | Coming end of March |                              |                             |                                     |
 
 [1] - Throughput is measured by taking batch size and dividing by accelerator inference time, and reported per sec.
 
 [2] - Throughput on device is measured by directly counting the clock cycles for operations done on device.
 
-## What's coming for models
+## Model demos on Wormhole (WH)
 
-We are writing efficient versions of the following models to run on our Wormhole (WH) architecture (N300 2x WH card):
+We are preparing demos for the following models to run on our Wormhole (WH) architecture (N300 2x WH card):
 
 | Model            | N300 (2x WH) Throughput |
 |------------------|-------------------------|
