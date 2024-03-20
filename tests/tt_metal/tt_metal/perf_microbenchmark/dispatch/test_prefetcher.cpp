@@ -273,8 +273,8 @@ void add_dram_data_to_worker_data(const vector<uint32_t>& dram_data,
     for (uint32_t i = 0; i < pages; i++) {
         uint32_t index = base_addr_words + page * DRAM_DATA_SIZE_WORDS;
         for (uint32_t j = 0; j  < page_size_words; j++) {
-            for (uint32_t y = all_workers_g.start.y; y < all_workers_g.end.y; y++) {
-                for (uint32_t x = all_workers_g.start.x; x < all_workers_g.end.x; x++) {
+            for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
+                for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
                     CoreCoord core(x, y);
                     worker_data[core].data.push_back(dram_data[index + j]);
                     worker_data[core].valid.push_back(workers.contains(core));
@@ -544,6 +544,7 @@ void gen_smoke_test(Device *device,
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
                       3, 128, 6144, num_dram_banks_g * 8 + 7);
 
+
     // Send inline data to (maybe) multiple cores
     dispatch_cmds.resize(0);
     vector<CoreCoord> worker_cores;
@@ -553,10 +554,12 @@ void gen_smoke_test(Device *device,
 
     dispatch_cmds.resize(0);
     worker_cores.resize(0);
-    worker_cores.push_back(first_worker_g);
-    worker_cores.push_back({first_worker_g.x + 1, first_worker_g.y});
-    worker_cores.push_back({first_worker_g.x + 2, first_worker_g.y});
-    worker_cores.push_back({first_worker_g.x + 3, first_worker_g.y});
+    for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
+        for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
+            CoreCoord worker_core(x, y);
+            worker_cores.push_back(worker_core);
+        }
+    }
     gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 12);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
