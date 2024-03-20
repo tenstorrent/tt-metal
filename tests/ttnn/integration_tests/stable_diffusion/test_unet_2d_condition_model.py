@@ -169,7 +169,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     reader_patterns_cache = {}
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
 
-    input = pre_process_input_new(model.device, input)
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
