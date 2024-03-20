@@ -37,6 +37,8 @@ public:
             EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }
+    int NumDevices() { return this->devices_.size(); }
+    bool IsSlowDispatch() { return this->slow_dispatch_; }
 
 
 protected:
