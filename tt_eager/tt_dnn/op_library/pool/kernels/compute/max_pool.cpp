@@ -42,7 +42,7 @@ inline void tilize(uint32_t out_nelems,
                    uint32_t in_ntiles_hw,
                    uint32_t in_ntiles_c,
                    uint32_t in_ntiles_hwc,
-                   uint32_t window_hw_padded,
+                   uint32_t window_size_hw,
                    uint32_t out_cb_id) {
     tilize_init_short(in_cb_id, in_ntiles_hwc);
     for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
@@ -151,7 +151,7 @@ void MAIN {
     const uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
     const uint32_t in_ntiles_c = get_compile_time_arg_val(1);
     const uint32_t in_ntiles_hwc = get_compile_time_arg_val(2);
-    const uint32_t window_hw_padded = get_compile_time_arg_val(3);
+    const uint32_t window_size_hw = get_compile_time_arg_val(3);
     const uint32_t out_h = get_compile_time_arg_val(4);
     const uint32_t out_w = get_compile_time_arg_val(5);
     const uint32_t out_ntiles_c = get_compile_time_arg_val(7);
@@ -181,7 +181,7 @@ void MAIN {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.
                 // tilize
-                // tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
+                // tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_size_hw, in_tiled_cb_id);
                 // Reduce H
                 // reduce_h_orig(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
                 // reduce_h<in_ntiles_hw, in_ntiles_c>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
