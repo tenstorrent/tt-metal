@@ -22,9 +22,10 @@ TTNN_OBJS = $(addprefix $(OBJDIR)/, $(TTNN_SRCS:.cpp=.o))
 TTNN_PYBIND11_OBJS = $(addprefix $(OBJDIR)/, $(TTNN_PYBIND11_SRCS:.cpp=.o))
 
 TTNN_DEPS = $(addprefix $(OBJDIR)/, $(TTNN_SRCS:.cpp=.d))
--include $(TTNN_DEPS)
+TTNN_PYBIND11_DEPS = $(addprefix $(OBJDIR)/, $(TTNN_PYBIND11_SRCS:.cpp=.d))
 
--include $(TTNN_PYBIND11_SRCS:.cpp=.d)
+-include $(TTNN_DEPS)
+-include $(TTNN_PYBIND11_DEPS)
 
 TTNN_LIBS_TO_BUILD = $(TTNN_LIB) \
 		     $(TTNN_PYBIND11_LIB) \
