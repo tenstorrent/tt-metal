@@ -190,7 +190,7 @@ class resnetBlock2D:
             padding=(1, 1),
             dtype=ttnn.bfloat8_b,
             device=device,
-            use_1d_systolic_array=False,  # must be block sharded. height sharding will break code to determine GN shard config below
+            use_1d_systolic_array=False,
             batch_size=batch_size,
             input_height=conv2_input_height,
             input_width=conv2_input_width,
@@ -298,7 +298,6 @@ class resnetBlock2D:
         down=False,
         use_in_shortcut: Optional[bool] = None,
         dtype: Optional[ttnn.DataType] = None,
-        dump_to_file=False,
     ):
         assert groups == self.groups
         if non_linearity == "mish":

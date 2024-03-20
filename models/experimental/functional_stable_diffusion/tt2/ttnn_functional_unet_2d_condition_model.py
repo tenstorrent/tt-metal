@@ -31,13 +31,8 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_a
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d import downblock2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    run_ttnn_conv_with_pre_and_post_tensor_formatting,
-    pre_process_input_new,
-    post_process_output,
-    permute_conv_parameters,
     pad_group_norm_weight,
     pre_process_input,
-    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 fp32_accum = True
