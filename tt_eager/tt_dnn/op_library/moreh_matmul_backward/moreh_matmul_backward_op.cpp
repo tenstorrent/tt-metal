@@ -30,8 +30,9 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> other_grad,
+    std::optional<const Tensor> input_grad,
+    std::optional<const Tensor> other_grad,
+    std::optional<const Tensor> output_tensor,
     const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs;
     outputs.reserve(2);
@@ -46,8 +47,8 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         return dims;
     };
 
-    if (input_grad) {
-        const auto& input_grad_tensor = input_grad->get();
+    if (input_grad.has_value()) {
+        const auto& input_grad_tensor = input_grad.value();
         if (is_same_batch_shape(output_grad, input_grad_tensor)) {
             const auto& input_grad_shape = input_grad_tensor.get_legacy_shape().without_padding();
             const auto& output_grad_shape = output_grad.get_legacy_shape().without_padding();
@@ -64,8 +65,8 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         outputs.push_back(nullptr);
     }
 
-    if (other_grad) {
-        const auto& other_grad_tensor = other_grad->get();
+    if (other_grad.has_value()) {
+        const auto& other_grad_tensor = other_grad.value();
         if (is_same_batch_shape(output_grad, other_grad_tensor)) {
             moreh_matmul(input, output_grad, other_grad_tensor, true, false, output_mem_config);
         } else {
@@ -79,6 +80,12 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         outputs.push_back(nullptr);
     }
 
+    if (output_tensor.has_value()) {
+        outputs.push_back(output_tensor.value());
+    } else {
+        outputs.push_back(nullptr);
+    }
+
     return outputs;
 }
 
@@ -86,13 +93,14 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> other_grad,
+    std::optional<const Tensor> input_grad,
+    std::optional<const Tensor> other_grad,
+    std::optional<const Tensor> output_tensor,
     const MemoryConfig& output_mem_config) {
     if (is_dot_backward(output_grad, input, other)) {
         return moreh_dot_backward(output_grad, input, other, input_grad, other_grad, output_mem_config);
     } else {
-        return moreh_matmul_backward_(output_grad, input, other, input_grad, other_grad, output_mem_config);
+        return moreh_matmul_backward_(output_grad, input, other, input_grad, other_grad, output_tensor, output_mem_config);
     }
 }
 

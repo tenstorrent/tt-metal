@@ -177,7 +177,7 @@ Tensor moreh_matmul_(
 Tensor moreh_matmul(
     const Tensor& input_tensor,
     const Tensor& other_tensor,
-    std::optional<std::reference_wrapper<const Tensor>> output_tensor,
+    std::optional<const Tensor> output_tensor,
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {

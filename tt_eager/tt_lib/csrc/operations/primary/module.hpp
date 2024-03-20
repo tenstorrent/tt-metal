@@ -588,6 +588,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_b").noconvert(),
         py::arg("input_a_grad").noconvert() = std::nullopt,
         py::arg("input_b_grad").noconvert() = std::nullopt,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_matmul_backward operation.

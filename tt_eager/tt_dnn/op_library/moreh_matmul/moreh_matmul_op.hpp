@@ -57,7 +57,7 @@ struct MorehMatmul {
 Tensor moreh_matmul(
     const Tensor &input_tensor,
     const Tensor &other_tensor,
-    std::optional<std::reference_wrapper<const Tensor>> output_tensor = std::nullopt,
+    std::optional<const Tensor> output_tensor = std::nullopt,
     bool transpose_input = false,
     bool transpose_other = false,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
