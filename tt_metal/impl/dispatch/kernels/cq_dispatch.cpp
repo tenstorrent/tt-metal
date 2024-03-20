@@ -393,9 +393,8 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DPRINT << "!checksum" << ENDL();
         DEBUG_STATUS('!', 'C', 'H', 'K');
-        while(1);
+        ASSERT(0);
     }
 
     return cmd_ptr + cmd->debug.stride;
@@ -503,7 +502,7 @@ void kernel_main() {
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
-            while(1);
+            ASSERT(0);
         }
 
         // Move to next page
