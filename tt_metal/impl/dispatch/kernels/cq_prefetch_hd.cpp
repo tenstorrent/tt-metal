@@ -43,7 +43,7 @@ static uint32_t dispatch_data_ptr = dispatch_cb_base;
 
 static uint32_t prefetch_q_log_minsize = 4;
 
-static uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
+static const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
 static_assert((dispatch_cb_base & (dispatch_cb_page_size - 1)) == 0);
 
@@ -382,6 +382,70 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr) {
     return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
+uint32_t process_relay_linear_cmd(uint32_t cmd_ptr) {
+
+    // This ensures that a previous cmd using the scratch buf has finished
+    noc_async_writes_flushed();
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
+    uint32_t read_addr = cmd->relay_linear.addr;
+    uint32_t length = cmd->relay_linear.length;
+    uint32_t read_length = length;
+
+    // First step - read into DB0
+    uint32_t scratch_read_addr = scratch_db_top[0];
+    uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
+    noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
+    read_addr += amt_to_read;
+    noc_async_read_barrier();
+
+    // Second step - read into DB[x], write from DB[x], toggle x, iterate
+    // Writes are fast, reads are slow
+    uint32_t db_toggle = 0;
+    uint32_t scratch_write_addr;
+    read_length -= amt_to_read;
+    while (read_length != 0) {
+        // This ensures that writes from prior iteration are done
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_writes_flushed();
+
+        db_toggle ^= 1;
+        scratch_read_addr = scratch_db_top[db_toggle];
+        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+
+        uint32_t amt_to_write = amt_to_read;
+        amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+        noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
+        noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
+        read_addr += amt_to_read;
+
+        // Third step - write from DB
+        uint32_t npages = write_pages_to_dispatcher<0, false>(dispatch_noc_xy, dispatch_data_ptr, scratch_write_addr, amt_to_write);
+
+        dispatch_cb_release_pages(npages);
+
+        read_length -= amt_to_read;
+
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_read_barrier();
+    }
+
+    // Third step - write from DB
+    scratch_write_addr = scratch_db_top[db_toggle];
+    uint32_t amt_to_write = amt_to_read;
+    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>(dispatch_noc_xy, dispatch_data_ptr, scratch_write_addr, amt_to_write);
+
+    uint32_t pad_to_page = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
+    dispatch_data_ptr += pad_to_page;
+
+    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
+    dispatch_cb_release_pages(npages + 1);
+
+    return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+}
+
 uint32_t process_stall(uint32_t cmd_ptr) {
 
     static uint32_t count = 0;
@@ -409,6 +473,11 @@ void kernel_main() {
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
+        case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            DPRINT << "relay linear: " << fence << " " << cmd_ptr << ENDL();
+            cmd_ptr = process_relay_linear_cmd(cmd_ptr);
+            break;
+
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
             if (cmd->relay_paged.is_dram) {
