@@ -386,11 +386,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
             for i in range(len(xs)):
-                xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
-            for i in range(len(xs)):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
-                )
+                xs[i] = tt_lib.tensor.reshard(xs[i], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
 
         # Fused QKV
         fused_query_key_value = []
@@ -409,13 +405,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # TMs
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
             for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.sharded_to_interleaved(
-                    fused_query_key_value[i], output_mem_config=self.model_config["L1_MEMCFG"]
+                fused_query_key_value[i] = tt_lib.tensor.reshard(
+                    fused_query_key_value[i], self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
                 )
-            for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.interleaved_to_sharded(
-                    fused_query_key_value[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
-                )
+
         query_layer = []
         key_layer = []
         value_layer = []
