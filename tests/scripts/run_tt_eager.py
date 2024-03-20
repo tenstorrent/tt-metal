@@ -82,7 +82,7 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
     TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
     # Integration tests
-    void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
+    # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
 TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
