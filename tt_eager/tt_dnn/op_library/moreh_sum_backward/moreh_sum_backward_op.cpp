@@ -49,13 +49,13 @@ std::vector<Shape> MorehSumBackward::compute_output_shapes(const std::vector<Ten
 
 tt::stl::reflection::Attributes MorehSumBackward::attributes() const { return {}; }
 
-Tensor moreh_sum_backward_(const Tensor& output_grad, const Tensor& input_grad) {
+Tensor moreh_sum_backward_(const Tensor& output_grad, const Tensor& input_grad, std::optional<Tensor> output_tensor) {
     operation::run(MorehSumBackward{}, {output_grad, input_grad});
     return input_grad;
 }
 
-Tensor moreh_sum_backward(const Tensor& output_grad, const Tensor& input_grad) {
-    return moreh_sum_backward_(output_grad, input_grad);
+Tensor moreh_sum_backward(const Tensor& output_grad, const Tensor& input_grad, std::optional<Tensor> output_tensor) {
+    return moreh_sum_backward_(output_grad, input_grad, output_tensor);
 }
 
 }  // namespace primary

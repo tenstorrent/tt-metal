@@ -39,14 +39,15 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
 
 Tensor moreh_sum_(
     const Tensor &input,
-    std::optional<std::reference_wrapper<const Tensor>> output,
+    std::optional<Tensor> output,
     const int64_t &dim,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor moreh_sum(
+std::vector<Tensor> moreh_sum(
     const Tensor &input,
     const Tensor &output,
     std::vector<int64_t> &dims,
+    std::optional<Tensor> output_tensor = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

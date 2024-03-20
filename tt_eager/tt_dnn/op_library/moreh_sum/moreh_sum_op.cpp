@@ -108,29 +108,43 @@ Tensor moreh_sum_(const Tensor& input, const int64_t& dim, const MemoryConfig& m
     return output;
 }
 
-Tensor moreh_sum(
+std::vector<Tensor> moreh_sum(
     const Tensor& input,
     const Tensor& output,
     std::vector<int64_t>& dims,
-    const MemoryConfig& mem_config) {
-    // reduce for all dims
-    if (dims.empty()) {
-        dims = {0, 1, 2, 3};
-    }
+    std::optional<Tensor> output_tensor,
+    const MemoryConfig& mem_config)
+    {
+        // reduce for all dims
+        if (dims.empty()) {
+            dims = {0, 1, 2, 3};
+        }
 
-    std::vector<int64_t> sorted_dims = dims;
-    std::sort(sorted_dims.begin(), sorted_dims.end());
+        std::vector<int64_t> sorted_dims = dims;
+        std::sort(sorted_dims.begin(), sorted_dims.end());
 
-    auto temp_input = input;
-    for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims[i]);
-        auto temp_output = moreh_sum_(temp_input, sorted_dims[i], mem_config);
-        temp_input = temp_output;
+        auto temp_input = input;
+        // std::vector<Tensor> temp_output;
+        for (uint32_t i = dims.size() - 1; i > 0; i--) {
+            log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims[i]);
+            auto temp_output = moreh_sum_(temp_input, sorted_dims[i], mem_config);
+            temp_input = temp_output;
+        }
+        log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
+        moreh_sum_(temp_input, output, sorted_dims.front());
+
+        std::vector<Tensor> output_vector;
+        if(output_tensor.has_value())
+        {
+            output_vector.emplace_back(output);
+            output_vector.emplace_back(output_tensor.value());
+        }
+        else
+        {
+            output_vector.emplace_back(output);
+        }
+        return output_vector;
     }
-    log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
-    moreh_sum_(temp_input, output, sorted_dims.front());
-    return output;
-}
 
 }  // namespace primary
 }  // namespace operations

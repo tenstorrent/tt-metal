@@ -839,6 +839,7 @@ void py_module(py::module& m_primary) {
         py::arg("output").noconvert(),
         py::kw_only(),
         py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs sum operation. Returns an output tensor.");
     m_primary.def(
@@ -846,6 +847,7 @@ void py_module(py::module& m_primary) {
         &moreh_sum_backward,
         py::arg("output_grad").noconvert(),
         py::arg("input_grad").noconvert(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
         "Performs sum backward operation. Returns an input_grad tensor.");
     m_primary.def(
         "moreh_cumsum",

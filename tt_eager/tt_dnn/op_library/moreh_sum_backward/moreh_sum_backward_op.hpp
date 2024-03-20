@@ -29,7 +29,7 @@ struct MorehSumBackward {
 
 operation::ProgramWithCallbacks moreh_sum_backward_program(const Tensor &output_grad, const Tensor &input_grad);
 
-Tensor moreh_sum_backward(const Tensor &output_grad, const Tensor &input_grad);
+Tensor moreh_sum_backward(const Tensor &output_grad, const Tensor &input_grad, std::optional<Tensor> output_tensor);
 
 }  // namespace primary
 
