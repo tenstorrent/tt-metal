@@ -20,7 +20,6 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d
 )
 import math
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
     post_process_output,
 )
 
