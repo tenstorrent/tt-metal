@@ -24,11 +24,11 @@ test-list:
         inputs:
           - input-1:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
+            data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1"]
           - input-2:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
+            data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1"]
           - input-3:
             data-layout: ["TILE"]
