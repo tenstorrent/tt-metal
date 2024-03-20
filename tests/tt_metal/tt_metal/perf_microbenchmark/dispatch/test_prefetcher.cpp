@@ -178,6 +178,25 @@ void add_prefetcher_dram_cmd(vector<uint32_t>& cmds,
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
+void add_prefetcher_linear_read_cmd(Device *device,
+                                    vector<uint32_t>& cmds,
+                                    vector<uint16_t>& sizes,
+                                    CoreCoord worker_core,
+                                    uint32_t addr,
+                                    uint32_t length) {
+
+    CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
+
+    CQPrefetchCmd cmd;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
+
+    cmd.relay_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.relay_linear.addr = addr;
+    cmd.relay_linear.length = length;
+
+    add_bare_prefetcher_cmd(cmds, cmd, true);
+}
+
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
                         vector<uint16_t>& sizes,
                         CQPrefetchCmdId id,
@@ -317,6 +336,49 @@ void gen_dram_read_cmd(Device *device,
     cmd_sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
 
     add_dram_data_to_worker_data(dram_data, worker_core, worker_data, start_page, base_addr, page_size, pages);
+}
+
+// This is pretty much a blit: copies from worker core's start of data back to the end of data
+void gen_linear_read_cmd(Device *device,
+                         vector<uint32_t>& prefetch_cmds,
+                         vector<uint16_t>& cmd_sizes,
+                         const vector<uint32_t>& dram_data,
+                         worker_data_t& worker_data,
+                         CoreCoord worker_core,
+                         uint32_t addr,
+                         uint32_t length) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, addr, length);
+
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+
+    auto prior_end = prefetch_cmds.size();
+    add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr, length);
+
+    uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
+
+    // Add linear data to worker data:
+    uint32_t length_words = length / sizeof(uint32_t);
+    for (uint32_t i = 0; i < length_words; i++) {
+        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
+            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
+                CoreCoord core(x, y);
+                if (core == worker_core) {
+                    uint32_t datum = worker_data[core].data[i];
+                    worker_data[core].data.push_back(datum);
+                    worker_data[core].valid.push_back(true);
+                } else {
+                    worker_data[core].data.push_back(0);
+                    worker_data[core].valid.push_back(false);
+                }
+            }
+        }
+    }
 }
 
 void gen_dram_test(Device *device,
@@ -566,6 +628,10 @@ void gen_smoke_test(Device *device,
     worker_cores.push_back({first_worker_g.x + 3, first_worker_g.y});
     gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 156);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    // These tests copy data from earlier tests so can't run first
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr, 32);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr, 65 * 1024);
 }
 
 void gen_prefetcher_cmds(Device *device,
