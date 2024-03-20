@@ -61,9 +61,10 @@ We also provide tools to review the graphs you create and run in TT-NN.
 
 <img src="./docs/source/_static/add.svg" alt="ttnn tracer example" height="250"/>
 
-## Running performant out-of-the-box models
+## Running model demos on Grayskull (GS)
 
-We have working demos for models such as [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
+We have prepared demos for the following models: [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
+In each model folder the `README.md`
 
 These are some performance metrics for our models running on Grayskull (GS). We constantly improve these
 and publish these metrics on [GitHub
