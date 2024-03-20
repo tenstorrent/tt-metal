@@ -27,8 +27,8 @@ enum CQPrefetchCmdId : uint8_t {
 // Dispatcher CMD ID enums
 enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_ILLEGAL = 0,            // common error value
-    CQ_DISPATCH_CMD_WRITE = 1,              // write data from dispatcher to dst_noc
-    CQ_DISPATCH_CMD_WRITE_HOST = 2,         // like write, dedicated to writing to host
+    CQ_DISPATCH_CMD_WRITE_LINEAR = 1,       // write data from dispatcher to dst_noc
+    CQ_DISPATCH_CMD_WRITE_LINEAR_HOST = 2,  // like write, dedicated to writing to host
     CQ_DISPATCH_CMD_WRITE_PAGED = 3,        // write banked/paged data from dispatcher to dst_noc
     CQ_DISPATCH_CMD_WRITE_PACKED = 4,       // write to multiple noc addresses with packed data
     CQ_DISPATCH_CMD_WAIT = 5,               // wait until workers are done
@@ -149,7 +149,7 @@ struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
     union {
-        CQDispatchWriteCmd write;
+        CQDispatchWriteCmd write_linear;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWaitCmd wait;

@@ -204,11 +204,11 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
-    cmd.write.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
-    cmd.write.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
-    cmd.write.length = length;
-    cmd.write.num_mcast_dests = 0;
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
+    cmd.write_linear.length = length;
+    cmd.write_linear.num_mcast_dests = 0;
 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
@@ -224,11 +224,11 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
-    cmd.write.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
-    cmd.write.addr = dst_addr + worker_data[worker_core].data.size() * sizeof(uint32_t);
-    cmd.write.length = length;
-    cmd.write.num_mcast_dests = 0;
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.addr = dst_addr + worker_data[worker_core].data.size() * sizeof(uint32_t);
+    cmd.write_linear.length = length;
+    cmd.write_linear.num_mcast_dests = 0;
 
     add_dispatcher_cmd(cmds, worker_core, worker_data, cmd, length);
 }
@@ -253,11 +253,11 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
         }
     }
 
-    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
-    cmd.write.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-    cmd.write.addr = dst_addr + worker_data[worker_core_range.start].data.size() * sizeof(uint32_t);
-    cmd.write.length = length;
-    cmd.write.num_mcast_dests = worker_core_range.size();
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+    cmd.write_linear.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+    cmd.write_linear.addr = dst_addr + worker_data[worker_core_range.start].data.size() * sizeof(uint32_t);
+    cmd.write_linear.length = length;
+    cmd.write_linear.num_mcast_dests = worker_core_range.size();
 
     add_dispatcher_cmd(cmds, worker_core_range, worker_data, cmd, length);
 }

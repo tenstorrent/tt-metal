@@ -133,9 +133,9 @@ FORCE_INLINE
 void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
-    uint32_t dst_noc = cmd->write.noc_xy_addr;
-    uint32_t dst_addr = cmd->write.addr;
-    uint32_t length = cmd->write.length;
+    uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
+    uint32_t dst_addr = cmd->write_linear.addr;
+    uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     DPRINT << "dispatch_write: " << length << " num_mcast_dests: " << num_mcast_dests << ENDL();
     while (length != 0) {
@@ -194,7 +194,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
 FORCE_INLINE
 void process_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
-    uint32_t num_mcast_dests = cmd->write.num_mcast_dests;
+    uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     if (num_mcast_dests == 0) {
         process_write_linear<false>(0);
     } else {
@@ -457,8 +457,8 @@ void kernel_main() {
         volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
-        case CQ_DISPATCH_CMD_WRITE:
-        case CQ_DISPATCH_CMD_WRITE_HOST:
+        case CQ_DISPATCH_CMD_WRITE_LINEAR:
+        case CQ_DISPATCH_CMD_WRITE_LINEAR_HOST:
             DEBUG_STATUS('D', 'W', 'B');
             DPRINT << "cmd_write\n";
             process_write();
