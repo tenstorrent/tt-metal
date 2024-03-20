@@ -30,4 +30,5 @@
 #include "ckernel_sfpu_square.h"
 #include "ckernel_sfpu_tanh_derivative.h"
 #include "ckernel_sfpu_tanh.h"
+#include "ckernel_sfpu_topk.h"
 #include "ckernel_sfpu_trigonometry.h"
