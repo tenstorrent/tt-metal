@@ -11,10 +11,10 @@ python_env/clean:
 
 # .PRECIOUS: $(PYTHON_ENV)/.installed $(PYTHON_ENV)/%
 $(PYTHON_ENV)/.installed:
-	python3.8 -m venv $(PYTHON_ENV)
-	bash -c "source $(PYTHON_ENV)/bin/activate && python -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu"
+	python3 -m venv $(PYTHON_ENV)
+	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu"
 	echo "Installing python env build backend requirements..."
-	bash -c "source $(PYTHON_ENV)/bin/activate && python -m pip install setuptools wheel"
+	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip install setuptools wheel"
 	touch $@
 
 $(PYTHON_ENV)/%: $(PYTHON_ENV)/.installed
@@ -27,7 +27,7 @@ else
 $(PYTHON_ENV)/.installed-dev: $(PYTHON_ENV)/.installed tt_metal/python_env/requirements-dev.txt
 endif
 	echo "Installing dev environment packages..."
-	bash -c "source $(PYTHON_ENV)/bin/activate && python -m pip install -r tt_metal/python_env/requirements-dev.txt"
+	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip install -r tt_metal/python_env/requirements-dev.txt"
 	echo "Installing editable dev version of tt_eager packages..."
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e ."
 	echo "Installing editable dev version of ttnn package..."
