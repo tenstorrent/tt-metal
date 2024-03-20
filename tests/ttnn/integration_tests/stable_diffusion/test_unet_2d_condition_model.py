@@ -120,7 +120,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     # setup pytorch model
     torch.manual_seed(0)
     model_name = "CompVis/stable-diffusion-v1-4"
-    load_from_disk = True
+    load_from_disk = False
     if not load_from_disk:
         pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
 
