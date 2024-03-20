@@ -109,6 +109,7 @@ def run_roberta_question_and_answering_inference(
     ttnn_roberta_inputs = bert.preprocess_inputs(
         roberta_input["input_ids"],
         roberta_input["token_type_ids"],
+        torch.zeros(roberta_input["token_type_ids"].shape),
         torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
         device=device,
     )
@@ -212,6 +213,7 @@ def run_roberta_question_and_answering_inference_squad_v2(
                 ttnn_roberta_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
+                    torch.zeros(batch_data["token_type_ids"].shape),
                     torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
                     device=device,
                 )
