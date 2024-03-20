@@ -16,7 +16,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_t
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -158,7 +158,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.rand(hidden_states_shape) * 0.01
     encoder_hidden_states_shape = [1, 2, 77, 768]
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
+    encoder_hidden_states = torch.rand(encoder_hidden_states_shape)
 
     timestep = None
     attention_mask = None

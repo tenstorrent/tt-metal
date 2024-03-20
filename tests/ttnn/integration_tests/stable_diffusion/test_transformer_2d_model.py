@@ -139,27 +139,27 @@ def test_transformer_2d_model_256x256(
             40,
             "up",
         ),
-        # (
-        #     (2, 640, 32, 32),
-        #     1,
-        #     1,
-        #     80,
-        #     "down",
-        # ),
-        # (
-        #     (2, 1280, 16, 16),
-        #     2,
-        #     1,
-        #     160,
-        #     "down",
-        # ),
-        # (
-        #     (2, 1280, 8, 8),
-        #     2,
-        #     1,
-        #     160,
-        #     "down",
-        # ),
+        (
+            (2, 640, 32, 32),
+            1,
+            1,
+            80,
+            "down",
+        ),
+        (
+            (2, 1280, 16, 16),
+            2,
+            1,
+            160,
+            "down",
+        ),
+        (
+            (2, 1280, 8, 8),
+            2,
+            1,
+            160,
+            "down",
+        ),
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
@@ -183,7 +183,7 @@ def test_transformer_2d_model_512x512(
     _, in_channels, _, _ = input_shape
 
     input = torch.randn(input_shape) * 0.01
-    encoder_hidden_states = torch.randn(encoder_hidden_states)
+    encoder_hidden_states = torch.rand(encoder_hidden_states)
 
     load_from_disk = False
     if not load_from_disk:
@@ -280,4 +280,4 @@ def test_transformer_2d_model_512x512(
         )
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.94)
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

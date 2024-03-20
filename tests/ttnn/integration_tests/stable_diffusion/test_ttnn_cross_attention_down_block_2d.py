@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -98,7 +98,7 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
     temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    hidden_states = pre_process_input_new(device, hidden_states)
+    hidden_states = pre_process_input(device, hidden_states)
     ttnn_output, _ = model(
         hidden_states,
         encoder_hidden_states,
@@ -192,19 +192,19 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
     temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    hidden_states = pre_process_input_new(device, hidden_states)
+    hidden_states = pre_process_input(device, hidden_states)
     ttnn_output, _ = model(
         hidden_states,
         encoder_hidden_states,
         temb,
-        in_channels=in_channels,
+        in_channels=C,
         out_channels=in_channels,
         attention_mask=None,
         add_downsample=True,
         cross_attention_kwargs={},
         config=config,
     )
-    # ttnn_output = post_process_output(device, ttnn_output, N, H//2, W//2, in_channels)
+    ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    # assert_with_pcc(torch_output, ttnn_output, 0.94)
+    assert_with_pcc(torch_output, ttnn_output, 0.94)

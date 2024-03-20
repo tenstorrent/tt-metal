@@ -19,7 +19,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downsam
     downsample_2d as tt2_ttnn_downsample_2d,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -100,7 +100,7 @@ def test_downsample_2d_512x512(device, model_name, batch_size, in_channels, inpu
     )
     reader_patterns_cache = {}
     model = tt2_ttnn_downsample_2d(device, parameters, reader_patterns_cache, batch_size, input_height, input_width)
-    ttnn_hidden_state = pre_process_input_new(device, ttnn_hidden_state)
+    ttnn_hidden_state = pre_process_input(device, ttnn_hidden_state)
     ttnn_output = model(
         in_channels=in_channels,
         hidden_states=ttnn_hidden_state,
@@ -109,7 +109,7 @@ def test_downsample_2d_512x512(device, model_name, batch_size, in_channels, inpu
         padding=1,
     )
 
-    # ttnn_output = post_process_output(device, ttnn_output, batch_size, input_height, input_width, in_channels)
-    # ttnn_output_torch = ttnn.to_torch(ttnn_output) # NOTE: errors out
+    ttnn_output = post_process_output(device, ttnn_output, batch_size, input_height // 2, input_width // 2, in_channels)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

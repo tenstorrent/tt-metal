@@ -18,7 +18,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblo
     downblock2d as tt2_ttnn_downblock2d,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -141,7 +141,7 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
     parameters = parameters.down_blocks[3]
     reader_patterns_cache = {}
     model = tt2_ttnn_downblock2d(device, parameters, reader_patterns_cache, N, H, W)
-    ttnn_hidden_states = pre_process_input_new(device, ttnn_hidden_states)
+    ttnn_hidden_states = pre_process_input(device, ttnn_hidden_states)
     ttnn_out, ttnn_output_states = model(
         temb=ttnn_temb,
         hidden_states=ttnn_hidden_states,

@@ -17,7 +17,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import torch_random
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
-    pre_process_input_new,
+    pre_process_input,
     post_process_output,
 )
 
@@ -106,7 +106,7 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
     torch_output = resnet_upsampler(input)
 
     tt_input_tensor = ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    tt_input_tensor = pre_process_input_new(device, tt_input_tensor)
+    tt_input_tensor = pre_process_input(device, tt_input_tensor)
     tt_up = model(
         tt_input_tensor,
         in_channels,
