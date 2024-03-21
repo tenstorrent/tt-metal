@@ -182,7 +182,15 @@ class SystemMemoryManager {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         char* hugepage_start = (char*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         this->cq_sysmem_start = hugepage_start;
-        this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+
+        // TODO(abhullar): Remove env var and expose sizing at the API level
+        char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
+        if (cq_size_override_env != nullptr) {
+            uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
+            this->cq_size = cq_size_override;
+        } else {
+            this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+        }
         this->channel_offset = DeviceCommand::MAX_HUGEPAGE_SIZE * channel;
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
@@ -281,13 +289,6 @@ class SystemMemoryManager {
         uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
 
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-        // if (cq_interface
-        //         .issue_fifo_wr_ptr + cmd_size_16B > cq_interface.issue_fifo_limit) {
-
-        //     // If we try reserving past the bounds, we need to wrap
-        //     cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;
-        //     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
-        // }
 
         uint32_t rd_ptr_and_toggle;
         uint32_t rd_ptr;
@@ -419,6 +420,10 @@ class SystemMemoryManager {
 
         // Notify dispatch core
         this->send_completion_queue_read_ptr(cq_id);
+    }
+
+    uint32_t get_cq_size() const {
+        return this->cq_size;
     }
 
 };
