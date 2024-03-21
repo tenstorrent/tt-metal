@@ -11,8 +11,8 @@
 #include <set>
 #include <string>
 
-#include "common/assert.hpp"
-#include "common/logger.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 

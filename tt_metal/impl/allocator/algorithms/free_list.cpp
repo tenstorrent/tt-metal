@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 
 #include <algorithm>
 #include <cmath>

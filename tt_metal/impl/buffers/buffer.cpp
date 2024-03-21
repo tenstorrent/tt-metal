@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
