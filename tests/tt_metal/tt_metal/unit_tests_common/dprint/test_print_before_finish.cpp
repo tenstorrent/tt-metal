@@ -59,6 +59,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 
 TEST_F(DPrintFixture, TestPrintFinish) {
     auto devices = this->devices_;
-    // Run only on the first device
+    // Run only on the first device, as this tests disconnects devices and this can cause
+    // issues on multi-device setups.
     this->RunTestOnDevice(RunTest, devices[0]);
 }
