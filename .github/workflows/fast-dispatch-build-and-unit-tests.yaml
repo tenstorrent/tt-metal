@@ -10,6 +10,9 @@ jobs:
   fd-model-tests:
     uses: ./.github/workflows/models-post-commit.yaml
     secrets: inherit
+  fd-cpp-tests:
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    secrets: inherit
   fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -30,7 +33,6 @@ jobs:
           {name: misc group 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 2 },
           {name: misc group 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/misc/ -vvv --splits 3 --group 3 },
           {name: sweep, cmd: ./tests/scripts/run_python_sweep_tests.sh},
-          {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
