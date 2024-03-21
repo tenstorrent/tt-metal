@@ -648,17 +648,27 @@ ALWI void silu_tile_init() {
 
 //topK local sort
 /**
- * Performs local sort phase of TopK algorithm on the two data tiles and two
+ * Performs local sort stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking
  * and is only available on the compute engine.
  *
- * The local sort phase sorts the data into length-K subsequences of
- * alternating directions, in place.
+ * The algorithm used to implement TopK is found here:
+ * https://anilshanbhag.in/static/papers/gputopk_sigmod18.pdf
+ *
+ * The local sort stage sorts the data into length-K subsequences of
+ * alternating directions, in place. If i_start_phase != i_end_phase, all
+ * phases in the range i_start_phase to i_end_phase (inclusive) are computed.
+ * If i_start_phase == i_end_phase, only that phase is computed, with
+ * i_start_step and i_end_step defining how many steps are computed. This can
+ * be used to extend the OP support for cases when K > 64.
  *
  * Note that the two data tiles need to be loaded into the DST register
  * before the invocation of this call. The corresponding index tiles should
  * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that local sort is done across columns on 64 values spanning across
+ * 2 tiles.
  *
  * Note: idist should be set to 0
  *
@@ -679,17 +689,21 @@ ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_
 
 //topK merge
 /**
- * Performs merge phase of TopK algorithm on the two data tiles and two
+ * Performs merge stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking
  * and is only available on the compute engine.
  *
- * The merge phase combines length-K subsequences that are 2^m_iter apart,
- * such that the first is left with the K greatest values.
+ * The merge stage combines length-K subsequences that are 2^m_iter apart,
+ * such that the first subsequence receives the top K values, and the
+ * second subsequence receives the bottom K values.
  *
  * Note that the two data tiles need to be loaded into the DST register
  * before the invocation of this call. The corresponding index tiles should
  * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that merge is done across columns on values spanning across 2
+ * tiles.
  *
  * Note: idist should be set to 0
  *
@@ -707,17 +721,20 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 
 //topK rebuild
 /**
- * Performs rebuild phase of TopK algorithm on the two data tiles and two
+ * Performs rebuild stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking
  * and is only available on the compute engine.
  *
- * The rebuild phase sorts the length-K subsequences that are 2^(m_iter+1)
+ * The rebuild stage sorts the length-K subsequences that are 2^(m_iter+1)
  * apart, such that they alternate directions.
  *
  * Note that the two data tiles need to be loaded into the DST register
  * before the invocation of this call. The corresponding index tiles should
  * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that rebuild is done across columns on values spanning across 2
+ * tiles.
  *
  * Note: idist should be set to 0
  *
