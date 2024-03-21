@@ -5,8 +5,7 @@
 #include "debug/dprint.h"
 
 // A helper function to exercise print features.
-// TODO: When #5566 is implemented combine these functions again.
-inline void print_test_data_basic_types() {
+inline void print_test_data() {
     uint8_t  my_uint8  = 101;
     uint16_t my_uint16 = 555;
     uint32_t my_uint32 = 123456;
@@ -19,11 +18,6 @@ inline void print_test_data_basic_types() {
     DPRINT << "Basic Types:\n" << 101 << -1.6180034f << '@' << BF16(0x3dfb) << ENDL();
     DPRINT << my_uint8 << my_uint16 << my_uint32 << my_uint64 << ENDL();
     DPRINT << my_int8 << my_int16 << my_int32 << my_int64 << ENDL();
-}
-
-inline void print_test_data_modifiers() {
-    uint32_t my_uint32 = 123456;
-    float my_float = 3.14159f;
     DPRINT << "SETPRECISION/FIXED/DEFAULTFLOAT:\n";
     DPRINT << SETPRECISION(5) << my_float << ENDL();
     DPRINT << SETPRECISION(9) << my_float << ENDL();
