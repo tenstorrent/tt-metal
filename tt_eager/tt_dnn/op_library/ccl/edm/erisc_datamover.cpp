@@ -8,7 +8,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "eth_l1_address_map.h"
-#include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_async_datamover.hpp"
+#include "tt_eager/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
 
 // Args Schema:
 // 1) handshake addr
@@ -125,14 +125,13 @@ void kernel_main() {
 
     uint8_t const sender_channels_start = get_arg_val<uint32_t>(args_offset++);
     uint32_t const sender_num_channels = num_senders;//get_arg_val<uint32_t>(args_offset++);
-    uint8_t num_senders_with_no_work = 0;;
+    uint8_t num_senders_with_no_work = 0;
     for (uint32_t channel = 0; channel < sender_num_channels; channel++) {
         uint32_t const sender_buffer_address = get_arg_val<uint32_t>(args_offset++);
         uint32_t const sender_num_messages_to_send = get_arg_val<uint32_t>(args_offset++);
         // Each channel buffer is at buffer_base + (channel_id * sender_channel_size)
         // Each channel currently constrained to the same buffer size
         uint32_t const sender_channel_size = get_arg_val<uint32_t>(args_offset++);
-        // TODO(snijjar): we can consider computing this instead using a helper in erisc_datamover_api.h
         // The erisc's local l1 copy of the semaphore workers remotely increment
         uint32_t const sender_semaphores_base_address = get_arg_val<uint32_t>(args_offset++);
         // worker's semaphore L1 address
@@ -148,7 +147,7 @@ void kernel_main() {
             sender_num_workers,
             sender_num_messages_to_send,
             (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
-            (const erisc::datamover::WorkerXY *)workers_xy_list_addr,
+            (const ccl::WorkerXY *)workers_xy_list_addr,
             true);
         if (sender_num_messages_to_send == 0) {
             num_senders_with_no_work++;
@@ -165,7 +164,6 @@ void kernel_main() {
         // Each channel buffer is at buffer_base + (channel_id * sender_channel_size)
         // Each channel currently constrained to the same buffer size
         uint32_t const receiver_channel_size = get_arg_val<uint32_t>(args_offset++);
-        // TODO(snijjar): we can consider computing this instead using a helper in erisc_datamover_api.h
         uint32_t const receiver_semaphores_base_address = get_arg_val<uint32_t>(args_offset++);
         uint32_t const worker_semaphore_address = get_arg_val<uint32_t>(args_offset++);
         uint32_t const receiver_num_workers = get_arg_val<uint32_t>(args_offset++);
@@ -179,7 +177,7 @@ void kernel_main() {
             receiver_num_workers,
             receiver_num_messages_to_send,
             (volatile tt_l1_ptr uint32_t *const)receiver_semaphores_base_address,
-            (const erisc::datamover::WorkerXY *)workers_xy_list_addr,
+            (const ccl::WorkerXY *)workers_xy_list_addr,
             false);
 
         if (receiver_num_messages_to_send == 0) {

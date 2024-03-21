@@ -277,7 +277,7 @@ bool RunWriteBWTest(
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover.cpp",
+        "tt_eager/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
@@ -350,7 +350,7 @@ bool RunWriteBWTest(
     uint32_t chip1_receiver_num_channels = chip0_arg_sender_num_channels;
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover.cpp",
+        "tt_eager/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,

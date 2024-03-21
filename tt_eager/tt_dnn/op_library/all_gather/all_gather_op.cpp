@@ -37,8 +37,17 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
         TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+
+
+    // Sharding Config checks
+    bool input_sharded = input_tensor.is_sharded();
+    if (input_sharded) {
+        // TODO(snijjar)
+    }
 }
 
 std::vector<Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -49,7 +58,17 @@ std::vector<Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &i
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    if(this->output_mem_config.is_sharded()) {
+        return {create_sharded_device_tensor(
+            this->compute_output_shapes(input_tensors).at(0),
+            input_tensor.get_dtype(),
+            input_tensor.get_layout(),
+            input_tensor.device(),
+            this->output_mem_config
+            )};
+    } else {
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    }
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {

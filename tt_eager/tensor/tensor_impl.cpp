@@ -115,6 +115,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Devic
                                             const Shape& shape, DataType data_type, Layout layout,
                                             std::optional<ShardSpecBuffer> shard_params,
                                             const MemoryConfig& memory_config) {
+    TT_ASSERT(shard_params.has_value(), "Shard params are required for sharded buffer and they were not initialized");
     auto page_shape = shard_params.value().page_shape;
     uint32_t size_of_element = element_size_bytes_wrapper(data_type);
     uint32_t page_size = page_shape[0] * page_shape[1] * size_of_element;
