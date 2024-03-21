@@ -572,6 +572,95 @@ def test_block_sharded_partial_op(
     assert passing
 
 
+@pytest.mark.parametrize("num_cores", [64, 1], ids=["multi_core", "single_core"])
+@pytest.mark.parametrize("in0_height_sharded", [True, False], ids=["in0_height_sharded", "in0_dram_interleaved"])
+@pytest.mark.parametrize("out_height_sharded", [True, False], ids=["out_height_sharded", "out_dram_interleaved"])
+@pytest.mark.parametrize("in_place", [True, False], ids=["in_place", "not_in_place"])
+def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_place):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+
+    if in0_height_sharded != out_height_sharded:
+        pytest.skip(f"Currently bcast hw op supports sharding if both inputs and outputs are sharded")
+
+    scalar_shape = [1, 1, 32, 32]
+    in0_shape = [1, 1, num_cores * 32, 128]
+    height_shard_spec = [32, 128]
+
+    torch_scalar = torch.randn(scalar_shape).bfloat16().float()
+    torch_in0 = torch.randn(in0_shape).bfloat16().float()
+
+    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    height_sharded_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    )
+
+    tt_scalar_dram = torch2tt_tensor(
+        torch_scalar, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+
+    tt_in0_dram = torch2tt_tensor(
+        torch_in0, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+
+    if out_height_sharded:
+        out_mem_config = height_sharded_memory_config
+    else:
+        out_mem_config = dram_interleaved_memory_config
+
+    if in0_height_sharded:
+        tt_in0_height_sharded = ttl.tensor.interleaved_to_sharded(
+            tt_in0_dram,
+            device.compute_with_storage_grid_size(),
+            height_shard_spec,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+        tt_out = ttl.operations.primary.bcast(
+            tt_in0_height_sharded,
+            tt_scalar_dram,
+            ttl.tensor.BcastOpMath.MUL,
+            ttl.tensor.BcastOpDim.HW,
+            output_mem_config=out_mem_config,
+            in_place=in_place,
+        )
+        tt_in0_height_sharded.deallocate()
+    else:
+        tt_out = ttl.operations.primary.bcast(
+            tt_in0_dram,
+            tt_scalar_dram,
+            ttl.tensor.BcastOpMath.MUL,
+            ttl.tensor.BcastOpDim.HW,
+            output_mem_config=out_mem_config,
+            in_place=in_place,
+        )
+
+    if out_height_sharded:
+        tt_out = ttl.tensor.sharded_to_interleaved(tt_out, output_mem_config=dram_interleaved_memory_config)
+
+    # Reference is out and input dram interleaved
+    tt_out_ref = ttl.operations.primary.bcast(
+        tt_in0_dram,
+        tt_scalar_dram,
+        ttl.tensor.BcastOpMath.MUL,
+        ttl.tensor.BcastOpDim.HW,
+        output_mem_config=dram_interleaved_memory_config,
+        in_place=in_place,
+    )
+
+    tt_out_torch = tt2torch_tensor(tt_out)
+    tt_ref_torch = tt2torch_tensor(tt_out_ref)
+
+    passing, output = comp_pcc(tt_out_torch, tt_ref_torch)
+    logger.info(output)
+    assert passing
+
+
 @pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
 @pytest.mark.parametrize(
     "activations_dtype",

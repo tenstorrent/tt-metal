@@ -217,13 +217,11 @@ def test_falcon_matmul(
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
 @skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
-@pytest.mark.parametrize("seq_len", [1024], ids=["seq_len_1024"])
-@pytest.mark.parametrize("num_slices", [4], ids=["four_slices"])
+@pytest.mark.parametrize("seq_len", [128, 1024, 2048], ids=["seq_len_128", "seq_len_1024", "seq_len_2048"])
 @pytest.mark.parametrize("num_cores", [64])
 def test_falcon7b_attnention_sliced(
     device,
     seq_len,
-    num_slices,
     num_cores,
     function_level_defaults,
 ):
@@ -232,13 +230,28 @@ def test_falcon7b_attnention_sliced(
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     grid_size = (8, 8)
 
+    num_heads = 64
+
+    if seq_len == 128:
+        num_slices = 1
+    elif seq_len == 1024:
+        num_slices = 4
+    elif seq_len == 2048:
+        num_slices = 16
+
     query_layer_shape = [1, 71, seq_len, 64]
     key_layer_transposed_shape = [1, 1, 64, seq_len]
     attention_mask_shape = [1, 71, seq_len, seq_len]
+    scalar_shape = [1, 1, 32, 32]
+    value_layer_shape = [1, 1, seq_len, 64]
+    attention_output_shape = [1, 71, seq_len, 64]
 
     torch_query_layer = torch.randn(query_layer_shape).bfloat16().float()
     torch_key_layer_transposed = torch.randn(key_layer_transposed_shape).bfloat16().float()
     torch_attention_mask = torch.randn(attention_mask_shape).bfloat16().float()
+    torch_scalar = (torch.ones(scalar_shape) * (1 / math.sqrt(num_heads))).bfloat16().float()
+    torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
+    torch_attention_output = torch.randn(attention_output_shape).bfloat16().float()
 
     dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -268,6 +281,16 @@ def test_falcon7b_attnention_sliced(
         tt_memory_config=dram_interleaved_memory_config,
         tt_dtype=ttl.tensor.DataType.BFLOAT16,
     )
+    reference_scalar = torch2tt_tensor(
+        torch_scalar, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+    reference_value_layer = torch2tt_tensor(
+        torch_value_layer,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+
     compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi4,
         math_approx_mode=True,
@@ -278,104 +301,612 @@ def test_falcon7b_attnention_sliced(
     passing = True
     output = None
 
-    # Todo: 2K seq_len
+    attention_output_concatenated = torch2tt_tensor(
+        torch_attention_output,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+    tiles_per_shard = math.ceil((((71 * seq_len) / num_cores) / num_slices) / 32)
+    mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
+    mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
+
+    for i in range(num_slices):
+        slice = ttl.tensor.interleaved_to_sharded_partial(
+            reference_query_layer,
+            grid_size,
+            mm_activations_height_shard_spec,
+            num_slices,  # num_slices
+            i,  # slice_index
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        subblock_h = 1
+        subblock_w = 1
+        if seq_len == 2048:
+            subblock_w = 8  # best option
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=2,
+            per_core_M=tiles_per_shard,
+            per_core_N=seq_len // 32,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+
+        mm_slice = ttl.operations.primary.matmul(
+            slice,
+            reference_key_layer_transposed,
+            program_config=program_config,
+            output_mem_config=height_sharded_memory_config,
+            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        mm_slice = ttl.operations.primary.bcast(
+            mm_slice,
+            reference_scalar,
+            ttl.tensor.BcastOpMath.MUL,
+            ttl.tensor.BcastOpDim.HW,
+            output_mem_config=height_sharded_memory_config,
+            in_place=True,
+        )
+
+        # Deallocating here causes pcc to drop - issue #6638
+        # So we have to move it after the entire sequence is finished
+        # slice.deallocate()
+
+        attn_mask_slice = ttl.tensor.interleaved_to_sharded_partial(
+            attention_mask,
+            grid_size,
+            mm_output_height_shard_spec,
+            num_slices,
+            i,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        mm_slice = ttl.operations.primary.add(
+            mm_slice,
+            attn_mask_slice,
+            fused_activations=None,
+            output_mem_config=height_sharded_memory_config,
+            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            in_place=True,
+        )
+
+        attn_mask_slice.deallocate()
+
+        subblock_w = 1
+        if seq_len == 2048:
+            subblock_w = 8
+        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            subblock_w=subblock_w,
+            block_h=mm_output_height_shard_spec[0] // 32,
+            block_w=mm_output_height_shard_spec[1] // 32,
+        )
+
+        mm_slice = ttl.operations.primary.softmax_in_place(
+            mm_slice, program_config=softmax_program_config, compute_kernel_config=compute_kernel_config
+        )
+
+        subblock_w = 2
+        subblock_h = 1
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=seq_len // 32,
+            per_core_M=tiles_per_shard,
+            per_core_N=2,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+
+        attn_out_slice = ttl.operations.primary.matmul(
+            mm_slice,
+            reference_value_layer,
+            program_config=program_config,
+            output_mem_config=height_sharded_memory_config,
+            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            attn_out_slice,
+            attention_output_concatenated,
+            num_slices,
+            i,
+            dram_interleaved_memory_config,
+        )
+
+        slice.deallocate()
+        mm_slice.deallocate()
+        attn_out_slice.deallocate()
+
+    attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
+
+    attn_weights = ttl.tensor.matmul(
+        reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+    )
+
+    attn_weights = ttl.operations.primary.bcast(
+        attn_weights,
+        reference_scalar,
+        ttl.tensor.BcastOpMath.MUL,
+        ttl.tensor.BcastOpDim.HW,
+        output_mem_config=dram_interleaved_memory_config,
+    )
+    attn_weights = ttl.tensor.add(attn_weights, attention_mask, output_mem_config=dram_interleaved_memory_config)
+    attn_weights = ttl.operations.primary.softmax_in_place(attn_weights, compute_kernel_config=compute_kernel_config)
+    attn_output = ttl.tensor.matmul(attn_weights, reference_value_layer)
+    attn_output_torch = tt2torch_tensor(attn_output)
+    passing = True
+
+    attn_output_torch_reshaped = attn_output_torch.view(1, 1, 71 * seq_len, 64)
+    attention_output_concatenated_torch_reshaped = attention_output_concatenated_torch.view(1, 1, 71 * seq_len, 64)
+    slice_length = (71 * seq_len) // num_slices
+    for slice_index in range(num_slices):
+        print("Comparing slice ", slice_index, "...")
+        slice_passing = False
+        slice_passing, output = comp_pcc(
+            attn_output_torch_reshaped[:, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :],
+            attention_output_concatenated_torch_reshaped[
+                :, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :
+            ],
+        )
+        passing = passing and slice_passing
+        print("Slice PCC is: ", output)
+
+    # Compare entire tensors as well
+    entire_tensor_passing, output = comp_pcc(attn_output_torch, attention_output_concatenated_torch)
+    passing = entire_tensor_passing and passing
+
+    print(output)
+    assert passing
+
+
+@pytest.mark.parametrize("seq_len", [128, 1024, 2048], ids=["seq_len_128", "seq_len_1024", "seq_len_2048"])
+@pytest.mark.parametrize("num_cores", [64])
+@skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
+def test_falcon7b_attention_softmax_sequence(
+    device,
+    seq_len,
+    num_cores,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+
+    num_heads = 64
+
     if seq_len == 1024:
-        mm_out = torch2tt_tensor(
-            torch_attention_mask,
+        num_slices = 4
+    elif seq_len == 2048:
+        num_slices = 16
+    elif seq_len == 128:
+        num_slices = 1
+
+    query_layer_shape = [1, 71, seq_len, 64]
+    key_layer_transposed_shape = [1, 1, 64, seq_len]
+    attention_mask_shape = [1, 71, seq_len, seq_len]
+    attention_mask_proper_dim_shape = [1, 1, seq_len, seq_len]
+    scalar_shape = [1, 1, 32, 32]
+    value_layer_shape = [1, 1, seq_len, 64]
+    attention_output_shape = [1, 71, seq_len, 64]
+
+    torch_query_layer = torch.randn(query_layer_shape).bfloat16().float()
+    torch_key_layer_transposed = torch.randn(key_layer_transposed_shape).bfloat16().float()
+    torch_attention_mask_proper_dim = torch.randn(attention_mask_proper_dim_shape).bfloat16().float()
+    torch_attention_mask = torch_attention_mask_proper_dim.repeat(1, attention_mask_shape[1], 1, 1)
+    scalar_value = 1 / math.sqrt(num_heads)
+    torch_scalar = (torch.ones(scalar_shape) * scalar_value).bfloat16().float()
+    torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
+    torch_attention_output = torch.randn(attention_output_shape).bfloat16().float()
+
+    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    height_sharded_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    )
+
+    # compare output to regular case
+    reference_query_layer = torch2tt_tensor(
+        torch_query_layer,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+    reference_key_layer_transposed = torch2tt_tensor(
+        torch_key_layer_transposed,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+    attention_mask = torch2tt_tensor(
+        torch_attention_mask,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+    attention_mask_proper_dim = torch2tt_tensor(
+        torch_attention_mask_proper_dim,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    # We need to create attention masks per slice
+    attention_masks_per_slice = []
+    attention_mask_starting_index_per_slice = 0
+    slice_length = (71 * seq_len) // num_slices
+    number_of_attention_mask_elements_used_per_slice = slice_length - seq_len * (slice_length // seq_len)
+    # print("Slice length is: ", slice_length)
+    # print("Number of attention mask elements per slice = ", number_of_attention_mask_elements_used_per_slice)
+    for slice_index in range(num_slices):
+        print("Slice attention mask starting index: ", attention_mask_starting_index_per_slice)
+        torch_attention_mask_per_slice = torch.cat(
+            [
+                torch_attention_mask_proper_dim[:, :, attention_mask_starting_index_per_slice:, :],
+                torch_attention_mask_proper_dim[:, :, :attention_mask_starting_index_per_slice, :],
+            ],
+            dim=2,
+        )
+        tt_attention_slice = torch2tt_tensor(
+            torch_attention_mask_per_slice,
             device,
             tt_memory_config=dram_interleaved_memory_config,
             tt_dtype=ttl.tensor.DataType.BFLOAT16,
         )
-        tiles_per_shard = math.ceil((((71 * seq_len) / num_cores) / num_slices) / 32)
-        mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
-        mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
+        attention_masks_per_slice.append(tt_attention_slice)
+        attention_mask_starting_index_per_slice = (
+            attention_mask_starting_index_per_slice + number_of_attention_mask_elements_used_per_slice
+        ) % seq_len  # mod attention_mask.height
 
-        for i in range(num_slices):
-            slice = ttl.tensor.interleaved_to_sharded_partial(
-                reference_query_layer,
-                grid_size,
-                mm_activations_height_shard_spec,
-                num_slices,  # num_slices
-                i,  # slice_index
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-            )
+    reference_scalar = torch2tt_tensor(
+        torch_scalar, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+    reference_value_layer = torch2tt_tensor(
+        torch_value_layer,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
 
-            program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                in0_block_w=2,
-                per_core_M=tiles_per_shard,
-                per_core_N=32,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
-            )
+    passing = True
+    output = None
 
-            # [1, 1, 71, 32, 2] * [2, 32]
-            mm_slice = ttl.operations.primary.matmul(
-                slice,
-                reference_key_layer_transposed,
-                program_config=program_config,
-                output_mem_config=height_sharded_memory_config,
-                output_dtype=ttl.tensor.DataType.BFLOAT16,
-                compute_kernel_config=compute_kernel_config,
-            )
+    attention_output_concatenated = torch2tt_tensor(
+        torch_attention_output,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+    tiles_per_shard = math.ceil((((71 * seq_len) / num_cores) / num_slices) / 32)
+    mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
+    mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
-            slice.deallocate()
-
-            attn_mask_slice = ttl.tensor.interleaved_to_sharded_partial(
-                attention_mask,
-                grid_size,
-                mm_output_height_shard_spec,
-                num_slices,
-                i,
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-            )
-
-            mm_slice = ttl.operations.primary.add(
-                mm_slice,
-                attn_mask_slice,
-                fused_activations=None,
-                output_mem_config=height_sharded_memory_config,
-                output_dtype=ttl.tensor.DataType.BFLOAT16,
-                in_place=True,
-            )
-
-            attn_mask_slice.deallocate()
-
-            softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                subblock_w=1,
-                block_h=mm_output_height_shard_spec[0] // 32,
-                block_w=mm_output_height_shard_spec[1] // 32,
-            )
-
-            mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
-
-            ttl.tensor.sharded_to_interleaved_partial(
-                mm_slice,
-                mm_out,
-                num_slices,
-                i,
-                dram_interleaved_memory_config,
-            )
-
-            mm_slice.deallocate()
-
-        mm_out_torch = tt2torch_tensor(mm_out)
-
-        attn_weights = ttl.tensor.matmul(
-            reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+    for i in range(num_slices):
+        slice = ttl.tensor.interleaved_to_sharded_partial(
+            reference_query_layer,
+            grid_size,
+            mm_activations_height_shard_spec,
+            num_slices,  # num_slices
+            i,  # slice_index
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        attn_weights = ttl.tensor.add(attn_weights, attention_mask, output_mem_config=dram_interleaved_memory_config)
-        attn_weights = ttl.operations.primary.softmax_in_place(attn_weights)
+        subblock_h = 1
+        subblock_w = 1
+        if seq_len == 2048:
+            subblock_w = 8  # best option
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=2,
+            per_core_M=tiles_per_shard,
+            per_core_N=seq_len // 32,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
 
-        attn_weights_torch = tt2torch_tensor(attn_weights)
-        passing, output = comp_pcc(mm_out_torch, attn_weights_torch)
+        mm_slice = ttl.operations.primary.matmul(
+            slice,
+            reference_key_layer_transposed,
+            program_config=program_config,
+            output_mem_config=height_sharded_memory_config,
+            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        # Deallocating here causes pcc to drop - issue #6638
+        # So we have to move it after the entire sequence is finished
+        # slice.deallocate()
+
+        subblock_w = 1
+        if seq_len == 2048:
+            subblock_w = 8
+        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            subblock_w=subblock_w,
+            block_h=mm_output_height_shard_spec[0] // 32,
+            block_w=mm_output_height_shard_spec[1] // 32,
+        )
+
+        mm_slice = ttl.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+            mm_slice,
+            scalar_value,
+            attention_masks_per_slice[i],
+            program_config=softmax_program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        subblock_w = 2
+        subblock_h = 1
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=seq_len // 32,
+            per_core_M=tiles_per_shard,
+            per_core_N=2,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+
+        attn_out_slice = ttl.operations.primary.matmul(
+            mm_slice,
+            reference_value_layer,
+            program_config=program_config,
+            output_mem_config=height_sharded_memory_config,
+            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            attn_out_slice,
+            attention_output_concatenated,
+            num_slices,
+            i,
+            dram_interleaved_memory_config,
+        )
+
+        slice.deallocate()
+        mm_slice.deallocate()
+        attn_out_slice.deallocate()
+
+    attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
+
+    attn_weights = ttl.tensor.matmul(
+        reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+    )
+
+    attn_weights = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_weights,
+        scalar_value,
+        attention_mask_proper_dim,
+        program_config=ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+        is_causal_mask=True,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    attn_output = ttl.tensor.matmul(attn_weights, reference_value_layer)
+    attn_output_torch = tt2torch_tensor(attn_output)
+    passing = True
+
+    attn_output_torch_reshaped = attn_output_torch.view(1, 1, 71 * seq_len, 64)
+    attention_output_concatenated_torch_reshaped = attention_output_concatenated_torch.view(1, 1, 71 * seq_len, 64)
+    for slice_index in range(num_slices):
+        print("Comparing slice ", slice_index, "...")
+        slice_passing = False
+        slice_passing, output = comp_pcc(
+            attn_output_torch_reshaped[:, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :],
+            attention_output_concatenated_torch_reshaped[
+                :, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :
+            ],
+        )
+        passing = passing and slice_passing
+        print("Slice PCC is: ", output)
+
+    # Compare entire tensors as well
+    entire_tensor_passing, output = comp_pcc(attn_output_torch, attention_output_concatenated_torch)
+    passing = entire_tensor_passing and passing
+
+    print(output)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "seq_len",
+    (32, 64, 128, 1024, 2048),
+    ids=["seq_len_32", "seq_len_64", "seq_len_128", "seq_len_1024", "seq_len_2048"],
+)
+@pytest.mark.parametrize("num_cores", [64])
+def test_softmax(device, num_cores, seq_len):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+
+    head_dim = 71
+    num_heads = 64
+    torch.manual_seed(0)
+
+    input_shape = [1, head_dim, seq_len, seq_len]
+    attention_mask_shape = [1, 1, seq_len, seq_len]
+    scalar_shape = [1, 1, 32, 32]
+
+    scalar_value = 1 / math.sqrt(num_heads)
+    torch_input = torch.randn(input_shape).bfloat16().float()
+    torch_attention_mask = torch.randn(attention_mask_shape).bfloat16().float()
+    torch_attention_mask_full = torch_attention_mask.repeat(1, head_dim, 1, 1)
+    torch_scalar = (torch.ones(scalar_shape) * scalar_value).bfloat16().float()
+
+    num_slices = 1
+    if seq_len == 1024:
+        num_slices = 4
+    elif seq_len == 2048:
+        num_slices = 16
+
+    slice_length = (head_dim * seq_len) // num_slices
+
+    torch_outputs = torch.zeros(input_shape).bfloat16().float()
+
+    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    tt_input = torch2tt_tensor(
+        torch_input,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+
+    tt_attention_mask_full = torch2tt_tensor(
+        torch_attention_mask_full,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+
+    tt_scalar = torch2tt_tensor(
+        torch_scalar, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+
+    tt_attention_masks_per_slice = []
+    attention_mask_starting_index_per_slice = 0
+    number_of_attention_mask_elements_used_per_slice = slice_length - seq_len * (slice_length // seq_len)
+    # print("Slice length is: ", slice_length)
+    # print("Number of attention mask elements per slice = ", number_of_attention_mask_elements_used_per_slice)
+    for slice_index in range(num_slices):
+        # print("Slice attention mask starting index: ", attention_mask_starting_index_per_slice)
+        torch_attention_mask_per_slice = torch.cat(
+            [
+                torch_attention_mask[:, :, attention_mask_starting_index_per_slice:, :],
+                torch_attention_mask[:, :, :attention_mask_starting_index_per_slice, :],
+            ],
+            dim=2,
+        )
+        tt_attention_slice = torch2tt_tensor(
+            torch_attention_mask_per_slice,
+            device,
+            tt_memory_config=dram_interleaved_memory_config,
+            tt_dtype=ttl.tensor.DataType.BFLOAT16,
+        )
+        tt_attention_masks_per_slice.append(tt_attention_slice)
+        attention_mask_starting_index_per_slice = (
+            attention_mask_starting_index_per_slice + number_of_attention_mask_elements_used_per_slice
+        ) % seq_len  # mod attention_mask.height
+
+    tt_output_sharded_softmax = torch2tt_tensor(
+        torch_outputs, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+
+    # Sharded softmax
+    tiles_per_shard = math.ceil((((head_dim * seq_len) / num_cores) / num_slices) / 32)
+    height_shard_spec = [tiles_per_shard * 32, seq_len]
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    for i in range(num_slices):
+        input_slice = ttl.tensor.interleaved_to_sharded_partial(
+            tt_input,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            i,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            subblock_w=1,
+            block_h=height_shard_spec[0] // 32,
+            block_w=height_shard_spec[1] // 32,
+        )
+
+        input_slice = ttl.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+            input_slice,
+            scalar_value,
+            tt_attention_masks_per_slice[i],
+            program_config=softmax_program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            input_slice, tt_output_sharded_softmax, num_slices, i, dram_interleaved_memory_config
+        )
+        input_slice.deallocate()
+
+    out = ttl.operations.primary.bcast(
+        tt_input,
+        tt_scalar,
+        ttl.tensor.BcastOpMath.MUL,
+        ttl.tensor.BcastOpDim.HW,
+        output_mem_config=dram_interleaved_memory_config,
+    )
+
+    out = ttl.tensor.add(
+        out,
+        tt_attention_mask_full,
+        output_mem_config=dram_interleaved_memory_config,
+    )
+
+    out = ttl.operations.primary.softmax_in_place(out, compute_kernel_config=compute_kernel_config)
+
+    out_torch = tt2torch_tensor(out)
+    out_torch_view = out_torch.view(1, 1, out_torch.shape[1] * out_torch.shape[2], out_torch.shape[3])
+
+    out_torch_softmax = tt2torch_tensor(tt_output_sharded_softmax)
+    out_torch_softmax_view = out_torch_softmax.view(
+        1, 1, out_torch_softmax.shape[1] * out_torch_softmax.shape[2], out_torch_softmax.shape[3]
+    )
+
+    # Compare slice pcc
+    passing = True
+    for slice_index in range(num_slices):
+        print("Comparing slice ", slice_index, "...")
+        slice_passing = False
+        slice_passing, output = comp_pcc(
+            out_torch_view[:, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :],
+            out_torch_softmax_view[:, :, (slice_length) * slice_index : (slice_length) * (slice_index + 1), :],
+        )
+        passing = passing and slice_passing
+        print("Slice PCC is: ", output)
+
+    # Compare entire tensors as well
+    entire_tensor_passing, output = comp_pcc(out_torch_view, out_torch_softmax_view)
+    passing = entire_tensor_passing and passing
 
     print(output)
     assert passing

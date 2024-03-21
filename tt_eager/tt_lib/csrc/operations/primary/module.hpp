@@ -725,7 +725,7 @@ void py_module(py::module& m_primary) {
     )doc");
 
     m_primary.def("bcast", &tt::operations::primary::bcast,
-        py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("in_place") = false, R"doc(
         Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
         Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
@@ -750,6 +750,7 @@ void py_module(py::module& m_primary) {
             "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
             "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+            "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
     )doc");
 
     py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
