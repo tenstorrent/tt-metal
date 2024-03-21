@@ -15,6 +15,10 @@ from models.demos.llama2_70b.tt.llama_common import (
     generate_rot_emb,
     gather_rotary_emb,
     get_weight_cache_path,
+    precompute_freqs,
+    freqs_to_rotation_matrix,
+    get_rotation_mat,
+    get_rotation_mat_prefill,
 )
 
 
@@ -47,6 +51,7 @@ class TtLlamaDecoder_optimized:
         self.emulated = emulated
         self.batched_attn = self.num_devices == 8
         self.padded_local_heads = 32
+        self.llm_mode = model_config["LLM_MODE"]
 
         self.layer_name = f"{base_url}.{layer_num}"
 
@@ -77,7 +82,6 @@ class TtLlamaDecoder_optimized:
             load_weights=load_weights,
             cache_path=cache_path,
         )
-        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
         if load_weights:
             self.load_weights()
@@ -167,68 +171,125 @@ class TtLlamaDecoder_optimized:
 
         batch = x.size(0)
         seq_len = x.size(1)
-        assert seq_len == 1, "Only supporting decode mode"
-        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+        batch, seq_len, hidden_size = x.shape
 
-        position_ids = torch.ones(seq_len, batch, dtype=torch.long) * start_pos
-        rot_mat = gather_rotary_emb(self.rot_emb, position_ids)[:, :1]
+        rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
-        padded_layer_past_len = nearest_32(start_pos + 1)
-        if self.batched_attn:
-            attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
-        else:
-            attn_mask_shape = (seq_len, self.n_local_heads, batch, padded_layer_past_len)
-        attn_mask = torch.zeros(*attn_mask_shape)
-        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+        if self.llm_mode == "prefill":
+            assert seq_len == 128, "prefill mode only supports 128 seq_len"
+            assert batch == 1, "prefill mode only supports batch size 1"
+            x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
+            rot_mat = get_rotation_mat_prefill(rot_mat=rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
+            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+            attn_mask = torch.triu(attn_mask, diagonal=1)
+            attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
 
-        # expected shapes:
-        # x: (seq_len, 1, batch, hidden_dim)
-        # start_pos: int
-        # rot_mat: [1, 1, head_dim, head_dim]
-        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
-        assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-        assert attn_mask.size() == attn_mask_shape
+            as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
+                tensor,
+                dtype=ttnn.bfloat16,
+                device=self.devices[device_id],
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=get_weight_cache_path(self.cache_path, name, device_id, self.num_devices),
+            )
+            # expected shapes:
+            # x: [batch, 1, seq_len, hidden_dim]
+            # start_pos: int
+            # rot_mat: [batch, seq_len, head_dim, head_dim]
+            # attn_mask: [batch, self.n_heads, seq_len, seq_len]
+            assert x.size() == (batch, 1, seq_len, self.hidden_size)
+            assert rot_mat.size() == (batch, seq_len, self.head_dim, self.head_dim)
+            assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
 
-        x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-        xs, rot_mats, attn_masks = [], [], []
-        # Put attn_mask on the device with the sharded config
-        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = padded_layer_past_len
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-        for i in range(self.num_devices):
-            device = self.devices[i]
-            xs.append(
-                torch2tt_tensor(
-                    x_fractured[i],
-                    device,
-                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
+            xs, rot_mats, attn_masks = [], [], []
+            for i in range(self.num_devices):
+                xs.append(
+                    ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
                 )
-            )
-            rot_mats.append(
-                torch2tt_tensor(
-                    rot_mat.clone(),
-                    device,
-                    tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
-                    tt_dtype=self.model_config["ROT_MAT_DTYPE"],
+                rot_mats.append(as_tensor(rot_mat.clone(), "rot_mat_prefill", i))
+                attn_masks.append(as_tensor(attn_mask.clone(), "attn_mask_prefill", i))
+
+            # Put attn_mask on the device with the sharded config
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = seq_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            for i in range(self.num_devices):
+                xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
-            )
-            attn_masks.append(
-                torch2tt_tensor(
-                    attn_mask.clone(),
-                    device,
-                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
                 )
+        elif self.llm_mode == "decode":
+            assert seq_len == 1, "Only supporting decode mode"
+            x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+
+            rot_mat = get_rotation_mat(
+                rot_mat=rot_mat,
+                start_pos=start_pos,
+                seqlen=seq_len,
+                batch=1,  # use batch=1 because we assume all users use same rot_mat
             )
-        for i in range(self.num_devices):
-            xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-            )
-            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-                attn_masks[i], sharded_mem_config=attention_mask_memconfig
-            )
+
+            padded_layer_past_len = nearest_32(start_pos + 1)
+            if self.batched_attn:
+                attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
+            else:
+                attn_mask_shape = (seq_len, self.n_local_heads, batch, padded_layer_past_len)
+            attn_mask = torch.zeros(*attn_mask_shape)
+            attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+
+            # expected shapes:
+            # x: (seq_len, 1, batch, hidden_dim)
+            # start_pos: int
+            # rot_mat: [1, 1, head_dim, head_dim]
+            # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
+            assert x.size() == (seq_len, 1, batch, self.hidden_size)
+            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+            assert attn_mask.size() == attn_mask_shape
+
+            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
+            xs, rot_mats, attn_masks = [], [], []
+            # Put attn_mask on the device with the sharded config
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            for i in range(self.num_devices):
+                device = self.devices[i]
+                xs.append(
+                    torch2tt_tensor(
+                        x_fractured[i],
+                        device,
+                        tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                    )
+                )
+                rot_mats.append(
+                    torch2tt_tensor(
+                        rot_mat.clone(),
+                        device,
+                        tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
+                        tt_dtype=self.model_config["ROT_MAT_DTYPE"],
+                    )
+                )
+                attn_masks.append(
+                    torch2tt_tensor(
+                        attn_mask.clone(),
+                        device,
+                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                    )
+                )
+            for i in range(self.num_devices):
+                xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+                )
+                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
+                )
         return (
             xs,
             start_pos,

@@ -177,3 +177,17 @@ def apply_rotary_emb(
     xq_out = xq @ rotation_mat
     xk_out = xk @ rotation_mat
     return xq_out, xk_out
+
+
+def get_rotation_mat_prefill(rot_mat, start_pos, seqlen, batch):
+    position_ids = torch.ones(batch, seqlen, dtype=torch.long) * torch.arange(start_pos, start_pos + seqlen).unsqueeze(
+        0
+    )
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
+
+
+def get_rotation_mat(rot_mat, start_pos, seqlen, batch):
+    position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
