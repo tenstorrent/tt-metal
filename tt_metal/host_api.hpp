@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 #include <future>
-#include "common/core_coord.h"
+#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/event/event.hpp"

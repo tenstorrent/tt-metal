@@ -12,7 +12,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
-#include "common/bfloat16.hpp"
+#include "tt_metal/common/bfloat16.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"

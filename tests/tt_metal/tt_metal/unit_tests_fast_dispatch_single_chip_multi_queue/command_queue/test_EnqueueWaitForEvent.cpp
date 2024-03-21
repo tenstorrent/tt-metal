@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
