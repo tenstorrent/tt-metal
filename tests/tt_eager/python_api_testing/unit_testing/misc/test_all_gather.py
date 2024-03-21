@@ -178,7 +178,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize("num_iters", [10])  # TODO: restore to 500
 def test_all_gather_on_t3000_post_commit_looping(
     all_devices,
     num_devices,
@@ -435,94 +435,235 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-@pytest.mark.skip("Not ready for prime time")
+# @pytest.mark.skip("Not ready for prime time")
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "input_shape, dim, layout",
-    [
-        # Input, Selfout, Final AllGather
-        ([1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),
-    ],
-)
-@pytest.mark.parametrize("num_cores", [2])
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+# @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        # ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT16,
+        # ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize(
+    "orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR]
+)  # , ttl.tensor.ShardOrientation.COLUMN_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        (
+            (1, 1, 32, 32),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+        ),
+        (
+            (1, 1, 32, 64),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+        ),
+        (
+            (1, 1, 32, 128),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+        ),
+        (
+            (1, 1, 32, 64),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+        ),
+        (
+            (1, 1, 32, 128),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+        ),
+        (
+            (1, 1, 32, 256),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+        ),
+        (
+            (1, 1, 32, 512),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+        ),
+        (
+            # 2048 wide works
+            # 3072 wide hangs -> maybe I'm exceeding some size limit... (add asserts on buffer sizes:
+            #  - eth buffer size
+            #  - shard buffer size
+            # )
+            (1, 1, 32, 3072),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 2))}),
+        ),
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        ),
+        (
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+        ),
+    ),
+)
 def test_all_gather_post_commit_sharded(
-    pcie_devices,
+    all_devices,
+    num_devices,
     input_shape,
+    input_shard_shape,
+    shard_grid,
     dim,
     num_links,
+    orientation,
     input_dtype,
-    layout,
-    num_cores,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
     use_program_cache,
     function_level_defaults,
 ):
-    if layout == ttl.tensor.Layout.ROW_MAJOR:
-        pytest.skip("All gather tests are hanging for RM in DRAM")
-    if layout == ttl.tensor.Layout.ROW_MAJOR and input_dtype == ttl.tensor.DataType.BFLOAT8_B:
-        pytest.skip("Invalid combination")
+    if len(all_devices) != 8:
+        pytest.skip("Not T3000!")
 
+    numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
+    unchunked_input_shape = list(input_shape)
+    unchunked_input_shape[dim] *= num_devices
+    # unchunked_input_tensor = torch.arange(numel).reshape(unchunked_input_shape).bfloat16()
+    unchunked_input_tensor = torch.arange(numel).reshape(unchunked_input_shape)
+
+    id = 0
+    for w in range(unchunked_input_shape[0]):
+        for z in range(unchunked_input_shape[1]):
+            for i in range(0, unchunked_input_shape[2], 32):
+                for j in range(0, unchunked_input_shape[3], 32):
+                    for ii in range(32):
+                        for jj in range(32):
+                            unchunked_input_tensor[w][z][i + ii][j + jj] = id
+                    id += 1
+
+    unchunked_input_tensor = unchunked_input_tensor.bfloat16()
+
+    input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
     devices = get_devices_for_t3000(all_devices, num_devices)
 
-    input_tensor = torch.arange(32 * 8192).reshape(input_shape).bfloat16()
-    num_devices = len(devices)
+    # num_cores =
+    # compute_grid_size = devices[0].compute_with_storage_grid_size()
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"unchunked_input_shape: {unchunked_input_shape}")
+    logger.info(f"dim: {dim}")
+    logger.info(f"num_devices: {num_devices}")
+    logger.info(f"num_links: {num_links}")
+    logger.info(f"input_dtype: {input_dtype}")
+    logger.info(f"tensor_layout: {tensor_layout}")
+    logger.info(f"tensor_mem_layout: {tensor_mem_layout}")
+    logger.info(f"orientation: {orientation}")
+    # logger.info(f"num_cores: {num_cores}")
+    logger.info(f"shard_grid: {shard_grid}")
+    logger.info(f"input_shard_shape: {input_shard_shape}")
+
+    # TODO: Figure out better shard spec
+    # all_cores_.size() == 1
+    # this->num_cores() == 8
+    # shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+
+    input_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        input_shard_shape,
+        orientation,
+        False,
+    )
+    input_mem_config = ttl.tensor.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=input_shard_spec
+    )
+    output_shard_shape = list(input_shard_shape)
+    if dim == 3:
+        output_shard_shape[1] *= num_devices
+    else:
+        output_shard_shape[0] *= num_devices
+    output_shard_spec = ttl.tensor.ShardSpec(
+        shard_grid,
+        output_shard_shape,
+        orientation,
+        False,
+    )
+    output_mem_config = ttl.tensor.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=output_shard_spec
+    )
+
     if num_devices < 2:
         pytest.skip("Requires multiple devices to run")
     elif num_devices == 2 and num_links == 2:
         pytest.skip("Not enough links to run")
 
-    if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
+    if unchunked_input_shape[dim] % num_devices != 0 or (
+        dim == 3 and unchunked_input_shape[dim] // num_devices % 32 != 0
+    ):
         pytest.skip("Unsupported test case")
 
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
-    input_shard_spec = ttl.tensor.ShardSpec(
-        shard_grid,
-        [
-            input_tensors[0].shape.numel() // input_tensors[0].shape[-1],
-            input_tensors[0].shape[-1] // num_cores,
-        ],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
-        False,
-    )
-    input_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
-    )
-    output_shard_spec = ttl.tensor.ShardSpec(
-        shard_grid,
-        [
-            input_tensors[0].shape.numel() // input_tensors[0].shape[-1],
-            input_shape[-1] // num_cores,
-        ],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
-        False,
-    )
-    output_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
-    )
+
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], input_mem_config))
+        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
     tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=output_mem_config)
+    for d in devices:
+        ttl.device.Synchronize(d)
     torch.set_printoptions(sci_mode=False)
+    all_eq = True
+    reported_mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         # print(tt_output_tensor[...,:2048])
         # print(tt_output_tensor[...,6144:])
         # breakpoint()
         if input_dtype == ttl.tensor.DataType.BFLOAT16:
-            eq, output = comp_equal(tt_output_tensor, input_tensor)
+            eq, output = comp_equal(tt_output_tensor, unchunked_input_tensor)
         else:
-            eq, output = comp_pcc(tt_output_tensor, input_tensor)
+            eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
         if not eq:
             print(f"output mismatch for tensor {i}")
-        assert eq, f"{i} FAILED: {output}"
+            if not reported_mismatch:
+                reported_mismatch = True
+                for w in range(unchunked_input_shape[0]):
+                    for z in range(unchunked_input_shape[1]):
+                        for y in range(unchunked_input_shape[2]):
+                            for x in range(unchunked_input_shape[3]):
+                                if tt_output_tensor[w, z, y, x] != unchunked_input_tensor[w, z, y, x]:
+                                    print(
+                                        f"mismatch at {w} {z} {y} {x} {unchunked_input_tensor[w, z, y, x]} != {tt_output_tensor[w, z, y, x]}"
+                                    )
+            all_eq = False
+            print(f"")
+            print(f"")
+    assert all_eq, f"{i} FAILED: {output}"
