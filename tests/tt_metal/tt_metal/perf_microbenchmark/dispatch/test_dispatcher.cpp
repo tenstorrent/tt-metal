@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_buf_base = L1_UNRESERVED_BASE;
+        uint32_t l1_buf_base = align(L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
         if (prefetcher_buffer_size_g + l1_buf_base > 1024 * 1024) {
             log_fatal(LogTest, "Error, prefetcher buffer size too large\n");
