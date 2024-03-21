@@ -281,7 +281,8 @@ def construct_arg(**kwargs):
     return Args(**kwargs)
 
 
-@pytest.mark.parametrize("num_layers", (1, 2, 4, 8, 10, 20, None))
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("num_layers", (1, 2, 4, 8, 10, 20, 80))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices, emulated",
     [
@@ -308,8 +309,8 @@ def construct_arg(**kwargs):
 @pytest.mark.parametrize(
     "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
     [
-        (100, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
-        (100, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
+        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
+        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
     ],
     ids=["greedy", "sampling"],
 )
@@ -330,7 +331,6 @@ def test_LlamaModel_demo(
     top_k,
     temperature,
     # TT args
-    # pcie_devices,
     all_devices,
     n_devices,
     emulated,
@@ -346,6 +346,9 @@ def test_LlamaModel_demo(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+
+    for device in devices:
+        device.enable_program_cache()
 
     args = construct_arg(
         implementation=implementation,

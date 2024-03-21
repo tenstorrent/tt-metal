@@ -291,6 +291,9 @@ def test_LlamaDecoder_inference(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
+    for device in devices:
+        device.enable_program_cache()
+
     run_test_LlamaDecoder_inference(
         devices,
         batch,

@@ -79,6 +79,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Repack llama2-70b weights")
     parser.add_argument("in_dir", type=str, help="input directory")
     parser.add_argument("out_dir", type=str, help="output directory")
-    parser.add_argument("chunk_size", type=int, help="number of layers per chunk")
+    parser.add_argument("chunk_size", type=int, default=5, help="number of layers per chunk")
     args = parser.parse_args()
     repack(args.in_dir, args.out_dir, args.chunk_size)
