@@ -74,28 +74,36 @@ class UNet:
         profiler.tracy_message("c1")
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
-        save_c1_2_out = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        save_c1_2_out = ttl.tensor.sharded_to_interleaved(
+            output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
+        )
         output_tensor = self.p1(output_tensor)
 
         profiler.tracy_message("c2")
         output_tensor = unet_reshard(output_tensor, self.c2.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
-        save_c2_2_out = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        save_c2_2_out = ttl.tensor.sharded_to_interleaved(
+            output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
+        )
         output_tensor = self.p2(output_tensor)
 
         profiler.tracy_message("c3")
         output_tensor = unet_reshard(output_tensor, self.c3.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c3(output_tensor)
         output_tensor = self.c3_2(output_tensor)
-        save_c3_2_out = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        save_c3_2_out = ttl.tensor.sharded_to_interleaved(
+            output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
+        )
         output_tensor = self.p3(output_tensor)
 
         profiler.tracy_message("c4")
         output_tensor = unet_reshard(output_tensor, self.c4.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
-        save_c4_2_out = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        save_c4_2_out = ttl.tensor.sharded_to_interleaved(
+            output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
+        )
         output_tensor = self.p4(output_tensor)
 
         profiler.tracy_message("bnc")
@@ -103,11 +111,49 @@ class UNet:
         output_tensor = self.bnc(output_tensor)
         output_tensor = self.bnc_2(output_tensor)
 
+        # need to convert into interleaved, then back into sharded due to pcc issues
+        # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
+        output_tensor = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if output_tensor.device().arch() == ttl.device.Arch.WORMHOLE_B0:
+            core_range_upsample_1 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 5), ttnn.experimental.tensor.CoreCoord(1, 5)
+                    ),
+                }
+            )
+            shard_spec_upsample_1 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_1, (32, 64), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+        else:
+            core_range_upsample_1 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 2)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 3), ttnn.experimental.tensor.CoreCoord(5, 3)
+                    ),
+                }
+            )
+            shard_spec_upsample_1 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_1, (32, 64), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+
+        in_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_upsample_1
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+
         ## upsample block
         profiler.tracy_message("upsample1")
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (1, 132, 10, 64))
-        output_tensor = ttnn.upsample(output_tensor, 2)
+        output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 5280, 64))
 
         profiler.tracy_message("concat1")
@@ -121,10 +167,48 @@ class UNet:
         output_tensor = self.c5_2(output_tensor)
         output_tensor = self.c5_3(output_tensor)
 
-        profiler.tracy_message("upsample2")
+        # need to convert into interleaved, then back into sharded due to pcc issues
+        # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
+        output_tensor = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if output_tensor.device().arch() == ttl.device.Arch.WORMHOLE_B0:
+            core_range_upsample_2 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 5)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 6), ttnn.experimental.tensor.CoreCoord(6, 6)
+                    ),
+                }
+            )
+            shard_spec_upsample_2 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_2, (96, 32), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+        else:
+            core_range_upsample_2 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 3)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 4), ttnn.experimental.tensor.CoreCoord(6, 4)
+                    ),
+                }
+            )
+            shard_spec_upsample_2 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_2, (96, 32), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+
+        in_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_upsample_2
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+
+        profiler.tracy_message("upsample2")
         output_tensor = ttnn.reshape(output_tensor, (1, 264, 20, 32))
-        output_tensor = ttnn.upsample(output_tensor, 2)
+        output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 21120, 32))
 
         profiler.tracy_message("concat2")
@@ -138,10 +222,48 @@ class UNet:
         output_tensor = self.c6_2(output_tensor)
         output_tensor = self.c6_3(output_tensor)
 
-        profiler.tracy_message("upsample3")
+        # need to convert into interleaved, then back into sharded due to pcc issues
+        # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
+        output_tensor = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if output_tensor.device().arch() == ttl.device.Arch.WORMHOLE_B0:
+            core_range_upsample_3 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 6)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 7), ttnn.experimental.tensor.CoreCoord(3, 7)
+                    ),
+                }
+            )
+            shard_spec_upsample_3 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_3, (352, 32), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+        else:
+            core_range_upsample_3 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 4)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 5), ttnn.experimental.tensor.CoreCoord(5, 5)
+                    ),
+                }
+            )
+            shard_spec_upsample_3 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_3, (320, 32), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+
+        in_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_upsample_3
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+
+        profiler.tracy_message("upsample3")
         output_tensor = ttnn.reshape(output_tensor, (1, 528, 40, 32))
-        output_tensor = ttnn.upsample(output_tensor, 2)
+        output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 84480, 32))
 
         profiler.tracy_message("concat3")
@@ -156,10 +278,48 @@ class UNet:
         output_tensor = self.c7_2(output_tensor)
         output_tensor = self.c7_3(output_tensor)
 
-        profiler.tracy_message("upsample4")
+        # need to convert into interleaved, then back into sharded due to pcc issues
+        # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
+        output_tensor = ttl.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if output_tensor.device().arch() == ttl.device.Arch.WORMHOLE_B0:
+            core_range_upsample_4 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 6)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 7), ttnn.experimental.tensor.CoreCoord(3, 7)
+                    ),
+                }
+            )
+            shard_spec_upsample_4 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_4, (1408, 16), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+        else:
+            core_range_upsample_4 = ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 6)
+                    ),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 7), ttnn.experimental.tensor.CoreCoord(3, 7)
+                    ),
+                }
+            )
+            shard_spec_upsample_4 = ttnn.experimental.tensor.ShardSpec(
+                core_range_upsample_4, (960, 16), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+
+        in_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_upsample_4
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+
+        profiler.tracy_message("upsample4")
         output_tensor = ttnn.reshape(output_tensor, (1, 1056, 80, 16))
-        output_tensor = ttnn.upsample(output_tensor, 2)
+        output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 160 * 1056 * 2, 16))
 
         profiler.tracy_message("concat4")

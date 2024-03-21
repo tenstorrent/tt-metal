@@ -155,10 +155,7 @@ void MAIN {
         uint32_t in1_index_inner_dim_h_offset = 0;
 
         #ifdef PACK_RELU
-        if constexpr ((tilize_in0 || spill) && !untilize_out) {
-            // for each output block we start we relu disabled so that intermediate results are not relu'd
-            PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
-        }
+        PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
         #endif
 
         uint32_t curr_matmul_out_cb = matmul_partials_cb;
