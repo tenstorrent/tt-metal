@@ -26,6 +26,7 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
+    return pcc_passed, pcc_message
 
 
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
