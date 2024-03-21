@@ -63,17 +63,15 @@ def do_reshard(output_tensor, input_mem_config):
 
 
 def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None):
-    identity = x
     conv1 = parameters.conv1(x)
-
     conv1 = do_reshard(conv1, parameters.conv2.conv.input_sharded_memory_config)
 
-    # if device is not None:
-    #     ttnn.dump_device_memory_state(device)
+    identity = x
 
     conv2 = parameters.conv2(conv1)
     if conv1.is_allocated():
         ttnn.deallocate(conv1)
+
     conv3 = parameters.conv3(conv2)
     ttnn.deallocate(conv2)
 
@@ -86,7 +84,8 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
         if layer is not None and layer == 2:
             if x.is_allocated() and x is not identity:
                 ttnn.deallocate(x)
-            identity = ttnn.experimental.tensor.move_sharded(identity)
+            if module >= 2:
+                identity = ttnn.experimental.tensor.move_sharded(identity)
         identity = parameters.downsample(identity)
 
     if layer is not None and layer >= 3:
@@ -100,7 +99,9 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
         ttnn.deallocate(identity)
 
     if (layer is not None and module is not None) and (
-        (layer == 2 and module == 1) or (layer == 1 and module == 1 and is_wormhole_b0())
+        (layer == 1 and module == 1)
+        or (layer == 1 and module == 2 and is_grayskull())
+        or (layer == 1 and module == 3 and is_grayskull())
     ):
         out = ttnn.experimental.tensor.move_sharded(out)
 
