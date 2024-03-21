@@ -154,10 +154,8 @@ void MAIN {
             bool enable_reload = false;
 
             #ifdef PACK_RELU
-            if constexpr ((tilize_in0 || spill) && !untilize_out) {
-                // for each output block we start we relu disabled so that intermediate results are not relu'd
-                PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
-            }
+            // for each output block we start we relu disabled so that intermediate results are not relu'd
+            PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
             #endif
 
             UNPACK( const uint32_t partials_cb_read_ptr = cb_interface[matmul_partials_cb].fifo_rd_ptr );
