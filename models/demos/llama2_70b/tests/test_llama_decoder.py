@@ -254,8 +254,12 @@ def run_test_LlamaDecoder_inference(
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
         cache_length_to_check = generation_start_pos + generation_length
-        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        if model_config["LLM_MODE"] == "prefill":
+            cache_pt = cache_pt[:, :, :seq_len, :]
+            cache_tt = cache_tt[:, :, :seq_len, :]
+        else:
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
         logger.info(f"Output: {output_pcc}")
 
