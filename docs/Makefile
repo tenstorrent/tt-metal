@@ -5,24 +5,23 @@
 # from the environment for the first two.
 SPHINXOPTS    	?= -W
 SPHINXBUILD   	?= sphinx-build
-SOURCEDIR     	= source
+SOURCEDIR     	= source/$(REQUESTED_DOCS_PKG)
 BUILDDIR      	= build
 DOXYGENDIR    	= doxygen_build
 HTMLDIR       	= $(BUILDDIR)/html
+TT_METALIUM_BUILDDIR	= $(BUILDDIR)/tt-metalium
+TTNN_BUILDDIR	= $(BUILDDIR)/ttnn
 PORT          	?= 8888
 DOCS_VERSION       	?= latest
-#TODO: Update when folder created on web server with updated name
-#PUBLIC_DOCDIR   = yyz-webservice-02:/var/www/html/docs/<PROJECT-NAME>
-BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
 
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
-TTNN_SWEEPS_DIR = $(HTMLDIR)/ttnn_sweeps
+TTNN_SWEEPS_DIR = $(HTMLDIR)/ttnn/ttnn_sweeps
 
 # Put it first so that "make" without argument is like "make help".
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
-.PHONY: help default clean html publish
+.PHONY: help default clean html publish build_doxygen sphinx_build_dir html/ttnn html/tt-metalium ttnn_sweeps ttnn_sweeps/check_directory
 
 default: html
 
@@ -32,9 +31,23 @@ clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(DOXYGENDIR)
 
-html:
+build_doxygen: clean
 	@cd .. && doxygen
-	@DOCS_VERSION=$(DOCS_VERSION) $(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+
+sphinx_build_dir: clean
+	@mkdir -p $(BUILDDIR)
+
+html/tt-metalium: build_doxygen sphinx_build_dir
+	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)" $(SPHINXOPTS) $(O)
+
+html/ttnn: build_doxygen sphinx_build_dir
+	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
+
+html: html/tt-metalium html/ttnn
+	mkdir -p $(HTMLDIR)
+	mv -f $(TT_METALIUM_BUILDDIR) $(HTMLDIR)/tt-metalium
+	mv -f $(TTNN_BUILDDIR) $(HTMLDIR)/ttnn
+	cp source/index.html $(HTMLDIR)/
 
 ttnn_sweeps/check_directory:
 	@if [ -d "$(TTNN_SWEEPS_DIR)" ]; then \
@@ -51,16 +64,3 @@ ttnn_sweeps:
 server:
 	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"
 	@cd $(HTMLDIR) && python -m http.server $(PORT)
-
-# This will need to updated to
-# - Use proper branch name for main
-# - Upload doxygen XML assets with build
-publish:
-ifeq ($(BRANCH), master)
-	@echo "Publishing docs to server"
-	@chmod -R g+w $(HTMLDIR)/*
-	@rsync --delete-before --delete-excluded --omit-dir-times -avz $(HTMLDIR)/* $(PUBLIC_DOCDIR)
-else
-	@echo "Publishing docs to server failed, only supported on master branch"
-	@echo "You are currently on branch: $(BRANCH)"
-endif

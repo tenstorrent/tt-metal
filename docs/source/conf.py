@@ -16,12 +16,25 @@
 #
 import os
 import sys
+import collections
 
 sys.path.insert(0, os.path.abspath("."))
 
+MetalSphinxConfig = collections.namedtuple("MetalSphinxConfig", ["fullname", "shortname"])
+
+config_lookup = {
+    "tt-metalium": MetalSphinxConfig(fullname="TT-Metalium", shortname="tt-metalium"),
+    "ttnn": MetalSphinxConfig(fullname="TT-NN", shortname="ttnn"),
+}
+
+if "REQUESTED_DOCS_PKG" not in os.environ:
+    raise Exception("REQUESTED_DOCS_PKG needs to be supplied, either tt-metalium or ttnn")
+
+metal_sphinx_config = config_lookup[os.environ["REQUESTED_DOCS_PKG"]]
+
 # -- Project information -----------------------------------------------------
 
-project = "TT-Metalium"
+project = metal_sphinx_config.fullname
 copyright = "Tenstorrent"
 author = "Tenstorrent"
 
@@ -77,7 +90,7 @@ exclude_patterns = []
 html_theme = "sphinx_rtd_theme"
 html_logo = "images/tt_logo.svg"
 html_favicon = "images/cropped-favicon-32x32.png"
-html_baseurl = "/" + os.environ["DOCS_VERSION"]
+html_baseurl = f"/{metal_sphinx_config.shortname}/" + os.environ["DOCS_VERSION"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -90,5 +103,5 @@ def setup(app):
 
 
 # Breathe configs
-breathe_projects = {"ttmetaldoxygen": "../doxygen_build/xml/"}
+breathe_projects = {"ttmetaldoxygen": "../../doxygen_build/xml/"}
 breathe_default_project = "ttmetaldoxygen"

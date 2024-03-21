@@ -7,7 +7,7 @@ Prerequisites
 -------------
 
 Ensure that you have the base TT-Metalium source and environment configuration
-:ref:`built and ready<Getting Started>`.
+`built and ready <https://github.com/tenstorrent-metal/tt-metal#installing>`_.
 
 Now, from the project root, get the Python virtual environment in which you'll
 be working in ready.
