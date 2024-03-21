@@ -1204,7 +1204,6 @@ def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **
 #################### Tensor ####################
 ################################################
 def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
-    print("PT")
     input_tensor_shape = x.shape
     input_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] for i in range(len(input_tensor_shape)))
     out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
@@ -1214,8 +1213,6 @@ def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
         input_tensor_start[2] : input_tensor_end[2],
         input_tensor_start[3] : input_tensor_end[3],
     ] = x
-
-    print("PT 2")
 
     return out
 
@@ -1927,11 +1924,10 @@ def preprocessing_model_conv_conv(x, *args, **kwargs):
 
 def preprocessing_model_conv_relu_conv(x, *args, **kwargs):
     torch.manual_seed(234)
+    torch_input_tensor = x.to(torch.float32)
 
     torch_model = TorchConvReluConv()
     torch_model.eval()
-
-    torch_input_tensor = x.to(torch.float32)
 
     output = torch_model(torch_input_tensor)
 
