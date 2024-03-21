@@ -79,6 +79,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp \
