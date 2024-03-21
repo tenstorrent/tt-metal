@@ -261,6 +261,16 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
 
     torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
 
+    if is_wormhole_b0():
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+    else:
+        compute_kernel_config = None
+
     def update_ttnn_module_args_resnet50(ttnn_module_args):
         ttnn_module_args["use_1d_systolic_array"] = True
         ttnn_module_args["enable_auto_formatting"] = False
@@ -293,6 +303,9 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
             ):
                 ttnn_module_args.conv2["reallocate_halo_output"] = True
 
+            ttnn_module_args.conv1["compute_kernel_config"] = compute_kernel_config
+            ttnn_module_args.conv2["compute_kernel_config"] = compute_kernel_config
+            ttnn_module_args.conv3["compute_kernel_config"] = compute_kernel_config
             if batch_size == 20 and ttnn_module_args.conv3.input_height == 56:
                 ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 320}
             if batch_size == 20 and ttnn_module_args.conv3.input_height == 28:
@@ -379,6 +392,7 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
             if batch_size == 20:
                 ttnn_module_args.conv1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 1280}
             ttnn_module_args.conv1["dtype"] = act_dtype
+            ttnn_module_args.conv1["compute_kernel_config"] = compute_kernel_config
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
             parameters["conv1"] = fold_conv7s2_into_conv4s1(conv1_weight, conv1_bias, ttnn_module_args.conv1)
 
