@@ -9,7 +9,7 @@
 
 <h3>
 
-[Documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html) | [Working models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
+[Documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html) | [Demo models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
 
 </h3>
 
