@@ -873,14 +873,15 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_buf_base = L1_UNRESERVED_BASE + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE);
+        uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+        uint32_t l1_buf_base = l1_unreserved_base_aligned + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
         TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
         uint32_t dispatch_buffer_base = l1_buf_base;
         uint32_t dev_hugepage_base = 0;
         uint32_t prefetch_q_base = l1_buf_base;
-        uint32_t prefetch_q_rd_ptr_addr = L1_UNRESERVED_BASE;
-        dispatch_wait_addr_g = L1_UNRESERVED_BASE + 16;
+        uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
+        dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
         vector<uint32_t>zero_data(0);
         llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
