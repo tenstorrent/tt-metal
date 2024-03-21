@@ -81,7 +81,7 @@ def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devi
         v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
         tt_k_cache = torch2tt_tensor(k_cache, device)
         tt_v_cache = torch2tt_tensor(v_cache, device)
-        kv_cache += ((tt_k_cache, tt_v_cache),)
+        kv_cache += ([(tt_k_cache, tt_v_cache)],)
     return kv_cache
 
 
@@ -135,7 +135,7 @@ def run_falcon_demo_kv(
 
     base_url = ""
     tt_FalconCausalLM_singlelayer = TtFalconCausalLM(
-        device,
+        [device],
         state_dict,
         base_url,
         1,
@@ -195,12 +195,12 @@ def run_falcon_demo_kv(
         time_prefill_compile_end = time.time()
         time_prefill_compile += time_prefill_compile_end - time_prefill_compile_start
 
-        tt_prefill_embeddings.deallocate()
+        tt_prefill_embeddings[0].deallocate()
         if tt_prefill_attention_mask is not None:
-            tt_prefill_attention_mask.deallocate()
+            tt_prefill_attention_mask[0].deallocate()
 
-        logits = tt2torch_tensor(tt_logits).squeeze(1)
-        tt_logits.deallocate()
+        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
+        tt_logits[0].deallocate()
 
         user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id] = user_output_ids
@@ -242,12 +242,12 @@ def run_falcon_demo_kv(
         time_decode_compile_end = time.time()
         time_decode_compile += time_decode_compile_end - time_decode_compile_start
 
-        tt_decode_embeddings.deallocate()
+        tt_decode_embeddings[0].deallocate()
         if tt_decode_attention_mask is not None:
-            tt_decode_attention_mask.deallocate()
+            tt_decode_attention_mask[0].deallocate()
 
-        logits = tt2torch_tensor(tt_logits).squeeze(1)
-        tt_logits.deallocate()
+        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
+        tt_logits[0].deallocate()
 
         decode_ids = post_processor(logits=logits, index=...).reshape(batch_size, 1)
 
@@ -270,7 +270,7 @@ def run_falcon_demo_kv(
     del kv_cache_singlelayer
 
     tt_FalconCausalLM = TtFalconCausalLM(
-        device,
+        [device],
         state_dict,
         base_url,
         num_layers,
@@ -311,12 +311,12 @@ def run_falcon_demo_kv(
         time_prefill_inference_end = time.time()
         time_prefill_inference += time_prefill_inference_end - time_prefill_inference_start
 
-        tt_prefill_embeddings.deallocate()
+        tt_prefill_embeddings[0].deallocate()
         if tt_prefill_attention_mask is not None:
-            tt_prefill_attention_mask.deallocate()
+            tt_prefill_attention_mask[0].deallocate()
 
-        logits = tt2torch_tensor(tt_logits).squeeze(1)
-        tt_logits.deallocate()
+        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
+        tt_logits[0].deallocate()
 
         user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id] = user_output_ids
@@ -357,12 +357,12 @@ def run_falcon_demo_kv(
         time_decode_inference_end = time.time()
         time_decode_inference += time_decode_inference_end - time_decode_inference_start
 
-        tt_decode_embeddings.deallocate()
+        tt_decode_embeddings[0].deallocate()
         if tt_decode_attention_mask is not None:
-            tt_decode_attention_mask.deallocate()
+            tt_decode_attention_mask[0].deallocate()
 
-        logits = tt2torch_tensor(tt_logits).squeeze(1)
-        tt_logits.deallocate()
+        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
+        tt_logits[0].deallocate()
 
         decode_ids = post_processor(logits=logits, index=...).reshape(batch_size, 1)
 

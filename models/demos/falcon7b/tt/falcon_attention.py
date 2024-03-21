@@ -17,6 +17,8 @@ from models.utility_functions import (
     is_wormhole_b0,
 )
 
+from models.demos.falcon7b.tt.model_utils import get_weights_cached
+
 
 class TtFalconRotaryEmbedding(torch.nn.Module):
     """
@@ -25,7 +27,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
 
     def __init__(
         self,
-        tt_device,
+        tt_devices,
         dim,
         base_url,
         layer_num,
@@ -49,65 +51,59 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
 
         layer_name = f"{base_url}.{layer_num}.rotary_embedding"
+        cos_str = f"{layer_name}.cos_cached"
+        sin_str = f"{layer_name}.sin_cached"
+
         overwrite_cos, overwrite_sin = False, False
-        cos_exists = (
-            tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
-        ).exists()
-        if cos_exists:
-            self.tt_cos_cached = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin")
-            ).to(tt_device, self.model_config["COS_CACHED_WEIGHTS_MEMCFG"])
+
+        for _ in range(2):
+            self.tt_cos_cached = get_weights_cached(
+                tt_devices,
+                model_config,
+                tt_cache_path,
+                cos_str,
+                weight_config_str="COS_CACHED_WEIGHTS",
+                weights_to_cache=emb.cos()[None, None, :, :],
+                overwrite=overwrite_cos,
+            )
             overwrite_cos = (
-                tt2torch_tensor(self.tt_cos_cached).shape[-2] != self.max_seq_len_cached
+                tt2torch_tensor(self.tt_cos_cached[0]).shape[-2] != self.max_seq_len_cached
             )  # Verify cached tensor has same max seq len
-        if not cos_exists or overwrite_cos:
-            self.tt_cos_cached = torch2tt_tensor(
-                emb.cos()[None, None, :, :],
-                tt_device,
-                tt_memory_config=self.model_config["COS_CACHED_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["COS_CACHED_WEIGHTS_DTYPE"],
+            if not overwrite_cos:
+                break
+
+        for _ in range(2):
+            self.tt_sin_cached = get_weights_cached(
+                tt_devices,
+                model_config,
+                tt_cache_path,
+                sin_str,
+                weight_config_str="SIN_CACHED_WEIGHTS",
+                weights_to_cache=emb.sin()[None, None, :, :],
+                overwrite=overwrite_sin,
             )
-            tt_lib.tensor.dump_tensor(
-                str(
-                    tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
-                ),
-                self.tt_cos_cached.cpu(),
-            )
-        sin_exists = (
-            tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
-        ).exists()
-        if sin_exists:
-            self.tt_sin_cached = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin")
-            ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
             overwrite_sin = (
-                tt2torch_tensor(self.tt_sin_cached).shape[-2] != self.max_seq_len_cached
+                tt2torch_tensor(self.tt_sin_cached[0]).shape[-2] != self.max_seq_len_cached
             )  # Verify cached tensor has same max seq len
-        if not sin_exists or overwrite_sin:
-            self.tt_sin_cached = torch2tt_tensor(
-                emb.sin()[None, None, :, :],
-                tt_device,
-                tt_memory_config=self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
-            )
-            tt_lib.tensor.dump_tensor(
-                str(
-                    tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
-                ),
-                self.tt_sin_cached.cpu(),
-            )
+            if not overwrite_sin:
+                break
 
     def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
-        seq_len = layer.get_legacy_shape()[2]
+        seq_len = layer[0].get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
-        return tt_lib.tensor.rotary_embedding(
-            layer,
-            self.tt_cos_cached,
-            self.tt_sin_cached,
-            token_idx,
-            output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
-        )
+        output = []
+        for i in range(len(layer)):
+            output.append(
+                tt_lib.tensor.rotary_embedding(
+                    layer[i],
+                    self.tt_cos_cached[i],
+                    self.tt_sin_cached[i],
+                    token_idx,
+                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+                )
+            )
+        return output
 
 
 class TtFalconAttention(nn.Module):
@@ -115,7 +111,7 @@ class TtFalconAttention(nn.Module):
 
     def __init__(
         self,
-        device,
+        devices,
         state_dict,
         base_url,
         layer_num,
@@ -130,7 +126,8 @@ class TtFalconAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.device = device
+        self.devices = devices
+        self.num_devices = len(devices)
         self.state_dict = state_dict
         self.model_config = model_config
 
@@ -144,52 +141,25 @@ class TtFalconAttention(nn.Module):
         query_key_value_str = f"{layer_name}.query_key_value.weight"
         selfout_str = f"{layer_name}.dense.weight"
 
-        if (
-            tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
-        ).exists():
-            self.query_key_value_weights = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-        else:
-            self.query_key_value_weights = torch2tt_tensor(
-                torch.transpose(
-                    self.state_dict[query_key_value_str],
-                    -2,
-                    -1,
-                ),
-                self.device,
-                tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
-            )
-            tt_lib.tensor.dump_tensor(
-                str(
-                    tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
-                ),
-                self.query_key_value_weights.cpu(),
-            )
-
-        if (tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin").exists():
-            self.dense_weights = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
-        else:
-            self.dense_weights = torch2tt_tensor(
-                torch.transpose(
-                    self.state_dict[selfout_str],
-                    -2,
-                    -1,
-                ),
-                self.device,
-                tt_memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
-            )
-            tt_lib.tensor.dump_tensor(
-                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin"),
-                self.dense_weights.cpu(),
-            )
+        self.query_key_value_weights = get_weights_cached(
+            devices,
+            model_config,
+            tt_cache_path,
+            query_key_value_str,
+            weight_config_str="FUSED_QKV_MM_WEIGHTS",
+            weights_to_cache=(torch.transpose(state_dict[query_key_value_str], -2, -1) if state_dict else None),
+        )
+        self.dense_weights = get_weights_cached(
+            devices,
+            model_config,
+            tt_cache_path,
+            selfout_str,
+            weight_config_str="SELFOUT_MM_WEIGHTS",
+            weights_to_cache=(torch.transpose(state_dict[selfout_str], -2, -1) if state_dict else None),
+        )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            self.device,
+            self.devices,
             self.head_dim,
             base_url,
             layer_num,
@@ -198,7 +168,7 @@ class TtFalconAttention(nn.Module):
             tt_cache_path=tt_cache_path,
         )
 
-        self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
+        self.scalar = [pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), device)[0] for device in devices]
 
     def forward(
         self,
@@ -216,17 +186,16 @@ class TtFalconAttention(nn.Module):
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
         """
-        device = hidden_states.device()
 
         assert not output_attentions
 
         if llm_mode == "prefill":
-            batch = hidden_states.get_legacy_shape()[0]
-            q_len = hidden_states.get_legacy_shape()[2]
+            batch = hidden_states[0].get_legacy_shape()[0]
+            q_len = hidden_states[0].get_legacy_shape()[2]
             assert layer_past is not None
         elif llm_mode == "decode":
-            batch = hidden_states.get_legacy_shape()[2]
-            q_len = hidden_states.get_legacy_shape()[0]
+            batch = hidden_states[0].get_legacy_shape()[2]
+            q_len = hidden_states[0].get_legacy_shape()[0]
             # We always store max_position_embeddings for kv_cache,
             # so we need separate variable to store the actual len of the kv_cache
             assert layer_past is not None
@@ -237,21 +206,30 @@ class TtFalconAttention(nn.Module):
         #################
         ### FUSED QKV ###
         #################
-        fused_query_key_value = tt_lib.tensor.falcon_fused_qkv_matmul(
-            hidden_states,
-            self.query_key_value_weights,
-            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-        )
+        fused_query_key_value = []
+        for i in range(self.num_devices):
+            fused_query_key_value.append(
+                tt_lib.tensor.falcon_fused_qkv_matmul(
+                    hidden_states[i],
+                    self.query_key_value_weights[i],
+                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                )
+            )
 
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
-            fused_query_key_value,
-            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
-        )
-        fused_query_key_value.deallocate()
+        query_layer, key_layer, value_layer = [], [], []
+        for i in range(self.num_devices):
+            query_layer_i, key_layer_i, value_layer_i = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
+                fused_query_key_value[i],
+                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+            )
+            fused_query_key_value[i].deallocate()
+            query_layer.append(query_layer_i)
+            key_layer.append(key_layer_i)
+            value_layer.append(value_layer_i)
 
         #########################
         ### ROTARY EMBEDDINGS ###
@@ -267,143 +245,180 @@ class TtFalconAttention(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         if llm_mode == "prefill":
-            tt_lib.tensor.fill_cache(layer_past[0], key_layer, user_id)
+            for i in range(self.num_devices):
+                tt_lib.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
 
         elif llm_mode == "decode":
-            # Update kv_cache in place
-            tt_lib.tensor.update_cache(layer_past[0], key_layer, layer_past_len)
-            # key and value layers will have kv_seq_len padded to nearest 32
-            key_layer = tt_lib.tensor.unpad(
-                layer_past[0],
-                [0, 0, 0, 0],
-                [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
-            )
+            for i in range(self.num_devices):
+                # Update kv_cache in place
+                tt_lib.tensor.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
+            for i in range(self.num_devices):
+                # key and value layers will have kv_seq_len padded to nearest 32
+                key_layer[i] = tt_lib.tensor.unpad(
+                    layer_past[i][0],
+                    [0, 0, 0, 0],
+                    [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+                    output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
+                )
 
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
-        key_layer_transposed = tt_lib.tensor.transpose(
-            key_layer,
-            -2,
-            -1,
-            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-        )
-        key_layer.deallocate()
-
-        if llm_mode == "prefill":
-            attn_weights = tt_lib.tensor.matmul(
-                query_layer,
-                key_layer_transposed,
-                output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+        key_layer_transposed = []
+        for i in range(self.num_devices):
+            key_layer_transposed.append(
+                tt_lib.tensor.transpose(
+                    key_layer[i],
+                    -2,
+                    -1,
+                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+                )
             )
+            key_layer[i].deallocate()
+
+        attn_weights = []
+        if llm_mode == "prefill":
+            for i in range(self.num_devices):
+                attn_weights.append(
+                    tt_lib.tensor.matmul(
+                        query_layer[i],
+                        key_layer_transposed[i],
+                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    )
+                )
+                query_layer[i].deallocate()
+                key_layer_transposed[i].deallocate()
 
         elif llm_mode == "decode":
-            # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
-            if is_wormhole_b0():
-                attn_weights = tt_lib.operations.primary.transformers.attn_matmul(
-                    query_layer,
-                    key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            else:
-                attn_weights = tt_lib.operations.primary.transformers.group_attn_matmul(
-                    query_layer,
-                    key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-        query_layer.deallocate()
-        key_layer_transposed.deallocate()
+            for i, device in enumerate(self.devices):
+                # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
+                if is_wormhole_b0():
+                    attn_weights.append(
+                        tt_lib.operations.primary.transformers.attn_matmul(
+                            query_layer[i],
+                            key_layer_transposed[i],
+                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        )
+                    )
+                else:
+                    attn_weights.append(
+                        tt_lib.operations.primary.transformers.group_attn_matmul(
+                            query_layer[i],
+                            key_layer_transposed[i],
+                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        )
+                    )
+                query_layer[i].deallocate()
+                key_layer_transposed[i].deallocate()
 
-        attn_weights = tt_lib.tensor.bcast(
-            attn_weights,
-            self.scalar,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
-            output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
-        )
+        for i in range(self.num_devices):
+            attn_weights[i] = tt_lib.tensor.bcast(
+                attn_weights[i],
+                self.scalar[i],
+                tt_lib.tensor.BcastOpMath.MUL,
+                tt_lib.tensor.BcastOpDim.HW,
+                output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
+            )
 
         if attention_mask is not None:
-            attn_weights = tt_lib.tensor.add(
-                attn_weights,
-                attention_mask,
-                output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
-            )
+            for i in range(self.num_devices):
+                attn_weights[i] = tt_lib.tensor.add(
+                    attn_weights[i],
+                    attention_mask[i],
+                    output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+                )
 
         ###############
         ### SOFTMAX ###
         ###############
         # TODO: Replace with scaled_softmax_attention_mask from BERT
-        attn_weights = tt_lib.operations.primary.softmax_in_place(
-            attn_weights,
-        )
+        for i in range(self.num_devices):
+            attn_weights[i] = tt_lib.operations.primary.softmax_in_place(
+                attn_weights[i],
+            )
 
         ######################
         ### V CACHE UPDATE ###
         ######################
         if llm_mode == "prefill":
-            tt_lib.tensor.fill_cache(layer_past[1], value_layer, user_id)
+            for i in range(self.num_devices):
+                tt_lib.tensor.fill_cache(layer_past[i][1], value_layer[i], user_id)
 
         elif llm_mode == "decode":
-            # Update kv_cache in place
-            tt_lib.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
-            value_layer = tt_lib.tensor.unpad(
-                layer_past[1],
-                [0, 0, 0, 0],
-                [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
-            )
+            for i in range(self.num_devices):
+                # Update kv_cache in place
+                tt_lib.tensor.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
+            for i in range(self.num_devices):
+                value_layer[i] = tt_lib.tensor.unpad(
+                    layer_past[i][1],
+                    [0, 0, 0, 0],
+                    [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+                    output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
+                )
 
         layer_present = layer_past if use_cache else None
 
         ########################
         ### POST-SOFTMAX MM ###
         ########################
+        attn_output = []
         if llm_mode == "prefill":
-            attn_output = tt_lib.tensor.matmul(
-                attn_weights,
-                value_layer,
-                output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            )
+            for i in range(self.num_devices):
+                attn_output.append(
+                    tt_lib.tensor.matmul(
+                        attn_weights[i],
+                        value_layer[i],
+                        output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    )
+                )
+                attn_weights[i].deallocate()
+                value_layer[i].deallocate()
 
         elif llm_mode == "decode":
-            # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
-            if is_wormhole_b0():
-                attn_output = tt_lib.operations.primary.transformers.attn_matmul(
-                    attn_weights,
-                    value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            else:
-                attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
-                    attn_weights,
-                    value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-        attn_weights.deallocate()
-        value_layer.deallocate()
+            for i in range(self.num_devices):
+                # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
+                if is_wormhole_b0():
+                    attn_output.append(
+                        tt_lib.operations.primary.transformers.attn_matmul(
+                            attn_weights[i],
+                            value_layer[i],
+                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        )
+                    )
+                else:
+                    attn_output.append(
+                        tt_lib.operations.primary.transformers.group_attn_matmul(
+                            attn_weights[i],
+                            value_layer[i],
+                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        )
+                    )
+                attn_weights[i].deallocate()
+                value_layer[i].deallocate()
 
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = tt_lib.tensor.nlp_concat_heads(
-            attn_output,
-            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-        )
+        for i in range(self.num_devices):
+            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
+                attn_output[i],
+                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            )
 
-        attn_output = tt_lib.tensor.falcon_selfout_matmul(
-            attn_output,
-            self.dense_weights,
-            output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-        )
+        for i in range(self.num_devices):
+            attn_output[i] = tt_lib.tensor.falcon_selfout_matmul(
+                attn_output[i],
+                self.dense_weights[i],
+                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            )
 
         return attn_output, layer_present

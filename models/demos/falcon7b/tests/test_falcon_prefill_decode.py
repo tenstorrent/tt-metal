@@ -87,7 +87,7 @@ def run_test_FalconCausalLM_inference(
     for i in range(num_layers):
         tt_k_cache = torch2tt_tensor(k_cache, device)
         tt_v_cache = torch2tt_tensor(v_cache, device)
-        tt_layer_past += ((tt_k_cache, tt_v_cache),)
+        tt_layer_past += ([(tt_k_cache, tt_v_cache)],)
 
     # CPU REFERENCE ------------------------------------------------------------------------
     logger.info("Setting up CPU model")
@@ -116,7 +116,7 @@ def run_test_FalconCausalLM_inference(
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     logger.info("Setting up Falcon model")
     tt_FalconCausalLM = TtFalconCausalLM(
-        device,
+        [device],
         state_dict,
         base_url,
         num_layers,
@@ -161,7 +161,7 @@ def run_test_FalconCausalLM_inference(
         layer_past_len=kv_cache_len,
         use_cache=use_cache,
     )
-    tt_out = tt2torch_tensor(tt_out).squeeze(1).transpose(0, 1)
+    tt_out = tt2torch_tensor(tt_out[0]).squeeze(1).transpose(0, 1)
 
     # check outputs for first user only --------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out[0], tt_out[0], pcc)
@@ -170,8 +170,8 @@ def run_test_FalconCausalLM_inference(
     for i in range(num_layers):
         pytorch_layer_pres = pytorch_layer_present[i]
         tt_layer_pres = (
-            tt2torch_tensor(tt_layer_present[i][0]),
-            tt2torch_tensor(tt_layer_present[i][1]),
+            tt2torch_tensor(tt_layer_present[i][0][0]),
+            tt2torch_tensor(tt_layer_present[i][0][1]),
         )
         tt_layer_pres = (
             tt_layer_pres[0][:, :, : kv_cache_len + 1, :],
