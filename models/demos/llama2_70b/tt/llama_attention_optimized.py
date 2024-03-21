@@ -1003,17 +1003,17 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
-        for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
-                attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
+        # for i in range(len(attn_output)):
+        #     attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
+        #         attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
+        #     )
 
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.operations.primary.matmul(
                 attn_output[i],
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size

@@ -162,6 +162,14 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         batch, seq_len = 1, 128
         shard_height = seq_len
 
+    shard_spec_64_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(7, 7),
+            ),
+        }
+    )
     shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
         {
             ttl.tensor.CoreRange(
@@ -216,6 +224,7 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
     shard_width_hidden_dim_per_device_across_32_cores = shard_width_hidden_dim_across_32_cores // num_devices
     shard_width_hidden_dim_across_16_cores = hidden_size // 16
     shard_width_hidden_dim_across_8_cores = hidden_size // 8
+    shard_width_hidden_dim_across_64_cores = hidden_size // 64
 
     # Constants based on head_dim
     total_width_per_group_of_qkv_heads = head_dim * ((n_heads // n_kv_heads) + 2)  # 8 q_heads + 1 k_heads + 1 v_heads
@@ -360,7 +369,7 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
-            block_h=1,
+            block_h=shard_height // 32,
             block_w=8,
             inplace=True,
         )
@@ -390,7 +399,7 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
-            block_h=1,
+            block_h=shard_height // 32,
             block_w=8,
             inplace=True,
         )
