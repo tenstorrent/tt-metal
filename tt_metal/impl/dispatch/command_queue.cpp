@@ -12,7 +12,7 @@
 #include "allocator/allocator.hpp"
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
-#include "logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

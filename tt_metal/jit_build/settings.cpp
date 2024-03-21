@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/assert.hpp"
-#include "common/core_coord.h"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/core_coord.h"
 #include "jit_build/settings.hpp"
 #include "jit_build/build.hpp"
 #include <iostream>

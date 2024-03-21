@@ -10,7 +10,7 @@
 
 #include <cstdint>
 #include <vector>
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "math.hpp"
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
-#include "common/test_tiles.hpp"
+#include "tt_metal/common/test_tiles.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

@@ -8,8 +8,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "common/bfloat16.hpp"
-#include "common/logger.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/logger.hpp"
 
 using namespace tt;
 

@@ -9,8 +9,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat4.hpp"
+#include "tt_metal/common/bfloat8.hpp"
+#include "tt_metal/common/bfloat4.hpp"
 
 using namespace tt::constants;
 

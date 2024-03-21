@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <thread>
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 namespace tt::tt_metal
 {

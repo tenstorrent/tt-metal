@@ -5,7 +5,7 @@
 #pragma once
 #include <iostream>
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 
 using namespace std;
 

@@ -10,8 +10,8 @@
 #include <unordered_set>
 
 #include "allocator_types.hpp"
-#include "common/assert.hpp"
-#include "common/core_coord.h"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {

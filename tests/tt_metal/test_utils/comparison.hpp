@@ -7,7 +7,7 @@
 #include <functional>
 #include <random>
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {

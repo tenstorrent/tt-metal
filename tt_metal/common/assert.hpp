@@ -12,7 +12,7 @@
 #include <sstream>
 #include <vector>
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 
 namespace tt {
 template <typename A, typename B>

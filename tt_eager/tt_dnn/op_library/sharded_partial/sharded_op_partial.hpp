@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"

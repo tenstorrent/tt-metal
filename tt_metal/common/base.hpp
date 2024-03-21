@@ -16,8 +16,8 @@
 
 #include <boost/functional/hash.hpp>
 
-#include "common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
-#include "common/assert.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
+#include "tt_metal/common/assert.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "eth_l1_address_map.h"
 #include "common/constants.hpp"

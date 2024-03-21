@@ -4,7 +4,7 @@
 ///
 #include <algorithm>
 
-#include "common/core_coord.h"
+#include "tt_metal/common/core_coord.h"
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor_impl.hpp"

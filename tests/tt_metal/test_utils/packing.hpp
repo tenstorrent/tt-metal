@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <random>
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 
 namespace tt {
 namespace test_utils {

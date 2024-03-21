@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <math.h>
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 
 namespace tt {
 

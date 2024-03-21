@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-#include "common/test_tiles.hpp"
+#include "tt_metal/common/test_tiles.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"

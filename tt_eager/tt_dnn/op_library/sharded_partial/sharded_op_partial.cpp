@@ -4,7 +4,7 @@
 
 #include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tensor/types.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/constants.hpp"

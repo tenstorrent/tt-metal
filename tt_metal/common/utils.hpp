@@ -7,7 +7,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
-#include "assert.hpp"
+#include "tt_metal/common/assert.hpp"
 
 using std::string;
 using std::cout;

@@ -9,9 +9,9 @@
 #include <vector>
 #include <immintrin.h>
 
-#include "common/assert.hpp"
-#include "common/logger.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 using namespace std;
