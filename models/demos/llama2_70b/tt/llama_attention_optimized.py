@@ -11,10 +11,10 @@ import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    gather_rotary_emb,
+    generate_rot_emb,
     get_weight_cache_path,
+    get_rotation_mat,
+    get_rotation_mat_prefill,
 )
 
 
@@ -279,33 +279,18 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices, self.cache_id)), wo_host
                 )
 
-    def get_rotation_mat_prefill(self, dhead, end, start_pos, seqlen, batch):
-        cos, sin = precompute_freqs(dhead, end)
-        rot_mat = freqs_to_rotation_matrix(cos, sin)
-        position_ids = torch.ones(batch, seqlen, dtype=torch.long) * torch.arange(
-            start_pos, start_pos + seqlen
-        ).unsqueeze(0)
-        rot_emb = gather_rotary_emb(rot_mat, position_ids)
-        return rot_emb
-
-    def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
-        cos, sin = precompute_freqs(dhead, end)
-        rot_mat = freqs_to_rotation_matrix(cos, sin)
-        position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
-        rot_emb = gather_rotary_emb(rot_mat, position_ids)
-        return rot_emb
-
     def prepare_inputs(self, x, start_pos):
         assert x.size(2) == self.hidden_size
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
+
+        rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+
         if self.llm_mode == "prefill":
             assert seq_len == 128, "prefill mode only supports 128 seq_len"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
-            rot_mat = self.get_rotation_mat_prefill(
-                dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
-            )
+            rot_mat = get_rotation_mat_prefill(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
@@ -350,9 +335,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-            rot_mat = self.get_rotation_mat(
-                dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
-            )
+            rot_mat = get_rotation_mat(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
             rot_mat = rot_mat[:, :1]
 
             padded_layer_past_len = nearest_32(start_pos + 1)
