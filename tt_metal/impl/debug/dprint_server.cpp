@@ -120,6 +120,9 @@ private:
     // A flag to signal to the main thread if the print server detected a print-based hang.
     bool server_killed_due_to_hang_;
 
+    // A counter to keep track of how many iterations the print server has gone through without
+    std::atomic<int> wait_loop_iterations_ = 0;
+
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
 
@@ -351,6 +354,10 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
     // TODO(dma): once we have access to the device is there a way we can poll the device to
     // check whether more print data is coming?
     size_t num_harts_waiting = 0;
+
+    // Make sure to run at least one full iteration inside PollPrintData before returning.
+    wait_loop_iterations_ = 0;
+
     do {
         // No need to await if the server was killed already due to a hang.
         if (server_killed_due_to_hang_)
@@ -359,7 +366,7 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
         raise_wait_lock_.lock();
         num_harts_waiting = hart_waiting_on_signal_.size();
         raise_wait_lock_.unlock();
-    } while (num_harts_waiting > 0 || new_data_last_iter_);
+    } while (num_harts_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
 } // WaitForPrintsFinished
 
 void DebugPrintServerContext::AttachDevice(Device* device) {
@@ -868,6 +875,8 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         // Sleep for a few ms if no data was processed.
         if (!new_data_last_iter_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        wait_loop_iterations_++;
     }
 } // PollPrintData
 

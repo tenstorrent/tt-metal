@@ -19,6 +19,7 @@ constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
 constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(4);
+constexpr uint32_t prefetch_sync_sem = get_compile_time_arg_val(5);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -132,9 +133,9 @@ FORCE_INLINE
 void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
-    uint32_t dst_noc = cmd->write.noc_xy_addr;
-    uint32_t dst_addr = cmd->write.addr;
-    uint32_t length = cmd->write.length;
+    uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
+    uint32_t dst_addr = cmd->write_linear.addr;
+    uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     DPRINT << "dispatch_write: " << length << " num_mcast_dests: " << num_mcast_dests << ENDL();
     while (length != 0) {
@@ -193,7 +194,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
 FORCE_INLINE
 void process_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
-    uint32_t num_mcast_dests = cmd->write.num_mcast_dests;
+    uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     if (num_mcast_dests == 0) {
         process_write_linear<false>(0);
     } else {
@@ -392,9 +393,8 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DPRINT << "!checksum" << ENDL();
         DEBUG_STATUS('!', 'C', 'H', 'K');
-        while(1);
+        ASSERT(0);
     }
 
     return cmd_ptr + cmd->debug.stride;
@@ -403,12 +403,34 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
 static void process_wait() {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
+    uint32_t barrier = cmd->wait.barrier;
+    uint32_t notify_prefetch = cmd->wait.notify_prefetch;
     uint32_t addr = cmd->wait.addr;
     uint32_t count = cmd->wait.count;
 
+    if (barrier) {
+        noc_async_write_barrier();
+    }
+
+    DEBUG_STATUS('P', 'W', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     while (*sem_addr < count); // XXXXX use a wrapping compare
+    DEBUG_STATUS('P', 'W', 'D');
+
+    if (notify_prefetch) {
+        noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, get_semaphore(prefetch_sync_sem)), 1);
+    }
+
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
+
+static void process_delay_cmd() {
+
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t count = cmd->delay.delay;
+    for (volatile uint32_t i = 0; i < count; i++);
+    cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 void kernel_main() {
@@ -435,8 +457,8 @@ void kernel_main() {
         volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
-        case CQ_DISPATCH_CMD_WRITE:
-        case CQ_DISPATCH_CMD_WRITE_HOST:
+        case CQ_DISPATCH_CMD_WRITE_LINEAR:
+        case CQ_DISPATCH_CMD_WRITE_LINEAR_HOST:
             DEBUG_STATUS('D', 'W', 'B');
             DPRINT << "cmd_write\n";
             process_write();
@@ -480,6 +502,11 @@ void kernel_main() {
             goto re_run_command;
             break;
 
+        case CQ_DISPATCH_CMD_DELAY:
+            DPRINT << "cmd_delay" << ENDL();
+            process_delay_cmd();
+            break;
+
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch terminate\n";
             done = true;
@@ -492,7 +519,7 @@ void kernel_main() {
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
-            while(1);
+            ASSERT(0);
         }
 
         // Move to next page
