@@ -83,7 +83,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
                     # self.max_seq_len,
-                    1024,  # HACK: Reduce DRAM reqs
+                    2048 + 128,  # Meets benchmarking spec needs
                     self.head_dim,
                 )
             )
@@ -92,7 +92,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     self.max_batch_size,
                     self.n_kv_heads // self.num_devices,
                     # self.max_seq_len,
-                    1024,  # HACK: Reduce DRAM reqs
+                    2048 + 128,  # Meets benchmarking spec needs
                     self.head_dim,
                 )
             )
