@@ -33,3 +33,7 @@ endif
 	echo "Installing editable dev version of ttnn package..."
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e ttnn"
 	touch $@
+	echo "Generating stubs..."
+	bash -c "source $(PYTHON_ENV)/bin/activate && stubgen -m tt_lib -m tt_lib.device -m tt_lib.profiler -m tt_lib.tensor -m tt_lib.dtx -m tt_lib.operations -m tt_lib.operations.primary -m tt_lib.operations.primary.transformers -o tt_eager"
+	bash -c "source $(PYTHON_ENV)/bin/activate && stubgen -p ttnn._ttnn -o ttnn"
+	bash -c "sed -i 's/\._C/tt_lib/g' tt_eager/tt_lib/__init__.pyi"
