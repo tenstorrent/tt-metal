@@ -122,7 +122,6 @@ class PytorchLlamaQKVModel(torch.nn.Module):
             current_assembly = torch.cat([q_chunks_for_assembly, k_chunk_for_assembly, v_chunk_for_assembly], dim=-1)
             assembled_chunks.append(current_assembly)
 
-        # breakpoint()
         # Concatenate assembled chunks
         result = torch.cat(assembled_chunks, dim=-1)
         return result
@@ -171,7 +170,6 @@ def run_test_LlamaQKV(
     tt_inp = [torch2tt_tensor(inp.clone(), devices[i]) for i in range(n_devices)]
 
     tt_out = tt_LlamaQKV_model(tt_inp)
-    breakpoint()
     tt_out = tt2torch_tensor(tt_out)
 
     # check outputs ----------------------------------------------------------------------
