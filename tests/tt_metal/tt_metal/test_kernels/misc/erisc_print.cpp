@@ -11,5 +11,5 @@
 
 void kernel_main() {
     DPRINT << "Test Debug Print: ERISC" << ENDL();
-    print_test_data_basic_types();
+    print_test_data();
 }
