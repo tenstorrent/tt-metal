@@ -607,11 +607,7 @@ namespace stress_tests {
 
 
 TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Skipping 10k enqueue program on grayskull because of event sync bug";
-    }
-
-    uint32_t NUM_ITER = 10000;
+    uint32_t NUM_ITER = 100000;
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
