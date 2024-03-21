@@ -1858,6 +1858,7 @@ def mse_loss_mean(x, y, *args, **kwargs):
     torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
     return torch_output_tensor
 
+
 def rotary_embedding(x, *args, **kwargs):
     def rotate_half(x):
         x1 = x[..., : x.shape[-1] // 2]

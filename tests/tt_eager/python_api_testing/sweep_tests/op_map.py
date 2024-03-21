@@ -1707,9 +1707,6 @@ op_map = {
     "ttnn-empty": {
         "tt_lib_op": ttnn_ops.empty,
         "pytorch_op": pytorch_ops.ttnn_empty,
-<<<<<<< HEAD
-    },       
-=======
     },
     "ttnn-attention_softmax_nomask_2": {
         "tt_lib_op": ttnn_ops.attention_softmax_nomask_2,
@@ -1727,6 +1724,5 @@ op_map = {
         "tt_lib_op": ttnn_ops.zeros_like,
         "pytorch_op": pytorch_ops.zeros_like,
     },
->>>>>>> #5589: Add softmax inplace
-}
 
+}
