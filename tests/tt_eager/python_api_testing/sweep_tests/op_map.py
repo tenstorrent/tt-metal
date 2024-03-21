@@ -1688,4 +1688,12 @@ op_map = {
         "tt_lib_op": ttnn_ops.rotary_embedding,
         "pytorch_op": pytorch_ops.rotary_embedding,
     },
+    "ttnn-activation_reglu": {
+        "tt_lib_op": ttnn_ops.activation_reglu,
+        "pytorch_op": pytorch_ops.activation_reglu,
+    },
+    "ttnn-arange": {
+        "tt_lib_op": ttnn_ops.arange,
+        "pytorch_op": pytorch_ops.arange,
+    },
 }

@@ -2639,3 +2639,39 @@ def rotary_embedding(
     t2 = ttnn.transformer.rotary_embedding(t0, cost, sint, None, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
+
+
+def activation_reglu(
+    x,
+    *args,
+    dim=-1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.reglu(t0, dim, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def arange(
+    x,
+    *args,
+    start,
+    end,
+    step=1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.arange(start, end, step, device)
+    return ttnn_tensor_to_torch(t1)
