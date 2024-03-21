@@ -5,7 +5,7 @@ exports_files(["tensix.ld", "tmu-crt0.S", "substitutes.cpp", "ncrisc.ld"])
 
 filegroup(
     name = "ld-files",
-    srcs = ["tensix-sections.ld", "tensix-address.ld", "tensix-memory.ld"]
+    srcs = ["tensix-sections.ld", "tensix-address.ld", "tensix-memory.ld", "idle-erisc-memory.ld"]
 )
 
 py_binary(

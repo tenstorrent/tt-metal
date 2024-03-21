@@ -136,6 +136,10 @@ class dispatch_core_manager {
         return assignment.remote_push_and_pull.value();
     }
 
+    CoreType get_dispatch_core_type(chip_id_t device_id) {
+        return this->dispatch_core_type_by_device[device_id];
+    }
+
    private:
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
@@ -146,6 +150,7 @@ class dispatch_core_manager {
             for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs)) {
                 logical_dispatch_cores.push_back(logical_dispatch_core);
             }
+            this->dispatch_core_type_by_device[device_id] = tt::get_dispatch_core_type(device_id, num_hw_cqs);
         }
     }
 
@@ -168,6 +173,7 @@ class dispatch_core_manager {
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues (represented by cq_id)
     std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_types_t>>> dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    std::unordered_map<chip_id_t, CoreType> dispatch_core_type_by_device;
 };
 
 

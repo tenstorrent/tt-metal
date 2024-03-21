@@ -40,7 +40,7 @@ dependencies = [
   "pyelftools==0.29",
   "curtsies==0.4.1",
 ]
-requires-python = ">=3.8,<3.9"
+requires-python = ">=3.8"
 description = "General compute framework for Tenstorrent devices"
 dynamic = ["version"]
 

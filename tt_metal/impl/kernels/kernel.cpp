@@ -174,7 +174,12 @@ std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const
 }
 
 std::pair<uint64_t, uint64_t> EthernetKernel::get_runtime_args_range() const {
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base;
+    if (this->config_.eth_mode == Eth::IDLE) {
+        arg_base_to_result_base = {IDLE_ERISC_L1_ARG_BASE, IDLE_ERISC_L1_RESULT_BASE};
+    } else {
+        arg_base_to_result_base = {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
+    }
     return arg_base_to_result_base;
 }
 
@@ -243,7 +248,8 @@ void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions& buil
 
 void EthernetKernel::generate_binaries(Device *device, JitBuildOptions& build_options) const {
     detail::GenerateDeviceHeaders(device, build_options.path);
-    jit_build(device->build_kernel_state(JitBuildProcessorType::ETHERNET, 0), this, this->kernel_path_file_name_);
+    int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
+    jit_build(device->build_kernel_state(JitBuildProcessorType::ETHERNET, erisc_id), this, this->kernel_path_file_name_);
 }
 
 void ComputeKernel::generate_binaries(Device *device, JitBuildOptions& build_options) const {
@@ -280,8 +286,8 @@ void EthernetKernel::read_binaries(Device *device) {
    // untested
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-
-    const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, 0);
+    int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
+    const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, erisc_id);
     ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     binaries.push_back(binary_mem);
     this->set_binaries(device->id(), std::move(binaries));
@@ -346,7 +352,7 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) co
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device_id).at(0);
-    int riscv_id = 5;
+    int riscv_id = this->config_.eth_mode == Eth::IDLE ? 6 : 5;
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
     return pass;
 }

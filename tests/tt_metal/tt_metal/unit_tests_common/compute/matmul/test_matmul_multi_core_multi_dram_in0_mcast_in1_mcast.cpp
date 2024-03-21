@@ -173,6 +173,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
+
+    uint32_t in0_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in0_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in1_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in1_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
     return {std::move(program), mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver, unary_writer_kernel_noc0, unary_writer_kernel_noc1};
 }
 
@@ -307,6 +313,7 @@ bool write_runtime_args_to_device(
             }
         }
     }
+
     return pass;
 }
 
@@ -329,10 +336,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     uint32_t in0_dram_addr = DRAM_UNRESERVED_BASE;
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
-    uint32_t in0_mcast_sender_semaphore_noc_addr = 109600;
-    uint32_t in0_mcast_receiver_semaphore_noc_addr = 109632;
-    uint32_t in1_mcast_sender_semaphore_noc_addr = 109664;
-    uint32_t in1_mcast_receiver_semaphore_noc_addr = 109696;
+
 
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
@@ -357,6 +361,8 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
                                                     in0_block_w, out_subblock_h, out_subblock_w,
                                                     per_core_M, per_core_N);
 
+
+
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
@@ -369,16 +375,13 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
     log_debug(LogTest, "Copying inputs to dram complete");
 
-    for(int i = 0; i < num_cores_r; i++) {
-        for(int j = 0; j < num_cores_c; j++) {
-            std::vector<uint32_t> invalid = {INVALID};
-            CoreCoord core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
-            tt_metal::detail::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore_noc_addr, invalid);
-            tt_metal::detail::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore_noc_addr, invalid);
-        }
-    }
-
     log_debug(LogTest, "Writing kernel runtime args to device");
+    const vector<Semaphore>& semaphores = program.semaphores();
+    uint32_t in0_mcast_sender_semaphore_noc_addr = semaphores[0].address();
+    uint32_t in1_mcast_sender_semaphore_noc_addr = semaphores[1].address();
+    uint32_t in0_mcast_receiver_semaphore_noc_addr = semaphores[2].address();
+    uint32_t in1_mcast_receiver_semaphore_noc_addr = semaphores[3].address();
+
     pass &= write_runtime_args_to_device(
         device,
         program,

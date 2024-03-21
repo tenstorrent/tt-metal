@@ -56,13 +56,18 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
 
     risc_init();
     noc_init();
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
     DEBUG_STATUS('R', 'E', 'W');
+    uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
+        volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
+        count++;
+        *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
     DEBUG_STATUS('R', 'E', 'D');

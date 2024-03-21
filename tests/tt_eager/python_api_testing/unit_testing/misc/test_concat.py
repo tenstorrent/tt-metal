@@ -183,6 +183,18 @@ def test_concat_with_program_cache(
             (80, 64),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
         ),
+        (
+            (1, 1, 160, 32),
+            (80, 32),
+            (80, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+        ),
+        (
+            (1, 1, 235200, 16),
+            (4800, 16),
+            (4800, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(6, 6))}),
+        ),
     ),
 )
 def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid, device):
@@ -220,7 +232,6 @@ def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid
 
     tt_dev = tt_output_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     tt_cpu = torch.concat(inputs, dim)
-
     passing, output = comp_equal(tt_cpu, tt_dev)
     logger.info(output)
     assert passing

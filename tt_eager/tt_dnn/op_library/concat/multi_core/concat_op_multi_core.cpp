@@ -24,7 +24,11 @@ struct CorePageRange {
     PageRange range;
 };
 
-operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
+
+
+
+
+operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
 
@@ -36,7 +40,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    uint32_t num_output_rows = output.get_legacy_shape()[-1];
+    uint32_t num_output_rows = output.get_legacy_shape()[-2];
     uint32_t num_input_tensors = input_tensors.size();
 
     vector<CBHandle> cb_input(num_input_tensors);
@@ -67,6 +71,132 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
     uint32_t cb_dst_id = 16;
     auto num_output_units =
         input_num_units_per_shard_height[0] * input_num_units_per_shard_width[0] * num_input_tensors;
+    uint32_t intermed_cb_id = 8;
+    auto output_page_size = round_up_to_mul32(input_unit_size);
+    tt_metal::CircularBufferConfig output_cb_config =
+        tt_metal::CircularBufferConfig(num_output_units * output_page_size, {{cb_dst_id, cb_data_format}})
+            .set_page_size(cb_dst_id, output_page_size)
+            .set_globally_allocated_address(*output.buffer());
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+
+    auto output_shard_spec = output.shard_spec().value();
+    uint32_t output_stick_size = output_shard_spec.shape[1] * output.element_size();
+
+    auto input_0_shard_spec = input_tensors[0].shard_spec().value();
+    auto input_1_shard_spec = input_tensors[1].shard_spec().value();
+    auto input_0_stick_size = input_0_shard_spec.shape[1] * input_tensors[0].element_size();
+    auto input_1_stick_size = input_1_shard_spec.shape[1] * input_tensors[1].element_size();
+    auto input_0_stride = output_stick_size - input_0_stick_size;
+    auto input_1_stride = output_stick_size - input_1_stick_size;
+    uint32_t num_output_rows_per_core = div_up(num_output_rows, all_cores.num_cores());
+    auto num_pages_per_risc = div_up(num_output_rows_per_core, 2);
+    std::vector <uint32_t> compile_time_args_0 = {
+                                                    cb_dst_id,
+                                                    input_0_stick_size,
+                                                    input_1_stick_size,
+                                                    input_0_stride,
+                                                    input_1_stride,
+                                                    num_output_rows_per_core * num_input_tensors,
+                                                    0,
+                                                    num_pages_per_risc,
+                                                    0,
+                                                    0,
+                                                    0
+                                                };
+
+    std::vector <uint32_t> compile_time_args_1 = {
+                                                    cb_dst_id,
+                                                    input_0_stick_size,
+                                                    input_1_stick_size,
+                                                    input_0_stride,
+                                                    input_1_stride,
+                                                    num_output_rows_per_core * num_input_tensors ,
+                                                    num_pages_per_risc,
+                                                    num_output_rows_per_core,
+                                                    num_pages_per_risc*output_stick_size,
+                                                    num_pages_per_risc*input_0_stick_size,
+                                                    num_pages_per_risc*input_1_stick_size,
+                                                };
+
+
+
+
+
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        all_cores,
+        tt_metal::ReaderDataMovementConfig(compile_time_args_0));
+
+
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat_two_tensors.cpp",
+        all_cores,
+        tt_metal::WriterDataMovementConfig(compile_time_args_1));
+
+
+
+
+    auto override_runtime_arguments_callback =
+        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
+            const void *operation,
+            Program &program,
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &,
+            const std::vector<Tensor> &output_tensors) {
+                ;
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
+
+
+operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
+    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
+    TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    tt_metal::Device *device = output.device();
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    uint32_t num_output_rows = output.get_legacy_shape()[-2];
+    uint32_t num_input_tensors = input_tensors.size();
+
+    vector<CBHandle> cb_input(num_input_tensors);
+    vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
+    vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
+
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    auto all_cores = input_tensors[0].shard_spec().value().grid;
+
+    vector<uint32_t> cb_ids(num_input_tensors);
+    uint32_t input_unit_size = input_tensors[0].shard_spec().value().shape[1] * input_tensors[0].element_size();
+    // input CBs
+    for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+        auto shard_spec = input_tensors[input_id].shard_spec().value();
+        input_num_units_per_shard_height[input_id] = shard_spec.shape[0];
+        input_num_units_per_shard_width[input_id] = 1;
+        auto num_input_units = input_num_units_per_shard_height[input_id] * input_num_units_per_shard_width[input_id];
+        auto input_page_size = round_up_to_mul32(input_unit_size);
+        tt_metal::CircularBufferConfig input_cb_config =
+            tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_id, cb_data_format}})
+                .set_page_size(input_id, input_page_size)
+                .set_globally_allocated_address(*input_tensors[input_id].buffer());
+        cb_input[input_id] = tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+        cb_ids[input_id] = input_id;
+    }
+
+    // output CB
+    uint32_t cb_dst_id = 16;
+    auto num_output_units =
+        input_num_units_per_shard_height[0] * input_num_units_per_shard_width[0] * num_input_tensors;
+    uint32_t intermed_cb_id = 8;
     auto output_page_size = round_up_to_mul32(input_unit_size);
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(num_output_units * output_page_size, {{cb_dst_id, cb_data_format}})
@@ -76,27 +206,51 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
 
     auto output_shard_spec = output.shard_spec().value();
 
-    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram), cb_dst_id};
+    tt_metal::CircularBufferConfig intermed_cb_config =
+    tt_metal::CircularBufferConfig(num_output_units * output_page_size, {{intermed_cb_id, cb_data_format}})
+            .set_page_size(intermed_cb_id, output_page_size);
+    auto cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, intermed_cb_config);
+
+
+
+    bool writer = false;
+    std::map<string, string> defines;
+    std::vector <uint32_t> compile_time_args = {num_input_tensors, intermed_cb_id};
+    if(not writer) {
+        compile_time_args = {num_input_tensors, cb_dst_id};
+        defines["NO_WRITER"] = "1";
+    }
+
+    std::vector <uint32_t> writer_compile_time_args = {intermed_cb_id, cb_dst_id};
+    if (not writer) {
+        writer_compile_time_args = compile_time_args;
+    }
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_s2i_width.cpp",
+        "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
+
+    std::string kernel_1 = "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/writer_height_s2s_width_concat.cpp";
+    if(not writer) {
+        kernel_1 = "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_height_sharded_width_concat.cpp";
+    }
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/writer_s2s_width.cpp",
+        kernel_1.c_str(),
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
     auto input_cores = input_tensors[0].shard_spec().value().grid;
     uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
     auto input0_shard_spec = input_tensors[0].shard_spec().value();
+
+
+
 
     uint32_t core_id = 0;
     for (auto core : cores) {
@@ -109,18 +263,30 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
             curr_num_input_tensors = 0;
             curr_num_output_rows = 0;
         }
+        uint32_t output_stick_size = output_shard_spec.shape[1] * output.element_size();
 
-        vector<uint32_t> reader_runtime_args = {};
-        vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(),
-            core_id,
-            curr_num_output_rows,
-            input_unit_size,
-            num_input_tensors * input0_shard_spec.shape[0],
-            input0_shard_spec.shape[0],
-        };
 
-        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+        vector<uint32_t> runtime_args_0 = {0,
+                                                curr_num_output_rows * num_input_tensors ,
+                                                0,
+                                                curr_num_output_rows};
+
+        vector<uint32_t> runtime_args_1 = {
+                                                curr_num_output_rows * num_input_tensors ,
+                                                curr_num_output_rows * output_stick_size
+                                            };
+        uint32_t page_id = div_up(curr_num_output_rows, 2);
+        if (not writer) {
+            runtime_args_0[3] = div_up(curr_num_output_rows, 2);
+            runtime_args_1 = {page_id*output_stick_size,
+                                                curr_num_output_rows * num_input_tensors ,
+                                                div_up(curr_num_output_rows, 2),
+                                                curr_num_output_rows
+                                };
+        }
+
+        uint32_t start_offset = 0;
+        for(uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             auto input_i_shard_spec = input_tensors[input_id].shard_spec().value();
             TT_FATAL(
                 input_i_shard_spec.shape[0] == input0_shard_spec.shape[0],
@@ -128,13 +294,33 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
                 input_id,
                 input_i_shard_spec,
                 input0_shard_spec);
-            reader_runtime_args.push_back(input_id);
-            reader_runtime_args.push_back(input_i_shard_spec.shape[0]);
-            writer_runtime_args.push_back(input_i_shard_spec.shape[1] * input_tensors[input_id].element_size());
-        }
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+            auto input_stick_size = input_i_shard_spec.shape[1] * input_tensors[input_id].element_size();
+
+            runtime_args_0.push_back(input_stick_size);
+            runtime_args_0.push_back(output_stick_size - input_stick_size);
+            runtime_args_0.push_back(0);
+
+            if(not writer) {
+                runtime_args_1.push_back(input_stick_size);
+                runtime_args_1.push_back(output_stick_size - input_stick_size);
+                runtime_args_1.push_back(page_id*input_stick_size);
+                start_offset += input_stick_size;
+            }
+        }
+        tt_metal::SetRuntimeArgs(
+            program,
+            unary_reader_kernel_id,
+            core,
+            runtime_args_0
+        );
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            unary_writer_kernel_id,
+            core,
+            runtime_args_1
+        );
         core_id++;
     }
 
@@ -318,7 +504,13 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     if (output.is_sharded()) {
-        return s2s_rm_concat_multi_core(input_tensors, dim, output);
+        if(input_tensors.size() == 2) {
+            return s2s_rm_concat_two_tensors_multi_core(input_tensors, dim, output);
+
+        }
+        else {
+            return s2s_rm_concat_multi_core(input_tensors, dim, output);
+        }
     } else {
         return s2i_rm_concat_multi_core(input_tensors, dim, output);
     }

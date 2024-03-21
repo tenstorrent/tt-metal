@@ -547,8 +547,8 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                             circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
                     }
 
-                    program.init_semaphores(*device, logical_core);
                 }
+                program.init_semaphores(*device, logical_core, core_type);
             }
         }
 
@@ -587,7 +587,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
                 auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
                 const auto & rt_args = kernel->runtime_args(logical_core);
-                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, get_l1_arg_base_addr(processor));
+                auto arg_addr = get_l1_arg_base_addr(processor);
+                if (processor == RISCV::ERISC) {
+                    auto config = std::get<EthernetConfig>(kernel->config());
+                    if (config.eth_mode == Eth::IDLE) {
+                        arg_addr = IDLE_ERISC_L1_ARG_BASE;
+                    }
+                }
+                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, arg_addr);
             }
         }
     }
@@ -703,7 +710,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
     detail::GetCircularBuffer(program, cb_handle)->assign_global_address();
 }
 
-uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value) {
+uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type) {
     return std::visit(
         [&](auto&& c) -> uint32_t
         {
@@ -729,7 +736,7 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
             }
             TT_FATAL(address.has_value(), "Expecting a valid Semaphore address!");
 
-            program.add_semaphore(crs, address.value(), initial_value);
+            program.add_semaphore(crs, address.value(), initial_value, core_type);
 
             return address.value();
         },

@@ -21,6 +21,7 @@ enum NOC : uint8_t {
 enum Eth : uint8_t {
     SENDER = 0,
     RECEIVER = 1,
+    IDLE = 2,
 };
 
 } // namespace tt::tt_metal

@@ -15,7 +15,14 @@ void kernel_main() {
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
 
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+    while (db_semaphore_addr[0] == 0) {
+        RISC_POST_HEARTBEAT(heartbeat);
+    }
+#else
     while (db_semaphore_addr[0] == 0);
+#endif
     db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
     uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     while (true) {

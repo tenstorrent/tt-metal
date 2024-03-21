@@ -38,6 +38,9 @@ constexpr std::uint32_t L1_RESULT_BASE = TRISC_L1_ARG_BASE +1024;
 #elif defined(COMPILE_FOR_ERISC)
 constexpr std::uint32_t L1_ARG_BASE = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
 constexpr std::uint32_t L1_RESULT_BASE = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+constexpr std::uint32_t L1_ARG_BASE = IDLE_ERISC_L1_ARG_BASE;
+constexpr std::uint32_t L1_RESULT_BASE = IDLE_ERISC_L1_RESULT_BASE;
 #endif
 
 const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
