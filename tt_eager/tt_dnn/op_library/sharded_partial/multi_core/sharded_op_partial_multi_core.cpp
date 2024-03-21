@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
