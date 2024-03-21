@@ -460,17 +460,17 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
             # Input shape is [1,1,128,8192]
             # qkv_list shape is [8192,1280]
             # 2D
-            pass
-            # model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            #     compute_with_storage_grid_size=(8, 4),
-            #     in0_block_w=32,  # how much inner dim you take each time
-            #     out_subblock_h=1,  # Must be divisible by per_core_M
-            #     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            #     per_core_M=1,  #
-            #     per_core_N=5,  # N / TILE_WIDTH / Grid_Size
-            #     transpose_mcast=False,
-            #     fused_activation=ttl.tensor.FusibleActivation.SILU,
-            # )
+
+            model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=32,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  #
+                per_core_N=5,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+            )
             # model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             #     ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             #     ttl.tensor.BufferType.L1,
