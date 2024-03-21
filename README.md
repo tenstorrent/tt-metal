@@ -165,7 +165,7 @@ source build/python_env/bin/activate
 ### Running example programs
 
 After installing, please refer to our [Getting Started
-page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html)
+page](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/get_started/get_started.html)
 in our documentation.
 
 Note that example programs are only available through source installation at

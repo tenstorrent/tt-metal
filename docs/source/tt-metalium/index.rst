@@ -20,31 +20,6 @@ Welcome to TT-Metalium documentation!
    tools/index
 
 .. toctree::
-   :caption: TTNN
-
-   ttnn/about
-   ttnn/usage
-   ttnn/tensor
-   ttnn/api
-   ttnn/tutorials
-   ttnn/onboarding
-   ttnn/converting_torch_model_to_ttnn
-   ttnn/adding_new_ttnn_operation
-   ttnn/profiling_ttnn_operations
-   ttnn/dependencies/index.rst
-
-.. toctree::
-   :caption: Models
-
-   tt_metal_models/get_started
-   tt_metal_models/get_performance
-
-.. toctree::
-   :caption: Developer Notes
-
-   dev_onboarding/sfpu_operators
-
-.. toctree::
    :caption: Resources
 
    resources/support
