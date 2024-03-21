@@ -12,6 +12,8 @@ run_perf_models_other() {
     local test_marker=$2
 
     if [ "$tt_arch" == "grayskull" ]; then
+        env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
+
         env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $test_marker
 
         env pytest "tests/ttnn/integration_tests/bloom/test_performance.py" -m $test_marker
@@ -81,6 +83,8 @@ run_device_perf_models() {
     #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
     #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
     tests/scripts/run_profiler_regressions.sh PROFILER
+
+    env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
     env pytest models/demos/resnet/tests -m $test_marker
 
