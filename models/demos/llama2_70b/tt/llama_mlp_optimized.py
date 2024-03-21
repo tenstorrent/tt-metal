@@ -186,6 +186,11 @@ class TtLlamaMLP_optimized(nn.Module):
         w1_outs = []
         w3_outs = []
         # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
+
+        seq_tiles = x[0].shape[2] // 32
+        self.model_config["PADDED_FF1_MM_PROGCFG"] = self.model_config["PADDED_FF1_MM_PROGCFG_LAMBDA"](seq_tiles)
+        self.model_config["PADDED_FF3_MM_PROGCFG"] = self.model_config["PADDED_FF3_MM_PROGCFG_LAMBDA"](seq_tiles)
+        self.model_config["PADDED_FF2_MM_PROGCFG"] = self.model_config["PADDED_FF2_MM_PROGCFG_LAMBDA"](seq_tiles)
         for i in range(len(x)):
             """
             x[i] is shape [1,32,128,8192]
