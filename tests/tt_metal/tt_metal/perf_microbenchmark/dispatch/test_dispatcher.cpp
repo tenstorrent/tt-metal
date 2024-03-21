@@ -264,6 +264,9 @@ int main(int argc, char **argv) {
              dispatch_cb_sem,
              dispatch_buffer_size_blocks_g,
              prefetch_sync_sem,
+             // Hugepage compile args aren't used in this test since WriteHost is not tested here
+             0,
+             0,
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,

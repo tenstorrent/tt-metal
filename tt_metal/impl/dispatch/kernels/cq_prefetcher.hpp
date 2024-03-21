@@ -145,7 +145,7 @@ FORCE_INLINE volatile uint32_t* get_16b_scratch_l1() {
 
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t data_size_B) {
-    DEBUG_STATUS('N', 'Q', 'R', 'B', 'W');
+    DEBUG_STATUS('Q', 'R', 'B', 'W');
     uint32_t data_size_16B = align(data_size_B, 32) >> 4;
     uint32_t completion_rd_ptr_and_toggle;
     uint32_t completion_rd_ptr;
@@ -159,7 +159,7 @@ void completion_queue_reserve_back(uint32_t data_size_B) {
         (completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle) and (cq_write_interface.completion_fifo_wr_ptr == completion_rd_ptr)
     );
 
-    DEBUG_STATUS('N', 'Q', 'R', 'B', 'D');
+    DEBUG_STATUS('Q', 'R', 'B', 'D');
 }
 
 FORCE_INLINE
