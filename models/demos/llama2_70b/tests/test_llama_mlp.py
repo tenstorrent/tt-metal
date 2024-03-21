@@ -74,11 +74,9 @@ def run_test_LlamaMLP_inference(
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
     if model_config["LLM_MODE"] == "decode":
-        # shape should be (1, batch, seq_len, dim)
-        pt_inp_normed = pt_inp_normed.unsqueeze(0)
-    else:
-        # shape should be (seq_len=1, 1, batch, dim)
+        # shape should be (1, seq_len, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+
     tt_inp = pt_inp_normed.clone()
 
     # PyTorch output --------------------------------------------------------------------
@@ -156,8 +154,9 @@ def run_test_LlamaMLP_inference(
     (
         (32, 1),
         (1, 128),
+        (1, 2048),
     ),
-    ids=("decode", "prefill"),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
 def test_LlamaMLP_inference(
