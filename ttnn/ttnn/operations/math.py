@@ -298,7 +298,7 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
             weight = weight[slices]
 
         torch_function = name_to_torch_function[name]
-        return torch_function(input_tensor_a, input_tensor_b)
+        return torch_function(input_tensor_a, input_tensor_b, weight)
 
     def _math_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
         ttnn.validate_input_tensor(
@@ -361,21 +361,23 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
         return output_tensor
 
     lerp_function.__name__ = f"ttnn.{name}"
-    lerp_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    lerp_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, weight: Union[ttnn.Tensor, int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
+        Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`, based on :attr:`weight`.
 
         .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i  \\; \\; or \\; \\; \\mathrm{{scalar}})
+            {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\mathrm{{input\\_tensor\\_b}}_i \\; , \\; \\mathrm{{weight_tensor}}_i  \\; \\; or \\; \\; \\mathrm{{weight_scalar}})
 
         Args:
             * :attr:`input_tensor_a`
             * :attr:`input_tensor_b`
+            * :attr:`weight`
 
         Example::
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor1, tensor2)
+            >>> weight = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor1, tensor2, weight)
         """
 
     setattr(THIS_MODULE, name, lerp_function)

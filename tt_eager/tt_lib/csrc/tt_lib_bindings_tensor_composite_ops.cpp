@@ -367,8 +367,8 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
             py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
-            Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
-            scalar ``arg2`` and returns the resulting out tensor.
+            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
+            scalar ``weight`` and returns the resulting out tensor.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -385,8 +385,8 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&lerp),
             py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
-            tensor ``arg2`` and returns the resulting out tensor.
+            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
+            tensor ``weight`` and returns the resulting out tensor.
 
             Input tensor must have BFLOAT16 data type.
 
