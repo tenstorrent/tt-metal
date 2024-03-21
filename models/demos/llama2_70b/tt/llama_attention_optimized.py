@@ -107,7 +107,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     lp,
                     self.devices[i],
                     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    # tt_dtype=self.model_config["KV_CACHE_DTYPE"], # HACK: We need FP16 to pad and fill cache for prefill
+                    tt_dtype=self.model_config["KV_CACHE_DTYPE"],
                 )
                 for lp in layer_past
             ]
@@ -925,7 +925,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # FILL K CACHE
         for i in range(len(key_layer)):
             keys = self.layer_past_list[i][0]
-            tt_lib.tensor.fill_cache(keys, key_layer[i], user_id)
+            tt_lib.tensor.fill_cache(
+                keys, tt_lib.tensor.typecast(key_layer[i], self.model_config["BFP8_DTYPE"]), user_id
+            )
 
         # PRE-SOFTMAX MM
         key_layer_transposed = []
@@ -947,7 +949,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     query_layer[i],
                     key_layer_transposed[i],
                     program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"],
-                    # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                     output_dtype=self.model_config["ATTN_BATCHED_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
@@ -956,32 +958,23 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             key_layer_transposed[i].deallocate(True)
 
         # SOFTMAX
-        # TODO: File issue on using this with 8 cores
-        # softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
-        # softmax_progcfg.block_w = self.seq_len // 32
-        # for i in range(len(attn_weights)):
-        #     attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-        #         attn_weights[i],
-        #         self.scale,
-        #         attn_masks[i],
-        #         #program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
-        #         is_causal_mask=True,
-        #     )
+        softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
+        softmax_progcfg.block_w = self.seq_len // 32
         for i in range(len(attn_weights)):
-            attn_weights[i] = tt_lib.tensor.mul_unary(
+            attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
                 attn_weights[i],
                 self.scale,
+                attn_masks[i],
+                program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
+                is_causal_mask=True,
             )
-            attn_weights[i] = tt_lib.tensor.add(attn_weights[i], attn_masks[i])
-            attn_weights[i] = tt_lib.tensor.softmax(attn_weights[i])
 
         # V CACHE UPDATE
         for i in range(len(value_layer)):
             values = self.layer_past_list[i][1]
-            tt_lib.tensor.fill_cache(values, value_layer[i], user_id)
-
-        # for i in range(len(value_layer)):
-        #     value_layer[i] = tt_lib.tensor.interleaved_to_sharded(value_layer[i], sharded_mem_config=kv_cache_memcfg)
+            tt_lib.tensor.fill_cache(
+                values, tt_lib.tensor.typecast(value_layer[i], self.model_config["BFP8_DTYPE"]), user_id
+            )
 
         # POST-SOFTMAX MM
         attn_output = []
@@ -1037,7 +1030,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output[i],
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-                # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size
