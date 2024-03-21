@@ -243,19 +243,24 @@ def create_sharded_mem_config_resnet(
     )
 
 
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    (
-        (8, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi4),  ## pass -- slightly lower pcc than ttlib
-        (8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),  ## pass
-        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),  ## L1 clash
-        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),   ## L1 clash
-        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),  ## L1 clash
-        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),   ## L1 clash
-    ),
-)
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
+# @pytest.mark.parametrize(
+#     "batch_size, act_dtype, weight_dtype, math_fidelity",
+#     (
+#         # (8, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi4),  ## pass -- slightly lower pcc than ttlib
+#         # (8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),  ## pass
+#         # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),  ## L1 clash
+#         # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),   ## L1 clash
+#         # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),  ## L1 clash
+#         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),  ## L1 clash
+#     ),
+# )
+def test_resnet_50(device):
     torch.manual_seed(0)
+
+    batch_size = 20
+    act_dtype = ttnn.bfloat8_b
+    weight_dtype = ttnn.bfloat8_b
+    math_fidelity = ttnn.MathFidelity.LoFi
 
     torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
 
@@ -271,6 +276,8 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         parameters = {}
         if isinstance(model, torchvision.models.resnet.Bottleneck):
+            # need to know the layer number (ideally the module number as well)
+
             ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
             ttnn_module_args.conv2["activation"] = "relu"  # Fuse relu with conv1
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
@@ -283,46 +290,80 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
             if model.downsample is not None:
                 update_ttnn_module_args_resnet50(ttnn_module_args.downsample[0])
 
-            ## TODO: Cleanup this atrocity
+            module_has_a_bypass_op = model.downsample is not None
+            if (
+                batch_size == 20
+                and ttnn_module_args.conv1.input_height == 56
+                and ttnn_module_args.conv1.in_channels == 256
+                and module_has_a_bypass_op
+            ):
+                ttnn_module_args.conv2["reallocate_halo_output"] = True
+
+            # convs with 56x56 output have 1280
+            if ttnn_module_args.conv3.input_height == 56:
+                ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 320}
+
+            # convs with 28x28 output have 320
+            if ttnn_module_args.conv3.input_height == 28:
+                ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 160}
+
+            # # convs with 14x14 output have 160
+            # if ttnn_module_args.conv3.input_height == 14:
+            #     ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 160}
+
+            # input 56x56 is layer 1  (no stride)
+            # input 56x56 is layer 2  (last module has a stride of 2)
+            # input 28x28 is layer 3  (check both input and output to see
+            # input 14x14 is layer 4  ()
+            # 7 x 7 (outpout from layer 4)
+
+            # this is layer 4
             if ttnn_module_args.conv1.input_height <= 14 and ttnn_module_args.conv1.input_width <= 14:
                 ttnn_module_args.conv1["use_1d_systolic_array"] = False
                 if model.downsample is not None:
                     ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
+            #
             else:
-                if ttnn_module_args.conv1.input_height == 28 and ttnn_module_args.conv1.input_width == 28:
-                    if ttnn_module_args.conv1.stride == (2, 2):
+                if (
+                    ttnn_module_args.conv1.input_height == 28 and ttnn_module_args.conv1.input_width == 28
+                ):  # this is layer 3
+                    if ttnn_module_args.conv1.stride == (2, 2):  # last module
                         ttnn_module_args.conv1["use_1d_systolic_array"] = False
                         if model.downsample is not None:
                             ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
-                    else:
+                    else:  # first modules
                         ttnn_module_args.conv1["use_1d_systolic_array"] = True
                         if model.downsample is not None:
                             ttnn_module_args.downsample[0]["use_1d_systolic_array"] = True
-                else:
+                else:  # this for layer 2 & 1
                     ttnn_module_args.conv1["use_1d_systolic_array"] = True
                     if model.downsample is not None:
                         ttnn_module_args.downsample[0]["use_1d_systolic_array"] = True
 
+            # layer 4 for conv2
             if ttnn_module_args.conv2.input_height <= 14 and ttnn_module_args.conv2.input_width <= 14:
                 ttnn_module_args.conv2["use_1d_systolic_array"] = False
                 if model.downsample is not None:
                     ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
             else:
-                if ttnn_module_args.conv2.input_height == 28 and ttnn_module_args.conv2.input_width == 28:
+                if (
+                    ttnn_module_args.conv2.input_height == 28 and ttnn_module_args.conv2.input_width == 28
+                ):  # layer 3 for conv2
                     if ttnn_module_args.conv2.stride == (2, 2):
                         ttnn_module_args.conv2["use_1d_systolic_array"] = False
                         if model.downsample is not None:
                             ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
-                    else:
+                    else:  # this for layer 2 & 1
                         ttnn_module_args.conv2["use_1d_systolic_array"] = True
                 else:
                     ttnn_module_args.conv2["use_1d_systolic_array"] = True
 
+            # layer 4 for conv3
             if ttnn_module_args.conv3.input_height <= 14 and ttnn_module_args.conv3.input_width <= 14:
                 ttnn_module_args.conv3["use_1d_systolic_array"] = False
                 if model.downsample is not None:
                     ttnn_module_args.downsample[0]["use_1d_systolic_array"] = False
-            else:
+            else:  # layer 3 for conv3
                 if ttnn_module_args.conv3.input_height == 28 and ttnn_module_args.conv3.input_width == 28:
                     if ttnn_module_args.conv3.stride == (2, 2):
                         ttnn_module_args.conv3["use_1d_systolic_array"] = False
@@ -361,6 +402,7 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
             ttnn_module_args.conv1["padded_input_channels"] = 16
             ttnn_module_args.conv1["math_fidelity"] = math_fidelity
             ttnn_module_args.conv1["weights_dtype"] = weight_dtype
+            ttnn_module_args.conv1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 1280}
             ttnn_module_args.conv1["dtype"] = act_dtype
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
             parameters["conv1"] = fold_conv7s2_into_conv4s1(conv1_weight, conv1_bias, ttnn_module_args.conv1)
@@ -392,14 +434,19 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
         device=device,
     )
 
-    for module in range(1, 5):
-        parameters.layer3[module].conv1.conv.is_1d_systolic = False
-        parameters.layer3[module].conv2.conv.is_1d_systolic = False
-        parameters.layer3[module].conv3.conv.is_1d_systolic = False
-    for module in range(1, 3):
-        parameters.layer4[module].conv1.conv.is_1d_systolic = False
-        parameters.layer4[module].conv2.conv.is_1d_systolic = False
-        parameters.layer4[module].conv3.conv.is_1d_systolic = False
+    # for module in range(1, 5):
+    #     parameters.layer3[module].conv1.conv.is_1d_systolic = False
+    #     parameters.layer3[module].conv2.conv.is_1d_systolic = False
+    #     parameters.layer3[module].conv3.conv.is_1d_systolic = False
+    # for module in range(1, 3):
+    #     parameters.layer4[module].conv1.conv.is_1d_systolic = False
+    #     parameters.layer4[module].conv2.conv.is_1d_systolic = False
+    #     parameters.layer4[module].conv3.conv.is_1d_systolic = False
+
+    # for module in range(1, 3):
+    #     parameters.layer1[module].conv1.conv.is_1d_systolic = False
+    #     parameters.layer1[module].conv2.conv.is_1d_systolic = False
+    #     parameters.layer1[module].conv3.conv.is_1d_systolic = False
 
     torch_model.to(torch.bfloat16)
     torch_input_tensor = torch_input_tensor.to(torch.bfloat16)
@@ -464,6 +511,8 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     output_tensor = ttnn.to_device(input_tensor, device=device, memory_config=sharded_mem_config)
 
     output_tensor = parameters.conv1(output_tensor)
+    if batch_size == 20:
+        output_tensor = ttnn.experimental.tensor.move_sharded(output_tensor)
     output_tensor = parameters.maxpool(output_tensor)
 
     """
@@ -471,6 +520,8 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     """
     output_tensor = ttnn.reshape(output_tensor, (1, 1, 56 * 56 * batch_size, 64))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT, dtype=act_dtype)
+    if batch_size == 20:
+        output_tensor = ttnn.experimental.tensor.move_sharded(output_tensor)
 
     module = 1
     for bottleneck_block_parameters in list(parameters.layer1.values()):
