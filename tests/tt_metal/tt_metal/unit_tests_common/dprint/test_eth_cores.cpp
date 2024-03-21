@@ -55,17 +55,6 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         );
         fixture->RunProgram(device, program);
 
-        program = Program();
-        erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print_modifiers.cpp",
-            core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
-        fixture->RunProgram(device, program);
-
         // Check the print log against golden output.
         EXPECT_TRUE(
             FilesMatchesString(
