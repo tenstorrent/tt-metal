@@ -37,6 +37,8 @@ void kernel_main() {
     // Same per worker receiver writer
     constexpr uint32_t sem_addr = get_compile_time_arg_val(20);
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(22);
+    static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     #ifdef RM_INTERLEAVED
@@ -76,6 +78,9 @@ void kernel_main() {
             // DPRINT << "rws WRITE PARTIAL CHUNK " << i << "\n";
             write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
             noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
+            ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+            ASSERT(half_cb_n_pages > rem_num_pages);
+            pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
 
         if (is_clockwise_direction) {

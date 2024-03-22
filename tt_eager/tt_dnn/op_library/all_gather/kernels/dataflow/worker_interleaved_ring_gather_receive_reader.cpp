@@ -17,7 +17,8 @@ void kernel_main() {
     constexpr uint32_t eth_receiver_noc_y = get_compile_time_arg_val(6);
     constexpr uint32_t eth_receiver_l1_semaphore_addr = get_compile_time_arg_val(7);
     constexpr uint32_t receiver_read_sem_addr = get_compile_time_arg_val(8);
-    constexpr uint32_t ID = get_compile_time_arg_val(9);
+    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(9);
+    static_assert (half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than 0");
 
     const uint32_t eth_receiver_l1_base_addr = get_arg_val<uint32_t>(0);
 
@@ -52,6 +53,9 @@ void kernel_main() {
             noc_semaphore_set(receiver_read_semaphore_addr_ptr, 0);
             fetch_chunk(cb_id_in0, rem_num_pages, page_size, eth_receiver_l1_base_noc_addr);
             noc_semaphore_inc(eth_receiver_l1_semaphore_noc_addr, 1);
+            ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+            ASSERT(half_cb_n_pages > rem_num_pages);
+            push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
             transfers_completed++;
         }
     }

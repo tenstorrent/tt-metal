@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(21);
     constexpr uint32_t sem_addr = get_compile_time_arg_val(22);
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t ID = get_compile_time_arg_val(24);
+    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(24);
+    static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
 
@@ -74,6 +75,9 @@ void kernel_main() {
     }
     if constexpr(rem_num_pages > 0) {
         read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, rem_num_pages, page_size);
+        ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+        ASSERT(half_cb_n_pages > rem_num_pages);
+        push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
     }
 
     uint32_t sem_idx = 1;
@@ -133,6 +137,9 @@ void kernel_main() {
             noc_semaphore_wait_min(sender_semaphore_addr_ptr, sem_idx);
             sem_idx++;
             read_chunk_from_output_tensor(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
+            ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+            ASSERT(half_cb_n_pages > rem_num_pages);
+            push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
 
