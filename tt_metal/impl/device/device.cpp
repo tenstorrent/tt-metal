@@ -301,11 +301,13 @@ void Device::clear_l1_state() {
             zero_vec_above_tile_header_buffer,
             eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
 
+        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
         std::vector<uint32_t> zero_vec_below_command_q_base(
             (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
 
         llrt::write_hex_vec_to_core(
             this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
+        */
     }
     // TODO: clear idle eriscs as well
 }
