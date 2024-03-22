@@ -194,6 +194,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp \
+	tt_eager/tt_dnn/op_library/scan/scan_op.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =
