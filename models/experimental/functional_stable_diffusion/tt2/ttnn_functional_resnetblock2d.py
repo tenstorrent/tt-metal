@@ -237,11 +237,43 @@ class resnetBlock2D:
         in_channels = parameters.conv1.weight.shape[1]
 
         if not self.fallback_on_groupnorm:
+            print("!!!!!!! GN op")
+            # self.parameters.norm1.weight = ttnn.create_group_norm_weight_bias_rm(
+            #     ttnn.to_torch(self.parameters.norm1.weight), in_channels, self.groups
+            # )
+            # self.parameters.norm1.bias = ttnn.create_group_norm_weight_bias_rm(
+            #     ttnn.to_torch(self.parameters.norm1.bias), in_channels, self.groups
+            # )
+            if (
+                self.first_gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                num_cores_across_channel = self.first_group_norm_core_grid.y
+            elif (
+                self.first_gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+            ):
+                num_cores_across_channel = 1
+            else:
+                num_cores_across_channel = int(self.first_group_norm_core_grid.x * self.first_group_norm_core_grid.y)
+
             self.parameters.norm1.weight = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.norm1.weight), in_channels, self.groups
+                ttnn.to_torch(self.parameters.norm1.weight), in_channels, num_cores_across_channel
             )
             self.parameters.norm1.bias = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.norm1.bias), in_channels, self.groups
+                ttnn.to_torch(self.parameters.norm1.bias), in_channels, num_cores_across_channel
+            )
+
+            self.norm1_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
+                in_channels, self.groups, num_cores_across_channel
+            )
+
+            self.norm1_input_mask = ttnn.from_torch(
+                self.norm1_input_mask_torch_tensor,
+                dtype=ttnn.DataType.BFLOAT8_B,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             self.parameters.norm1.weight = ttnn.from_torch(
@@ -258,13 +290,31 @@ class resnetBlock2D:
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # self.parameters.norm2.weight = ttnn.create_group_norm_weight_bias_rm(
+            #     ttnn.to_torch(self.parameters.norm2.weight), out_channels, self.groups
+            # )
+            # self.parameters.norm2.bias = ttnn.create_group_norm_weight_bias_rm(
+            #     ttnn.to_torch(self.parameters.norm2.bias), out_channels, self.groups
+            # )
+            if (
+                self.second_gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                num_cores_across_channel = self.second_group_norm_core_grid.y
+            elif (
+                self.second_gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+            ):
+                num_cores_across_channel = 1
+            else:
+                num_cores_across_channel = int(self.second_group_norm_core_grid.x * self.second_group_norm_core_grid.y)
+
             self.parameters.norm2.weight = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.norm2.weight), out_channels, self.groups
+                ttnn.to_torch(self.parameters.norm2.weight), out_channels, num_cores_across_channel
             )
             self.parameters.norm2.bias = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.norm2.bias), out_channels, self.groups
+                ttnn.to_torch(self.parameters.norm2.bias), out_channels, num_cores_across_channel
             )
-
             self.parameters.norm2.weight = ttnn.from_torch(
                 self.parameters.norm2.weight,
                 dtype=ttnn.DataType.BFLOAT16,
@@ -276,6 +326,17 @@ class resnetBlock2D:
                 self.parameters.norm2.bias,
                 dtype=ttnn.DataType.BFLOAT16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            self.norm2_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
+                out_channels, self.groups, num_cores_across_channel
+            )
+            self.norm2_input_mask = ttnn.from_torch(
+                self.norm2_input_mask_torch_tensor,
+                dtype=ttnn.DataType.BFLOAT8_B,
+                layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -304,19 +365,36 @@ class resnetBlock2D:
             assert False, "Mish is not implemented!"
         else:
             nonlinearity = ttnn.silu
+
+        print(input_tensor.get_layout())
+        print(input_tensor.get_dtype())
+
         out_channels = in_channels if out_channels is None else out_channels
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = input_tensor
+        # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
         # convert input tensor to tile layout for eltwise add in the end
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+
+        input_tensor_in_dram = ttnn.get_memory_config(input_tensor) == ttnn.DRAM_MEMORY_CONFIG
+        if not input_tensor_in_dram:
+            input_tensor_dram = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(input_tensor)
+        else:
+            input_tensor_dram = input_tensor
+
+        # if not input_tensor_in_dram:
+        #     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # ttnn.dump_device_memory_state(self.device, prefix="GN_resnet_3_")
+
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
-            if ttnn.is_sharded(hidden_states):
-                hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            # if ttnn.is_sharded(hidden_states):
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
                 hidden_states, (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, in_channels)
             )
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
+
+            # ttnn.dump_device_memory_state(self.device, prefix="GN_resnet_4_")
 
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
@@ -339,13 +417,14 @@ class resnetBlock2D:
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
+                input_mask=self.norm1_input_mask,
                 weight=self.parameters.norm1.weight,
                 bias=self.parameters.norm1.bias,
                 epsilon=eps,
                 memory_config=ttnn.get_memory_config(hidden_states),
                 core_grid=self.first_group_norm_core_grid,
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)  # avoid OOM
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
                 hidden_states,
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, in_channels),
@@ -424,7 +503,7 @@ class resnetBlock2D:
         # print("GN2 shape - ", (self.conv2.batch_size, out_channels, self.conv2.input_height, self.conv2.input_width))
         hidden_states = ttnn.reshape(
             hidden_states,
-            (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
+            (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, out_channels),
         )
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -448,6 +527,7 @@ class resnetBlock2D:
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
+                input_mask=self.norm2_input_mask,
                 weight=self.parameters.norm2.weight,
                 bias=self.parameters.norm2.bias,
                 epsilon=eps,
@@ -459,6 +539,15 @@ class resnetBlock2D:
         hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
         hidden_states = self.conv2(hidden_states)
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
+
+        if not input_tensor_in_dram:
+            input_tensor = ttnn.to_memory_config(input_tensor_dram, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            input_tensor = input_tensor_dram
+
+        # if not input_tensor_in_dram:
+        #     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         if use_in_shortcut:
             if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
                 if ttnn.is_sharded(input_tensor):

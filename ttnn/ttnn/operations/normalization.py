@@ -217,7 +217,8 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
         num_cores_channels = 1
     else:
         num_cores_channels = device_grid_size[1]
-        num_channels_tiles = num_channels // 16
+        # num_channels_tiles = num_channels // 16
+        num_channels_tiles = num_channels // 8
         while (num_channels_tiles % num_cores_channels != 0) or (
             ((num_channels // num_cores_channels) % group_size) != 0
         ):
@@ -225,7 +226,8 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
             assert num_cores_channels > 0
     input_nhw_padded_to_ncores = math.ceil(input_nhw / (num_cores_nhw * 32)) * (num_cores_nhw * 32)
     gn_in_channels_per_core = num_channels // num_cores_channels
-    assert gn_in_channels_per_core % 16 == 0
+    # assert gn_in_channels_per_core % 16 == 0
+    assert gn_in_channels_per_core % 8 == 0
     gn_nhw_per_core = input_nhw_padded_to_ncores // num_cores_nhw
     if is_height_sharded:
         grid_size = [
