@@ -352,27 +352,81 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         )
 
     # Decoder
-    model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
+    # For Prefill. we can calculate based on the dynamic seqlen for block sharded layernorm.
+    # shard_height = seqlen for prefill
+    layernorm_num_cores_x = 8
+    layernorm_max_num_cores_y = 7
+    for i in range(layernorm_max_num_cores_y, 0, -1):
+        if (shard_height // 32) % i == 0:
+            layernorm_num_cores_y = i
+            break
+
+    num_tiles_per_core_h = shard_height // 32 // layernorm_num_cores_y
+    num_tiles_per_core_w = hidden_size // 32 // layernorm_num_cores_x
+
+    layernorm_shard_height_hidden_dim = shard_height // layernorm_num_cores_y
+    layernorm_shard_width_hidden_dim = hidden_size // layernorm_num_cores_x
+
+    core_range_block_sharded_layernorm = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(layernorm_num_cores_x - 1, layernorm_num_cores_y - 1),
+            ),
+        }
     )
-    if num_devices == 8:
-        model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            subblock_w=8,
-            block_h=shard_height // 32,
-            block_w=8,
-            inplace=True,
+    if llm_mode == "decode":
+        model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
         )
+    else:
+        model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                core_range_block_sharded_layernorm,
+                [
+                    layernorm_shard_height_hidden_dim,
+                    layernorm_shard_width_hidden_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+    if num_devices == 8:
+        if llm_mode == "decode":
+            model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[8, 4],
+                subblock_w=8,
+                block_h=shard_height // 32,
+                block_w=8,
+                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+                im_data_format=ttl.tensor.DataType.BFLOAT16,
+                out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
+                inplace=True,
+            )
+        else:
+            model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+                subblock_w=8,
+                block_h=num_tiles_per_core_h,
+                block_w=num_tiles_per_core_w,
+                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+                im_data_format=ttl.tensor.DataType.BFLOAT16,
+                out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
+                inplace=True,
+            )
     elif num_devices == 32:
         model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
@@ -396,13 +450,28 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         ),
     )
     if num_devices == 8:
-        model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
-            subblock_w=8,
-            block_h=shard_height // 32,
-            block_w=8,
-            inplace=True,
-        )
+        if llm_mode == "decode":
+            model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[8, 4],
+                subblock_w=8,
+                block_h=shard_height // 32,
+                block_w=8,
+                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+                im_data_format=ttl.tensor.DataType.BFLOAT16,
+                out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
+                inplace=True,
+            )
+        else:
+            model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+                subblock_w=8,
+                block_h=num_tiles_per_core_h,
+                block_w=num_tiles_per_core_w,
+                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+                im_data_format=ttl.tensor.DataType.BFLOAT16,
+                out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
+                inplace=True,
+            )
     elif num_devices == 32:
         model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
