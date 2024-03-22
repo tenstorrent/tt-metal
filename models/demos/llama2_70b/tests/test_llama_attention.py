@@ -187,7 +187,6 @@ def run_test_LlamaAttention_inference(
 
         # TT hardware execution -------------------------------------------------------------
         attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(tt_input, start_pos)
-
         tt_out = tt_LlamaAttention_model(
             attention_input,
             rot_mat,
@@ -293,11 +292,8 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    (
-        (32, 1),
-        (1, 128),
-    ),
-    ids=("decode", "prefill"),
+    ((32, 1), (1, 128), (1, 2048)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9997),))
 def test_LlamaAttention_inference(
@@ -309,9 +305,8 @@ def test_LlamaAttention_inference(
     all_devices,
     emulated,
 ):
-    llm_mode = "prefill" if seq_len > 1 else "decode"
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices, llm_mode=llm_mode)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
