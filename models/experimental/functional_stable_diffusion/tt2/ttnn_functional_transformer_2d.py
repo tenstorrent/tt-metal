@@ -42,9 +42,9 @@ class transformer_2d_model:
         in_channels = parameters.proj_in.weight.shape[1]
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
-        if not self.fallback_on_groupnorm:
-            parameters.norm.weight = pad_group_norm_weight(parameters.norm.weight, 32, in_channels)
-            parameters.norm.bias = pad_group_norm_weight(parameters.norm.bias, 32, in_channels)
+        # if not self.fallback_on_groupnorm:
+        #     parameters.norm.weight = pad_group_norm_weight(parameters.norm.weight, 32, in_channels)
+        #     parameters.norm.bias = pad_group_norm_weight(parameters.norm.bias, 32, in_channels)
 
         self.proj_in = ttnn.Conv2d(
             in_channels,
@@ -68,16 +68,63 @@ class transformer_2d_model:
             deallocate_activation=True,
         )
 
+        norm_num_groups = 32
         (
             self.gn_expected_input_sharded_memory_config,
             self.group_norm_core_grid,
         ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
             device=self.device,
             num_channels=in_channels,
-            num_groups=32,
+            num_groups=norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
         )
+
+        if not self.fallback_on_groupnorm:
+            if (
+                self.gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                num_cores_across_channel = self.group_norm_core_grid.y
+            elif (
+                self.gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+            ):
+                num_cores_across_channel = 1
+            else:
+                num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
+
+            parameters.norm.weight = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(parameters.norm.weight), in_channels, num_cores_across_channel
+            )
+            parameters.norm.bias = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(parameters.norm.bias), in_channels, num_cores_across_channel
+            )
+            parameters.norm.weight = ttnn.from_torch(
+                parameters.norm.weight,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            parameters.norm.bias = ttnn.from_torch(
+                parameters.norm.bias,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            self.norm_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
+                in_channels, norm_num_groups, num_cores_across_channel
+            )
+            self.norm_input_mask = ttnn.from_torch(
+                self.norm_input_mask_torch_tensor,
+                dtype=ttnn.DataType.BFLOAT8_B,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
             parameters.proj_out.weight, parameters.proj_out.bias
@@ -216,6 +263,7 @@ class transformer_2d_model:
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
                 epsilon=eps,
+                input_mask=self.norm_input_mask,
                 weight=self.parameters.norm.weight,
                 bias=self.parameters.norm.bias,
                 memory_config=ttnn.get_memory_config(hidden_states),

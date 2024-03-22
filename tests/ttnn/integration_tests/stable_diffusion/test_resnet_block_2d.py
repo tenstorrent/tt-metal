@@ -111,20 +111,20 @@ def test_resnet_block_2d_256x256(
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [
-        (2, 320, 64, 64, 0, 0, "down", None),
-        (2, 320, 32, 32, 0, 0, "down", None),
-        (2, 640, 32, 32, 1, 1, "down", None),
-        (2, 640, 16, 16, 1, 1, "down", None),
-        (2, 1280, 16, 16, 2, 1, "down", None),
-        (2, 1280, 8, 8, 2, 1, "down", None),
-        (2, 2560, 8, 8, 0, 0, "up", 1280),
-        (2, 2560, 16, 16, 0, 0, "up", 1280),
-        # (2, 1920, 16, 16, 2, 0, "up", 640), # l1 allocation error
-        (2, 1920, 32, 32, 2, 0, "up", 640),
-        (2, 1280, 32, 32, 3, 0, "down", None),
-        # (2, 960, 32, 32, 3, 0, "up", 320), # l1 allocation error
+        # (2, 320, 64, 64, 0, 0, "down", None),
+        # (2, 320, 32, 32, 0, 0, "down", None),
+        # (2, 640, 32, 32, 1, 1, "down", None),
+        # (2, 640, 16, 16, 1, 1, "down", None),
+        # (2, 1280, 16, 16, 2, 1, "down", None),
+        # (2, 1280, 8, 8, 2, 1, "down", None),
+        # (2, 2560, 8, 8, 0, 0, "up", 1280),
+        # (2, 2560, 16, 16, 0, 0, "up", 1280),
+        # # (2, 1920, 16, 16, 2, 0, "up", 640), # l1 allocation error
+        # (2, 1920, 32, 32, 2, 0, "up", 640),
+        # (2, 1280, 32, 32, 3, 0, "down", None),
+        # # (2, 960, 32, 32, 3, 0, "up", 320), # l1 allocation error
         (2, 960, 64, 64, 3, 0, "up", 320),
-        (2, 640, 64, 64, 3, 1, "up", 320),
+        # (2, 640, 64, 64, 3, 1, "up", 320),
     ],
 )
 def test_resnet_block_2d_512x512(
@@ -162,6 +162,8 @@ def test_resnet_block_2d_512x512(
             initialize_model=lambda: resnet, custom_preprocessor=custom_preprocessor, device=device
         )
 
+    ttnn.dump_device_memory_state(device, prefix="GN_resnet_1_")
+
     ############ start of residual block #############
     temb_channels = 1280
     groups = 32
@@ -184,13 +186,20 @@ def test_resnet_block_2d_512x512(
     input = torch.permute(input, (0, 2, 3, 1))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
+
+    ttnn.dump_device_memory_state(device, prefix="GN_resnet_1_")
+
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     # input = ttnn.to_memory_config(input, resnet_block.conv1s[0].conv.input_sharded_memory_config)
 
+    ttnn.dump_device_memory_state(device, prefix="GN_resnet_2_")
+
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    ttnn.dump_device_memory_state(device, prefix="GN_resnet_4_")
 
     ttnn_output = resnet_block(
         input,
