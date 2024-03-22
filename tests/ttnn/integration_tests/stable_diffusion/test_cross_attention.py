@@ -243,6 +243,7 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
     else:
         ttnn_encoder_hidden_states = None
 
+    hidden_states = hidden_states.reshape(1, 1, N * C * H, W)
     ttnn_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
 
@@ -256,5 +257,6 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
 
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = ttnn_output.reshape(N, C, H, W)
 
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

@@ -281,7 +281,8 @@ class transformer_2d_model:
         hidden_states = self.proj_in(hidden_states)
 
         inner_dim = hidden_states.shape[-1]
-        hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
+        # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
 
         # 2. Blocks
         for block in self.blocks:

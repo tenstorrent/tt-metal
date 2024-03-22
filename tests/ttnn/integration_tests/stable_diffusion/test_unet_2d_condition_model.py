@@ -8,6 +8,7 @@ import pytest
 from tqdm.auto import tqdm
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
@@ -183,5 +184,19 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
+
+    for i in range(50):
+        ttnn_output = model(
+            input,
+            timestep=ttnn_timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            class_labels=class_labels,
+            attention_mask=attention_mask,
+            cross_attention_kwargs=cross_attention_kwargs,
+            return_dict=return_dict,
+            config=config,
+        )
     ttnn_output = ttnn_to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.94)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.94)
+    print(output)
+    assert passing
