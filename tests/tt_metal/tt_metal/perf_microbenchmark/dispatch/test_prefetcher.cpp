@@ -294,7 +294,7 @@ void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uin
 
     // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
     TT_ASSERT(start_page < num_dram_banks_g);
-    for (uint32_t page_idx = 0; page_idx < pages; page_idx++) {
+    for (uint32_t page_idx = start_page; page_idx < start_page + pages; page_idx++) {
 
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
