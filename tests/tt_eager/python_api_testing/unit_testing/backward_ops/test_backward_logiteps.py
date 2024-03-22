@@ -5,7 +5,11 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_val,
+    compare_pcc,
+)
 
 
 @pytest.mark.parametrize(
@@ -16,9 +20,9 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_logit(input_shapes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+def test_bw_logiteps(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
     tt_output_tensor_on_device = tt_lib.tensor.logiteps_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
@@ -28,5 +32,5 @@ def test_bw_logit(input_shapes, device):
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
