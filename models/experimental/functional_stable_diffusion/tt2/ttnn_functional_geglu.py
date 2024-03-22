@@ -16,7 +16,7 @@ def ttnn_to_torch(input):
 def split_linear_params(params):
     dim = -1
     device = params.proj.weight.device()
-    memory_config = ttnn.get_memory_config(params.proj.weight)
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     weight = ttnn_to_torch(params.proj.weight)
     bias = ttnn_to_torch(params.proj.bias)
@@ -24,16 +24,16 @@ def split_linear_params(params):
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
 
-    proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     proj_weight = ttnn.to_device(proj_weight, device, memory_config=memory_config)
 
-    gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     gate_weight = ttnn.to_device(gate_weight, device, memory_config=memory_config)
 
-    proj_bias = ttnn.from_torch(proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    proj_bias = ttnn.from_torch(proj_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     proj_bias = ttnn.to_device(proj_bias, device, memory_config=memory_config)
 
-    gate_bias = ttnn.from_torch(gate_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    gate_bias = ttnn.from_torch(gate_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     gate_bias = ttnn.to_device(gate_bias, device, memory_config=memory_config)
 
     params.proj.proj_weight = proj_weight
@@ -57,15 +57,15 @@ class geglu:
             hidden_states,
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
         )
         gate = ttnn.linear(
             hidden_states,
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            # memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
             activation="gelu",
         )
         return ttnn.mul(proj, gate)
