@@ -923,18 +923,15 @@ std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const 
 // (threshold < 0) grad_self = grad * torch.exp(beta * self) / (torch.exp(beta * self) + torch.exp(threshold))
 std::vector<Tensor> _softplus_bw(const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor exp_beta_self = exp(mul_unary(input, beta, output_mem_config), output_mem_config);
-    Tensor recip_inp = exp_beta_self;
-    if(threshold < 0){
-        Tensor threshold_exp = exp(full_like(input, threshold, output_mem_config) , output_mem_config);
-        recip_inp = add(recip_inp, threshold_exp, std::nullopt, output_mem_config);
-    }
-    else{
-        recip_inp = add1(recip_inp, output_mem_config);
-    }
-    Tensor grad_result = mul(grad, mul(exp_beta_self, recip(recip_inp, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor mul_input_beta = mul_unary(input, beta, output_mem_config);
+    Tensor exp_beta_self = exp(mul_input_beta, output_mem_config);
+    Tensor sub_result = add_unary(-threshold , mul_input_beta, output_mem_config);
+    Tensor temp = mul(mul(grad, exp_beta_self, std::nullopt, output_mem_config), recip(add1(exp_beta_self, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = where(gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    mul_input_beta.deallocate();
     exp_beta_self.deallocate();
-    recip_inp.deallocate();
+    sub_result.deallocate();
+    temp.deallocate();
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
