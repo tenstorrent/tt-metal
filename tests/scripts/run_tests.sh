@@ -76,7 +76,12 @@ run_eager_package_end_to_end_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    env pytest tests/end_to_end_tests --tt-arch $tt_arch -m $pipeline_type
+    # This is important for validating our wheel. Ideally end to end testing should
+    # be a diff repo
+    unset PYTHONPATH
+
+    cd tests/end_to_end_tests
+    env pytest -c conftest.py . -m $pipeline_type
 }
 
 run_frequent_models_pipeline_tests() {
@@ -286,7 +291,7 @@ set_up_chdir() {
         return
       fi
     done
-    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+      echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
     exit 1
 }
 
@@ -337,7 +342,10 @@ main() {
     fi
 
     validate_and_set_env_vars "$tt_arch" "$dispatch_mode"
-    set_up_chdir
+
+    if [[ $pipeline_type != "eager_"* ]]; then
+      set_up_chdir
+    fi
 
     if [[ -n $module ]]; then
         # Module invocation
