@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
