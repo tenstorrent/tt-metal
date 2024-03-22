@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_pcc
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -17,8 +17,8 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_acos(input_shapes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, -10, 10, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, -2, 2, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -2, 2, device)
 
     pyt_y = torch.acos(in_data)
 
