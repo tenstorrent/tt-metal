@@ -1528,6 +1528,7 @@ std::vector<Tensor> _logiteps_bw(const Tensor& grad, const Tensor& input, float 
     Tensor status = logical_and(gte_unary(input, low, output_mem_config),
                     lte_unary(input, high, output_mem_config), std::nullopt, output_mem_config);
     grad_result = where(eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, 0.0);
+    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(grad, std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1543,6 +1544,7 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
     Tensor status = logical_and(gte_unary(input, 0.0f, output_mem_config),
                     lte_unary(input, 1.0f, output_mem_config), std::nullopt, output_mem_config);
     grad_result = where(eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, std::nanf(""));
+    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(grad, std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
