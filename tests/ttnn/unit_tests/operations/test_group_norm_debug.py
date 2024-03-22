@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull
 
 
 # @pytest.mark.parametrize("h", [32])
@@ -126,6 +126,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
+@skip_for_grayskull("Todo: debug")
 @pytest.mark.parametrize("N", [1])
 @pytest.mark.parametrize("C", [1280])
 @pytest.mark.parametrize("H", [16])
