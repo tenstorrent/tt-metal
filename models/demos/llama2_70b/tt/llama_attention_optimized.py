@@ -69,9 +69,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
         self.llm_mode = model_config["LLM_MODE"]
         if self.llm_mode == "decode":
-            self.batch, self.seq_len = 32, 1
+            self.batch = 32
         else:
-            self.batch, self.seq_len = 1, 128
+            self.batch = 1
 
         if load_weights:
             self.load_weights()
@@ -287,7 +287,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
         if self.llm_mode == "prefill":
-            assert seq_len in [128, 2048], "prefill mode only supports 128 or 2048 seq_len"
+            assert (
+                seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
+            ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
             rot_mat = get_rotation_mat_prefill(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
@@ -813,7 +815,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         rot_mats: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
         assert xs[0].shape[0] == 1, "batch must be 1"
-        assert xs[0].shape[2] in [128, 2048], "Seqlen must be 128 or 2k"
+        assert xs[0].shape[2] % 128 == 0 and xs[0].shape[2] > 0, "Seqlen must be divisible by 128"
         seq_len = xs[0].shape[2]
 
         # Fused QKV
@@ -878,7 +880,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 query_layer[i],
                 [0, 0, 0, 0],
                 [1 - 1, self.n_local_heads - 1, seq_len - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         # K Rotary Embeddings
@@ -902,7 +904,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 key_layer[i],
                 [0, 0, 0, 0],
                 [1 - 1, self.n_local_kv_heads - 1, seq_len - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         return query_layer, key_layer, value_layer
@@ -916,7 +918,18 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         user_id: int,
     ) -> tt_lib.tensor.Tensor:
         seq_len = query_layer[0].shape[2]
-        num_slices = seq_len // 128  # we do q_lens of 128 per iteration (slice), then we concat the result.
+        slice_size = 128
+        num_slices = seq_len // slice_size  # we do q_lens of 128 per iteration (slice), then we concat the result.
+        attn_output_cat = []  # this is the output we write to. Initiate as empty tensors
+        for i in range(len(query_layer)):
+            attn_output_cat.append(
+                torch2tt_tensor(
+                    torch.zeros([1, self.n_local_heads, seq_len, self.head_dim]),
+                    self.devices[i],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                )
+            )
 
         # FILL K CACHE
         for i in range(len(key_layer)):
@@ -932,7 +945,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 values, tt_lib.tensor.typecast(value_layer[i], self.model_config["BFP8_DTYPE"]), user_id
             )
 
-        breakpoint()
         """
         (Pdb) query_layer[0].shape: ttnn.Shape([1, 8, 2048, 128])  -> each slice is [1,8,128,128]
         (Pdb) value_layer[0].shape: ttnn.Shape([1, 1, 2048, 128])
@@ -947,8 +959,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 q_slices.append(
                     tt_lib.tensor.interleaved_to_sharded_partial(
                         query_layer[i],
-                        (8, 1),
-                        [128, head_dim],  # each slice is [1,8,128,128], we use 8 cores
+                        (8, 4),
+                        [32, self.head_dim],  # each slice is [1,8,128,128], we use 32 cores
                         num_slices,  # num_slices
                         slice_i,  # slice_index
                         tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -958,16 +970,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_mask_slices.append(
                     tt_lib.tensor.interleaved_to_sharded_partial(
                         attn_masks[i],
-                        (8, 1),
-                        [128, seq_len],  # each slice is [1,8,128,128], we use 32 cores
+                        (8, 4),
+                        [32, seq_len],  # each slice is [1,8,128,128], we use 32 cores
                         num_slices,  # num_slices
                         slice_i,  # slice_index
                         tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                         tt_lib.tensor.ShardOrientation.ROW_MAJOR,
                     )
                 )
-
-            breakpoint()
 
             # PRE-SOFTMAX MM
             key_layer_transposed = []
@@ -990,14 +1000,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"],
                         output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                         output_dtype=self.model_config["ATTN_BATCHED_MM_OUTPUT_DTYPE"],
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                     )
                 )
                 key_layer_transposed[i].deallocate(True)
 
             # SOFTMAX
             softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
-            softmax_progcfg.block_w = self.seq_len // 32
+            softmax_progcfg.block_w = seq_len // 32
             for i in range(len(attn_weights)):
                 attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
                     attn_weights[i],
@@ -1015,7 +1025,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         attn_weights[i],
                         value_layer[i],
                         program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"],
-                        output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+                        output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                         output_dtype=self.model_config["SCORES_BATCHED_MM_OUTPUT_DTYPE"],
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
@@ -1026,7 +1036,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             for i in range(len(attn_output)):
                 tt_lib.tensor.sharded_to_interleaved_partial(
                     attn_output[i],
-                    query_layer[i],
+                    attn_output_cat[i],
                     num_slices,
                     slice_i,
                     self.model_config["DRAM_MEMCFG"],
@@ -1037,8 +1047,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         for i in range(len(key_layer)):
             key_layer[i].deallocate(True)
             value_layer[i].deallocate(True)
+            query_layer[i].deallocate(True)
 
-        return query_layer
+        return attn_output_cat
 
     def prefill_attn_selfout(
         self,
@@ -1048,13 +1059,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
 
-        for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
-                attn_output[i], output_mem_config=self.model_config["L1_MEMCFG"]
-            )
+        # for i in range(len(attn_output)):
+        #     attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+        #         attn_output[i], output_mem_config=self.model_config["L1_MEMCFG"]
+        #     )
+
         # All gather input to dense
         if self.emulated:
             attn_output = tt_all_gather_torch(attn_output, dim=-1)
