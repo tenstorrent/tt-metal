@@ -32,6 +32,8 @@ void kernel_main() {
     constexpr uint32_t writer_send_sem_addr = get_compile_time_arg_val(17);
     constexpr uint32_t eth_sender_noc_x = get_compile_time_arg_val(18);
     constexpr uint32_t eth_sender_noc_y = get_compile_time_arg_val(19);
+    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(20);
+    static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     #ifdef RM_INTERLEAVED
@@ -65,16 +67,17 @@ void kernel_main() {
             noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
             noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
             // TODO: Might be better to split this?
-            write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size, eth_l1_sender_base_noc_addr);
-            noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
+            write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size, eth_l1_sender_base_noc_addr, eth_l1_sender_semaphore_addr);
         }
     }
 
     if constexpr(rem_num_pages > 0) {
         noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
         noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-        write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, eth_l1_sender_base_noc_addr);
-        noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
+        write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, eth_l1_sender_base_noc_addr,eth_l1_sender_semaphore_addr);
+        ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+        ASSERT(half_cb_n_pages > rem_num_pages);
+        pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
     }
 
     // num_transfers = num_devices - 1
@@ -92,6 +95,9 @@ void kernel_main() {
             noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
             send_chunk(cb_id_in0, rem_num_pages, page_size, eth_l1_sender_base_noc_addr);
             noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
+            ASSERT(num_pages == 0 || num_pages > rem_num_pages);
+            ASSERT(half_cb_n_pages > rem_num_pages);
+            pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
 
