@@ -1051,6 +1051,14 @@ std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const Memo
     Tensor in_rsqrt = rsqrt(add1(mul(neg_in, input, std::nullopt, output_mem_config), output_mem_config), true, output_mem_config);
     in_rsqrt = neg(in_rsqrt, output_mem_config);
     Tensor grad_a = mul(grad, in_rsqrt, std::nullopt, output_mem_config);
+    Tensor neg_one = full_like(input, -1.0, output_mem_config);
+    Tensor pos_one = full_like(input, 1.0, output_mem_config);
+    Tensor t_inf = mul_unary(grad, -std::numeric_limits<float>::infinity(), output_mem_config);
+    grad_a = where(logical_or(lt(input, neg_one, std::nullopt, output_mem_config),
+             gt(input, pos_one, std::nullopt, output_mem_config), std::nullopt, output_mem_config), std::nanf(" "), grad_a, output_mem_config);
+    grad_a = where(eq(input, neg_one, std::nullopt, output_mem_config), t_inf,
+                   where(eq(input, pos_one, std::nullopt, output_mem_config), t_inf,
+                   grad_a, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
