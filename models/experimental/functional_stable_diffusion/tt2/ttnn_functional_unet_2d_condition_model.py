@@ -562,9 +562,6 @@ class UNet2DConditionModel:
 
         else:
             sample = ttnn.to_memory_config(sample, self.gn_expected_input_sharded_memory_config)
-            print(f"Starting final group norm")
-            print("GN input shape - ", sample.shape)
-            print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
             sample = ttnn.reshape(
                 sample,
                 (
@@ -583,7 +580,6 @@ class UNet2DConditionModel:
                 memory_config=self.gn_expected_input_sharded_memory_config,
                 core_grid=self.group_norm_core_grid,
             )
-        print("Done GN")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.reshape(
             sample,
@@ -599,8 +595,18 @@ class UNet2DConditionModel:
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
-        print("Done conv")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        # con_in completes
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        sample = ttnn.reshape(
+            sample,
+            (
+                self.conv_out.batch_size,
+                self.conv_out.input_height,
+                self.conv_out.input_width,
+                self.conv_out.out_channels,
+            ),
+        )
+        sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
 
         return sample
