@@ -610,5 +610,5 @@ class UNet2DConditionModel:
         )
         sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
         # con_in completes
-
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
         return sample

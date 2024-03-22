@@ -424,7 +424,8 @@ def run_demo_inference_diffusiondb(
         for i in range(len(time_step_list)):
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
             ttnn_latent_model_input = tt_latent_expansion(ttnn_latents, ttnn_scheduler, float(ttnn_sigma[i]), device)
-
+            print("Starting timestep - ", i)
+            # ttnn.synchronize_device(device)
             # predict the noise residual
             with torch.no_grad():
                 ttnn_noise_pred = model(
@@ -503,7 +504,7 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((2),),
+    ((30),),
 )
 @pytest.mark.parametrize(
     "image_size",
