@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
+#include "debug/dprint.h"
+#include "firmware_common.h"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
+    uint32_t local_indices[320];
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
@@ -47,6 +49,10 @@ void kernel_main() {
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
+    //DPRINT << "out_num_blocks_h=" << out_num_blocks_h << ENDL();
+    //DPRINT << "out_num_blocks_w=" << out_num_blocks_w << ENDL();
+    //DPRINT << "weight_block_height_num_outer=" << weight_block_height_num_outer << ENDL();
+    //DPRINT << "num_blocks_weight_h=" << num_blocks_weight_h << ENDL();
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
@@ -85,6 +91,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
     uint32_t reader_idx = 0;
 
+    uint32_t packed_reader_indices[act_block_h_datums_read];
 
     const InterleavedAddrGenFast<out_in_dram> s = {
         .bank_base_address = out_addr,
@@ -121,6 +128,9 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
+            for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
+                local_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
+            }
             if (read_weights) {
 
                 // TODO: Not sure how this loop works with the additional reader; we don't have a use case for this right now
@@ -135,7 +145,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = local_indices[bhd];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
@@ -187,7 +197,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = local_indices[bhd];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
