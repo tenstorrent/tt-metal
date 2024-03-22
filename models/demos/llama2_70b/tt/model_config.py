@@ -74,7 +74,8 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
+def get_model_config(model_config_str, num_devices=8, seq_len=1):
+    llm_mode = "decode" if seq_len == 1 else "prefill"
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     assert num_devices in (8, 32)
     assert llm_mode in ("decode", "prefill")
@@ -156,10 +157,10 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
     n_kv_heads = model_config_entries["num_kv_heads"]
 
     if llm_mode == "decode":
-        batch, seq_len = 32, 1
+        batch = 32
         shard_height = batch
     else:
-        batch, seq_len = 1, 128
+        batch = 1
         shard_height = seq_len
 
     shard_spec_64_cores_grid = ttl.tensor.CoreRangeSet(
@@ -535,33 +536,22 @@ def get_model_config(model_config_str, num_devices=8, llm_mode="decode"):
         )
         if llm_mode == "prefill":
             # Llama 2 Attention Module Prefill
-            # Input shape is [1,1,128,8192]
+            # Input shape is [1,1,seq_len,8192]
             # qkv_list shape is [8192,1280]
             # 2D
-
+            per_core_M = seq_len // 32 // 4
+            in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1
             model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
-                in0_block_w=32,  # how much inner dim you take each time
+                in0_block_w=in0_block_w,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=1,  #
+                per_core_M=per_core_M,  # M / TILE_HEIGHT / Grid_Size
                 per_core_N=5,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
             )
-            # model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            #     ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            #     ttl.tensor.BufferType.L1,
-            #     ttl.tensor.ShardSpec(
-            #         shard_spec_32_cores_grid,
-            #         [
-            #             shard_height // 4,
-            #             shard_width_hidden_dim_across_8_cores,
-            #         ],
-            #         ttl.tensor.ShardOrientation.ROW_MAJOR,
-            #         False,
-            #     ),
-            # )
+
     if num_devices == 8 or num_devices == 32:
         model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
