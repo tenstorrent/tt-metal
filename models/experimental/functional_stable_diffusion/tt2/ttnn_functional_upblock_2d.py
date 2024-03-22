@@ -74,6 +74,10 @@ class upblock_2d:
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
+            if hidden_states.dtype != ttnn.bfloat8_b:
+                hidden_states = ttnn.clone(
+                    hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
+                )
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
             hidden_states = resnet(
                 hidden_states,
