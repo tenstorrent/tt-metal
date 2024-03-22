@@ -148,8 +148,7 @@ inline Tensor run_eltwise_unary(
     std::vector<UnaryWithParam> ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    if(output_mem_config.is_sharded() && (output_mem_config.memory_layout ==
-        TensorMemoryLayout::HEIGHT_SHARDED || output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED)){
+    if(output_mem_config.is_sharded()){
        return operation::run_without_autoformat(
                EltwiseUnary{ops_chain, output_mem_config}, {input_tensor})
         .at(0);
