@@ -210,10 +210,8 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
     max_num_cores = device_grid_size[0] * device_grid_size[1]
     input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
-    num_cores_nhw = (
-        find_closest_largest_divisor(input_nhw_paddedto32 // 32, max_num_cores)
-        if is_height_sharded
-        else find_closest_largest_divisor_with_num_padding(input_nhw_paddedto32 // 32, device_grid_size[0])
+    num_cores_nhw = find_closest_largest_divisor(
+        input_nhw_paddedto32 // 32, max_num_cores if is_height_sharded else device_grid_size[0]
     )
     if is_height_sharded:
         num_cores_channels = 1
