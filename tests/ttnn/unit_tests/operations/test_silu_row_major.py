@@ -4,7 +4,6 @@
 
 import pytest
 import math
-from typing import Union, Tuple
 from loguru import logger
 
 import torch
@@ -13,54 +12,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 from models.utility_functions import skip_for_wormhole_b0
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 TILE_WIDTH = 32
-
-
-def get_shard_grid_from_num_cores(ncores: Union[int, Tuple[int, int]]) -> ttnn.experimental.tensor.CoreRangeSet:
-    max_grid_size = (9, 12)  ## (y, x)
-    if isinstance(ncores, int):
-        if ncores % max_grid_size[1] == 0:
-            core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
-            grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
-            return ttnn.experimental.tensor.CoreRangeSet(
-                {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-            )
-        else:
-            if ncores < max_grid_size[1]:
-                core_grid = ttnn.CoreGrid(y=1, x=ncores)
-                grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, 0)
-                return ttnn.experimental.tensor.CoreRangeSet(
-                    {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-                )
-            else:
-                core_grid_1 = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
-                core_grid_2 = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
-                grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
-                grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
-                return ttnn.experimental.tensor.CoreRangeSet(
-                    {
-                        ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, grid_coord_2.y), grid_coord_2
-                        ),
-                    }
-                )
-    elif isinstance(ncores, tuple):
-        ncores_h, ncores_w = ncores
-        assert ncores_h <= max_grid_size[0]
-        assert ncores_w <= max_grid_size[1]
-        return ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(ncores_w - 1, ncores_h - 1),
-                )
-            }
-        )
-    else:
-        raise ValueError("Invalid ncores")
 
 
 @skip_for_wormhole_b0()
@@ -125,7 +80,7 @@ def test_upsample_multi_core(device, input_shape, shard_strategy):
             raise ValueError("nshards_h or nshards_w is 0")
         ncores = (nshards_h, nshards_w)
 
-    shard_grid = get_shard_grid_from_num_cores(ncores)
+    shard_grid = get_shard_grid_from_num_cores(ncores, device)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
@@ -145,10 +100,6 @@ def test_upsample_multi_core(device, input_shape, shard_strategy):
     logger.debug(f"shard_shape={shard_shape}")
     shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
-
-    ## output shard
-    shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
 
     logger.debug(f"in_shard_mem_config: {in_sharded_mem_config}")
     logger.debug(f"ncore --> {ncores}")

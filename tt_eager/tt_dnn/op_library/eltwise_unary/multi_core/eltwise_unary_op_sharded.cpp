@@ -40,16 +40,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
     uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size; //ceil value
     TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
-    uint32_t ncores_x, ncores_nhw;
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        ncores_x = device->compute_with_storage_grid_size().x;
-        ncores_nhw = ncores;
-    } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end.x + 1;
-        ncores_nhw = all_cores.ranges().begin()->end.y + 1;
-    } else {
-        TT_FATAL(false, "Unsupported sharding layout");
-    }
 
     uint32_t in_cb_id = CB::c_in0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
@@ -73,7 +63,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
 
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
     log_debug(LogOp, "input_tile_size: {}", input_tile_size);
 
     auto src_buffer = input.buffer();
