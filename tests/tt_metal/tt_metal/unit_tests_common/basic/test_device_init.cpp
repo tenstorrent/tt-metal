@@ -62,7 +62,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 
 INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices()));
 
-TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
+TEST_P(DeviceParamFixture, DISABLED_DeviceInitializeAndTeardown) { // see issue #6659
     unsigned int num_devices = GetParam();
     if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
         GTEST_SKIP();

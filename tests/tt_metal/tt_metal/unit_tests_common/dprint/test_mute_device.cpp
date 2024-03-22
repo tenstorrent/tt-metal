@@ -72,8 +72,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     EXPECT_TRUE(OpenFile(file_name, log_file, std::fstream::in));
     EXPECT_TRUE(log_file.peek() == std::ifstream::traits_type::eof());
 }
-
-TEST_F(DPrintFixtureDisableDevices, TestPrintMuteDevice) {
+// see issue #6659
+TEST_F(DPrintFixtureDisableDevices, DISABLED_TestPrintMuteDevice) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

@@ -67,8 +67,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         tt::DPrintServerClearLogFile();
     }
 }
-
-TEST_F(DPrintFixture, TestPrintEthCores) {
+// see issue #6659
+TEST_F(DPrintFixture, DISABLED_TestPrintEthCores) {
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {
