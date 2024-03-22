@@ -746,11 +746,11 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
             model_config[
                 "ATTN_BATCHED_MM_PROGCFG"
             ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 1),
+                compute_with_storage_grid_size=(8, 4),
                 in0_block_w=head_dim // 32,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=shard_height // 32,
+                per_core_M=32 // 32,
                 per_core_N=seq_len // 32,
                 fuse_batch=True,
                 fused_activation=None,
@@ -773,11 +773,11 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
             model_config[
                 "SCORES_BATCHED_MM_PROGCFG"
             ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 1),
+                compute_with_storage_grid_size=(8, 4),
                 in0_block_w=seq_len // 32,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=shard_height // 32,
+                per_core_M=32 // 32,
                 per_core_N=head_dim // 32,
                 fuse_batch=True,
                 fused_activation=None,
@@ -903,9 +903,9 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
             model_config[
                 "BATCHED_SOFTMAX_PROGCFG"
             ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(8, 1),  # TODO: NOT WORKING !!!!!!!!
+                compute_with_storage_grid_size=(8, 4),
                 subblock_w=1,
-                block_h=shard_height // 32,
+                block_h=32 // 32,
                 block_w=1,  # Dynamic
                 math_fidelity=ttl.tensor.MathFidelity.HiFi4,
                 im_data_format=ttl.tensor.DataType.BFLOAT16,
