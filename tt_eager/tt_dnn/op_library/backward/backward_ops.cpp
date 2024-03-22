@@ -720,12 +720,12 @@ std::vector<Tensor> squared_difference_bw(const Tensor& grad, const Tensor& inpu
 
 // torch reference
 // - name: ldexp(Tensor self, Tensor other) -> Tensor
-//   self: 2^other
-//   other: self * ln(2) * (2^other)
-// # M_LN2 = ln(2)= 0.693147180s559945309417
+//   self: grad * 2^other
+//   other: grad * self * ln(2) * (2^other)
+// # M_LN2 = ln(2)= 0.693147180559945309417
 std::vector<Tensor> _ldexp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor tpow_o = mul_unary(exp(other, output_mem_config), M_LN2, output_mem_config);
+    Tensor tpow_o = mul(grad, rpow(other, 2.0, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(tpow_o);
     Tensor result = mul(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -835,9 +835,10 @@ std::vector<Tensor> concat_bw(const Tensor& grad, const Tensor& input, const Ten
 }
 
 
+
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul_unary(grad, 1.0/6);
+    Tensor grad_a = where(logical_or(lte_unary(input, -3, output_mem_config), gte_unary(input, 3, output_mem_config), std::nullopt, output_mem_config), zeros_like(input, output_mem_config), mul_unary(grad, 1.0/6), output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
@@ -922,18 +923,15 @@ std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const 
 // (threshold < 0) grad_self = grad * torch.exp(beta * self) / (torch.exp(beta * self) + torch.exp(threshold))
 std::vector<Tensor> _softplus_bw(const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor exp_beta_self = exp(mul_unary(input, beta, output_mem_config), output_mem_config);
-    Tensor recip_inp = exp_beta_self;
-    if(threshold < 0){
-        Tensor threshold_exp = exp(full_like(input, threshold, output_mem_config) , output_mem_config);
-        recip_inp = add(recip_inp, threshold_exp, std::nullopt, output_mem_config);
-    }
-    else{
-        recip_inp = add1(recip_inp, output_mem_config);
-    }
-    Tensor grad_result = mul(grad, mul(exp_beta_self, recip(recip_inp, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor mul_input_beta = mul_unary(input, beta, output_mem_config);
+    Tensor exp_beta_self = exp(mul_input_beta, output_mem_config);
+    Tensor sub_result = add_unary(-threshold , mul_input_beta, output_mem_config);
+    Tensor temp = mul(mul(grad, exp_beta_self, std::nullopt, output_mem_config), recip(add1(exp_beta_self, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = where(gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    mul_input_beta.deallocate();
     exp_beta_self.deallocate();
-    recip_inp.deallocate();
+    sub_result.deallocate();
+    temp.deallocate();
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -979,7 +977,7 @@ std::vector<Tensor> atanh_bw(const Tensor& grad, const Tensor& input, const Memo
 // result: grad * (-self * self + 1).rsqrt()
 std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(grad, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(input, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
