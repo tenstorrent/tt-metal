@@ -1,7 +1,7 @@
 <div align="center">
 
-<img src="./docs/source/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
-<img src="./docs/source/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
+<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
@@ -59,7 +59,7 @@ ttnn.tracer.visualize(output)
 
 We also provide tools to review the graphs you create and run in TT-NN.
 
-<img src="./docs/source/_static/add.svg" alt="ttnn tracer example" height="250"/>
+<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="250"/>
 
 ## Running model demos on Grayskull (GS)
 
