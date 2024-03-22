@@ -308,8 +308,7 @@ def test_LlamaDecoder_inference(
     all_devices,
     emulated,
 ):
-    llm_mode = "prefill" if seq_len > 1 else "decode"
-    model_config = get_model_config(model_config_str, num_devices=n_devices, llm_mode=llm_mode)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, seq_len=seq_len)
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
