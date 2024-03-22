@@ -9,7 +9,11 @@
 
 <h3>
 
-[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium) | [TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Demo models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
+[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium) | [TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | 
+
+
+
+[Demo models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
 
 </h3>
 
