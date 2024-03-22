@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "firmware_common.h"
 
 
 void kernel_main() {
+    constexpr uint32_t LOCAL_INDICES_SIZE = 320;
+    uint32_t local_indices[LOCAL_INDICES_SIZE];
     // This writer is for output tensor in tile format
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
@@ -85,7 +88,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
     uint32_t reader_idx = 0;
 
-
     #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
@@ -156,6 +158,9 @@ void kernel_main() {
 
         bool read_weights = true;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+            for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
+                local_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
+            }
             // READ WEIGHTS + MCAST SEND WEIGHTS
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
@@ -176,7 +181,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = local_indices[bhd];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
@@ -267,7 +272,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = local_indices[bhd];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 

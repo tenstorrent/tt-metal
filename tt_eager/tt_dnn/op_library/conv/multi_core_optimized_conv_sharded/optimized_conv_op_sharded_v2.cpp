@@ -753,6 +753,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         (uint32_t) weight_size_w,
         (uint32_t) conv_act_size_w + (2 * pad_w),
         (uint32_t) act_block_w_extra_align_bytes, // only used for 1d systolic variant
+        (uint32_t) weight_size_h,
+        (uint32_t) num_blocks_act_h_per_core,
         };
 
     // define for bias
