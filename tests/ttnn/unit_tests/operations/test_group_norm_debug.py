@@ -123,8 +123,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc_pass, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
-    logger.info(pcc_msg)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("N", [1])
