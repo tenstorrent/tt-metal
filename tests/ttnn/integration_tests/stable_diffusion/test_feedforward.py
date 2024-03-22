@@ -131,7 +131,7 @@ def test_feedforward_512x512(device, model_name, N, C, H, W, index, reset_seeds)
     )
     model = tt2_ttnn_feedforward(device, parameters)
 
-    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device)
 
     output = model(config, ttnn_hidden_state)
