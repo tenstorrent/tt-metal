@@ -165,8 +165,9 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         # and another with the unconditional embeddings (uncond_embeddings).
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
@@ -348,8 +349,9 @@ def run_demo_inference_diffusiondb(
         # and another with the unconditional embeddings (uncond_embeddings).
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)

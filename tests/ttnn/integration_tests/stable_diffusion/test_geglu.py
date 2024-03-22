@@ -135,4 +135,4 @@ def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.97)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)

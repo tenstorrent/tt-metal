@@ -19,7 +19,7 @@ class feedforward:
             self.parameters.net[2].weight,
             bias=self.parameters.net[2].bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         return hidden_states
