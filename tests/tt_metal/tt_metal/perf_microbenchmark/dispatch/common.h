@@ -39,15 +39,34 @@ inline void reset_worker_data(worker_data_t& awd) {
     }
 }
 
-// Arbitrary, just get first worker, and bank_id whatever that is and return num datums. Probably this
-// should be tweaked to only return valid datums, and perhaps consider all workers, banks.
-inline uint32_t worker_data_size(worker_data_t& awd) {
+// Return number of words in worker-data. Either in legacy mode which arbitrarily just looks at first worker and bank
+// and does not consider valid words, or in improved mode that iterates over all workers and counts only valid words
+// which could be slow, but was required for paged write+read test unless a global counter of bytes written is used.
+inline uint32_t worker_data_size(worker_data_t& awd, bool all_workers_valid_only = false) {
     TT_ASSERT(awd.size() > 0, "Worker data is empty, not expected");
-    auto first_worker = awd.begin()->first;
-    TT_ASSERT(awd[first_worker].size() > 0, "Worker data for core: {} is empty, not expected.", first_worker.str());
-    auto first_bank_id = awd[first_worker].begin()->first;
-    auto size = awd[first_worker_g][first_bank_id].data.size();
-    log_debug(tt::LogTest, "{} - returning size: {} from worker: {} bank_id: {}", __FUNCTION__, size, first_worker.str(), first_bank_id);
+    uint32_t size = 0;
+
+    if (all_workers_valid_only) {
+        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
+            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
+                CoreCoord core(x, y);
+                const vector<bool>& dev_valid = awd.at(core).at(0).valid;
+                // const vector<uint32_t>& dev_data = awd.at(core).at(0).data;
+                for (int i = 0; i < dev_valid.size(); i++) {
+                    if (dev_valid[i]){
+                        size++;
+                    }
+                }
+            }
+        }
+    } else {
+        auto first_worker = awd.begin()->first;
+        TT_ASSERT(awd[first_worker].size() > 0, "Worker data for core: {} is empty, not expected.", first_worker.str());
+        auto first_bank_id = awd[first_worker].begin()->first;
+        size = awd[first_worker_g][first_bank_id].data.size();
+    }
+
+    log_debug(tt::LogTest, "{} - all_workers_valid_only: {} returning size: {} words", __FUNCTION__, all_workers_valid_only, size);
     return size;
 }
 
@@ -130,10 +149,11 @@ inline void generate_random_paged_payload(Device *device,
                                           uint32_t start_page,
                                           bool is_dram) {
 
-    static uint32_t coherent_count = 0;
+    static uint32_t coherent_count = 0x100; // Abitrary starting value, avoid 0x0 since matches with DRAM prefill.
     auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
     uint32_t num_banks = device->num_banks(buf_type);
     uint32_t words_per_page = cmd.write_paged.page_size / sizeof(uint32_t);
+    log_debug(tt::LogTest, "Starting {} w/ is_dram: {} start_page: {} words_per_page: {}", __FUNCTION__, is_dram, start_page, words_per_page);
 
     // Note: the dst address marches in unison regardless of weather or not a core is written to
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
@@ -153,7 +173,7 @@ inline void generate_random_paged_payload(Device *device,
 
         // Generate data and add to cmd for sending to device, and worker_data for correctness checking.
         for (uint32_t i = 0; i < words_per_page; i++) {
-            uint32_t datum = (use_coherent_data_g) ? coherent_count++ : std::rand();
+            uint32_t datum = (use_coherent_data_g) ? (((page_id & 0xFF) << 24) | coherent_count++) : std::rand();
             log_debug(tt::LogTest, "{} - Setting {} page_id: {} word: {} on core: {} (bank_id: {} bank_offset: {}) => datum: 0x{:x}",
                 __FUNCTION__, is_dram ? "DRAM" : "L1", page_id, i, bank_core.str(), bank_id, bank_offset, datum);
             cmds.push_back(datum); // Push to device.
