@@ -413,16 +413,6 @@ int main(int argc, char **argv) {
         gen_cmds(device, cmds, all_workers_g, worker_data, write_buffer_addr, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
-        std::map<string, string> defines = {
-            {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
-            {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
-            {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
-            {"DISPATCH_NOC_Y", std::to_string(phys_dispatch_core.y)},
-        };
-        if (fire_once_g) {
-            defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));
-        }
-
         constexpr uint32_t dispatch_cb_sem = 0;
         constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
@@ -434,6 +424,7 @@ int main(int argc, char **argv) {
              log_dispatch_buffer_page_size_g,
              dispatch_buffer_size_g / dispatch_buffer_page_size_g,
              dispatch_cb_sem,
+             dispatch_cb_sem, // ugly, share an address
              dispatch_buffer_size_blocks_g,
              prefetch_sync_sem,
              // Hugepage compile args aren't used in this test since WriteHost is not tested here
@@ -451,6 +442,16 @@ int main(int argc, char **argv) {
              prefetch_sync_sem,
             };
 
+        std::map<string, string> prefetch_defines = {
+            {"MY_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
+            {"MY_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
+            {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
+            {"DISPATCH_NOC_Y", std::to_string(phys_dispatch_core.y)},
+        };
+        if (fire_once_g) {
+            prefetch_defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));
+        }
+
         auto sp1 = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
@@ -459,12 +460,19 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = spoof_prefetch_compile_args,
-                .defines = defines
+                .defines = prefetch_defines
             }
         );
         vector<uint32_t> args;
         args.push_back(prefetcher_iterations_g);
         tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
+
+        std::map<string, string> dispatch_defines = {
+            {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
+            {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
+            {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
+            {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
+        };
 
         auto d1 = tt_metal::CreateKernel(
             program,
@@ -474,7 +482,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = dispatch_compile_args,
-                .defines = defines
+                .defines = dispatch_defines
             }
         );
 

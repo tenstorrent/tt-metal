@@ -25,6 +25,9 @@ constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
 // 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
 constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
+constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
+
+
 constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
 constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
@@ -43,6 +46,7 @@ constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
+constexpr uint32_t dev_hugepage_base_g = 0;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -73,6 +77,8 @@ uint32_t dram_pages_to_read_g;
 uint32_t bytes_of_data_g = 0;
 bool initialize_device_g = true;
 uint32_t dispatch_wait_addr_g;
+bool split_prefetcher_g;
+bool split_dispatcher_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -105,9 +111,11 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -cs: max cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
         log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
-        log_info(LogTest, "  -pcies: size of data to transfer in pcie bw test type (default )", PCIE_TRANSFER_SIZE_DEFAULT);
-        log_info(LogTest, "  -dpgs: dram page size in dram bw test type (default: {} )", DRAM_PAGE_SIZE_DEFAULT);
-        log_info(LogTest, "  -dpgr: dram pages to read in dram bw test type (default: {} )", DRAM_PAGES_TO_READ_DEFAULT);
+        log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
+        log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
+        log_info(LogTest, " -dpgr: dram pages to read in dram bw test type (default: {})", DRAM_PAGES_TO_READ_DEFAULT);
+        log_info(LogTest, " -spre: split prefetcher into H and D variants (default not split)");
+        log_info(LogTest, " -sdis: split dispatcher into H and the other thing variants (default not split)");
         log_info(LogTest, "  -c: use coherent data as payload (default false)");
         log_info(LogTest, "  -s: seed for randomized tests (default 1)");
         exit(0);
@@ -130,6 +138,8 @@ void init(int argc, char **argv) {
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
     all_workers_g.end.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end.y);
+    split_prefetcher_g = test_args::has_command_option(input_args, "-spre");
+    split_dispatcher_g = test_args::has_command_option(input_args, "-sdis");
 
     uint32_t seed = test_args::get_command_option_uint32(input_args, "-s", 1);
     std::srand(seed);
@@ -1005,6 +1015,65 @@ std::chrono::duration<double> run_test(uint32_t iterations,
     return end-start;
 }
 
+template<bool is_hd>
+void configure_host_connected_prefetcher(
+    Program& program,
+    string path,
+    CoreCoord my_core,
+    CoreCoord phys_my_core,
+    CoreCoord phys_downstream_core,
+    uint32_t downstream_buffer_base,
+    uint32_t downstream_buffer_log_page_size,
+    uint32_t downstream_buffer_pages,
+    uint32_t prefetch_local_downstream_cb_sem, // sem instanced local to prefetcher for downstream
+    uint32_t downstream_cb_sem,                // sem instanced downstream
+    uint32_t prefetch_q_base,
+    uint32_t prefetch_q_rd_ptr_addr,
+    uint32_t cmddat_q_base,
+    uint32_t scratch_db_base,
+    uint32_t prefetch_sync_sem) {
+
+    std::map<string, string> defines = {
+        {"MY_NOC_X", std::to_string(phys_my_core.x)},
+        {"MY_NOC_Y", std::to_string(phys_my_core.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(phys_downstream_core.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(phys_downstream_core.y)},
+    };
+
+    std::vector<uint32_t> compile_args = {
+         downstream_buffer_base,
+         downstream_buffer_log_page_size,
+         downstream_buffer_pages,
+         prefetch_local_downstream_cb_sem,
+         downstream_cb_sem,
+         dev_hugepage_base_g,
+         hugepage_buffer_size_g,
+         prefetch_q_base,
+         prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
+         prefetch_q_rd_ptr_addr,
+         cmddat_q_base,
+         cmddat_q_size_g,
+    };
+
+    if (is_hd) {
+        compile_args.push_back(scratch_db_base);
+        compile_args.push_back(scratch_db_size_g);
+        compile_args.push_back(prefetch_sync_sem);
+    }
+
+    tt_metal::CreateKernel(
+        program,
+        path,
+        {my_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = compile_args,
+            .defines = defines
+        }
+    );
+}
+
 int main(int argc, char **argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -1021,10 +1090,14 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord prefetch_core = {0, 0};
+        CoreCoord prefetch_d_core = {1, 0};
         CoreCoord dispatch_core = {4, 0};
+        CoreCoord dispatch_h_core = {5, 0};
 
         CoreCoord phys_prefetch_core = device->worker_core_from_logical_core(prefetch_core);
+        CoreCoord phys_prefetch_d_core = device->worker_core_from_logical_core(prefetch_d_core);
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
+        CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
@@ -1032,7 +1105,8 @@ int main(int argc, char **argv) {
         TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
         uint32_t dispatch_buffer_base = l1_buf_base;
-        uint32_t dev_hugepage_base = 0;
+        uint32_t prefetch_d_buffer_base = l1_buf_base;
+        uint32_t prefetch_d_buffer_pages = 256 * 1024 >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE; // XXXX 256 for now, nothing below it in memory
         uint32_t prefetch_q_base = l1_buf_base;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
         dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
@@ -1057,7 +1131,7 @@ int main(int argc, char **argv) {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         host_hugepage_base = (void*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base);
+        host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base_g);
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
@@ -1081,19 +1155,22 @@ int main(int argc, char **argv) {
         tt::Cluster::instance().l1_barrier(device->id());
         tt::Cluster::instance().dram_barrier(device->id());
 
-        std::map<string, string> defines = {
-            {"PREFETCH_NOC_X", std::to_string(phys_prefetch_core.x)},
-            {"PREFETCH_NOC_Y", std::to_string(phys_prefetch_core.y)},
-            {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
-            {"DISPATCH_NOC_Y", std::to_string(phys_dispatch_core.y)},
-        };
+        constexpr uint32_t prefetch_sync_sem = 0;
+        tt_metal::CreateSemaphore(program, {prefetch_core}, 0); // ugly, unused on _h
+        tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
 
-        constexpr uint32_t dispatch_cb_sem = 0;
+        constexpr uint32_t prefetch_downstream_cb_sem = 1;
         tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+
+        constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
+        constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
+        tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
+        tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
+
+        constexpr uint32_t dispatch_sync_sem = 0;
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
-        constexpr uint32_t prefetch_sync_sem = 1;
-        tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
+        constexpr uint32_t dispatch_cb_sem = 1;
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -1101,6 +1178,7 @@ int main(int argc, char **argv) {
              DISPATCH_BUFFER_LOG_PAGE_SIZE,
              DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
              dispatch_cb_sem,
+             split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
              // Hugepage compile args aren't used in this test since WriteHost is not tested here
@@ -1108,46 +1186,103 @@ int main(int argc, char **argv) {
              0,
         };
 
-        std::vector<uint32_t> prefetch_compile_args = {
-             dispatch_buffer_base,
-             DISPATCH_BUFFER_LOG_PAGE_SIZE,
-             dispatch_buffer_pages,
-             dispatch_cb_sem,
-             dev_hugepage_base,
-             hugepage_buffer_size_g,
-             prefetch_q_base,
-             prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
-             prefetch_q_rd_ptr_addr,
-             cmddat_q_base,
-             cmddat_q_size_g,
-             scratch_db_base,
-             scratch_db_size_g,
-             prefetch_sync_sem,
-        };
+        if (split_prefetcher_g) {
+            configure_host_connected_prefetcher<false>(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch_h.cpp",
+                prefetch_core,
+                phys_prefetch_core,
+                phys_prefetch_d_core,
+                prefetch_d_buffer_base,
+                PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+                prefetch_d_buffer_pages,
+                prefetch_downstream_cb_sem,
+                prefetch_d_upstream_cb_sem,
+                prefetch_q_base,
+                prefetch_q_rd_ptr_addr,
+                cmddat_q_base,
+                0,
+                0);
 
-        auto sp1 = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_prefetch_hd.cpp",
-            {prefetch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = prefetch_compile_args,
-                .defines = defines
-            }
-        );
+            std::map<string, string> prefetch_d_defines = {
+                {"UPSTREAM_NOC_X", std::to_string(phys_prefetch_core.x)},
+                {"UPSTREAM_NOC_Y", std::to_string(phys_prefetch_core.y)},
+                {"MY_NOC_X", std::to_string(phys_prefetch_d_core.x)},
+                {"MY_NOC_Y", std::to_string(phys_prefetch_d_core.y)},
+                {"DOWNSTREAM_NOC_X", std::to_string(phys_dispatch_core.x)},
+                {"DOWNSTREAM_NOC_Y", std::to_string(phys_dispatch_core.y)},
+            };
 
-        auto d1 = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {dispatch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = dispatch_compile_args,
-                .defines = defines
-            }
-        );
+            std::vector<uint32_t> prefetch_d_compile_args = {
+                dispatch_buffer_base,
+                DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                dispatch_buffer_pages,
+                prefetch_d_downstream_cb_sem,
+                dispatch_cb_sem,
+
+                prefetch_d_buffer_base,
+                PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+                prefetch_d_buffer_pages,
+                prefetch_d_upstream_cb_sem,
+                prefetch_downstream_cb_sem,
+
+                scratch_db_base,
+                scratch_db_size_g,
+                prefetch_sync_sem,
+            };
+
+            tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch_d.cpp",
+                {prefetch_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = prefetch_d_compile_args,
+                    .defines = prefetch_d_defines
+                }
+            );
+        } else {
+            configure_host_connected_prefetcher<true>(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch_hd.cpp",
+                prefetch_core,
+                phys_prefetch_core,
+                phys_dispatch_core,
+                dispatch_buffer_base,
+                DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                dispatch_buffer_pages,
+                prefetch_downstream_cb_sem,
+                dispatch_cb_sem,
+                prefetch_q_base,
+                prefetch_q_rd_ptr_addr,
+                cmddat_q_base,
+                scratch_db_base,
+                prefetch_sync_sem);
+        }
+
+        if (split_dispatcher_g) {
+            TT_FATAL("split dispatcher not implemented");
+        } else {
+            std::map<string, string> defines = {
+                {"PREFETCH_NOC_X", std::to_string(phys_prefetch_core.x)},
+                {"PREFETCH_NOC_Y", std::to_string(phys_prefetch_core.y)},
+                {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
+                {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
+            };
+
+            tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                {dispatch_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = dispatch_compile_args,
+                    .defines = defines
+                }
+            );
+        }
 
         log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_buffer_size_g));
         log_info(LogTest, "Prefetch prefetch_q entries {}", std::to_string(prefetch_q_entries_g));
@@ -1175,8 +1310,8 @@ int main(int argc, char **argv) {
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
             std::thread t1 ([&]() {
-                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
-                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
             });
             tt_metal::detail::LaunchProgram(device, program);
             t1.join();
@@ -1193,7 +1328,7 @@ int main(int argc, char **argv) {
                 cmd_sizes.resize(0);
                 reset_worker_data(worker_data);
                 gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base);
-                run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
                 pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base);
                 if (!pass) {
                     break;
@@ -1202,7 +1337,7 @@ int main(int argc, char **argv) {
         } else {
             gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base);
             gen_terminate_cmds(terminate_cmds, terminate_sizes);
-            auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+            auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
 
             log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
             log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);

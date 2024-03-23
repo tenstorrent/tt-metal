@@ -7,7 +7,7 @@
 //  - data (dispatch commands) magically appears in a buffer and gets sent to dispatcher
 
 #include "dataflow_api.h"
-#include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
 
 constexpr uint32_t dispatch_cb_base = get_compile_time_arg_val(0);
@@ -19,7 +19,7 @@ constexpr uint32_t cmd_cb_pages = get_compile_time_arg_val(5);
 constexpr uint32_t page_batch_size = get_compile_time_arg_val(6);
 constexpr uint32_t dispatch_sync_sem = get_compile_time_arg_val(7);
 
-constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
+constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_page_size * dispatch_cb_pages;
@@ -32,7 +32,7 @@ void kernel_main() {
     uint32_t cmd_ptr = cmd_cb_base;
     uint32_t dispatch_data_ptr = dispatch_cb_base;
 
-    downstream_cb_acquire_pages<prefetch_noc_xy, dispatch_cb_sem>(dispatch_cb_pages);
+    downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(dispatch_cb_pages);
     for (uint32_t i = 0; i < dispatch_cb_pages; i++) {
         noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
         cmd_ptr += dispatch_cb_page_size;
@@ -60,7 +60,7 @@ void kernel_main() {
         cmd_ptr = cmd_cb_base;
         for (uint32_t j = 0; j < (cmd_cb_pages - 1) / page_batch_size; j++) {
 
-            downstream_cb_acquire_pages<prefetch_noc_xy, dispatch_cb_sem>(page_batch_size);
+            downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(page_batch_size);
             for (uint32_t k = 0; k < page_batch_size; k++) {
                 noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
                 cmd_ptr += dispatch_cb_page_size;
@@ -74,7 +74,7 @@ void kernel_main() {
     }
 
     // Send finish, last cmd in the chain
-    downstream_cb_acquire_pages<prefetch_noc_xy, dispatch_cb_sem>(1);
+    downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(1);
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
     downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(1);
     noc_async_write_barrier();
