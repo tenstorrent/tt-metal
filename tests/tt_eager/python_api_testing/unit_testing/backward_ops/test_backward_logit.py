@@ -6,6 +6,7 @@ import torch
 import pytest
 import tt_lib
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -16,6 +17,8 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+@skip_for_wormhole_b0()
+@skip_for_grayskull()
 def test_bw_logit(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
