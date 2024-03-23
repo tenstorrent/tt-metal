@@ -257,12 +257,22 @@ std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const Memory
 std::vector<Tensor> _addcdiv_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
+    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
     Tensor grad_a = mul(mul_unary(grad, value, output_mem_config), recip(tensor2, output_mem_config));
-    grad_tensor.emplace_back(grad_a);
-    Tensor tmp = mul(mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(where(
+        eqz(tensor2, output_mem_config),
+        where(eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
+        grad_a,
+        output_mem_config));
+    Tensor tmp = mul(
+        mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
     Tensor grad_b = mul(tmp, recip(square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-
+    grad_tensor.emplace_back(where(
+        eqz(tensor2, output_mem_config),
+        where(eqz(grad, output_mem_config), t_nan, neg(t_inf, output_mem_config), output_mem_config),
+        grad_b,
+        output_mem_config));
     return grad_tensor;
 }
 std::vector<Tensor> addcdiv_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config)
@@ -978,8 +988,33 @@ std::vector<Tensor> atanh_bw(const Tensor& grad, const Tensor& input, const Memo
 // result: grad * (-self * self + 1).rsqrt()
 std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(input, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    UnaryWithParam op1 {UnaryOpType::SQUARE};
+    UnaryWithParam op2 {UnaryOpType::NEG};
+    UnaryWithParam op3 {UnaryOpType::ADD_UNARY_SFPU, 1.0f};
+    UnaryWithParam op4 {UnaryOpType::RSQRT, true};
+    Tensor grad_result = mul(grad, unary_chain( input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
+    Tensor sub_one = add_unary(-1, input, output_mem_config);
+    Tensor sub_minus_one = add1(input, output_mem_config);
+    Tensor result = where(
+        ltz(sub_minus_one, output_mem_config),
+        t_nan,
+        where(
+            gtz(sub_one, output_mem_config),
+            t_nan,
+            where(
+                eqz(sub_minus_one, output_mem_config),
+                mul(sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                where(
+                    eqz(sub_one, output_mem_config),
+                    mul(sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                    grad_result,
+                    output_mem_config),
+                output_mem_config),
+            output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(result);
     return grad_tensor;
 }
 std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
