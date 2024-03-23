@@ -526,12 +526,34 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     # """
     # the last layers of the resnet
     # """
-    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT, out_memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.reshape(output_tensor, (batch_size, 1, 49, 2048))
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.global_avg_pool2d(output_tensor)
-    output_tensor = output_tensor @ parameters.fc.weight + parameters.fc.bias
+    sharded_mem_config = ttnn.L1_MEMORY_CONFIG
+    if batch_size == 20:
+        grid_size = (8, 4)
+        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                )
+            }
+        )
+        shard_shape = (980, 64)
+        shard_spec = ttnn.experimental.tensor.ShardSpec(
+            shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+        )
+        sharded_mem_config = ttnn.types.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+    output_tensor = ttnn.to_memory_config(output_tensor, sharded_mem_config)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT, out_memory_config=output_tensor.memory_config())
+    output_tensor = ttnn.global_avg_pool2d(output_tensor, out_memory_config=output_tensor.memory_config())
+    # output_tensor = output_tensor @ parameters.fc.weight
+    # output_tensor = ttnn.add(output_tensor, parameters.fc.bias)
+    output_tensor = ttnn.linear(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
+    # output_tensor = ttnn.experimental.tensor.resnet_matmul(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
 
     """
     output verify

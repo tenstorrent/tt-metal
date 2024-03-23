@@ -143,12 +143,15 @@ def _global_avg_pool2d_validate_input_tensors(operation_name, input_tensor, *arg
     validate_input_tensors=_global_avg_pool2d_validate_input_tensors,
     torch_function=_torch_global_avg_pool2d,
 )
-def global_avg_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+def global_avg_pool2d(input_tensor: ttnn.Tensor, out_memory_config: ttnn.MemoryConfig = None) -> ttnn.Tensor:
     r"""
     Applies a 2D adaptive average pooling over an input signal composed of several input planes.
 
     Arguments:
         * :attr: input_tensor: the input tensor
     """
-    output = ttl.tensor.average_pool_2d(input_tensor)
+    if out_memory_config is None:
+        output = ttl.tensor.average_pool_2d(input_tensor)
+    else:
+        output = ttl.tensor.average_pool_2d(input_tensor, out_memory_config)
     return output

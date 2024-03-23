@@ -617,7 +617,7 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 
 
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
-def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
+def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None, out_memory_config: ttnn.MemoryConfig = None):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
@@ -733,6 +733,8 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
                     output_mem_config = ttl.tensor.MemoryConfig(
                         memory_layout_config.memory_layout, ttl.tensor.BufferType.L1
                     )
+                    if out_memory_config is not None:
+                        output_mem_config = out_memory_config
                     output_tensor = ttl.tensor.untilize_with_unpadding(
                         input_tensor,
                         (0, 0, 0, 0),
@@ -740,7 +742,14 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
                         output_mem_config,
                     )
                 else:
-                    output_tensor = ttl.tensor.untilize_with_unpadding(input_tensor, (0, 0, 0, 0), intended_4D_shape)
+                    if out_memory_config is None:
+                        output_tensor = ttl.tensor.untilize_with_unpadding(
+                            input_tensor, (0, 0, 0, 0), intended_4D_shape
+                        )
+                    else:
+                        output_tensor = ttl.tensor.untilize_with_unpadding(
+                            input_tensor, (0, 0, 0, 0), intended_4D_shape, out_memory_config
+                        )
             else:
                 input_tensor = ttnn.from_device(input_tensor)
                 input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
@@ -778,9 +787,19 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         *batch_sizes, _, _ = tensor.shape
 
         if is_on_device:
-            tensor = ttl.tensor.tilize_with_val_padding(
-                tensor, batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0, output_dtype=dtype
-            )
+            if out_memory_config is None:
+                tensor = ttl.tensor.tilize_with_val_padding(
+                    tensor, batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0, output_dtype=dtype
+                )
+            else:
+                tensor = ttl.tensor.tilize_with_val_padding(
+                    tensor,
+                    batch_sizes + [padded_height, padded_width],
+                    [0, 0, 0, 0],
+                    0,
+                    output_dtype=dtype,
+                    output_mem_config=out_memory_config,
+                )
         else:
 
             def impl(tensor):
