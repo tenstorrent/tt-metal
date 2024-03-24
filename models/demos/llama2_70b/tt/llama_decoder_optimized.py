@@ -168,15 +168,14 @@ class TtLlamaDecoder_optimized:
         # Only called by decoder tests
         assert x.size(2) == self.hidden_size
         assert len(x.size()) == 3
-
-        batch = x.size(0)
-        seq_len = x.size(1)
         batch, seq_len, hidden_size = x.shape
 
         rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
         if self.llm_mode == "prefill":
-            assert seq_len == 128, "prefill mode only supports 128 seq_len"
+            assert (
+                seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
+            ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
             rot_mat = get_rotation_mat_prefill(rot_mat=rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
@@ -207,22 +206,8 @@ class TtLlamaDecoder_optimized:
                 xs.append(
                     ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
                 )
-                rot_mats.append(as_tensor(rot_mat.clone(), "rot_mat_prefill", i))
-                attn_masks.append(as_tensor(attn_mask.clone(), "attn_mask_prefill", i))
-
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = seq_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-            for i in range(self.num_devices):
-                # xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                #     xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-                # )
-                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
-                )
+                rot_mats.append(as_tensor(rot_mat.clone(), f"rot_mat_prefill_{seq_len}", i))
+                attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
@@ -438,6 +423,67 @@ class TtLlamaDecoder_optimized:
         #     )
         return output
 
+    def sharded_rmsnorm(self, xs, eps, norm_list):
+        # Do sharded RMS by partial sequence length of 128
+        # Input xs[0] is [1, 1, seq_len, 8192]
+        seq_len = xs[0].shape[2]
+        slice_size = 128
+        num_slices = seq_len // slice_size  # we do 128 per iteration (slice), then we concat the result.
+
+        xs_output_cat = []  # this is the output we write to. Initiate as empty tensors
+        for i in range(len(xs)):
+            xs_output_cat.append(
+                torch2tt_tensor(
+                    torch.zeros([1, 1, seq_len, self.hidden_size]),
+                    self.devices[i],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                )
+            )
+
+        layernorm_num_cores_x, layernorm_num_cores_y = (
+            self.model_config["layernorm_params"]["layernorm_num_cores_x"],
+            self.model_config["layernorm_params"]["layernorm_num_cores_y"],
+        )
+        layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim = (
+            self.model_config["layernorm_params"]["layernorm_shard_height_hidden_dim"],
+            self.model_config["layernorm_params"]["layernorm_shard_width_hidden_dim"],
+        )
+
+        for slice_i in range(num_slices):
+            xs_slice = []
+            for j in range(len(xs)):
+                xs_slice.append(
+                    tt_lib.tensor.interleaved_to_sharded_partial(
+                        xs[i],
+                        (layernorm_num_cores_x, layernorm_num_cores_y),
+                        [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
+                        num_slices,  # num_slices
+                        slice_i,  # slice_index
+                        tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    )
+                )
+
+            for i in range(self.num_devices):
+                xs_slice[i] = tt_lib.operations.primary.rmsnorm(
+                    xs_slice[i],
+                    eps,
+                    norm_list[i],
+                    program_config=self.model_config["LN_ATTN_PROGCFG"],
+                    output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                )
+
+                tt_lib.tensor.sharded_to_interleaved_partial(
+                    xs_slice[i],
+                    xs_output_cat[i],
+                    num_slices,
+                    slice_i,
+                    self.model_config["DRAM_MEMCFG"],
+                )
+                xs_slice[i].deallocate(True)
+        return xs_output_cat
+
     def prefill_forward(
         self,
         xs: list,
@@ -461,31 +507,14 @@ class TtLlamaDecoder_optimized:
                 output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
-        for i in range(self.num_devices):
-            # RMSNorm must execute on sharded input
-            xs_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
-                xs_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
+        attn_norm_interleaved = self.sharded_rmsnorm(xs_replicated, self.norm_eps, self.attn_norm_list)
 
-        attn_norm_interleaved = []
         for i in range(self.num_devices):
-            xs_replicated[i] = tt_lib.operations.primary.rmsnorm(
-                xs_replicated[i],
-                self.norm_eps,
-                self.attn_norm_list[i],
-                program_config=self.model_config["LN_ATTN_PROGCFG"],
-                output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-            )
-
-            # xs_replicated[i] is sharded, turn it into interleaved
-            attn_norm_interleaved.append(
-                tt_lib.tensor.sharded_to_interleaved(
-                    xs_replicated[i], output_mem_config=self.model_config["DRAM_MEMCFG"]
-                )
-            )
             xs_replicated[i].deallocate(True)
+
         # attn_outs is fractured
         attn_outs = self.attention(attn_norm_interleaved, rot_mats, start_pos, attn_masks)
+        # breakpoint()
 
         ### Fractured residual add
         # Add attn output to residiual first in place to save memory
@@ -515,31 +544,13 @@ class TtLlamaDecoder_optimized:
                 output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
-        for i in range(self.num_devices):
-            # RMSNorm must execute on sharded input
-            attn_resid_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
-                attn_resid_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
-        ### Duplicate FFN layernorm
-        ffn_norm_interleaved = []
-        for i in range(self.num_devices):
-            attn_resid_replicated[i] = tt_lib.operations.primary.rmsnorm(
-                attn_resid_replicated[i],
-                self.norm_eps,
-                self.ffn_norm_list[i],
-                program_config=self.model_config["LN_MLP_PROGCFG"],
-                output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
-            )
+        ffn_norm_interleaved = self.sharded_rmsnorm(attn_resid_replicated, self.norm_eps, self.ffn_norm_list)
 
-            ffn_norm_interleaved.append(
-                tt_lib.tensor.sharded_to_interleaved(
-                    attn_resid_replicated[i], output_mem_config=self.model_config["DRAM_MEMCFG"]
-                )
-            )
+        for i in range(self.num_devices):
             attn_resid_replicated[i].deallocate(True)
 
-        # breakpoint()
         ffn_out = self.mlp(ffn_norm_interleaved)
+        # breakpoint()
 
         ### residual in place
         for i in range(self.num_devices):

@@ -320,20 +320,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
                 rot_mats.append(as_tensor(rot_mat.clone(), f"rot_mat_prefill_{seq_len}", i))
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
-
-            # # Put attn_mask on the device with the sharded config
-            # attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            # if attention_mask_memconfig.is_sharded():
-            #     attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            #     attn_mask_shard_shape[-1] = seq_len
-            #     attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-            # for i in range(self.num_devices):
-            #     # xs[i] = tt_lib.tensor.interleaved_to_sharded(
-            #     #     xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
-            #     # )
-            #     attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-            #         attn_masks[i], sharded_mem_config=attention_mask_memconfig
-            #     )
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
@@ -857,6 +843,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
+        query_layer_ret = []
         for i in range(len(query_layer)):
             # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
             query_layer[i] = tt_lib.tensor.pad(
@@ -876,14 +863,18 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             query_layer[i] = tt_lib.tensor.transpose(
                 query_layer[i], 1, 2, output_mem_config=self.model_config["L1_MEMCFG"]
             )
-            query_layer[i] = tt_lib.tensor.unpad(
-                query_layer[i],
-                [0, 0, 0, 0],
-                [1 - 1, self.n_local_heads - 1, seq_len - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["DRAM_MEMCFG"],
+            query_layer_ret.append(
+                tt_lib.tensor.unpad(
+                    query_layer[i],
+                    [0, 0, 0, 0],
+                    [1 - 1, self.n_local_heads - 1, seq_len - 1, self.head_dim - 1],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
+                )
             )
+            query_layer[i].deallocate(True)
 
         # K Rotary Embeddings
+        key_layer_ret = []
         for i in range(len(key_layer)):
             # key_layer: ttnn.Shape([1, 1, seq_len, 128])
             key_layer[i] = tt_lib.tensor.pad(
@@ -900,14 +891,17 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
             )
             key_layer[i] = tt_lib.tensor.transpose(key_layer[i], 1, 2, output_mem_config=self.model_config["L1_MEMCFG"])
-            key_layer[i] = tt_lib.tensor.unpad(
-                key_layer[i],
-                [0, 0, 0, 0],
-                [1 - 1, self.n_local_kv_heads - 1, seq_len - 1, self.head_dim - 1],
-                output_mem_config=self.model_config["DRAM_MEMCFG"],
+            key_layer_ret.append(
+                tt_lib.tensor.unpad(
+                    key_layer[i],
+                    [0, 0, 0, 0],
+                    [1 - 1, self.n_local_kv_heads - 1, seq_len - 1, self.head_dim - 1],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
+                )
             )
+            key_layer[i].deallocate(True)
 
-        return query_layer, key_layer, value_layer
+        return query_layer_ret, key_layer_ret, value_layer
 
     def prefill_attn_mqa(
         self,
@@ -1032,7 +1026,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
                 attn_weights[i].deallocate(True)
 
-            # write output to query_layer
+            # write output to attn_output_cat
             for i in range(len(attn_output)):
                 tt_lib.tensor.sharded_to_interleaved_partial(
                     attn_output[i],

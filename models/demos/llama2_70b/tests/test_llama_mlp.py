@@ -151,12 +151,8 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    (
-        (32, 1),
-        (1, 128),
-        (1, 2048),
-    ),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    ((32, 1), (1, 128), (1, 256), (1, 512), (1, 1024), (1, 2048)),
+    ids=("decode", "prefill_128", "prefill_256", "prefill_512", "prefill_1k", "prefill_2k"),
 )
 @pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
 def test_LlamaMLP_inference(
