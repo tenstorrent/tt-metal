@@ -354,19 +354,30 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
 
     # Decoder
     # For Prefill. we can calculate based on the dynamic seqlen for block sharded layernorm.
-    # shard_height = seqlen for prefill
+    # shard_height_slice = 128 for prefill
+    shard_height_slice = 128
     layernorm_num_cores_x = 8
     layernorm_max_num_cores_y = 7
     for i in range(layernorm_max_num_cores_y, 0, -1):
-        if (shard_height // 32) % i == 0:
+        if (shard_height_slice // 32) % i == 0:
             layernorm_num_cores_y = i
             break
 
-    num_tiles_per_core_h = shard_height // 32 // layernorm_num_cores_y
+    num_tiles_per_core_h = shard_height_slice // 32 // layernorm_num_cores_y
     num_tiles_per_core_w = hidden_size // 32 // layernorm_num_cores_x
 
-    layernorm_shard_height_hidden_dim = shard_height // layernorm_num_cores_y
+    layernorm_shard_height_hidden_dim = shard_height_slice // layernorm_num_cores_y
     layernorm_shard_width_hidden_dim = hidden_size // layernorm_num_cores_x
+
+    model_config["layernorm_params"] = {
+        "layernorm_num_cores_x": layernorm_num_cores_x,
+        "layernorm_num_cores_y": layernorm_num_cores_y,
+        "layernorm_max_num_cores_y": layernorm_max_num_cores_y,
+        "layernorm_shard_height_hidden_dim": layernorm_shard_height_hidden_dim,
+        "layernorm_shard_width_hidden_dim": layernorm_shard_width_hidden_dim,
+        "num_tiles_per_core_h": num_tiles_per_core_h,
+        "num_tiles_per_core_w": num_tiles_per_core_w,
+    }
 
     core_range_block_sharded_layernorm = ttl.tensor.CoreRangeSet(
         {
