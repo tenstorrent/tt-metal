@@ -747,7 +747,7 @@ std::vector<Tensor> _xlogy_bw(const Tensor& grad, const Tensor& input, const Ten
     grad_tensor.emplace_back(grad1_result);
     Tensor div_result = mul(input, recip(other, output_mem_config), std::nullopt, output_mem_config);
     Tensor grad2_result = mul(grad, div_result , std::nullopt, output_mem_config);
-    grad2_result = where(eqz(other, output_mem_config), mul_unary(grad, std::numeric_limits<float>::infinity(), output_mem_config), grad2_result, output_mem_config);
+    grad2_result = where(eqz(other, output_mem_config), mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config), grad2_result, output_mem_config);
     grad2_result = where(eq_unary(other, std::nanf(" "), output_mem_config), std::nanf(" "), grad2_result, output_mem_config);
     grad_tensor.emplace_back(grad2_result);
     return grad_tensor;
@@ -1054,7 +1054,7 @@ std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const Memo
     Tensor grad_a = mul(grad, in_rsqrt, std::nullopt, output_mem_config);
     Tensor neg_one = full_like(input, -1.0, output_mem_config);
     Tensor pos_one = full_like(input, 1.0, output_mem_config);
-    Tensor t_inf = mul_unary(grad, -std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_inf = mul_unary(sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), output_mem_config);
     grad_a = where(logical_or(lt(input, neg_one, std::nullopt, output_mem_config),
              gt(input, pos_one, std::nullopt, output_mem_config), std::nullopt, output_mem_config), std::nanf(" "), grad_a, output_mem_config);
     grad_a = where(eq(input, neg_one, std::nullopt, output_mem_config), t_inf,
@@ -1528,7 +1528,7 @@ std::vector<Tensor> _logiteps_bw(const Tensor& grad, const Tensor& input, float 
     Tensor status = logical_and(gte_unary(input, low, output_mem_config),
                     lte_unary(input, high, output_mem_config), std::nullopt, output_mem_config);
     grad_result = where(eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, 0.0);
-    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(grad, std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
+    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1544,7 +1544,7 @@ std::vector<Tensor> _logit_bw(const Tensor& grad, const Tensor& input, const Mem
     Tensor status = logical_and(gte_unary(input, 0.0f, output_mem_config),
                     lte_unary(input, 1.0f, output_mem_config), std::nullopt, output_mem_config);
     grad_result = where(eq(status, ones_like(input, output_mem_config), std::nullopt, output_mem_config), grad_result, std::nanf(""));
-    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(grad, std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
+    grad_result = where(eq_unary(input, 1.0, output_mem_config), mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config), grad_result, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
