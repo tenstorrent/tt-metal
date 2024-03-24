@@ -6,10 +6,10 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "common/env_lib.hpp"
+#include "tt_metal/common/env_lib.hpp"
 #include "gtest/gtest.h"
-#include "impl/program/program.hpp"
-#include "logger.hpp"
+#include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 

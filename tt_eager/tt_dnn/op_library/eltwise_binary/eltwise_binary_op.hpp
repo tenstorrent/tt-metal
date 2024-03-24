@@ -9,6 +9,7 @@
 #include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -110,8 +111,25 @@ struct make_eltwise_binary {
         std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt,
         const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::optional<const DataType> output_dtype = std::nullopt) const {
+        Shape shape_a = input_tensor_a.get_legacy_shape();
+        Shape shape_b = input_tensor_b.get_legacy_shape();
+        Tensor in_a = input_tensor_a;
+        Tensor in_b = input_tensor_b;
+        if (shape_a[0] != shape_b[0])
+        {
+            if (shape_a[0] > shape_b[0])
+            {
+                Shape shape ({shape_a[0],1,1,1});
+                in_b = repeat(input_tensor_b, shape, output_mem_config);
+            }
+            else
+            {
+                Shape shape ({shape_b[0],1,1,1});
+                in_a = repeat(input_tensor_a, shape, output_mem_config);
+            }
+        }
         TT_FATAL(
-            input_tensor_a.get_legacy_shape() == input_tensor_b.get_legacy_shape(), "Input shapes must be the same!");
+            in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
         return operation::run_with_autoformat(
                    EltwiseBinary{
                        binary_op_type,
@@ -119,7 +137,7 @@ struct make_eltwise_binary {
                        output_mem_config,
                        output_dtype.value_or(input_tensor_a.get_dtype()),
                        false},
-                   {input_tensor_a, input_tensor_b})
+                   {in_a, in_b})
             .at(0);
     }
 };
@@ -159,7 +177,24 @@ inline Tensor add(
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt,
     bool in_place = false) {
-    TT_FATAL(input_tensor_a.get_legacy_shape() == input_tensor_b.get_legacy_shape(), "Input shapes must be the same!");
+    Shape shape_a = input_tensor_a.get_legacy_shape();
+    Shape shape_b = input_tensor_b.get_legacy_shape();
+    Tensor in_a = input_tensor_a;
+    Tensor in_b = input_tensor_b;
+    if (shape_a[0] != shape_b[0])
+    {
+        if (shape_a[0] > shape_b[0])
+        {
+            Shape shape ({shape_a[0],1,1,1});
+            in_b = repeat(input_tensor_b, shape, output_mem_config);
+        }
+        else
+        {
+            Shape shape ({shape_b[0],1,1,1});
+            in_a = repeat(input_tensor_a, shape, output_mem_config);
+        }
+    }
+    TT_FATAL(in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
     auto output = operation::run(
         EltwiseBinary{
             BinaryOpType::ADD,
@@ -167,9 +202,9 @@ inline Tensor add(
             output_mem_config,
             output_dtype.value_or(input_tensor_a.get_dtype()),
             in_place},
-        {input_tensor_a, input_tensor_b});
+        {in_a, in_b});
     if (in_place) {
-        return input_tensor_a;
+        return in_a;
     } else {
         return output.at(0);
     }

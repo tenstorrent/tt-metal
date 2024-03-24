@@ -19,6 +19,7 @@ tt_dtype_to_torch_dtype = {
     ttl.tensor.DataType.FLOAT32: torch.float,
     ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
     ttl.tensor.DataType.BFLOAT8_B: torch.float,
+    ttl.tensor.DataType.BFLOAT4_B: torch.float,
 }
 
 
@@ -31,6 +32,7 @@ tt_dtype_to_torch_dtype = {
         ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT4_B,
     ],
 )
 def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
@@ -54,15 +56,14 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
     else:
         assert tt_tensor.storage_type() == ttl.tensor.StorageType.OWNED
 
-    if tt_dtype in {
-        ttl.tensor.DataType.BFLOAT8_B,
-    }:
+    if tt_dtype in {ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT4_B}:
         tt_tensor = tt_tensor.to(ttl.tensor.Layout.TILE)
 
     if tt_dtype in {
         ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT4_B,
         ttl.tensor.DataType.UINT32,
         ttl.tensor.DataType.UINT16,
     }:
@@ -71,6 +72,7 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
 
     if tt_dtype in {
         ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT4_B,
     }:
         tt_tensor = tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
 
@@ -82,6 +84,8 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
     allclose_kwargs = {}
     if tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
         allclose_kwargs = dict(atol=1e-2)
+    elif tt_dtype == ttl.tensor.DataType.BFLOAT4_B:
+        allclose_kwargs = dict(atol=0.2)
 
     passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip, **allclose_kwargs)
     assert passing
@@ -146,6 +150,7 @@ def test_tensor_conversion_between_torch_and_np(shape, tt_dtype, device):
         ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT4_B,
     ],
 )
 def test_serialization(tmp_path, shape, tt_dtype):
@@ -170,6 +175,8 @@ def test_serialization(tmp_path, shape, tt_dtype):
     allclose_kwargs = {}
     if tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
         allclose_kwargs = dict(atol=1e-2)
+    elif tt_dtype == ttl.tensor.DataType.BFLOAT4_B:
+        allclose_kwargs = dict(atol=0.2)
 
     passing = torch.allclose(torch_tensor, torch_tensor_from_file, **allclose_kwargs)
     assert passing

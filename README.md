@@ -1,7 +1,7 @@
 <div align="center">
 
-<img src="./docs/source/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
-<img src="./docs/source/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
+<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
@@ -9,7 +9,7 @@
 
 <h3>
 
-[Documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html) | [Demo models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
+[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium) | [TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Demo models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com) | [Buy an E150 Grayskull card](https://tenstorrent.com/cards/)
 
 </h3>
 
@@ -59,7 +59,7 @@ ttnn.tracer.visualize(output)
 
 We also provide tools to review the graphs you create and run in TT-NN.
 
-<img src="./docs/source/_static/add.svg" alt="ttnn tracer example" height="250"/>
+<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="250"/>
 
 ## Running model demos on Grayskull (GS)
 
@@ -165,7 +165,7 @@ source build/python_env/bin/activate
 ### Running example programs
 
 After installing, please refer to our [Getting Started
-page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html)
+page](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/get_started/get_started.html)
 in our documentation.
 
 Note that example programs are only available through source installation at
@@ -173,8 +173,10 @@ this time.
 
 ## Documentation
 
-Please refer to our
-[documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html).
+Please refer to our documentation:
+
+- [TT-Metalium](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
+- [TT-NN](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn)
 
 ## Troubleshooting and debugging tips
 
@@ -205,7 +207,6 @@ page](https://github.com/tenstorrent-metal/tt-metal/discussions/categories/gener
 We also have a Discord channel that you can join. You may discuss with other
 members of the community and developers there. You may use this invite
 [link](https://discord.gg/tvhGzHQwaj).
-
 If you would like to formally propose a new feature, report a bug, or have
 issues with permissions, please file through [GitHub
 issues](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose).

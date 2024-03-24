@@ -6,7 +6,7 @@
 
 #include <iostream>
 
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"

@@ -4,7 +4,7 @@
 
 #pragma once
 #include <type_traits>
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tensor/tensor.hpp"

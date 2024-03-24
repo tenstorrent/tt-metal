@@ -45,13 +45,13 @@ and
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Learn the basics of multi-head attention operations in tt-metal's ttnn module
-with a simple example: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Write-Multi-Head-Attention-using-ttnn>`.
+with a simple example: `ttnn simple module <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn>`_.
 
 4. ttnn Tutorial: Multi-Head Attention (Optimized)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Dive deeper into multi-head attention operations in ttnn, optimizing
-performance: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Write-optimized-version-of-Multi-Head-Attention>`.
+performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.
 
 5. Advanced Metalium Usage: Matrix Multiplication Kernels
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -66,8 +66,7 @@ Where to go from here
 ---------------------
 
 If you're an ML developer and looking for further docs for using the Python
-library APIs to build models, please now go to :ref:`TT-Metalium Models Get
-Started`.
+library APIs to build models, please now go to `getting started for models <../../ttnn/tt_metal_models/get_started.html>`_.
 
 If you're an internal TT-Metalium developer, please now read please review the
 `contribution standards

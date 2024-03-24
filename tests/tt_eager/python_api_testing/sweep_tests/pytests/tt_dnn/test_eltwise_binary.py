@@ -18,6 +18,8 @@ from models.utility_functions import is_wormhole_b0
 
 shapes = [
     [[1, 1, 32, 32], [1, 1, 32, 32]],  # Single core
+    [[1, 1, 32, 32], [32, 1, 32, 32]],  # Single core
+    [[64, 1, 32, 32], [1, 1, 32, 32]],  # Single core
     [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
     [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
 ]

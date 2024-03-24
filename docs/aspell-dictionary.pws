@@ -1,4 +1,4 @@
-personal_ws-1.1 en 540 
+personal_ws-1.1 en 541
 ABI
 ADDI
 API
@@ -155,6 +155,7 @@ TSLICE
 TT
 TTNN
 TTNN's
+TT-NN
 TensTorrent's
 TensorMemoryLayout
 Tensorflow

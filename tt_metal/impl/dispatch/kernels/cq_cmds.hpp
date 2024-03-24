@@ -72,14 +72,14 @@ struct CQPrefetchRelayPagedCmd {
     uint32_t base_addr;
     uint32_t page_size;
     uint32_t pages;
-} __attribute__((packed));;
+} __attribute__((packed));
 
 struct CQPrefetchRelayInlineCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t length;
     uint32_t stride;          // explicit stride saves a few insns on device
-} __attribute__((packed));;
+} __attribute__((packed));
 
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
@@ -103,6 +103,14 @@ struct CQDispatchWriteCmd {
     uint16_t pad1;
     uint32_t noc_xy_addr;
     uint32_t addr;
+    uint32_t length;
+} __attribute__((packed));
+
+struct CQDispatchWriteHostCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t pad3;
+    uint32_t pad4;
     uint32_t length;
 } __attribute__((packed));
 
@@ -150,6 +158,7 @@ struct CQDispatchCmd {
 
     union {
         CQDispatchWriteCmd write_linear;
+        CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWaitCmd wait;

@@ -157,6 +157,19 @@ inline void debug_epilogue(vector<uint32_t>& cmds,
 }
 
 inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
+                               CQDispatchCmd cmd,
+                               uint32_t length) {
+
+    size_t prior_end = debug_prologue(cmds);
+
+    add_bare_dispatcher_cmd(cmds, cmd);
+    uint32_t length_words = length / sizeof(uint32_t);
+    generate_random_payload(cmds, length_words);
+
+    debug_epilogue(cmds, prior_end);
+}
+
+inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
                                const CoreRange& workers,
                                worker_data_t& worker_data,
                                CQDispatchCmd cmd,
@@ -314,13 +327,21 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
     return xfer_size_bytes;
 }
 
+inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
+
+    CQDispatchCmd cmd;
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_HOST;
+    // Include cmd in transfer
+    cmd.write_linear_host.length = length + sizeof(CQDispatchCmd);
+
+    add_dispatcher_cmd(cmds, cmd, length);
+}
+
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
-    worker_data_t dummy_data;
-    CoreCoord worker_dummy;
     CQDispatchCmd cmd;
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
-    add_dispatcher_cmd(cmds, worker_dummy, dummy_data, cmd, 0);
+    add_dispatcher_cmd(cmds, cmd, 0);
 }
 
 inline bool validate_results(Device *device, CoreRange workers, const worker_data_t& worker_data, uint64_t l1_buf_base) {

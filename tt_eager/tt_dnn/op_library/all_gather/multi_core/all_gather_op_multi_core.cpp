@@ -4,7 +4,7 @@
 ///
 #include <algorithm>
 
-#include "common/core_coord.h"
+#include "tt_metal/common/core_coord.h"
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -309,9 +309,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         // Circular Buffer Setup
         uint32_t cb_page_size = is_sharded ? shard_size_in_bytes : input_page_size;
         log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
-        uint32_t num_input_pages = 2 * max_pages_per_chunk;
+        uint32_t cb_num_pages = 2 * max_pages_per_chunk;
+        log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
         uint32_t src0_cb_index = CB::c_in0;
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_pages * cb_page_size, {{src0_cb_index, df}})
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
 		.set_page_size(src0_cb_index, cb_page_size);
         CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, sender_workers, cb_src0_config);
         CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, receiver_workers, cb_src0_config);
@@ -363,6 +364,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         if (pages_per_link.at(i) >= max_pages_per_chunk) {
             bytes_per_chunk = max_buffer_per_chunk;
             pages_per_chunk = max_pages_per_chunk;
+            TT_ASSERT(max_buffer_per_chunk == max_pages_per_chunk * input_page_size);
             num_full_chunks = link_size_bytes / bytes_per_chunk;
             rem_bytes = link_size_bytes % bytes_per_chunk;
             rem_pages = pages_per_link.at(i) % max_pages_per_chunk;
@@ -376,6 +378,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         all_worker_sender_cores.insert(all_worker_sender_cores.end(), sender_worker_cores.begin(), sender_worker_cores.end());
         all_worker_receiver_cores.insert(all_worker_receiver_cores.end(), receiver_worker_cores.begin(), receiver_worker_cores.end());
 
+        TT_ASSERT(rem_pages < pages_per_chunk || num_full_chunks == 0);
+        TT_ASSERT(rem_pages <= max_pages_per_chunk);
         std::vector<uint32_t> num_full_chunks_per_worker(all_gather_config.get_num_buffers_per_link(), num_full_chunks / all_gather_config.get_num_buffers_per_link());
         std::vector<uint32_t> rem_pages_per_worker(all_gather_config.get_num_buffers_per_link(), 0);
         {
@@ -385,6 +389,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             }
             if (rem_pages != 0) {
                 rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_buffers_per_link()) = rem_pages;
+                TT_ASSERT(rem_pages_per_worker.at(worker_idx % all_gather_config.get_num_buffers_per_link()) * 2 <= cb_num_pages);
             }
         }
 
@@ -590,7 +595,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         static_cast<uint32_t>(ring_index),
                         static_cast<uint32_t>(sender_worker_reader_semaphore_addr),
                         static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
-                        static_cast<uint32_t>(b | (i << 16))
+                        static_cast<uint32_t>(cb_num_pages / 2)
                     };
                     return worker_reader_sender_ct_args;
                 }
@@ -721,6 +726,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         static_cast<uint32_t>(sender_worker_writer_semaphore_addr),
                         static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                         static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
+                        static_cast<uint32_t>(cb_num_pages / 2),
                     };
 
                     log_trace(tt::LogOp, "HOST SWS ARGS:");
@@ -818,7 +824,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 sender_writer_kernel_path,
                 sender_worker_cores.at(b),
                 tt_metal::WriterDataMovementConfig(worker_sender_writer_ct_args, worker_defines));
-            // std::cout << "worker_interleaved_ring_gather_send_writer sent to core x=" << sender_worker_cores.at(b).x << ", y=" << sender_worker_cores.at(b).y << std::endl;
 
             worker_writer_sender_kernels.push_back(worker_sender_writer_kernel_id);
 
@@ -858,7 +863,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
                         static_cast<uint32_t>(eth_sem_addrs.at(b)),
                         static_cast<uint32_t>(receiver_worker_semaphore_addr),
-                        static_cast<uint32_t>(b | (i << 16))
+                        static_cast<uint32_t>(cb_num_pages / 2)
                     };
                     return worker_receiver_reader_ct_args;
                 }
@@ -995,7 +1000,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                         static_cast<uint32_t>(receiver_ring_index),
                         static_cast<uint32_t>(sender_worker_reader_semaphore_addr),
                         static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
-                        static_cast<uint32_t>(b | (i << 16))
+                        static_cast<uint32_t>(cb_num_pages / 2)
                     };
                     return worker_writer_receiver_ct_args;
                 }
