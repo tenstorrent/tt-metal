@@ -611,10 +611,18 @@ std::vector<Tensor> relu_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _atan2_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor recip_mul = mul(grad, recip(square(hypot(input,other))),std::nullopt, output_mem_config);
+    float t_nan  = std::nanf("");
+    UnaryWithParam op1 {UnaryOpType::SQUARE};
+    UnaryWithParam op2 {UnaryOpType::RECIP};
+    Tensor recip_mul = mul(grad, unary_chain(hypot(input,other), {op1, op2}, output_mem_config), std::nullopt, output_mem_config);
     Tensor grad_a = mul(other, recip_mul, std::nullopt, output_mem_config);
+    Tensor cond = logical_and(eqz(input, output_mem_config), eqz(other, output_mem_config));
+    grad_a = where(cond, t_nan, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     Tensor grad_b = mul(neg(input), recip_mul, std::nullopt, output_mem_config);
+    grad_b = where(cond, t_nan, grad_b, output_mem_config);
+    recip_mul.deallocate();
+    cond.deallocate();
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -1003,7 +1011,10 @@ std::vector<Tensor> polygamma_bw(const Tensor& grad, const Tensor& input, int n,
 
 std::vector<Tensor> _atan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul(grad, recip(add_unary(square(input), 1), output_mem_config), std::nullopt, output_mem_config);
+    UnaryWithParam op1 {UnaryOpType::SQUARE};
+    UnaryWithParam op2 {UnaryOpType::ADD_UNARY_SFPU, 1.0f};
+    UnaryWithParam op3 {UnaryOpType::RECIP};
+    Tensor grad_a = mul(grad, unary_chain( input, {op1, op2, op3}, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
@@ -1014,7 +1025,17 @@ std::vector<Tensor> atan_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _atanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul(grad, recip(sub_unary(1, square(input)), output_mem_config), std::nullopt, output_mem_config);
+    float t_nan  = std::nanf("");
+    float t_inf = std::numeric_limits<float>::infinity();
+    UnaryWithParam op1 {UnaryOpType::SQUARE};
+    UnaryWithParam op2 {UnaryOpType::SUB_UNARY_SFPU, 1.0f};
+    UnaryWithParam op3 {UnaryOpType::NEG};
+    UnaryWithParam op4 {UnaryOpType::RECIP};
+    Tensor grad_a = mul(grad, unary_chain( input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
+    grad_a = where(logical_and(eqz(grad, output_mem_config), eqz(input, output_mem_config)), 0, grad_a, output_mem_config);
+    grad_a = where(logical_and(logical_or(eq_unary(input, 1, output_mem_config), eq_unary(input, -1, output_mem_config), std::nullopt, output_mem_config), nez(grad, output_mem_config)), t_inf, grad_a, output_mem_config);
+    grad_a = where(logical_and(eq_unary(grad_a, t_inf, output_mem_config), ltz(grad, output_mem_config)), -t_inf, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
