@@ -176,11 +176,22 @@ std::vector<Tensor> _div_bw(const Tensor& grad, const Tensor& input, const Tenso
     std::vector<Tensor> grad_tensor;
     if (round_mode=="None"){
         Tensor grad_a = mul(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(grad_a);
+        Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+        Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
+        grad_tensor.emplace_back( where(eqz(other, output_mem_config),
+                                        where(eqz(grad, output_mem_config),
+                                            t_nan,
+                                            mul(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config), output_mem_config),
+                                        grad_a, output_mem_config));
         Tensor grad_b = mul(neg(grad, output_mem_config) , (mul(input, recip(square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)), std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(grad_b);
-    }
-    else{
+        grad_tensor.emplace_back(where(eqz(other, output_mem_config),
+                                    where(eqz(grad, output_mem_config),
+                                        t_nan,
+                                        where(eqz(input, output_mem_config),
+                                            t_nan,
+                                            mul( mul( neg(t_inf, output_mem_config), sign(input, output_mem_config), std::nullopt, output_mem_config), sign(grad, output_mem_config), std::nullopt, output_mem_config), output_mem_config), output_mem_config),
+                                    grad_b, output_mem_config));
+    } else{
         Tensor grad_a = zeros_like(grad, output_mem_config);
         grad_tensor.emplace_back(grad_a);
         Tensor grad_b = zeros_like(grad, output_mem_config);
