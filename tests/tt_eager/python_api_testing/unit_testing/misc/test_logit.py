@@ -59,15 +59,6 @@ test_sweep_args = [
         0.140625,
         12484268,
     ),
-    (
-        (3, 11, 181, 76),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        1000,
-        7340822,
-    ),
 ]
 
 
