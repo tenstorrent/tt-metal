@@ -96,7 +96,7 @@ ttnn.tracer.visualize(output)
 
 We also provide tools to review the graphs you create and run in TT-NN.
 <div align="center">
-<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="400"/>
+<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="600"/>
 </div>
 
 ---
