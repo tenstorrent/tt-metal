@@ -145,7 +145,7 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
     return std::make_tuple(ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff);
 }
 
-operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& output, bool use_pack_untilize) {
+operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -324,6 +324,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             compute_kernel,
             core_range,
             ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
                 .compile_args = compute_args});
     }
     if (core_range_cliff.ranges().size() > 0) {
@@ -332,6 +333,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             compute_kernel,
             core_range_cliff,
             ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
                 .compile_args = compute_args_cliff});
     }
 
@@ -583,7 +585,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 }
 
 // This purely supports input block shard -> output interleaved for now
-operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize) {
+operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize, bool fp32_dest_acc_en) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -721,6 +723,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         compute_kernel,
         all_cores,
         ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_args});
 
     // reader runtime args

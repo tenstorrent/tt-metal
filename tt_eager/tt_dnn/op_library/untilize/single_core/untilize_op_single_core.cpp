@@ -18,7 +18,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize) {
+operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         program,
         compute_kernel,
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );
 
     tt_metal::SetRuntimeArgs(
@@ -181,7 +181,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 }
 
 
-operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize) {
+operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize, bool fp32_dest_acc_en) {
 
     const Shape output_shape = output.get_legacy_shape();
 
@@ -326,7 +326,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         program,
         compute_kernel,
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );
 
     tt_metal::SetRuntimeArgs(
