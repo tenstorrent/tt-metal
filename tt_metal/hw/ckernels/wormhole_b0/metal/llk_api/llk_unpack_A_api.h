@@ -63,13 +63,19 @@ inline void llk_unpack_A_init(
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
+    const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
+    const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
+    if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
+        llk_unpack_dbg_feature_disable();
+    }
+
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
         within_face_16x16_transpose,
         face_r_dim,
         num_faces,
-        unpack_src_format[operand_id],
-        unpack_dst_format[operand_id]);
+        operand_unpack_src_format,
+        operand_unpack_dst_format);
 }
 
 template <
