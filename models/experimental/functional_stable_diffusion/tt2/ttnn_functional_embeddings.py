@@ -5,12 +5,11 @@
 import ttnn
 
 
-class TtTimestepEmbedding():
+class TtTimestepEmbedding:
     def __init__(self, parameters):
         self.parameters = parameters
 
     def __call__(self, sample, act_fn: str = "silu"):
-
         sample = ttnn.matmul(sample, self.parameters.linear_1.weight)
         sample = ttnn.add(sample, self.parameters.linear_1.bias)
 

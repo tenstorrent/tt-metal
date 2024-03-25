@@ -7,7 +7,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_a
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import feedforward
 
 
-class basic_transformer_block():
+class basic_transformer_block:
     def __init__(self, device, parameters):
         self.device = device
         self.parameters = parameters
@@ -63,7 +63,7 @@ class basic_transformer_block():
 
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            
+
         hidden_states = ttnn.add(attn_output, hidden_states)
         if cross_attention_dim is not None:
             norm_hidden_states = ttnn.layer_norm(

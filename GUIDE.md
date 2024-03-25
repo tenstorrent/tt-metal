@@ -27,7 +27,7 @@ void MAIN {
         {
             add_tiles(cb_in0, cb_in1, i, i, i);
         }
-        tile_regs_commit(); // signal the packer 
+        tile_regs_commit(); // signal the packer
 
         tile_regs_wait(); // packer waits here
         // pack a block of tiles
@@ -37,7 +37,7 @@ void MAIN {
         }
         tile_regs_release(); // packer releases
 
-        // pop a block of tiles from each of input CBs 
+        // pop a block of tiles from each of input CBs
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
 

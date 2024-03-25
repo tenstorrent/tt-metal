@@ -5,7 +5,7 @@
 import ttnn
 
 
-class geglu():
+class geglu:
     def __init__(self, device, parameters):
         self.device = device
         self.parameters = parameters
