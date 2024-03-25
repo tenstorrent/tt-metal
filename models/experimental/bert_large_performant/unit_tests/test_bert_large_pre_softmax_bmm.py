@@ -103,7 +103,6 @@ import pytest
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_config, out_mem_config, request):
-    ttl.profiler.set_profiler_location(f"BERT_large_pre_softmax_bmm_{request.node.callspec.id}")
     run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_config, out_mem_config)
 
 

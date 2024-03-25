@@ -173,18 +173,6 @@ void DeviceModule(py::module &m_device) {
 }
 
 void ProfilerModule(py::module &m_profiler) {
-    m_profiler.def("set_profiler_location", &op_profiler::set_profiler_location, R"doc(
-        Sets the profiling root folder.
-
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                                    | Data type             | Valid range | Required |
-        +==================+================================================+=======================+=============+==========+
-        | profilerLocation | Profiling output folder under the              | string                | Valid dir   | Yes      |
-        |                  | parent folder generated/profiler/.logs         |                       |             |          |
-        |                  | Default : generated/profiler/.logs/            |                       |             |          |
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-    )doc");
-
     m_profiler.def("start_tracy_zone",&op_profiler::start_tracy_zone,
             py::arg("source"), py::arg("functName"),py::arg("lineNum"), py::arg("color") = 0, R"doc(
         Stop profiling op with tracy.

@@ -298,8 +298,6 @@ def test_perf_bare_metal(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"llama2_70b_{request.node.callspec.id}")
-
     run_test_LlamaModel_end_to_end(
         devices,
         batch,

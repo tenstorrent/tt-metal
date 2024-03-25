@@ -598,7 +598,6 @@ def test_demo(
 
     # disable_persistent_kernel_cache()
     disable_compilation_reports()
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon40b")
 
     # Set it up for prefill initially and change the model_config to decode
     model_config_str = "BFLOAT8_B-SHARDED"

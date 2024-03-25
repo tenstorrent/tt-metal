@@ -202,7 +202,6 @@ def test_falcon_matmul(
     if is_e75_grid_size and (seq_len == 512) and (falcon_op == ttl.tensor.falcon_lm_head_matmul):
         pytest.skip(f"LM Head does not work on E75 grid size {compute_grid_size}")
 
-    ttl.profiler.set_profiler_location(f"falcon_{request.node.callspec.id}")
     run_falcon_matmul_test(
         falcon_op,
         seq_len,

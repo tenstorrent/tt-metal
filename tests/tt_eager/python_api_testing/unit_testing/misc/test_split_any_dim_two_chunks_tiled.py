@@ -61,7 +61,6 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
     profile_location = "splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
-    ttl.profiler.set_profiler_location(profile_location)
     _shape = refshape
     assert _shape[0] == 1
     num_splits = 2

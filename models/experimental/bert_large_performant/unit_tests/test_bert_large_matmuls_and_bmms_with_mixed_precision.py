@@ -316,7 +316,6 @@ def test_bert_large_matmul(
     if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
-    ttl.profiler.set_profiler_location(f"BERT_large_{request.node.callspec.id}")
     run_bert_large_matmul_test(
         bert_large_op,
         batch,
@@ -394,7 +393,6 @@ def test_bert_large_bmm(
     if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
-    ttl.profiler.set_profiler_location(f"BERT_large_{request.node.callspec.id}")
     run_bert_large_bmm_test(
         bert_large_op,
         batch,

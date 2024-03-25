@@ -422,8 +422,6 @@ def test_demo(
     disable_compilation_reports()
     import tt_lib  # to be replaced
 
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon7b")
-
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version="tiiuae/falcon-7b-instruct",

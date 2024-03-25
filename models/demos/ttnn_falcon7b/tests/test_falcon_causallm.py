@@ -222,8 +222,6 @@ def test_FalconCausalLM_inference(
     enable_persistent_kernel_cache()
     model_config = get_model_config(model_config_str)
 
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
-
     run_test_FalconCausalLM_inference(
         device,
         model_version,

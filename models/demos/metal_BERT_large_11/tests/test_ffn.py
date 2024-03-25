@@ -124,7 +124,6 @@ def test_ffn_inference(
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(f"BERT_large_ffn_{request.node.callspec.id}")
     run_ffn_inference(
         device,
         model_version,

@@ -143,7 +143,6 @@ def test_bert_large_ff2_matmul_test(
     out_mem_config,
     request,
 ):
-    ttl.profiler.set_profiler_location(f"BERT_large_ff2_matmul_{request.node.callspec.id}")
     run_bert_large_ff2_matmul_test(device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config)
 
 

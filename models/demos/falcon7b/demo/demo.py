@@ -438,7 +438,6 @@ def test_demo(
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon7b")
 
     return run_falcon_demo_kv(
         user_input=user_input,

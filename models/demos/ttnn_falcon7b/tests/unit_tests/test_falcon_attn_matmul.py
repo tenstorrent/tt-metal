@@ -169,7 +169,6 @@ def test_falcon_matmul(
     request,
     device,
 ):
-    ttl.profiler.set_profiler_location(f"falcon_{request.node.callspec.id}")
     run_falcon_attn_matmul_test(
         falcon_op,
         transpose_hw,

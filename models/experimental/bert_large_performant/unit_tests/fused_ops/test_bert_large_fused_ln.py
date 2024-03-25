@@ -153,5 +153,4 @@ import pytest
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
 def test_layernorm_test(device, test_id, batch, dtype, in0_mem_config, out_mem_config, request):
-    ttl.profiler.set_profiler_location(f"BERT_large_fused_layernorm_{request.node.callspec.id}")
     run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config)
