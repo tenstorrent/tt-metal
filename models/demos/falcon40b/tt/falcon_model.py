@@ -41,6 +41,7 @@ class TtFalconModelShared:
         self.config = config
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
+        self.num_layers = num_layers
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
@@ -129,6 +130,11 @@ class TtFalconModelShared:
             )
 
         self.layernorm_eps = config.layer_norm_epsilon
+
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+        for layer_num in range(self.num_layers):
+            self.layers[layer_num].set_model_config(model_config)
 
     def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens):
         assert input_ids.dim() == 2

@@ -98,7 +98,7 @@ def run_test_FalconMLP_inference(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("num_devices", (4, 8))
+@pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len",
     (

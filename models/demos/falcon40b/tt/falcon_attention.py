@@ -242,6 +242,9 @@ class TtFalconAttention:
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
 
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+
     # TODO: Remove hack for GQA for 8 chip since it would be MQA
     def prefill_grouped_attention_matmul_for_4_chips(self, query_layer, kv_layer, output_mem_config):
         _, num_q_heads, M, K = query_layer[0].get_legacy_shape()
