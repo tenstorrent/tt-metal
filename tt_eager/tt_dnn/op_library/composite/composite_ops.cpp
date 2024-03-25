@@ -886,18 +886,9 @@ Tensor logical_xori(const Tensor& input_a, float value, const MemoryConfig& outp
 
 // xlogy(x,y))=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(std::nanf(""));
-    Tensor t_nan = bcast(ltz(input_b, output_mem_config), t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
-    t_value.deallocate();
-    Tensor t_temp = add(eqz(input_b, output_mem_config), t_nan, std::nullopt, output_mem_config);
-    Tensor t_gtz = mul(gtz(input_b, output_mem_config), input_b, std::nullopt, output_mem_config);
-    t_temp = add(t_gtz, t_temp, std::nullopt, output_mem_config);
-    t_gtz.deallocate();
-    Tensor t_log = log(t_temp, output_mem_config);
-    t_temp.deallocate();
-    Tensor result = mac(input_a, t_log, t_nan, output_mem_config);
-    t_log.deallocate();
-    t_nan.deallocate();
+    Tensor t_nan = full_like(input_b, std::nanf(" "), output_mem_config);
+    Tensor result = mul(input_a, log(input_b, output_mem_config), std::nullopt, output_mem_config);
+    result = where(logical_or(ltz(input_b, output_mem_config), eq(input_b, t_nan, std::nullopt, output_mem_config), std::nullopt, output_mem_config), t_nan, result, output_mem_config);
     return result;
 }
 Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
