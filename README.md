@@ -16,26 +16,20 @@
 
 </h3>
 
-
-
 </div>
 
 ---
 
 ## Grayskull (GS) Models
-We have prepared demos for the following models: [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
-
-The demo models have the following performance measured on Grayskull. We publish up to date metrics on [GitHub
-Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-models.yaml).
 
 | Model                                                    | Batch               | End-to-end throughput        | Device throughput [1] | Target                              |
 |----------------------------------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
 | [ResNet-50](./models/demos/resnet) (fps)                 | 20                  | 2,070                        | 7,200                       | 10,000  (ETA April)                 |
 | [BERT-Large](./models/demos/bert) (sen/s)                | 12                  | 362                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)    | 32                  | 135                          | 135                         | 140                                 |
-| U-Net                                                    | Coming soon         |                              |                             |                                     |
-| T5 small                                                 | Coming soon         |                              |                             |                                     |
-| Bloom                                                    | Coming soon         |                              |                             |                                     |
+| U-Net                                                    | coming soon         |                              |                             |                                     |
+| T5 small                                                 | coming soon         |                              |                             |                                     |
+| Bloom                                                    | coming soon         |                              |                             |                                     |
 
 [1] - Throughput on device ignores the overhead of host runtime, which is being currently optimized.
 
@@ -102,22 +96,21 @@ ttnn.tracer.visualize(output)
 
 We also provide tools to review the graphs you create and run in TT-NN.
 <div align="center">
-<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="350"/>
+<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="400"/>
 </div>
 
-----
+---
 
 <div align="center">
 
-<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="400"/>
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
 
 <h3>
-[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium) | [TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | 
-
-[Demo models](./models/demos/) 
+   
+[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
 
 </h3>
 </div>
