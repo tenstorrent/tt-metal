@@ -35,13 +35,6 @@ namespace op_profiler {
     };
 
 
-    static void set_profiler_location (const string& profilerLocation)
-    {
-#if defined(PROFILER)
-        tt::tt_metal::detail::SetDeviceProfilerDir(profilerLocation);
-#endif
-    }
-
 #if defined(TRACY_ENABLE)
     inline stack<TracyCZoneCtx> call_stack;
 #endif

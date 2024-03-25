@@ -376,8 +376,6 @@ def test_demo(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"metal_BERT_large_11")
-
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
         batch=batch,

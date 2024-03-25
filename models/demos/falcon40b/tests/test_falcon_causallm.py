@@ -366,8 +366,6 @@ def test_FalconCausalLM_inference(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
 
-    tt_lib.profiler.set_profiler_location(f"falcon-40b_{request.node.callspec.id}")
-
     run_test_FalconCausalLM_inference(
         devices,
         model_version,
