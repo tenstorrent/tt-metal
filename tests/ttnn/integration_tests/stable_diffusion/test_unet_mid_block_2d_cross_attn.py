@@ -9,6 +9,9 @@ from torch import nn
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn import (
@@ -23,6 +26,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [
@@ -114,6 +118,7 @@ def test_unet_mid_block_2d_cross_attn_256x256(device, model_name, hidden_state_s
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [

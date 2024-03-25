@@ -19,8 +19,12 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     pre_process_input,
     post_process_output,
 )
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, attention_head_dim",
@@ -108,6 +112,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
     assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.98)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, attention_head_dim",
