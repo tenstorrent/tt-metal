@@ -45,11 +45,11 @@
 
 ## LoudBox (2x4 mesh of WHs) Models 
 
-| Model       | T3000 (8x WH) Throughput  | Galaxy (32x WH) Throughput |
-|-------------|---------------------------|----------------------------|
-| [Falcon40B](./models/demos/falcon40b)    | Coming end of March       | Coming end of March        |
-| LLaMA-2-70B | Coming end of March       | Coming end of March        |
-| Mixtral7Bx8 | Coming end of March       | Coming end of March        |
+| Model                                    | Batch                    | Throughput |
+|------------------------------------------|--------------------------|----------------------------|
+| [Falcon40B](./models/demos/falcon40b)    | coming soon              |               |
+| LLaMA-2-70B                              | coming soon             |               |
+| Mixtral7Bx8                              | coming soon             |               |
 
 
 
