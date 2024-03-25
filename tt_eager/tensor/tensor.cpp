@@ -410,7 +410,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     if (layout == Layout::TILE) {
         TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
     } else if (layout == Layout::ROW_MAJOR) {
-        // Require alignment for now
+        // Require 16 bytes alignment only and not 32 bytes because this is a tensor in L1.
         TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % 16 == 0);
     }
 
