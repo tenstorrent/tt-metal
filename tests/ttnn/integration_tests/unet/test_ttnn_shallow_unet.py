@@ -505,15 +505,9 @@ class UNet(nn.Module):
         return output
 
 
-if __name__ == "__main__":
+@pytest.mark.parametrize("loop", [0, 1, 5, 10, 50, 100])
+def test_unet(device, loop):
     with torch.no_grad():
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--loop", default=0, type=int)
-        args = ap.parse_args()
-
-        device_id = 0
-        device = ttnn.open_device(device_id=device_id)
-
         torch.manual_seed(0)
         torch_model = UNet()
         torch_model.eval()
@@ -558,7 +552,7 @@ if __name__ == "__main__":
 
         warmup = 1
         start = None
-        for i in range(args.loop + warmup):
+        for i in range(loop + warmup):
             if i == warmup:
                 start = time.perf_counter()
             profiler.tracy_frame()
@@ -567,7 +561,7 @@ if __name__ == "__main__":
             stop = time.perf_counter()
             total_time = stop - start
             batch = input_shape[0]
-            total_frame_count = batch * args.loop
+            total_frame_count = batch * loop
             print(f"Elapsed host time (sec): {total_time}")
             print(f"Frames processed: {total_frame_count}")
             print(f"Host perf (fps): {total_frame_count / total_time}")
@@ -591,4 +585,3 @@ if __name__ == "__main__":
             assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
         else:
             assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.97)
-        ttnn.close_device(device)
