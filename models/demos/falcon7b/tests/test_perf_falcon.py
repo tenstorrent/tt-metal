@@ -393,8 +393,6 @@ class TestParametrized:
         disable_persistent_kernel_cache()
         disable_compilation_reports()
 
-        tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
-
         run_test_FalconCausalLM_end_to_end(
             [device],
             model_version,
@@ -454,8 +452,6 @@ class TestParametrized:
 
         disable_persistent_kernel_cache()
         disable_compilation_reports()
-
-        tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
 
         run_test_FalconCausalLM_end_to_end(
             devices,
@@ -521,8 +517,6 @@ def test_perf_virtual_machine(
     tt_cache_path = get_tt_cache_path(model_version)
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_end_to_end(
         [device],

@@ -211,8 +211,6 @@ def test_FalconCausalLM_inference(
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
-
     batch = 32
     seq_len = 128
     max_seq_len = 2048

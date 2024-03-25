@@ -135,5 +135,4 @@ import pytest
     ids=["scale_mask_softmax", "softmax"],
 )
 def test_bert_large_softmax_test(device, test_id, batch, dtype, in0_mem_config, request):
-    ttl.profiler.set_profiler_location(f"BERT_large_fused_softmax_{request.node.callspec.id}")
     run_softmax_tests(device, test_id, batch, dtype, in0_mem_config)
