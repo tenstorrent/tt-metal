@@ -17,7 +17,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain){
+operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en){
     Program program = CreateProgram();
     Device *device = input.device();
 
@@ -89,7 +89,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
          num_tile_per_core // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = false;
     bool math_approx_mode = std::all_of(op_chain.begin(), op_chain.end(), [](const auto& u) {return eltwise_unary_op_utils::get_op_approx_mode(u.op_type);});
     std::map<string, string> unary_defines = eltwise_unary_op_utils::get_block_defines(op_chain);
     auto eltwise_unary_kernel_group_1_id = tt_metal::CreateKernel(

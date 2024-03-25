@@ -87,10 +87,10 @@ operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tenso
     auto& output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeOpParallelizationStrategy::MULTI_CORE:
-            return untilize_multi_core(input_tensor_a, output_tensor, use_pack_untilize);
+            return untilize_multi_core(input_tensor_a, output_tensor, use_pack_untilize, this->fp32_dest_acc_en);
         case UntilizeOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return untilize_single_core(input_tensor_a, output_tensor, use_pack_untilize);
+            return untilize_single_core(input_tensor_a, output_tensor, use_pack_untilize, this->fp32_dest_acc_en);
     }
 }
 
@@ -108,7 +108,8 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
         log_warning("Perf warning: Trying to untilize non-tilized data.");
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
-    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore, use_pack_untilize}, {input_tensor_a}).at(0);
+    bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;            // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
+    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a}).at(0);
 }
 
 
@@ -202,10 +203,10 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std:
     auto& output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeWithUnpaddingOpParallelizationStrategy::MULTI_CORE:
-            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
+            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize, this->fp32_dest_acc_en);
             break;
         case UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE:
-        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
+        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize, this->fp32_dest_acc_en);
     }
 }
 
@@ -234,7 +235,8 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output
             TT_FATAL(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize}, {input_tensor_a}).at(0);
+    bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;            // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
+    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

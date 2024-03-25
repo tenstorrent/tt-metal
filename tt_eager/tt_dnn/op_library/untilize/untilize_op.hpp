@@ -22,6 +22,7 @@ struct Untilize {
     const MemoryConfig output_mem_config;
     const bool use_multicore;
     const bool use_pack_untilize;
+    const bool fp32_dest_acc_en;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -46,6 +47,7 @@ struct UntilizeWithUnpadding {
     const Shape output_tensor_end;
     const MemoryConfig output_mem_config;
     const bool use_pack_untilize;
+    const bool fp32_dest_acc_en;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -61,10 +63,10 @@ struct UntilizeWithUnpadding {
     }
 };
 
-operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true);
-operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true);
-operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize = true);
-operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize = true);
+operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true, bool fp32_dest_acc_en = false);
+operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true, bool fp32_dest_acc_en = false);
+operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize = true, bool fp32_dest_acc_en = false);
+operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize = true, bool fp32_dest_acc_en = false);
 
 Tensor untilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = true, bool use_pack_untilize = true);
 Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_pack_untilize = true);
