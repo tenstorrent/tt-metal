@@ -12,8 +12,6 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "risc_attribs.h"
 
-#define SYNC SyncHalf
-
 #define ALWI inline __attribute__((always_inline))
 
 #ifdef TRISC_MATH
@@ -82,9 +80,9 @@ ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
  */
 ALWI void rsqrt_tile(uint32_t idst, bool fast_and_approx=true) {
   if (fast_and_approx) {
-    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<true>(idst) ));
   } else {
-    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<false, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<false>(idst) ));
   }
 }
 
@@ -109,7 +107,7 @@ ALWI void sigmoid_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_sigmoid<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_sigmoid<APPROX>(idst) ));
 }
 
 /**
@@ -132,7 +130,7 @@ ALWI void log_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void log_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_log<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_log<APPROX>(idst) ));
 }
 
 /**
@@ -156,7 +154,7 @@ ALWI void log_with_base_tile_init() {
  * | base_scale      | The log base                                                               | uint32_t |  Postive integers                                     | True     |
  */
 ALWI void log_with_base_tile(uint32_t idst,uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, SyncHalf>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX>(idst, base_scale)));
 }
 
 //TODO: Move to trigonometry.h
@@ -181,7 +179,7 @@ ALWI void tanh_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void tanh_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_tanh<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst) ));
 }
 
 /**
@@ -204,7 +202,7 @@ ALWI void signbit_tile_init() {
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void signbit_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst) ));
 }
 
 
@@ -222,7 +220,7 @@ ALWI void signbit_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void abs_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_abs<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_abs<APPROX>(idst) ));
 }
 
 
@@ -246,7 +244,7 @@ ALWI void abs_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void sign_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_sign<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_sign<APPROX>(idst) ));
 }
 
 /**
@@ -269,7 +267,7 @@ ALWI void sign_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void square_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_square<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_square<APPROX>(idst) ));
 }
 
 /**
@@ -298,7 +296,7 @@ ALWI void square_tile_init() {
  */
 
 ALWI void ltz_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_ltz<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_ltz<APPROX>(idst) ));
 }
 
 
@@ -324,7 +322,7 @@ ALWI void ltz_tile_init() {
  */
 
 ALWI void eqz_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_eqz<APPROX,SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_eqz<APPROX>(idst) ));
 }
 
 
@@ -349,7 +347,7 @@ ALWI void eqz_tile_init() {
  */
 
 ALWI void lez_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_lez<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_lez<APPROX>(idst) ));
 }
 
 /**
@@ -373,7 +371,7 @@ ALWI void lez_tile_init() {
  */
 
 ALWI void gtz_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_gtz<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_gtz<APPROX>(idst) ));
 }
 
 /**
@@ -396,7 +394,7 @@ ALWI void gtz_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void nez_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_nez<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_nez<APPROX>(idst) ));
 }
 
 
@@ -420,7 +418,7 @@ ALWI void nez_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void gez_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_gez<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_gez<APPROX>(idst) ));
 }
 
 /**
@@ -447,7 +445,7 @@ ALWI void gez_tile_init() {
  * | param0          | The value of the exponent in the power operation                           | uint32_t |                                                       | True     |
  */
 ALWI void power_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_power<APPROX, SyncHalf>(idst,param0) ));
+    MATH(( llk_math_eltwise_unary_sfpu_power<APPROX>(idst,param0) ));
 }
 
 /**
@@ -476,7 +474,7 @@ ALWI void power_tile_init() {
  * | idst1           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void max_tile(uint32_t idst0, uint32_t idst1) {
-    MATH(( llk_math_eltwise_unary_sfpu_max<APPROX, SyncHalf>(idst0) ));
+    MATH(( llk_math_eltwise_unary_sfpu_max<APPROX>(idst0) ));
 }
 
 /**
@@ -500,7 +498,7 @@ ALWI void max_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void exp2_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_exp2<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_exp2<true>(idst) ));
 }
 
 /**
@@ -525,7 +523,7 @@ ALWI void exp2_tile_init() {
  * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
  */
 ALWI void heaviside_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_heaviside<APPROX, SyncHalf>(idst,param0) ));
+    MATH(( llk_math_eltwise_unary_sfpu_heaviside<APPROX>(idst,param0) ));
 }
 
 /**
@@ -549,7 +547,7 @@ ALWI void heaviside_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void expm1_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_expm1<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_expm1<true>(idst) ));
 }
 
 /**
@@ -573,7 +571,7 @@ ALWI void expm1_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void asin_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_asin<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_asin<true>(idst) ));
 }
 
 //TODO: move to trigonometry.h
@@ -598,7 +596,7 @@ ALWI void asin_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void atan_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_atan<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_atan<true>(idst) ));
 }
 
 //TODO: move to trigonometry.h
@@ -623,7 +621,7 @@ ALWI void atan_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void acos_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_acos<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_acos<true>(idst) ));
 }
 
 //TODO: move to trigonometry.h
@@ -639,7 +637,7 @@ ALWI void acos_tile_init() {
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
 ALWI void silu_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_silu<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_silu<APPROX>(idst) ));
 }
 
 ALWI void silu_tile_init() {
@@ -684,7 +682,7 @@ ALWI void silu_tile_init() {
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
  */
 ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_phase=0, int i_end_step=0, int i_start_step=0) {
-    MATH(( llk_math_eltwise_unary_sfpu_topk_local_sort<true, SyncHalf>(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step) ));
+    MATH(( llk_math_eltwise_unary_sfpu_topk_local_sort<true>(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step) ));
 }
 
 //topK merge
@@ -716,7 +714,7 @@ ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  */
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH(( llk_math_eltwise_unary_sfpu_topk_merge<true, SyncHalf>(idst, m_iter, k) ));
+    MATH(( llk_math_eltwise_unary_sfpu_topk_merge<true>(idst, m_iter, k) ));
 }
 
 //topK rebuild
@@ -750,7 +748,7 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
  */
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH(( llk_math_eltwise_unary_sfpu_topk_rebuild<true, SyncHalf>(idst, idir, m_iter, k, logk, skip_second) ));
+    MATH(( llk_math_eltwise_unary_sfpu_topk_rebuild<true>(idst, idir, m_iter, k, logk, skip_second) ));
 }
 
 /**

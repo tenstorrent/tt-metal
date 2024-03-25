@@ -27,7 +27,7 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void isinf_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_isinf<APPROX, SyncHalf>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_isinf<APPROX>(idst)));
 }
 
 /**
@@ -50,7 +50,7 @@ ALWI void isinf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void isposinf_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_isposinf<APPROX, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isposinf<APPROX>(idst) ));
 }
 
 /**
@@ -73,7 +73,7 @@ ALWI void isposinf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void isneginf_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_isneginf<APPROX, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isneginf<APPROX>(idst) ));
 }
 
 /**
@@ -96,7 +96,7 @@ ALWI void isneginf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void isnan_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_isnan<APPROX, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isnan<APPROX>(idst) ));
 }
 
 /**
@@ -119,7 +119,7 @@ ALWI void isnan_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void isfinite_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_isfinite<APPROX, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isfinite<APPROX>(idst) ));
 }
 
 /**

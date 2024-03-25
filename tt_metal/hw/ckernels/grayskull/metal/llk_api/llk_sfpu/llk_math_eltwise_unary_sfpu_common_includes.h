@@ -64,7 +64,7 @@ inline void llk_math_calculate_sfpu(
 
 }
 
-template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, bool IS_INT_SFPU_EN=false>
+template <SfpuType sfpu_op, bool APPROXIMATE, bool IS_INT_SFPU_EN=false>
 inline void llk_math_eltwise_unary_sfpu(
     uint dst_index,
     int vector_mode = (int)VectorMode::RC,
@@ -75,7 +75,7 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param4 = 0,
     uint param5 = 0) {
 
-    _llk_math_eltwise_unary_sfpu_start_<Dst>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(dst_index);
     if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;

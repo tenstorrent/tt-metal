@@ -44,9 +44,9 @@ ALWI void gelu_tile_init(bool fast_and_approx=true) {
  */
 ALWI void gelu_tile(uint32_t idst, bool fast_and_approx=true) {
     if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_gelu<true, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_gelu<true>(idst) ));
     } else {
-        MATH(( llk_math_eltwise_unary_sfpu_gelu<false, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_gelu<false>(idst) ));
     }
 }
 

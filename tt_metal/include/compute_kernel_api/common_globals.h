@@ -4,8 +4,6 @@
 
 #pragma once
 
-#define SYNC SyncHalf
-
 #define ALWI inline __attribute__((always_inline))
 
 #include "chlkc_list.h"

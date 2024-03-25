@@ -32,23 +32,23 @@ namespace ckernel {
  */
 enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 4 };
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY, SyncHalf>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(idst, param1)));
 }
 
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, SUB_UNARY, SyncHalf>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, SUB_UNARY>(idst, param1)));
 }
 
 ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, MUL_UNARY, SyncHalf>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, MUL_UNARY>(idst, param1)));
 }
 
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, DIV_UNARY, SyncHalf>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, DIV_UNARY>(idst, param1)));
 }
 
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY, SyncHalf>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, param1)));
 }
 
 /**

@@ -45,7 +45,6 @@ inline void llk_math_eltwise_binary_init_with_operands(
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
@@ -55,7 +54,7 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
-        Dst,
+        DstSync::SyncHalf,
         NUM_FIDELITY_PHASES,
         binary_reuse_dest,
         is_fp32_dest_acc_en>(num_faces, dst_index, clear_fp32_dst_acc);
@@ -64,7 +63,6 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
@@ -79,7 +77,7 @@ inline void llk_math_eltwise_binary(
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
-        Dst,
+        DstSync::SyncHalf,
         NUM_FIDELITY_PHASES,
         binary_reuse_dest,
         is_fp32_dest_acc_en>(num_faces, dst_index, clear_fp32_dst_acc);

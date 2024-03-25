@@ -32,7 +32,7 @@ namespace ckernel {
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
 ALWI void elu_tile(uint32_t idst, uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_elu<APPROX, SyncHalf>(idst, param0) ));
+    MATH(( llk_math_eltwise_unary_sfpu_elu<APPROX>(idst, param0) ));
 }
 
 /**

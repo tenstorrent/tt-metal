@@ -21,19 +21,18 @@
  * LLK MATH COMMON
  *************************************************************************/
 
-template <DstSync Dst>
 inline void llk_math_wait_for_dest_available() {
-    _llk_math_wait_for_dest_available_<Dst>();
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 }
 
-template <DstSync Dst = SyncFull, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<Dst, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<Dst, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math = true, bool mail2pack = true>

@@ -6,17 +6,15 @@
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_0_param(
     void (*first_func)(),
     void (*func)(),
     uint dst_index,
     int vector_mode = VectorMode::RC) {
-    if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
-        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
-    } else {
-        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
-    }
+
+    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+
     if (vector_mode == VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;

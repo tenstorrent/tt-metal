@@ -43,9 +43,9 @@ namespace ckernel {
  */
 ALWI void exp_tile(uint32_t idst, bool fast_and_approx=false) {
     if ( fast_and_approx )
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<true, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_exponential<true>(idst) ));
     else
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<false, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_exponential<false>(idst) ));
  }
 
 } // namespace ckernel

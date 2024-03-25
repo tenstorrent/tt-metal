@@ -28,12 +28,12 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t 
     UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb, icb_scaler) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
-    MATH(( llk_math_pack_sync_init<SYNC>() ));
+    MATH(( llk_math_pack_sync_init() ));
 
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, false>() ));
+    PACK(( llk_pack_dest_init<false>() ));
 }
 
 ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {

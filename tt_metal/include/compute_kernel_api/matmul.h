@@ -33,12 +33,12 @@ ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_c
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose) ));
 
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
-    MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
+    MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
     PACK(( llk_pack_init(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>()  ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
 
 /**
@@ -117,12 +117,12 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
 
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
-    MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
+    MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
     PACK(( llk_pack_init<false, false>(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>()  ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
 
 /**

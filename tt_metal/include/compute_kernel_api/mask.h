@@ -43,7 +43,7 @@ ALWI void mask_tile_init() {
  * | dst_mask_index | The index of the tile in DST REG for the mask                              | uint32_t | Must be less than the acquired size of DST REG        | True     |
  */
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask) {
-    MATH(( llk_math_eltwise_unary_sfpu_mask<true, SyncHalf>(idst_data) ));
+    MATH(( llk_math_eltwise_unary_sfpu_mask<true>(idst_data) ));
 }
 
 } // namespace ckernel

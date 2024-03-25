@@ -155,7 +155,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -163,7 +163,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<Dst, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_<DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
         tile_index,
         pack_tile_addr
     );
@@ -207,7 +207,7 @@ inline void llk_pack_untilize(std::uint32_t block_rt_dim, std::uint32_t output, 
     }
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -216,7 +216,7 @@ inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output
     for (uint32_t tile_index=start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<Dst, untilize, is_fp32_dest_acc_en>(
+        _llk_pack_<DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
             tile_index,
             pack_tile_addr
         );
@@ -237,31 +237,31 @@ inline void llk_packer_set_math_semaphore() {
     _llk_packer_set_math_semaphore_<WaitRes>();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
-template <DstSync Dst, bool untilize = false>
+template <bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<Dst, DstTileFaceLayout::RowMajor, untilize>(
+    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize>(
         face_r_dim,
         narrow_tile
     );
 }
 
-template <DstSync Dst, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<Dst, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
         face_r_dim,
         narrow_tile
     );

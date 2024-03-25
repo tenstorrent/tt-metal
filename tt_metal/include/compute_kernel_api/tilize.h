@@ -24,12 +24,12 @@ namespace ckernel {
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
-    MATH(( llk_math_pack_sync_init<SyncHalf, DST_ACCUM_MODE>() ));
+    MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, false, DST_ACCUM_MODE>(ocb) ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
@@ -47,12 +47,12 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     UNPACK(( llk_unpack_tilizeA_B_init<true, true>(icb0, icb1_scaler, block, num_faces, face_r_dim, 1) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
-    MATH(( llk_math_pack_sync_init<SYNC>() ));
+    MATH(( llk_math_pack_sync_init() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>(ocb) ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
 }
 #endif
 
@@ -96,16 +96,16 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
-        MATH(( llk_math_wait_for_dest_available<SYNC>() ));
+        MATH(( llk_math_wait_for_dest_available() ));
         PACK(( llk_packer_wait_for_math_done() ));
 
         // Datacopy
-        MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0 /*dst index*/) ));
-        PACK(( llk_pack<false, SYNC, false >(0 /*tile index*/, ocb)  ));
+        MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0 /*dst index*/) ));
+        PACK(( llk_pack<false, false >(0 /*tile index*/, ocb)  ));
 
         // Release dest
-        MATH(( llk_math_dest_section_done<SYNC, DST_ACCUM_MODE>() ));
-        PACK(( llk_pack_dest_section_done<SYNC, DST_ACCUM_MODE>() ));
+        MATH(( llk_math_dest_section_done<DST_ACCUM_MODE>() ));
+        PACK(( llk_pack_dest_section_done<DST_ACCUM_MODE>() ));
     }
 }
 
