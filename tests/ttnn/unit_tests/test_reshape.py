@@ -109,3 +109,29 @@ def test_reshape_with_negative_dim(device):
     assert list(expected_output_shape) == list(torch_output.shape)
     assert list(expected_output_shape) == list(tt_output.shape)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def test_reshape_tile_layout_mamba(device):
+    torch_input_tensor = torch.randn((1, 1, 32, 2048 * 32), dtype=torch.bfloat16)
+    reshape_shape = (1, 32, 2048, 32)
+    torch_result = torch_input_tensor.reshape(reshape_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_output = ttnn.reshape(input_tensor, reshape_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+def test_reshape_tile_layout_only_change_shape(device):
+    torch_input_tensor = torch.randn((1, 64, 32, 4 * 32), dtype=torch.bfloat16)
+    reshape_shape = (1, 32, 64, 4 * 32)
+    torch_result = torch_input_tensor.reshape(reshape_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_output = ttnn.reshape(input_tensor, reshape_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
