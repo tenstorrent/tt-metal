@@ -452,7 +452,7 @@ class TtLlamaDecoder_optimized:
 
         for slice_i in range(num_slices):
             xs_slice = []
-            for j in range(len(xs)):
+            for i in range(self.num_devices):
                 xs_slice.append(
                     tt_lib.tensor.interleaved_to_sharded_partial(
                         xs[i],

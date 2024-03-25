@@ -944,17 +944,31 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
         ),
     )
     if num_devices == 8 or num_devices == 32:
-        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
-            out_subblock_h=1,
-            out_subblock_w=1,  # TODO: Maximize
-            per_core_M=shard_height // 32,
-            per_core_N=1,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
+        if llm_mode == "decode":
+            model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
+                out_subblock_h=1,
+                out_subblock_w=1,  # TODO: Maximize
+                per_core_M=shard_height // 32,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        else:
+            model_config[
+                "SELFOUT_MM_PROGCFG_LAMBDA"
+            ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=8,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=4,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+            )
 
     # Example code of using 2d multicast for MLP matmul
     """

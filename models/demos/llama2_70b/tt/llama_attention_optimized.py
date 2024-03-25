@@ -1069,7 +1069,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         # for i in range(len(attn_output)):
@@ -1081,7 +1081,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_output[i] = tt_lib.operations.primary.matmul(
                 attn_output[i],
                 self.wo_list[i],
-                program_config=self.model_config["SELFOUT_MM_PROGCFG"],
+                program_config=self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](attn_output[i].shape[2] // 32),
                 # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
