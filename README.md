@@ -73,32 +73,6 @@ with ttnn.manage_device(device_id=0) as device:
 print(output)
 ```
 
-You can use simple conversion APIs to use PyTorch tensors with Tenstorrent hardware.
-
-## Tracing graphs for TT-NN operators
-
-```python
-import ttnn
-import torch
-
-with ttnn.manage_device(device_id=0) as device, ttnn.tracer.trace():
-   a = torch.ones((5, 7))
-   b = torch.ones((1, 7))
-
-   a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-   b = ttnn.from_torch(b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-   output = a + b
-   output = ttnn.to_torch(output)
-
-ttnn.tracer.visualize(output)
-```
-
-We also provide tools to review the graphs you create and run in TT-NN.
-<div align="center">
-<img src="./docs/source/common/_static/add.svg" alt="ttnn tracer example" height="600"/>
-</div>
-
 ---
 
 <div align="center">
