@@ -24,7 +24,7 @@
 
 | Model                                                    | Batch               | End-to-end throughput        | Device throughput [1] | Target                              |
 |----------------------------------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
-| [ResNet-50](./models/demos/resnet) (fps)                 | 20                  | 2,070                        | 7,200                       | 10,000  (ETA April)                 |
+| [ResNet-50](./models/demos/resnet) (fps)                 | 20                  | 2,070                        | 7,200                       | 10,000                              |
 | [BERT-Large](./models/demos/bert) (sen/s)                | 12                  | 362                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)    | 32                  | 135                          | 135                         | 140                                 |
 | U-Net                                                    | coming soon         |                              |                             |                                     |
