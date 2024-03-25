@@ -106,3 +106,4 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
+inline void llk_unpack_clear_dbg_feature_disable() { _llk_unpack_clear_dbg_feature_disable_(); }

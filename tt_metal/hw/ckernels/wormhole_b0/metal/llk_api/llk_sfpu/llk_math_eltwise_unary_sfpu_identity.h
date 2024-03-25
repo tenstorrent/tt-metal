@@ -20,6 +20,14 @@ inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode
                                 dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_identity_uint32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+      (ckernel::sfpu::calculate_identity_uint<APPROXIMATE,8>,
+       ckernel::sfpu::calculate_identity_uint<APPROXIMATE,8>,
+                                dst_index, vector_mode);
+}
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_identity_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();

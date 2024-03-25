@@ -90,6 +90,8 @@ inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b): return ((1024 >> 4) + (64 >> 4));
 
+        case ((uint8_t)DataFormat::Int32):
+        case ((uint8_t)DataFormat::UInt32):
         case ((uint8_t)DataFormat::Float32): return ((4096 >> 4));
 
         case ((uint8_t)DataFormat::Bfp4):
@@ -106,6 +108,8 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
         case ((uint8_t)DataFormat::UInt16):
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (index << 11);
+        case ((uint8_t)DataFormat::Int32):
+        case ((uint8_t)DataFormat::UInt32):
         case ((uint8_t)DataFormat::Float32): return (index << 12);
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((index << 8) + (index << 6));
