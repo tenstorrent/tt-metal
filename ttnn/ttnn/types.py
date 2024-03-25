@@ -76,14 +76,3 @@ class ShardStrategy(Enum):
 class ShardOrientation(Enum):
     ROW_MAJOR = 1
     COLUMN_MAJOR = 2
-
-
-class ShardStrategy(Enum):
-    HEIGHT = 1
-    WIDTH = 2
-    BLOCK = 3
-
-
-class ShardOrientation(Enum):
-    ROW_MAJOR = 1
-    COLUMN_MAJOR = 2
