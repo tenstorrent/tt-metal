@@ -40,7 +40,7 @@ namespace ckernel {
  * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 ALWI void rsub_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_rsub<APPROX, SyncHalf>(idst,param0) ));
+    MATH(( llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst,param0) ));
 }
 
 /**

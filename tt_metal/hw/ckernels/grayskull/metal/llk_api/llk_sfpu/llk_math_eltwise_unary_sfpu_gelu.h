@@ -12,10 +12,10 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = VectorMode::RC) {
     constexpr int first_iterations = 1;
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_gelu<APPROXIMATE, first_iterations>,
                                 ckernel::sfpu::calculate_gelu<APPROXIMATE>,
                                 dst_index, vector_mode);
@@ -26,10 +26,10 @@ inline void llk_math_eltwise_unary_sfpu_gelu_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::gelu_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vector_mode = VectorMode::RC) {
     constexpr int first_iterations = 1;
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_gelu_derivative<APPROXIMATE, first_iterations>,
                                 ckernel::sfpu::calculate_gelu_derivative<APPROXIMATE>,
                                 dst_index, vector_mode);

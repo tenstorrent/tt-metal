@@ -33,33 +33,33 @@ inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
 }
 
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_lrelu<APPROXIMATE>,
                                 ckernel::sfpu::calculate_lrelu<APPROXIMATE>,
                                 dst_index, (int)VectorMode::RC, param0);
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_max<APPROXIMATE>,
                                 ckernel::sfpu::relu_max<APPROXIMATE>,
                                 dst_index, (int)VectorMode::RC, param0);
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_min<APPROXIMATE>,
                                 ckernel::sfpu::relu_min<APPROXIMATE>,
                                 dst_index, (int)VectorMode::RC, param0);
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_min<APPROXIMATE>,
                                 ckernel::sfpu::relu_min<APPROXIMATE>,
                                 dst_index, (int)VectorMode::RC, 0);
