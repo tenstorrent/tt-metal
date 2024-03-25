@@ -14,26 +14,24 @@
 template <
     DataCopyType type,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    DstSync Dst = DstSync::SyncFull,
     bool is_fp32_dest_acc_en = false,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, unpack_to_dest>(
+    _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, DstSync::SyncHalf, is_fp32_dest_acc_en, unpack_to_dest>(
         dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
 template <
     DataCopyType type,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    DstSync Dst = DstSync::SyncFull,
     bool is_fp32_dest_acc_en = false,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint ntiles, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
-        _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, unpack_to_dest>(
+        _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, DstSync::SyncHalf, is_fp32_dest_acc_en, unpack_to_dest>(
             dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     }
 }

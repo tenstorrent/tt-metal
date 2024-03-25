@@ -18,9 +18,9 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_logical_not_unary<APPROXIMATE,4>,
                                 ckernel::sfpu::calculate_logical_not_unary<APPROXIMATE,4>,
                                 dst_index, VectorMode::RC);

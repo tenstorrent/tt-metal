@@ -42,9 +42,9 @@ ALWI void erf_tile_init(bool fast_and_approx = true) {
  */
 ALWI void erf_tile(uint32_t idst, bool fast_and_approx = true) {
     if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_erf<true, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_erf<true>(idst) ));
     } else {
-        MATH(( llk_math_eltwise_unary_sfpu_erf<false, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_erf<false>(idst) ));
     }
 }
 
@@ -76,9 +76,9 @@ ALWI void erfc_tile_init(bool fast_and_approx = true) {
  */
 ALWI void erfc_tile(uint32_t idst, bool fast_and_approx = true) {
     if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_erfc<true, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_erfc<true>(idst) ));
     } else {
-        MATH(( llk_math_eltwise_unary_sfpu_erfc<false, SyncHalf>(idst) ));
+        MATH(( llk_math_eltwise_unary_sfpu_erfc<false>(idst) ));
     }
 }
 

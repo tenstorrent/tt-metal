@@ -17,9 +17,9 @@ inline void llk_math_eltwise_unary_sfpu_abs_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::abs, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_abs<APPROXIMATE>,
                                 ckernel::sfpu::calculate_abs<APPROXIMATE>,
                                 dst_index, vector_mode);

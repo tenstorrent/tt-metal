@@ -38,7 +38,7 @@ ALWI void sqrt_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void sqrt_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_sqrt<APPROX, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_sqrt<APPROX>(idst) ));
 }
 
 
