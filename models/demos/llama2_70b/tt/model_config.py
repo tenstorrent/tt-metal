@@ -316,43 +316,6 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
 
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
 
-    # Llama Model Config
-    model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                shard_height,
-                shard_width_hidden_dim_across_32_cores,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    model_config["LN_F_OUTPUT_MEMCFG"] = model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
-    model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=1,
-        block_w=8,
-        inplace=True,
-    )
-    # LM Head
-    if num_devices == 8:
-        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=4,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-
-    # Decoder
     # For Prefill. we can calculate based on the dynamic seqlen for block sharded layernorm.
     # shard_height_slice = 128 for prefill
     shard_height_slice = 128
@@ -387,6 +350,82 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
             ),
         }
     )
+    # Llama2 Model Config
+    if llm_mode == "decode":
+        model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            subblock_w=8,
+            block_h=shard_height // 32,
+            block_w=8,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_F_OUTPUT_DTYPE"],
+            inplace=True,
+        )
+        # LM Head
+        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                core_range_block_sharded_layernorm,
+                [
+                    layernorm_shard_height_hidden_dim,
+                    layernorm_shard_width_hidden_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["LN_F_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+            subblock_w=8,
+            block_h=num_tiles_per_core_h,
+            block_w=num_tiles_per_core_w,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
+            inplace=True,
+        )
+        model_config[
+            "LM_HEAD_MM_PROGCFG_LAMBDA"
+        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+    model_config["LN_F_OUTPUT_MEMCFG"] = model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+
+    # Llama2 Decoder Config
     if llm_mode == "decode":
         model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,

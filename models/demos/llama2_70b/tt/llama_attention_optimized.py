@@ -68,10 +68,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
         self.llm_mode = model_config["LLM_MODE"]
-        if self.llm_mode == "decode":
-            self.batch = 32
-        else:
-            self.batch = 1
 
         if load_weights:
             self.load_weights()

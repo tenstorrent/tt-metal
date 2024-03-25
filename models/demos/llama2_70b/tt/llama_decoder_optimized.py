@@ -13,10 +13,7 @@ from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     generate_rot_emb,
-    gather_rotary_emb,
     get_weight_cache_path,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
     get_rotation_mat,
     get_rotation_mat_prefill,
 )
