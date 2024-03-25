@@ -22,6 +22,9 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/routing/test_tx_rx \
 		 tests/tt_metal/perf_microbenchmark/routing/test_mux_demux \
 		 tests/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level \
+		 tests/tt_metal/perf_microbenchmark/routing/test_uni_tunnel \
+		 tests/tt_metal/perf_microbenchmark/routing/test_uni_tunnel_single_chip \
+		 tests/tt_metal/perf_microbenchmark/routing/test_bi_tunnel \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 \
