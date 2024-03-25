@@ -27,6 +27,36 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_identity_test(device, h, w, data_type, pcc=0.9999):
+    torch.manual_seed(0)
+
+    int_format = data_type == ttnn.uint32 or data_type == ttnn.uint16
+    if int_format:
+        torch_input_tensor = torch.randint(0, 10000, (1, 1, h, w), dtype=torch.int32)
+    else:
+        torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+    if int_format:
+        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+    else:
+        output_tensor = ttnn.experimental.tensor.identity(input_tensor)
+
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_fp32_uint32(device, h, w):
+    run_identity_test(device, h, w, ttnn.float32, pcc=0.9998)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_exp(device, h, w):
