@@ -57,6 +57,10 @@ run_perf_models_llm_javelin() {
 
     env pytest models/demos/falcon7b/tests -m $test_marker
 
+    if [ "$tt_arch" == "wormhole_b0" ]; then
+        env pytest models/demos/mistral7b/tests -m $test_marker
+    fi
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
@@ -85,6 +89,8 @@ run_device_perf_models() {
     env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
 
     env pytest models/demos/bert/tests -m $test_marker
+
+    env pytest models/demos/mistral7b/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_device_perf_results.py

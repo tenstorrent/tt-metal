@@ -63,7 +63,6 @@ def save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
     pil_images.save(f"{pre_fix}{pre_fix2}image_iter_{iter}.png")
 
 
-
 def guide(noise_pred, guidance_scale, t):  # will return latents
     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
@@ -94,17 +93,15 @@ def preprocess_images(image_paths):
     return torch.stack(images)
 
 
-
-def run_demo_inference_diffusiondb(
-    device, reset_seeds, input_path, num_inference_steps, image_size
-):
+def run_demo_inference_diffusiondb(device, reset_seeds, input_path, num_inference_steps, image_size):
     disable_persistent_kernel_cache()
 
     height, width = image_size
 
-   
     experiment_name = f"diffusiondb_{height}x{width}"
-    input_prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
+    input_prompt = [
+        "oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"
+    ]
     logger.info(f"input_prompts: {input_prompt}")
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
@@ -152,9 +149,7 @@ def run_demo_inference_diffusiondb(
     # and another with the unconditional embeddings (uncond_embeddings).
     # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
-    ttnn_text_embeddings = ttnn.from_torch(
-        text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
+    ttnn_text_embeddings = ttnn.from_torch(text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     # Initial random noise
@@ -194,9 +189,8 @@ def run_demo_inference_diffusiondb(
 
         # predict the noise residual
         with torch.no_grad():
-            
             ttnn_output = model(
-                ttnn_latent_model_input, #input
+                ttnn_latent_model_input,  # input
                 timestep=_t,
                 encoder_hidden_states=ttnn_text_embeddings,
                 class_labels=None,
@@ -236,7 +230,6 @@ def run_demo_inference_diffusiondb(
     ref_images = preprocess_images(ref_paths)
     ttnn_images = preprocess_images(ttnn_paths)
 
-       
 
 def test_tt2_multiple_iteration(device, reset_seeds, input_path):
     # 30 iterations, generate 512x512 image
