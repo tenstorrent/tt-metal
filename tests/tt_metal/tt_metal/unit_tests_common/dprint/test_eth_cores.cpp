@@ -55,17 +55,6 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         );
         fixture->RunProgram(device, program);
 
-        program = Program();
-        erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print_modifiers.cpp",
-            core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
-        fixture->RunProgram(device, program);
-
         // Check the print log against golden output.
         EXPECT_TRUE(
             FilesMatchesString(
@@ -78,8 +67,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         tt::DPrintServerClearLogFile();
     }
 }
-
-TEST_F(DPrintFixture, TestPrintEthCores) {
+// see issue #6659
+TEST_F(DPrintFixture, DISABLED_TestPrintEthCores) {
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {

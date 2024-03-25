@@ -345,25 +345,25 @@ Tensor lte_unary(
     const Tensor& input_tensor,
     float value,
     const MemoryConfig& output_mem_config)  {
-    return ltz(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
+    return lez(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
 }
 Tensor lte_unary(
     float value,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config)  {
-    return ltz(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
+    return lez(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
 }
 Tensor gte_unary(
     const Tensor& input_tensor,
     float value,
     const MemoryConfig& output_mem_config) {
-    return gtz(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
+    return gez(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
 }
 Tensor gte_unary(
     float value,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config) {
-    return gtz(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
+    return gez(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
 }
 Tensor eq_unary(
     const Tensor& input_tensor,

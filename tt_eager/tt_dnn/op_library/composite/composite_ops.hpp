@@ -5,7 +5,7 @@
 #pragma once
 #include <type_traits>
 
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tensor/owned_buffer_functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"

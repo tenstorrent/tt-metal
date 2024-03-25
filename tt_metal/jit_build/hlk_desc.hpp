@@ -8,9 +8,9 @@
 #include <boost/functional/hash.hpp>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "common/base_types.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "common/assert.hpp"
+#include "tt_metal/common/base_types.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/common/assert.hpp"
 
 namespace tt
 {

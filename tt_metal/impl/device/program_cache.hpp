@@ -6,7 +6,7 @@
 
 #include <unordered_map>
 #include <memory>
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt::tt_metal {

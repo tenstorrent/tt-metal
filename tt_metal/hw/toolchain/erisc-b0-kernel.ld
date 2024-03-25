@@ -68,7 +68,9 @@ SECTIONS
   . = DATA_SEGMENT_RELRO_END (0, .);
   .data           :
   {
+    . = ALIGN(16);
     *(.data .data.* .gnu.linkonce.d.*)
+    *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     SORT(CONSTRUCTORS)
   } > REGION_APP_KERNEL_DATA
 

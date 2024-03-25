@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -36,7 +36,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 
 
 def run_test_FalconMLP_inference(
-    device,
+    devices,
     model_version,
     batch,
     seq_len,
@@ -45,6 +45,7 @@ def run_test_FalconMLP_inference(
     tt_cache_path,
     model_location_generator,
 ):
+    num_devices = len(devices)
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
@@ -54,7 +55,8 @@ def run_test_FalconMLP_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    mlp_input = (torch.rand(batch, 1, seq_len, configuration.hidden_size) * 2) - 1
+    mlp_input = (torch.rand(batch * num_devices, 1, seq_len, configuration.hidden_size) * 2) - 1
+    logger.info(f"MLP input shape: {mlp_input.shape}")
     layer_num = 0
     base_url = "transformer.h"
 
@@ -64,7 +66,7 @@ def run_test_FalconMLP_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconMLP_model = TtFalconMLP(
-        device,
+        devices,
         state_dict,
         base_url,
         layer_num,
@@ -73,10 +75,14 @@ def run_test_FalconMLP_inference(
         tt_cache_path,
     )
 
-    tt_mlp_input = torch2tt_tensor(mlp_input, device)
+    tt_mlp_input = []
+    for i in range(num_devices):
+        tt_mlp_input.append(torch2tt_tensor(mlp_input[batch * i : batch * (i + 1)], devices[i]))
 
     tt_out = tt_FalconMLP_model(tt_mlp_input)
-    tt_out = tt2torch_tensor(tt_out)
+    for i in range(num_devices):
+        tt_out[i] = tt2torch_tensor(tt_out[i])
+    tt_out = torch.concat(tt_out)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
@@ -91,6 +97,7 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.parametrize("num_devices", (1, 2, 4))
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, pcc",
     (
@@ -104,19 +111,22 @@ def run_test_FalconMLP_inference(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconMLP_inference(
+    num_devices,
     model_version,
     batch,
     seq_len,
     pcc,
     model_config_str,
     model_location_generator,
-    device,
+    all_devices,
 ):
+    devices = get_devices_for_t3000(all_devices, num_devices)
+
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_FalconMLP_inference(
-        device,
+        devices,
         model_version,
         batch,
         seq_len,

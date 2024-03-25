@@ -8,7 +8,7 @@ import torch
 import pytest
 import tt_lib
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose_and_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.demos.resnet.tt.metalResnetBlock50 import (
     compute_conv_output_shape,
     resnet50_1x1_conv_as_matmul,
@@ -24,7 +24,6 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 )
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_1d_systolic, bias, untilize_out, fuse_relu",
     (
@@ -70,6 +69,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 @pytest.mark.parametrize(
     "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
 )
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 def test_optimized_conv_v2(
     device,
     use_program_cache,
@@ -91,6 +91,7 @@ def test_optimized_conv_v2(
     bias,
     untilize_out,
     fuse_relu,
+    packer_l1_acc,
 ):
     if input_channels == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
@@ -118,6 +119,20 @@ def test_optimized_conv_v2(
         )
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
+
+    if packer_l1_acc:
+        if is_grayskull():
+            pytest.skip("packer_l1_acc is not used in GS, skip test!")
+        elif batch_size == 1:
+            pytest.skip("Untested for whb0, cannot fit into trisc2 stack in this configuration!")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    n_cores = compute_grid_size.x * compute_grid_size.y
+    if is_wormhole_b0():
+        if batch_size == 20 and output_channels == 128 and input_height == 56:
+            pytest.skip("Skipping test because it won't fit in L1 for wormhole_b0!")
+        elif batch_size == 8 and output_channels == 256 and input_height == 28 and n_cores == 56:
+            pytest.skip("Skipping test because it won't fit in L1 for N300!")
 
     assert output_channels % 32 == 0
     torch.manual_seed(0)
@@ -175,6 +190,14 @@ def test_optimized_conv_v2(
         else None
     )
 
+    if is_wormhole_b0():
+        compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=packer_l1_acc,
+        )
+
     conv = TTPyCompositeConv(
         sliding_window_op_params,
         tt_tensor_conv_weight,
@@ -190,6 +213,7 @@ def test_optimized_conv_v2(
         deallocate_activation=True,
         output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
         fuse_relu=fuse_relu,
+        compute_kernel_config=compute_kernel_config if is_wormhole_b0() else None,
     )
 
     conv_input = tt_lib.tensor.Tensor(
