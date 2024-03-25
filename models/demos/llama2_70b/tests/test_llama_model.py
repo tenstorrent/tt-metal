@@ -102,8 +102,12 @@ def run_test_LlamaModel_inference(
     for device in devices:
         tt_lib.device.Synchronize(device)
 
-    generation_start_pos = UNIT_TEST_START_POS
-    generation_length = UNIT_TEST_GENERATION_LENGTH
+    if model_config["LLM_MODE"] == "prefill":
+        generation_start_pos = 0
+        generation_length = 1
+    else:
+        generation_start_pos = UNIT_TEST_START_POS
+        generation_length = UNIT_TEST_GENERATION_LENGTH
     all_tests_pass = True
     all_pccs, all_top1, all_top5 = [], [], []
     for i in range(generation_length):
@@ -200,8 +204,12 @@ def run_test_LlamaModel_inference(
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1
-        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        if model_config["LLM_MODE"] == "prefill":
+            cache_pt = cache_pt[:, :, :seq_len, :]
+            cache_tt = cache_tt[:, :, :seq_len, :]
+        else:
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
         logger.info(f"Output: {output_pcc}")
 
@@ -247,14 +255,8 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    (
-        (32, 1),
-        # (1, 128),
-    ),
-    ids=(
-        "decode",
-        # "prefill"
-    ),
+    ((32, 1), (1, 128), (1, 256), (1, 512), (1, 1024), (1, 2048)),
+    ids=("decode", "prefill_128", "prefill_256", "prefill_512", "prefill_1k", "prefill_2k"),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_inference(
@@ -268,7 +270,7 @@ def test_LlamaModel_inference(
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str, num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
