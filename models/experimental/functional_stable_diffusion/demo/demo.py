@@ -18,6 +18,9 @@ from diffusers import (
     UNet2DConditionModel,
 )
 from models.utility_functions import (
+    skip_for_grayskull,
+)
+from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
@@ -483,6 +486,7 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),
@@ -499,6 +503,7 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
     return run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),

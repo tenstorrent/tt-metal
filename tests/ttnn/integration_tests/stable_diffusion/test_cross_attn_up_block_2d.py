@@ -14,6 +14,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attn_upblock import (
     cross_attention_upblock2d as ttnn_cross_attention_upblock2d,
 )
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
     cross_attention_upblock2d as tt2_ttnn_cross_attention_upblock2d,
 )
@@ -34,6 +37,7 @@ def ttnn_to_torch(input):
     return input
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel,in_channels,  out_channels",
     [
@@ -177,6 +181,7 @@ def test_cross_attn_up_block_2d_256x256(
     assert_with_pcc(torch_output, op, 0.90)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel, in_channels ,out_channels",
     [
