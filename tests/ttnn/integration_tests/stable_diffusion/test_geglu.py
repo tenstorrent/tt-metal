@@ -11,11 +11,12 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_geglu import geglu as ttnn_geglu
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_geglu import geglu as tt2_ttnn_geglu
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, skip_for_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",
@@ -79,6 +80,7 @@ def test_geglu_256x256(device, model_name, N, C, H, W, index, reset_seeds):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.96)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",

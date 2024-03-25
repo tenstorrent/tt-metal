@@ -358,7 +358,7 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
     # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     # breakpoint()
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     # breakpoint()
     # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)

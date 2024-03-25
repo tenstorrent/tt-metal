@@ -310,9 +310,9 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
     input_tensor_torch = ttnn.to_torch(input_tensor)
 
     # here input is in l1 interleaved
-    # input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+    # input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     # here input is in l1 interleaved
-    # input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+    # input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     # here input is in l1 interleaved
 
     input_tensor_rm_torch = ttnn.to_torch(input_tensor)

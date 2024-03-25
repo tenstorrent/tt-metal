@@ -8,6 +8,9 @@ import pytest
 from tqdm.auto import tqdm
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from diffusers import LMSDiscreteScheduler
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -47,6 +50,7 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     return t_emb
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
@@ -109,6 +113,7 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [

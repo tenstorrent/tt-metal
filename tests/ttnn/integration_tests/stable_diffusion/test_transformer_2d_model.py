@@ -8,6 +8,9 @@ import pytest
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
@@ -20,6 +23,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape, index1, index2, attention_head_dim, block",
     [
@@ -129,6 +133,7 @@ def test_transformer_2d_model_256x256(
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape, index1, index2, attention_head_dim, block ",
     [

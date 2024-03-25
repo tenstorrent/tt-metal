@@ -13,6 +13,9 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsampl
 )
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import torch_random
@@ -29,6 +32,7 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     return input
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",
     [
@@ -73,6 +77,7 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
     assert_with_pcc(torch_output, torch_up, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",
     [

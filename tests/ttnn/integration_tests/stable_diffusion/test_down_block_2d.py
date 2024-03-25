@@ -9,7 +9,9 @@ from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
-
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downblock_2d import (
     downblock2d as ttnn_downblock2d,
@@ -23,6 +25,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -95,6 +98,7 @@ def test_down_block_2d_256x256_ttnn(input_shape, temb_shape, device, model_name,
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape",
     [
