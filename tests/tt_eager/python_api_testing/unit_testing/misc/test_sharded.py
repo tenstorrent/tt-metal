@@ -1955,6 +1955,7 @@ def test_sharded_concat_heads(
         ),
     ],
 )
+@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_reshard(
     device,
     input_shape,
@@ -1967,6 +1968,7 @@ def test_reshard(
     output_shard_shape,
     output_shard_orientation,
     output_sharding_scheme,
+    tt_dtype,
 ):
     compute_grid = ttl.tensor.CoreCoord(input_shard_grid[0], input_shard_grid[1])
     input_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
@@ -1975,7 +1977,8 @@ def test_reshard(
     output_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
     output_shard_spec = ttl.tensor.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
     output_mem_config = ttl.tensor.MemoryConfig(output_sharding_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
-    tt_dtype = ttl.tensor.DataType.BFLOAT16
+    if input_layout == ttl.tensor.Layout.ROW_MAJOR and tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        pytest.skip("Illegal layout/dtype config")
 
     dram_memory_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -2003,13 +2006,12 @@ def test_reshard(
     tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
 
-    assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
-    if not passing:
-        print(torch_tensor)
-        print(torch_tensor_after_round_trip)
-    assert passing
+    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
 
 
 @pytest.mark.parametrize(

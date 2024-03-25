@@ -598,20 +598,23 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
 
     auto cores = corerange_to_cores(all_cores);
 
-    uint32_t page_size, unit_size;
+    uint32_t total_size, page_size, unit_size;
+    auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     if (input.get_layout() == Layout::TILE) {
         page_size = tt_metal::detail::TileSize(data_format);
         unit_size = page_size;
+        total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
         page_size = output.get_legacy_shape()[-1] * output.element_size();
+        total_size = output_shard_shape[0] * unit_size;
     }
-    auto output_shard_shape = output_shard_spec.shape;
+
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(
-            output_shard_shape[0] * output_shard_shape[1] * output.element_size(), {{dst_cb_index, data_format}})
+            total_size, {{dst_cb_index, data_format}})
             .set_page_size(dst_cb_index, unit_size)
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
