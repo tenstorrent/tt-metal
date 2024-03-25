@@ -94,6 +94,9 @@ class TtFalconMLP:
                     dense_4h_to_h_weights_host,
                 )
 
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+
     def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
         for i in range(len(x)):
