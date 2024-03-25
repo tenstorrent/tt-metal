@@ -1,0 +1,102 @@
+cmake_minimum_required(VERSION 3.16)
+
+# Set default values for variables
+set(WARNINGS "-Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter" CACHE STRING "Warnings to enable")
+set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DFMT_HEADER_ONLY -Werror -Wno-int-to-pointer-cast -I$(TT_METAL_HOME)/tt_metal/third_party/fmt")
+# Modify compiler flags based on configuration -- CHANGE THIS TO USE CMAKE_BUILD_TYPE INSTEAD
+if(${CONFIG} STREQUAL "release")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3")
+elseif(${CONFIG} STREQUAL "ci")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3 -DDEBUG=DEBUG")
+    set(CONFIG_LDFLAGS "${CONFIG_LDFLAGS} -Wl,--verbose")
+elseif(${CONFIG} STREQUAL "assert")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3 -g -DDEBUG=DEBUG")
+elseif(${CONFIG} STREQUAL "asan")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3 -g -DDEBUG=DEBUG -fsanitize=address")
+    set(CONFIG_LDFLAGS "${CONFIG_LDFLAGS} -fsanitize=address")
+elseif(${CONFIG} STREQUAL "ubsan")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3 -g -DDEBUG=DEBUG -fsanitize=undefined")
+    set(CONFIG_LDFLAGS "${CONFIG_LDFLAGS} -fsanitize=undefined")
+elseif(${CONFIG} STREQUAL "debug")
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O0 -g -DDEBUG=DEBUG")
+else()
+    message(FATAL_ERROR "Unknown value for CONFIG: \"${CONFIG}\"")
+endif()
+
+if(NOT TT_METAL_VERSIM_DISABLED)
+    set(UMD_VERSIM_STUB 0)
+else()
+    set(UMD_VERSIM_STUB 1)
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DTT_METAL_VERSIM_DISABLED")
+endif()
+if(ENABLE_CODE_TIMERS)
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DTT_ENABLE_CODE_TIMERS")
+endif()
+if(ENABLE_PROFILER)
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DPROFILER")
+endif()
+if(ENABLE_TRACY)
+    set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DTRACY_ENABLE -fno-omit-frame-pointer -fPIC")
+    set(CONFIG_LDFLAGS "${CONFIG_LDFLAGS} -ltracy -rdynamic")
+endif()
+
+### !!! SET LDFLAGS, SHARED_LINKER_FLAGS AND STATIC_LIBRARY_FLAGS !!! ###
+set(LDFLAGS_ "${CONFIG_LDFLAGS} -L${OUT}/lib -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
+set(SHARED_LIB_FLAGS "-shared -fPIC")
+set(STATIC_LIB_FLAGS "-fPIC")
+
+set (CMAKE_CXX_FLAGS_ "${CMAKE_CXX_FLAGS} --std=c++17 -fvisibility-inlines-hidden -Werror")
+
+# whhat is even happening here
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(WARNINGS "${WARNINGS} -Wno-c++11-narrowing -Wno-c++2a-extensions")
+else()
+    set(WARNINGS "${WARNINGS} -Wmaybe-uninitialized")
+endif()
+
+set(CFLAGS_ "${WARNINGS} -MMD -I. ${CONFIG_CFLAGS} -mavx2 -mavx2 -DBUILD_DIR=\"$(OUT)\"")
+
+include(ExternalProject)
+ExternalProject_Add(
+    umd_device
+    PREFIX ${UMD_HOME}
+    SOURCE_DIR ${UMD_HOME}
+    BINARY_DIR ${OUT}
+    INSTALL_DIR ${OUT}
+    STAMP_DIR ${OUT}/umd_waste/umd_stamp
+    TMP_DIR ${OUT}/umd_waste/umd_tmp
+    DOWNLOAD_COMMAND ""
+    CONFIGURE_COMMAND ""
+    INSTALL_COMMAND ""
+    BUILD_COMMAND
+        make -f ${UMD_HOME}/device/module.mk umd_device
+        OUT=${OUT}
+        LIBDIR=${OUT}/lib
+        OBJDIR=${OUT}/obj
+        UMD_HOME=${UMD_HOME}
+        UMD_VERSIM_STUB=${UMD_VERSIM_STUB}
+        UMD_VERSIM_HEADERS=${TT_METAL_VERSIM_ROOT}/versim/
+        UMD_USER_ROOT=$ENV{TT_METAL_HOME}
+        WARNINGS=${WARNINGS}
+        SHARED_LIB_FLAGS=${SHARED_LIB_FLAGS}
+        STATIC_LIB_FLAGS=${STATIC_LIB_FLAGS}
+        LDFLAGS=${LDFLAGS_}
+        CXXFLAGS=${CMAKE_CXX_FLAGS_}
+        CFLAGS=${CFLAGS_}
+)
+
+# add_library(umd_lib SHARED IMPORTED)
+# set_target_properties(umd_lib PROPERTIES IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/build/lib/libdevice.so)
+
+# set(UMD_OBJS
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/grayskull/impl_device.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/cpuset_lib.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_cluster_descriptor.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_device.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_emulation_stub.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver_common.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_soc_descriptor.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_versim_stub.o
+#     ${CMAKE_BINARY_DIR}/obj/umd/device/util.o
+# )
