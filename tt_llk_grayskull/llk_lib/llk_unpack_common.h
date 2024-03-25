@@ -136,3 +136,7 @@ inline void _llk_unpack_dbg_feature_disable_(){
     TT_LLK_DUMP("llk_unpack_dbg_feature_disable()");
     //TBD
 }
+
+inline void _llk_unpack_clear_dbg_feature_disable_(){
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);     // Unset debug feature disable
+}
