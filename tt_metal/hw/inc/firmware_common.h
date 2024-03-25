@@ -59,4 +59,8 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
     }
+
+    // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
+    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+
 }

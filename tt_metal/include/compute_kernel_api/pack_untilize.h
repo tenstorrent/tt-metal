@@ -31,7 +31,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
-    UNPACK(( llk_unpack_A_init(false, false, icb) )); // init must be after configure
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(false, false, icb) )); // init must be after configure
 }
 
 /**
@@ -42,8 +42,8 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH(( llk_math_wait_for_dest_available() ));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
-            UNPACK(( llk_unpack_A(icb, c) ));
-            MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(c) ));
+            UNPACK(( llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c) ));
+            MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(c) ));
         }
         MATH(( llk_math_dest_section_done<DST_ACCUM_MODE>() ));
 
@@ -76,7 +76,7 @@ ALWI void pack_untilize_dst(uint32_t ocb, uint32_t block_rt_dim = 1, uint32_t bl
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_init_short(uint32_t icb, uint32_t ocb)
 {
-    UNPACK(( llk_unpack_A_init(false, false, icb) )); // init must be after configure
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(false, false, icb) )); // init must be after configure
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     pack_untilize_dst_init_short<block_ct_dim>(ocb);
 }

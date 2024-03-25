@@ -207,6 +207,8 @@ void device_setup() {
     // Initialize sempahores - check if we need to do this still
     // math->packer semaphore - max set to 1, as double-buffering is disabled by default
     core.ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf[0]);
+    core.ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf[0]);
+    core.ex_sem_init(ckernel::semaphore::MATH_DONE, 1, 0, instrn_buf[0]);
 
     // // unpacker semaphore
     // core.ex_sem_init(semaphore::UNPACK_MISC, 1, 1, instrn_buf[0]);
