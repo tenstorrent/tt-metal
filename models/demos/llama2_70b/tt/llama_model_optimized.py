@@ -478,7 +478,7 @@ class TtLlamaModel_optimized(nn.Module):
                 xs,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         ## Duplicate layernorm
@@ -488,7 +488,6 @@ class TtLlamaModel_optimized(nn.Module):
             xs[i].deallocate(True)
 
         ### Each device does an LM head fracture
-
         seq_tiles = norm_out_replicated[0].shape[2] // 32
         self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LM_HEAD_MM_PROGCFG_LAMBDA"](seq_tiles)
         lm_head_out = []
