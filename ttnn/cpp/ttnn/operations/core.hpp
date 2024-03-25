@@ -58,12 +58,16 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
         const auto new_shape_with_tile_padding = shape.with_tile_padding();
         const auto new_height = new_shape_with_tile_padding[-2];
         const auto new_width = new_shape_with_tile_padding[-1];
-        if (new_height % ttnn::TILE_SIZE == 0 && new_width % ttnn::TILE_SIZE == 0) {
-            return reshape_helper(tensor, shape);
-        } else {
+
+        const auto is_tile_multiple = (new_height % ttnn::TILE_SIZE == 0 && new_width % ttnn::TILE_SIZE == 0);
+        if (not is_tile_multiple) {
             TT_THROW(
                 "Unable to reshape a tensor in TILE_LAYOUT to non-tile height and width! Please convert the tensor to "
                 "ROW_MAJOR_LAYOUT first.");
+        }
+
+        if (tensor_shape.with_tile_padding()[-1] == new_width) {
+            return reshape_helper(tensor, shape);
         }
     }
 
