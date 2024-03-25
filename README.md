@@ -48,8 +48,8 @@
 | Model                                    | Batch                    | Throughput |
 |------------------------------------------|--------------------------|----------------------------|
 | [Falcon40B](./models/demos/falcon40b)    | coming soon              |               |
-| LLaMA-2-70B                              | coming soon             |               |
-| Mixtral7Bx8                              | coming soon             |               |
+| [LLaMA-2-70B](./models/demos/llama2_70b) | coming soon              |               |
+| Mixtral7Bx8                              | coming soon              |               |
 
 
 
