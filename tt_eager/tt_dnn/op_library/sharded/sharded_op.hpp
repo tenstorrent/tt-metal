@@ -21,7 +21,8 @@ enum class ShardedOpType { InterleavedToSharded, ShardedToInterleaved };
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
-operation::ProgramWithCallbacks reshard_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks reshard_runtime_args_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks reshard_config_tensor_multi_core(const Tensor& input, const Tensor &config_vector, Tensor& output);
 
 struct Sharded {
     const CoreCoord grid_size;
@@ -108,9 +109,14 @@ struct CorePageRange {
     PageRange range;
 };
 
+std::unordered_map<CoreCoord, std::vector<CorePageRange>> get_core_page_ranges(
+    Buffer* input_buffer, Buffer* output_buffer);
+
+enum class ReshardRunTimeArgType { RUNTIME_ARGS, CONFIG_TENSOR };
 // TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
     const MemoryConfig output_mem_config;
+    const ReshardRunTimeArgType rt_type;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -162,7 +168,15 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
     TT_FATAL(input_tensor.shard_spec().has_value());
     TT_FATAL(output_mem_config.is_sharded());
 
-    return operation::run(Reshard{.output_mem_config = output_mem_config}, {input_tensor}).at(0);
+    return operation::run(Reshard{.output_mem_config = output_mem_config, .rt_type= ReshardRunTimeArgType::RUNTIME_ARGS}, {input_tensor}).at(0);
+}
+
+
+inline Tensor reshard_config_tensor(const Tensor &input_tensor, const MemoryConfig &output_mem_config) {
+    TT_FATAL(input_tensor.shard_spec().has_value());
+    TT_FATAL(output_mem_config.is_sharded());
+
+    return operation::run(Reshard{.output_mem_config = output_mem_config,  .rt_type= ReshardRunTimeArgType::CONFIG_TENSOR}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

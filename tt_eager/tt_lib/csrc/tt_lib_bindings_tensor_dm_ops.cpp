@@ -500,6 +500,10 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert(),
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
+        m_tensor.def("reshard_config_tensor", &reshard_config_tensor,
+            py::arg("input"), py::arg("output_mem_config").noconvert(),
+            R"doc(Converts a tensor sharded one way to another way)doc"
+        );
 
         //MOE ops
         m_tensor.def("indexed_fill", &indexed_fill,

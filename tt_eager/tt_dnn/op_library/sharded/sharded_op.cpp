@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include <algorithm>
 using namespace tt::constants;
 
 namespace tt {
@@ -103,7 +103,14 @@ operation::ProgramWithCallbacks Reshard::create_program(
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     //each tensor has its respective shard_spec within its memory_config
-    return reshard_multi_core(input_tensor, output_tensor);
+
+    if(this->rt_type == ReshardRunTimeArgType::RUNTIME_ARGS) {
+        return reshard_runtime_args_multi_core(input_tensor, output_tensor);
+    }
+    else {
+        auto config_tensor = output_tensors.at(1);
+        return reshard_config_tensor_multi_core(input_tensor, config_tensor, output_tensor);
+    }
 
 
 }
@@ -114,15 +121,77 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
 
 
 
-
-    return {create_sharded_device_tensor(
+    auto output_tensor = create_sharded_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
         input_tensor.device(),
         mem_config,
         true
-        )};
+        );
+    if (this->rt_type == ReshardRunTimeArgType::CONFIG_TENSOR) {
+        return {output_tensor};
+    }
+    else {
+        auto sharded_mem_config = MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
+        auto cores = corerange_to_cores(mem_config.shard_spec.value().grid);
+
+        auto output_core_to_page_range_pair = get_core_page_ranges(input_tensor.buffer(), output_tensor.buffer());
+
+
+        //get maximum number of page_range per core for sharded size
+        uint32_t max_ranges = 0;
+        std::vector<uint32_t> args;
+        auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+        uint32_t page_size;
+        if (input_tensor.get_layout() == Layout::TILE) {
+            page_size = tt_metal::detail::TileSize(data_format);
+        } else {
+            page_size = output_tensor.get_legacy_shape()[-1] * output_tensor.element_size();
+        }
+
+
+        for(auto core: cores) {
+            auto page_range_vector = output_core_to_page_range_pair.at(core);
+            max_ranges = std::max((uint32_t)page_range_vector.size(), max_ranges);
+        }
+
+        args.reserve(cores.size()*(2+(max_ranges*4)));
+
+        for(auto core: cores) {
+            auto page_range_vector = output_core_to_page_range_pair.at(core);
+            auto physical_input_core = input_tensor.device()->worker_core_from_logical_core(core);
+            for (const auto& [core, range] : page_range_vector) {
+                args.push_back(physical_input_core.x);
+                args.push_back(physical_input_core.y);
+                args.push_back(range.start * page_size);
+                args.push_back((range.end - range.start) * page_size);
+            }
+            //padding for max_ranges
+            for(uint32_t i=page_range_vector.size(); i < max_ranges; i++) {
+                args.push_back(0);
+            }
+        }
+
+
+        ShardSpec shard_spec(mem_config.shard_spec.value().grid,
+                    {max_ranges, 1},
+                    mem_config.shard_spec.value().orientation);
+
+        sharded_mem_config.shard_spec = shard_spec;
+        auto config_tensor = create_sharded_device_tensor(
+            Shape({1,1,max_ranges*((uint32_t)cores.size()), 1}),
+            DataType::UINT32,
+            Layout::ROW_MAJOR,
+            input_tensor.device(),
+            sharded_mem_config,
+            true
+        );
+
+        tt::tt_metal::detail::WriteToBuffer(*config_tensor.buffer(), args);
+        return {output_tensor, config_tensor};
+    }
+
 }
 
 

@@ -572,33 +572,27 @@ std::unordered_map<CoreCoord, std::vector<CorePageRange>> get_core_page_ranges(
     return ret_map;
 }
 
-operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output) {
+
+// helper function to create cb and writer kernel as this is the same for both vsns of reshard (config vector and runtime args)
+void reshard_create_cb_writer_kernel(tt_metal::Program & program, tt_metal::CBHandle & cb_dst, tt_metal::KernelHandle & unary_writer_kernel_id, uint32_t  & page_size,
+                            const Tensor& input, Tensor& output) {
     auto device = input.device();
-    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
 
-    tt_metal::Program program{};
-
-    auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
 
-    uint32_t dst_cb_index = 16;
-    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig({dst_cb_index}));
 
+
+    uint32_t dst_cb_index = 16;
     std::vector<uint32_t> writer_compile_time_args = {dst_cb_index};
-    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+    unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto cores = corerange_to_cores(all_cores);
 
-    uint32_t total_size, page_size, unit_size;
+    uint32_t total_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
@@ -617,8 +611,38 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
             total_size, {{dst_cb_index, data_format}})
             .set_page_size(dst_cb_index, unit_size)
             .set_globally_allocated_address(*output.buffer());
-    auto cb_dst0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+    cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
+}
+
+
+
+operation::ProgramWithCallbacks reshard_runtime_args_multi_core(const Tensor& input, Tensor& output) {
+    auto device = input.device();
+    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+
+    tt_metal::Program program{};
+
+    auto input_shard_spec = input.shard_spec().value();
+    auto output_shard_spec = output.shard_spec().value();
+    auto all_cores = output_shard_spec.grid;
+
+
+    uint32_t dst_cb_index = 16;
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp" ,
+        all_cores,
+        tt_metal::ReaderDataMovementConfig({dst_cb_index}));
+
+    tt_metal::KernelHandle unary_writer_kernel_id;
+    CBHandle cb_dst;
+    uint32_t page_size;
+    reshard_create_cb_writer_kernel(program, cb_dst, unary_writer_kernel_id, page_size, input, output );
+
+
+
+    auto cores = corerange_to_cores(all_cores);
     for (auto core : cores) {
         auto page_range_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_range_vector.size();
@@ -637,7 +661,7 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
     }
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_dst0](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_dst](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -669,12 +693,101 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
             runtime_args[1] = num_output_pages;
             tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
-            UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_dst, *dst_buffer);
         }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
+
+
+operation::ProgramWithCallbacks reshard_config_tensor_multi_core(const Tensor& input, const Tensor &config_vector, Tensor& output) {
+    auto device = input.device();
+    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+
+    tt_metal::Program program{};
+
+    auto input_shard_spec = input.shard_spec().value();
+    auto output_shard_spec = output.shard_spec().value();
+    auto all_cores = output_shard_spec.grid;
+
+
+    uint32_t dst_cb_index = 16;
+    uint32_t config_cb_index = 0;
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_config_tensor.cpp" ,
+        all_cores,
+        tt_metal::ReaderDataMovementConfig({dst_cb_index, config_cb_index}));
+
+    tt_metal::KernelHandle unary_writer_kernel_id;
+    CBHandle cb_dst;
+    uint32_t page_size;
+    reshard_create_cb_writer_kernel(program, cb_dst, unary_writer_kernel_id, page_size, input, output );
+
+    auto config_shard_shape = config_vector.shard_spec().value().shape;
+    auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+
+    tt_metal::CircularBufferConfig config_cb_config =
+        tt_metal::CircularBufferConfig(
+            config_shard_shape[0]*config_shard_shape[1] * config_vector.element_size(), {{config_cb_index, data_format}})
+            .set_page_size(config_cb_index, config_shard_shape[1] * config_vector.element_size())
+            .set_globally_allocated_address(*config_vector.buffer());
+    auto cb_config = tt_metal::CreateCircularBuffer(program, all_cores, config_cb_config);
+
+
+
+    auto cores = corerange_to_cores(all_cores);
+    for (auto core : cores) {
+        auto page_range_vector = output_core_to_page_range_pair.at(core);
+        uint32_t num_ranges = page_range_vector.size();
+        std::vector<uint32_t> runtime_args = {input.buffer()->address(), 0, num_ranges};
+        uint32_t num_output_pages = 0;
+        for (const auto& [core, range] : page_range_vector) {
+            num_output_pages += range.end - range.start;
+        }
+        runtime_args[1] = num_output_pages;
+        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
+    }
+
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_config, cb_dst](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+        auto config_buffer = input_tensors.at(1).buffer();
+        auto output_core_to_page_range_pair = get_core_page_ranges(src_buffer, dst_buffer);
+
+        auto input_shard_spec = input_tensors.at(0).shard_spec().value();
+        auto output_shard_spec = output_tensors.at(0).shard_spec().value();
+        auto all_cores = input_shard_spec.grid.merge(output_shard_spec.grid);
+        auto cores = corerange_to_cores(all_cores);
+        auto device = input_tensors.at(0).device();
+
+        for (const auto& core : cores) {
+            auto page_range_vector = output_core_to_page_range_pair.at(core);
+            uint32_t num_ranges = page_range_vector.size();
+            std::vector<uint32_t> runtime_args = {src_buffer->address(), 0, num_ranges};
+            uint32_t num_output_pages = 0;
+            for (const auto& [core, range] : page_range_vector) {
+                auto physical_input_core = device->worker_core_from_logical_core(core);
+                num_output_pages += range.end - range.start;
+            }
+            runtime_args[1] = num_output_pages;
+            tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
+            UpdateDynamicCircularBufferAddress(program, cb_dst, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_config, *config_buffer);
+        }
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
 
 }  // namespace tt_metal
 
