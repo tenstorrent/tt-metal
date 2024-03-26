@@ -370,9 +370,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             subblock_w=8,
             block_h=shard_height // 32,
             block_w=8,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_F_OUTPUT_DTYPE"],
             inplace=True,
         )
         # LM Head
@@ -406,9 +403,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             subblock_w=8,
             block_h=num_tiles_per_core_h,
             block_w=num_tiles_per_core_w,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
             inplace=True,
         )
         model_config[
@@ -462,9 +456,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=8,
                 block_h=shard_height // 32,
                 block_w=8,
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
-                out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
                 inplace=True,
             )
         else:
@@ -473,16 +464,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=8,
                 block_h=num_tiles_per_core_h,
                 block_w=num_tiles_per_core_w,
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
-                out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
                 inplace=True,
             )
     elif num_devices == 32:
         model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
-            block_h=1,
+            block_h=shard_height // 32,
             block_w=8,
             inplace=True,  # TODO: Not Inplace RMSNorm because we need to keep the residual
         )
@@ -507,9 +495,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=8,
                 block_h=shard_height // 32,
                 block_w=8,
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
-                out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
                 inplace=True,
             )
         else:
@@ -518,9 +503,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=8,
                 block_h=num_tiles_per_core_h,
                 block_w=num_tiles_per_core_w,
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
-                out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
                 inplace=True,
             )
     elif num_devices == 32:
@@ -946,8 +928,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=1,
                 block_h=shard_height // 32,
                 block_w=1,  # Dynamic
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
             )
         else:
             model_config[
@@ -957,8 +937,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 subblock_w=1,
                 block_h=32 // 32,
                 block_w=1,  # Dynamic
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
             )
     elif num_devices == 32:
         model_config[
