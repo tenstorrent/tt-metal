@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from torch import nn
 from typing import Optional, Tuple
 
 import tt_lib
@@ -34,7 +31,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         self.model_config = model_config
         self.lm_head_weights = parameters.lm_head.weight
 
-    def forward(
+    def __call__(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         llm_mode: str,
@@ -44,7 +41,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         layer_past_len: int = 0,
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
-        hidden_states, presents = super().forward(
+        hidden_states, presents = super().__call__(
             input_embeddings=input_embeddings,
             attention_mask=attention_mask,
             llm_mode=llm_mode,

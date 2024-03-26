@@ -6,16 +6,13 @@ import torch
 from abc import abstractmethod
 from typing import Optional, Tuple
 
-import tt_lib
 import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.utility_functions import (
-    nearest_32,
-)
+from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
 
 
-class TtFalconModelShared(torch.nn.Module):
+class TtFalconModelShared:
     @abstractmethod
     def __init__(
         self,
@@ -26,8 +23,6 @@ class TtFalconModelShared(torch.nn.Module):
         model_config,
         parameters,
     ):
-        super().__init__()
-
         self.device = device
         self.parameters = parameters
         self.config = config
@@ -39,18 +34,15 @@ class TtFalconModelShared(torch.nn.Module):
         self.embeddings.weight = torch.nn.Parameter(parameters.word_embeddings.weight)
 
         # stack all decoders
-        self.layers = torch.nn.ModuleList(
-            [
-                TtFalconDecoderLayer(
-                    device=device,
-                    config=config,
-                    max_position_embeddings=max_position_embeddings,
-                    model_config=model_config,
-                    parameters=parameters.h[layer_num],
-                )
-                for layer_num in range(num_layers)
-            ]
-        )
+        self.layers = [
+            TtFalconDecoderLayer(
+                device=device,
+                config=config,
+                model_config=model_config,
+                parameters=parameters.h[layer_num],
+            )
+            for layer_num in range(num_layers)
+        ]
         self.ln_f_weight = parameters.ln_f.weight
         self.ln_f_bias = parameters.ln_f.bias
         self.layernorm_eps = config.layer_norm_epsilon
@@ -75,25 +67,6 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.TILE_LAYOUT,
             )
 
-            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
-            attention_mask_bool = attention_mask_bool.triu(diagonal=1)
-
-            attention_mask_bool_padded = torch.cat(
-                (
-                    attention_mask_bool,
-                    torch.ones(batch_size, 1, sequence_size, sequence_size - num_input_tokens, dtype=bool),
-                ),
-                dim=-1,
-            )
-
-            tt_attention_mask = ttnn.from_torch(
-                (attention_mask_bool_padded * -1e3).expand(-1, self.config.num_attention_heads, -1, -1),
-                device=self.device,
-                memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                dtype=self.model_config["ATTN_MASK_DTYPE"],
-                layout=ttnn.TILE_LAYOUT,
-            )
-
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
             assert sequence_size == 1, "For decode, q_len must be 1!"
@@ -106,42 +79,33 @@ class TtFalconModelShared(torch.nn.Module):
                 layout=ttnn.TILE_LAYOUT,
             )
 
-            attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
-
-            num_max_tokens = nearest_32(
-                kv_cache_len + 1
-            )  # Potentially, num_max_tokens must be provided as a separate argument
-            attention_mask_bool_padded = torch.cat(
-                (
-                    attention_mask_bool,
-                    torch.ones(batch_size, 1, sequence_size, num_max_tokens - num_input_tokens, dtype=bool),
-                ),
-                dim=-1,
-            )
-            tt_attention_mask = ttnn.from_torch(
-                (attention_mask_bool_padded.transpose(0, 2) * -1e3).expand(-1, self.config.num_attention_heads, -1, -1),
-                device=self.device,
-                memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                dtype=self.model_config["ATTN_MASK_DTYPE"],
-                layout=ttnn.TILE_LAYOUT,
-            )
-
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
+
+        attention_mask, tt_attention_mask = create_attention_mask(
+            llm_mode,
+            self.model_config["DEFAULT_DTYPE"],
+            embeddings,
+            batch_size,
+            sequence_size,
+            self.config.num_attention_heads,
+            kv_cache_len,
+            self.device,
+        )
 
         return tt_embeddings, tt_attention_mask
 
     @abstractmethod
-    def forward(
+    def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -197,17 +161,17 @@ class TtFalconModel(TtFalconModelShared):
             parameters=parameters,
         )
 
-    def forward(
+    def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
-        hidden_states, presents = super().forward(
+    ) -> ttnn.Tensor:
+        hidden_states, presents = super().__call__(
             input_embeddings=input_embeddings,
             llm_mode=llm_mode,
             attention_mask=attention_mask,

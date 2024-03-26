@@ -16,83 +16,102 @@ from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.utility_functions import enable_persistent_kernel_cache
+from models.demos.ttnn_falcon7b.tt.common import (
+    create_custom_preprocessor,
+    create_kv_cache,
+    strip_state_dict_prefix,
+)
 
-torch.manual_seed(0)
+
+PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
 
-def run_test_FalconModel_inference(
+def get_model_prefix(layer_index: int = 0):
+    return f"transformer"
+
+
+@pytest.mark.parametrize(
+    "llm_mode, batch, seq_len, kv_cache_len",
+    (
+        ("prefill", 1, 128, 0),
+        ("decode", 32, 1, 128),
+    ),
+    ids=["prefill_seq128_batch32", "decode_batch32"],
+)
+@pytest.mark.parametrize(
+    "num_layers, expected_pcc",
+    (
+        (1, 0.98),
+        (2, 0.98),
+        (32, 0.98),
+    ),
+    ids=[
+        "layers_1",
+        "layers_2",
+        "layers_32",
+    ],
+)
+@pytest.mark.parametrize(
+    "model_version",
+    ("tiiuae/falcon-7b-instruct",),
+    ids=["falcon_7b"],
+)
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+def test_falcon_model(
     device,
+    use_program_cache,
     model_version,
     llm_mode,
     batch,
     seq_len,
     kv_cache_len,
     num_layers,
-    pcc,
-    model_config,
+    expected_pcc,
+    model_config_str,
 ):
+    torch.manual_seed(0)
+
+    causual_model = transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True).eval()
+    state_dict = causual_model.state_dict()
+    filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
+
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    model = transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(
+    torch_model = transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(
         model_version, config=configuration
     ).eval()
 
-    head_dim = configuration.hidden_size // configuration.num_attention_heads
+    torch_model.load_state_dict(filtered_state_dict, strict=False)
+    model_config = get_model_config(model_config_str)
+    dtype = model_config["DEFAULT_DTYPE"]
+    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
+
     model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
 
-    # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
-        q_len, kv_len = seq_len, seq_len
-        assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
-        assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
-
         past_key_values = None
         tt_layer_past = ()
-        k_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-        v_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
         for i in range(num_layers):
-            tt_k_cache = ttnn.from_torch(
-                k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_v_cache = ttnn.from_torch(
-                v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
+            tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
 
     elif llm_mode == "decode":
-        q_len, kv_len = seq_len, kv_cache_len + 1
-        assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
-        assert q_len == 1, "For decode, q_len must be 1!"
-        attention_mask = torch.ones(batch, 1, seq_len, kv_len, dtype=int)
-        attention_mask = attention_mask.triu(diagonal=1)
-
         past_key_values = ()
         tt_layer_past = ()
         for i in range(num_layers):
-            k_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            v_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            past_key_values += ((k_cache, v_cache),)
-
-            tt_k_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_v_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_k_cache[:, :kv_cache_len, :] = k_cache.squeeze(1)
-            tt_v_cache[:, :kv_cache_len, :] = v_cache.squeeze(1)
-            tt_k_cache = ttnn.from_torch(
-                tt_k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
+            current_layer_past, tt_current_layer_past = create_kv_cache(
+                llm_mode, dtype, batch, kv_cache_len, configuration, device
             )
-            tt_v_cache = ttnn.from_torch(
-                tt_v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            past_key_values += (current_layer_past,)
+            tt_layer_past += (tt_current_layer_past,)
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
-    pytorch_out, pytorch_layer_present = model(
+    pytorch_out, pytorch_layer_present = torch_model(
         input_ids=model_input,
-        attention_mask=attention_mask,
+        attention_mask=None,
         past_key_values=past_key_values,
         use_cache=True,
         return_dict=False,
@@ -106,10 +125,13 @@ def run_test_FalconModel_inference(
 
     tt_cache_path = get_tt_cache_path(f"{model_version}")
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
+        initialize_model=lambda: torch_model,
         device=device,
         custom_preprocessor=create_custom_preprocessor(
-            model_config, tt_cache_path=tt_cache_path, device=device, base_file_name="transformer"
+            model_config,
+            tt_cache_path=tt_cache_path,
+            device=device,
+            base_file_name=get_model_prefix(),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )
@@ -159,7 +181,7 @@ def run_test_FalconModel_inference(
         tt_out = ttnn.to_torch(tt_out).squeeze(1)
         tt_out = tt_out.transpose(0, 1)
 
-    assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), pcc)
+    assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
 
     for i in range(num_layers):
         tt_layer_pres = (
@@ -182,61 +204,7 @@ def run_test_FalconModel_inference(
                 tt_layer_pres[1][:, :, kv_cache_len, :],
             )
 
-        assert_with_pcc(pytorch_layer_pres[0], tt_layer_pres[0].to(pytorch_layer_pres[0].dtype), pcc)
-        assert_with_pcc(pytorch_layer_pres[1], tt_layer_pres[1].to(pytorch_layer_pres[1].dtype), pcc)
+        assert_with_pcc(pytorch_layer_pres[0], tt_layer_pres[0].to(pytorch_layer_pres[0].dtype), expected_pcc)
+        assert_with_pcc(pytorch_layer_pres[1], tt_layer_pres[1].to(pytorch_layer_pres[1].dtype), expected_pcc)
 
     logger.info("Falcon Model Passed!")
-
-
-@pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
-    (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
-    ),
-    ids=["prefill_seq128_batch32", "decode_batch32"],
-)
-@pytest.mark.parametrize(
-    "num_layers, pcc",
-    (
-        (1, 0.98),
-        (2, 0.98),
-        (32, 0.98),
-    ),
-    ids=[
-        "layers_1",
-        "layers_2",
-        "layers_32",
-    ],
-)
-@pytest.mark.parametrize(
-    "model_version",
-    ("tiiuae/falcon-7b-instruct",),
-    ids=["falcon_7b"],
-)
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-def test_FalconModel_inference(
-    device,
-    use_program_cache,
-    model_version,
-    llm_mode,
-    batch,
-    seq_len,
-    kv_cache_len,
-    num_layers,
-    pcc,
-    model_config_str,
-):
-    enable_persistent_kernel_cache()
-    model_config = get_model_config(model_config_str)
-    run_test_FalconModel_inference(
-        device,
-        model_version,
-        llm_mode,
-        batch,
-        seq_len,
-        kv_cache_len,
-        num_layers,
-        pcc,
-        model_config,
-    )

@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from torch import nn
-from typing import Optional, Tuple
+from typing import Optional
 
 import ttnn
 
@@ -20,7 +18,7 @@ def falcon_rotary_embedding(
     )
 
 
-class TtFalconRotaryEmbedding(torch.nn.Module):
+class TtFalconRotaryEmbedding:
     def __init__(
         self,
         parameters,
@@ -32,7 +30,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
 
-    def forward(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
+    def __call__(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
         return falcon_rotary_embedding(
             layer,
             self.max_position_embeddings,
