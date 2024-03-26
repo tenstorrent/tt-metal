@@ -123,11 +123,11 @@ Tensor moreh_sum(
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims[i]);
+        log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, sorted_dims[i]);
         auto temp_output = moreh_sum_(temp_input, sorted_dims[i], mem_config);
         temp_input = temp_output;
     }
-    log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
+    log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
     moreh_sum_(temp_input, output, sorted_dims.front());
     return output;
 }

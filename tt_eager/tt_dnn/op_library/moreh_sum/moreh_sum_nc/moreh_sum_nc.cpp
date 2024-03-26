@@ -43,9 +43,9 @@ operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_output_tiles = output.volume() / TILE_HW;
 
-    log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
+    log_debug(LogOp, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
-        LogTest,
+        LogOp,
         "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
         dim,
         num_reduce_input_tile,
