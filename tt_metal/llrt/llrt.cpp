@@ -11,8 +11,6 @@
 #include <unordered_set>
 #include <mutex>
 #include <fmt/ranges.h>
-
-#include "tools/cpuprof/cpuprof.h"
 #include "dev_msgs.h"
 
 namespace tt {
