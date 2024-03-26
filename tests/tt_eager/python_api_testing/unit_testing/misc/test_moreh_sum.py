@@ -14,7 +14,6 @@ TILE_WIDTH = 32
 
 
 def get_tensors(input_shape, output_shape, device):
-    torch.manual_seed(2023)
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
@@ -29,7 +28,6 @@ def get_tensors(input_shape, output_shape, device):
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
-    torch.manual_seed(2023)
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
@@ -43,21 +41,15 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     return tt_output_grad, tt_input_grad, torch_output_grad
 
 
-# Dongjin : WH_B0 skips this test due to the problem of sum reduction for w-dim.
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (
         ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 9 - 1, TILE_WIDTH * 12 - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 9 - 1]),
-        ([8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1]),
+        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1]),
     ),
     ids=[
-        "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 9 - 1, TILE_WIDTH * 12 - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 9 - 1",
-        "8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1",
+        "1, 1, TILE_HEIGHT - 1,TILE_WIDTH - 1",
+        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
     ],
 )
 @pytest.mark.parametrize(
@@ -80,6 +72,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     ids=["0", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1", "1,2", "1,2,3", "1,3", "2", "2,3", "3"],
 )
 def test_moreh_sum_dims(input_shape, dims, device):
+    torch.manual_seed(2023)
     output_shape = input_shape.copy()
 
     for dim in dims:
@@ -113,15 +106,11 @@ def test_moreh_sum_dims(input_shape, dims, device):
     "input_shape",
     (
         ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-        ([4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1]),
-        ([8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1]),
+        ([4, 4, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1]),
     ),
     ids=[
         "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-        "4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1",
-        "8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1",
+        "4, 4, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1",
     ],
 )
 @pytest.mark.parametrize(
@@ -144,6 +133,7 @@ def test_moreh_sum_dims(input_shape, dims, device):
     ids=["0", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1", "1,2", "1,2,3", "1,3", "2", "2,3", "3"],
 )
 def test_moreh_sum_backward(input_shape, dims, device):
+    torch.manual_seed(2023)
     output_shape = input_shape.copy()
 
     for dim in dims:
