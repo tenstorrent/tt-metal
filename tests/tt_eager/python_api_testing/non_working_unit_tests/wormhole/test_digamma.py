@@ -10,18 +10,14 @@ import pytest
 import torch
 import tt_lib as ttl
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 
 
-def run_eltwise_digamma_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
+def run_eltwise_digamma_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     x = gen_rand(size=input_shape, low=1, high=100)
 
@@ -43,7 +39,6 @@ def run_eltwise_digamma_test(
     logger.debug(pcc_value)
     logger.debug(success)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -55,7 +50,6 @@ test_sweep_args = [
         [None],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         7329721,
-        "",
     ),
     (
         (9, 5, 160, 96),
@@ -64,7 +58,6 @@ test_sweep_args = [
         [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         8405597,
-        "",
     ),
     (
         (1, 8, 90, 182),
@@ -73,17 +66,14 @@ test_sweep_args = [
         [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         4367367,
-        "",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_digamma(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def test_eltwise_digamma(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     random.seed(0)
-    run_eltwise_digamma_test(
-        input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-    )
+    run_eltwise_digamma_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)

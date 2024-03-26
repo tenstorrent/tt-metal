@@ -11,12 +11,10 @@ import os
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops, tt_lib_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
 def run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode("")
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -38,7 +36,6 @@ def run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, 
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 

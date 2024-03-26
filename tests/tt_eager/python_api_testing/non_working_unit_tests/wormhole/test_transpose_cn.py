@@ -14,14 +14,10 @@ from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import transpose_cn as tt_transpose_cn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_transpose_cn_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
+def run_transpose_cn_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -45,7 +41,6 @@ def run_transpose_cn_tests(
     logger.debug(pcc_value)
     logger.debug(success)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -57,7 +52,6 @@ test_sweep_args = [
         "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         5163316,
-        "1",
     ),
     (
         (12, 15, 476, 206),
@@ -66,7 +60,6 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         6220343,
-        "1",
     ),
     (
         (12, 15, 476, 206),
@@ -75,20 +68,17 @@ test_sweep_args = [
         "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         14150048,
-        "1",
     ),
 ]
 
 
 # def test_transpose_cn_test(device):
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_transpose_cn_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
+def test_transpose_cn_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     random.seed(0)
     # for i in range(10):
     # for input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode in test_sweep_args:
-    run_transpose_cn_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
+    run_transpose_cn_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
