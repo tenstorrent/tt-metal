@@ -64,12 +64,13 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     return status
 
 
-def compare_all_close(tt_tensor, golden_tensor):
+def compare_all_close(tt_tensor, golden_tensor, atol=4, rtol=1e-1):
     status = True
     for i in range(len(tt_tensor)):
         tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
         pt_out_tensor = golden_tensor[i]
-        comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=4, rtol=1e-1)
+        comp_all, comp_out = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=atol, rtol=rtol)
         logger.debug(comp_all)
+        logger.debug(comp_out)
         status = status & comp_all
     return status
