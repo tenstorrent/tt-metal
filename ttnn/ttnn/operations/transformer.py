@@ -223,6 +223,8 @@ def split_query_key_value_and_split_heads(
         raise RuntimeError("Head size cannot have tile padding!")
 
     if ttnn.is_sharded(input_tensor):
+        if kv_input_tensor is not None:
+            raise RuntimeError("kv_input_tensor cannot be passed in when input_tensor is sharded!")
         input_tensor = ttnn.reshape(
             input_tensor,
             ttnn.Shape(

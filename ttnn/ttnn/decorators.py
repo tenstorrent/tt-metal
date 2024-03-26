@@ -256,10 +256,11 @@ class Operation:
             def call_wrapper(*function_args, **function_kwargs):
                 if self.torch_function is not None:
                     logger.info(f"{self.name} : Comparing against PyTorch")
-
-                if self.torch_function is not None:
                     torch_output = self.torch_function(*function_args, **function_kwargs)
                 else:
+                    logger.info(
+                        f"{self.name} : Skipping comparison against PyTorch because torch_function is not provided"
+                    )
                     torch_output = None
 
                 output = function(*function_args, **function_kwargs)
@@ -273,7 +274,12 @@ class Operation:
                                 raise TypeError(f"Expected Tensor, got {type(output)}")
                             output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
                         else:
-                            output = ttnn.to_torch(output)
+                            if isinstance(output, ttnn.Tensor):
+                                output = ttnn.to_torch(output)
+                            elif isinstance(output, (list, tuple)):
+                                output = [ttnn.to_torch(tensor) for tensor in output]
+                            else:
+                                raise TypeError(f"Expected Tensor, list or tuple, got {type(output)}")
                             raise RuntimeError(
                                 f"{self.name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
                             )

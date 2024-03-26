@@ -419,19 +419,12 @@ def matmul(
 def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_):
     import torch
 
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor_a = ttnn.to_torch(input_tensor_a)
-
-    input_tensor_b = ttnn.from_device(input_tensor_b)
-    input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor_b = ttnn.to_torch(input_tensor_b)
 
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if bias is not None:
-        bias = ttnn.from_device(bias)
-        bias = ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT)
         bias = ttnn.to_torch(bias, torch_rank=1)
         output_tensor += bias
 
