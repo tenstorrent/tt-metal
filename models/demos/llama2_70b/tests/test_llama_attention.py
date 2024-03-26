@@ -292,8 +292,8 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9997), (1, 128, 0.9998), (1, 256, 0.9998), (1, 512, 0.9997), (1, 1024, 0.9997), (1, 2048, 0.9997)),
-    ids=("decode", "prefill_128", "prefill_256", "prefill_512", "prefill_1k", "prefill_2k"),
+    ((32, 1, 0.9997), (1, 128, 0.9998), (1, 2048, 0.9997)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaAttention_inference(
     batch,

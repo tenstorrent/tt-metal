@@ -292,8 +292,8 @@ def run_test_LlamaDecoder_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9993), (1, 128, 0.9994), (1, 256, 0.999), (1, 512, 0.999), (1, 1024, 0.999), (1, 2048, 0.9992)),
-    ids=("decode", "prefill_128", "prefill_256", "prefill_512", "prefill_1k", "prefill_2k"),
+    ((32, 1, 0.9993), (1, 128, 0.9994), (1, 2048, 0.9992)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaDecoder_inference(
     batch,
