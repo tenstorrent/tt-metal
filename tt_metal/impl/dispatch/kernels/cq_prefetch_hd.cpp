@@ -75,95 +75,23 @@ void kernel_main() {
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
-        switch (cmd->base.cmd_id) {
-        case CQ_PREFETCH_CMD_RELAY_LINEAR:
-            DPRINT << "relay linear: " << fence << " " << cmd_ptr << ENDL();
-            cmd_ptr = process_relay_linear_cmd<
-                my_noc_xy,
-                local_dispatch_cb_sem_id,
-                dispatch_noc_xy,
-                dispatch_cb_sem_id,
-                dispatch_cb_base,
-                dispatch_cb_end,
-                dispatch_cb_page_size,
-                scratch_db_half_size>(cmd_ptr, dispatch_data_ptr);
-            break;
+        uint32_t stride;
+        done = process_cmd<
+            false,
+            my_noc_xy,
+            local_dispatch_cb_sem_id,
+            dispatch_noc_xy,
+            dispatch_cb_sem_id,
+            cmddat_q_base,
+            cmddat_q_end,
+            dispatch_cb_base,
+            dispatch_cb_end,
+            dispatch_cb_log_page_size,
+            dispatch_cb_page_size,
+            dispatch_sync_sem_id,
+            scratch_db_half_size>(cmd_ptr, dispatch_data_ptr, stride);
 
-        case CQ_PREFETCH_CMD_RELAY_PAGED:
-            DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
-            if (cmd->relay_paged.is_dram) {
-                cmd_ptr = process_relay_paged_cmd<
-                    true,
-                    my_noc_xy,
-                    local_dispatch_cb_sem_id,
-                    dispatch_noc_xy,
-                    dispatch_cb_sem_id,
-                    dispatch_cb_base,
-                    dispatch_cb_end,
-                    dispatch_cb_page_size,
-                    scratch_db_half_size>(cmd_ptr, dispatch_data_ptr);
-            } else {
-                cmd_ptr = process_relay_paged_cmd<
-                    false,
-                    my_noc_xy,
-                    local_dispatch_cb_sem_id,
-                    dispatch_noc_xy,
-                    dispatch_cb_sem_id,
-                    dispatch_cb_base,
-                    dispatch_cb_end,
-                    dispatch_cb_page_size,
-                    scratch_db_half_size>(cmd_ptr, dispatch_data_ptr);
-            }
-            break;
-
-        case CQ_PREFETCH_CMD_RELAY_INLINE:
-            DPRINT << "inline" << ENDL();
-            cmd_ptr = process_relay_inline_cmd<
-                my_noc_xy,
-                local_dispatch_cb_sem_id,
-                dispatch_noc_xy,
-                dispatch_cb_sem_id,
-                dispatch_cb_base,
-                dispatch_cb_end,
-                dispatch_cb_log_page_size,
-                dispatch_cb_page_size>(cmd_ptr, dispatch_data_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
-            DPRINT << "inline no flush" << ENDL();
-            cmd_ptr = process_relay_inline_noflush_cmd<
-                my_noc_xy,
-                local_dispatch_cb_sem_id,
-                dispatch_noc_xy,
-                dispatch_cb_base,
-                dispatch_cb_end>(cmd_ptr, dispatch_data_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_STALL:
-            DPRINT << "stall" << ENDL();
-            cmd_ptr = process_stall<dispatch_sync_sem_id>(cmd_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_DEBUG:
-            DPRINT << "debug" << ENDL();
-            cmd_ptr = process_debug_cmd(cmd_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_TERMINATE:
-            DPRINT << "terminating\n";
-            done = true;
-            break;
-
-        default:
-            DPRINT << "prefetcher invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << fence << " " << prefetch_q_end << ENDL();
-            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
-            DEBUG_STATUS('!', 'C', 'M', 'D');
-            ASSERT(0);
-        }
+        cmd_ptr += stride;
     }
 
     DPRINT << "prefetch out\n" << ENDL();

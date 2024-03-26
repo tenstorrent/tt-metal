@@ -48,15 +48,17 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
 
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
-    volatile tt_l1_ptr uint32_t *dptr = (volatile tt_l1_ptr uint32_t *)data_ptr;
-    *dptr = length;
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *dptr =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *)data_ptr;
+    dptr->length = length;
 
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
     downstream_cb_acquire_pages<my_noc_xy, local_downstream_cb_sem>(npages);
-    uint32_t dispatch_pages_left = (downstream_cb_end - downstream_data_ptr) / downstream_cb_page_size;
+    static int count = 0;
+    uint32_t dispatch_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (dispatch_pages_left >= npages) {
         noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
         downstream_data_ptr += npages * downstream_cb_page_size;
@@ -77,7 +79,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
     noc_async_writes_flushed();
     downstream_cb_release_pages<downstream_noc_xy, downstream_cb_sem>(npages);
 
-    return data_ptr + length;
+    return fence;
 }
 
 void kernel_main() {
@@ -86,6 +88,9 @@ void kernel_main() {
     uint32_t fence = cmddat_q_base;
 
     DPRINT << "prefetch_h" << ENDL();
+
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_downstream_cb_sem));
 
     bool done = false;
     while (!done) {
@@ -97,15 +102,13 @@ void kernel_main() {
                          prefetch_q_end,
                          prefetch_q_log_minsize,
                          prefetch_q_rd_ptr_addr,
-                         CQ_PREFETCH_DOWNSTREAM_PACKET_HEADER_SIZE>(fence, cmd_ptr, pcie_read_ptr);
+                         sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
 
-        volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-
+        volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+        cmd_ptr = process_relay_inline_all(cmd_ptr, fence);
         if (cmd->base.cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
             DPRINT << "terminating\n";
             done = true;
-        } else {
-            cmd_ptr = process_relay_inline_all(cmd_ptr, fence);
         }
     }
 
