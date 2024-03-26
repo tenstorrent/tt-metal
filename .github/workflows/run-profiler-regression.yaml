@@ -15,15 +15,16 @@ jobs:
         runner-info: [
           # No GS as tests now require synced starts. GS profiler tests will run on dedicated BMs
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       CONFIG: ci
       LOGURU_LEVEL: INFO
+      TT_METAL_WATCHER: 60
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -38,3 +39,9 @@ jobs:
         timeout-minutes: 30
         run: |
           ./tests/scripts/run_profiler_regressions.sh
+      - name: Upload watcher log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.name }}-profiler
+          path: generated/watcher/watcher.log

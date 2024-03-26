@@ -25,6 +25,7 @@ jobs:
       CONFIG: ci
       TT_METAL_SLOW_DISPATCH_MODE: 1
       LOGURU_LEVEL: INFO
+      TT_METAL_WATCHER: 60
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -43,3 +44,9 @@ jobs:
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
+      - name: Upload watcher log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.name }}-sd
+          path: generated/watcher/watcher.log
