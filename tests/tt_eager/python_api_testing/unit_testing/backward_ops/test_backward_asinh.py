@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -16,9 +16,9 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_asin(input_shapes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+def test_bw_asinh(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
     pyt_y = torch.asinh(in_data)
 
@@ -30,5 +30,5 @@ def test_bw_asin(input_shapes, device):
 
     golden_tensor = [in_data.grad]
 
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
