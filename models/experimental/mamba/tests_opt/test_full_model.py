@@ -7,10 +7,10 @@ import pytest
 from loguru import logger
 from transformers import AutoTokenizer
 
-import tt_lib
+import ttnn
 from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.tt.full_model import MambaTT
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.experimental.mamba.tt_opt.full_model import MambaTT
+from models.experimental.mamba.tt_opt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -39,34 +39,36 @@ class MambaPytorch(torch.nn.Module):
         x = self.lm_head(x)
         return x
 
-
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
-    "model_version, batch, pcc",
+    "model_version, batch, pcc, enable_cache",
     (
         (
-            "state-spaces/mamba-370m",
-            1,
+            "state-spaces/mamba-2.8b",
+            32,
             0.99,
+            False,
         ),
     ),
 )
-def test_mamba_model_inference(
-    model_version: MambaPretrainedModelName,
-    batch: int,
-    pcc: float,
-    device: tt_lib.device,
-):
+def test_mamba_model_inference(device, use_program_cache, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool):
     torch.manual_seed(10)
 
     reference_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
     input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
+    input_ids = input_ids.repeat(batch, 1)
 
     reference_output = MambaPytorch(reference_model)(input_ids)
 
-    mamba_model = MambaTT(reference_model, device)
+    if enable_cache:
+        cache_path = f"/tmp/{model_version}"
+    else:
+        cache_path = None
+
+    config = model_config.create_model_config(batch, reference_model.args.d_model)
+    mamba_model = MambaTT(reference_model, device, config, tt_cache_path=cache_path)
 
     tt_output = mamba_model(input_ids)
 

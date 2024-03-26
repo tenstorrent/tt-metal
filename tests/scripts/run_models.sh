@@ -17,6 +17,13 @@ if [[ $ARCH_NAME == "wormhole" ]]; then
   env pytest tests/ttnn/integration_tests/unet
 fi
 
+if [[ $ARCH_NAME == "wormhole_b0" ]]; then
+  env pytest models/experimental/mamba/tests/test_full_model.py
+  env pytest models/experimental/mamba/tests_opt/test_full_model.py
+  env pytest models/experimental/mamba/tests/test_benchmarks.py
+  env pytest models/experimental/mamba/tests/test_demo.py
+fi
+
 env pytest models/experimental/whisper -k whisper_attention
 env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
 
