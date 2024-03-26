@@ -16,6 +16,10 @@ from models.demos.ttnn_falcon7b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
+from models.demos.ttnn_falcon7b.tt.common import (
+    create_custom_preprocessor,
+    create_kv_cache,
+)
 
 from models.utility_functions import (
     is_e75,
@@ -45,30 +49,20 @@ def run_test_FalconCausalLM_end_to_end(
         model_version, config=configuration
     ).eval()
 
-    max_position_embeddings = 2048
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
+    dtype = model_config["DEFAULT_DTYPE"]
+    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
 
     model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
-        kv_len = seq_len
-        assert seq_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
-        assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
-
         past_key_values = None
         tt_layer_past = ()
-        k_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-        v_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
         for i in range(num_layers):
-            tt_k_cache = ttnn.from_torch(
-                k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_v_cache = ttnn.from_torch(
-                v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
+            tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
 
     elif llm_mode == "decode":
@@ -81,21 +75,11 @@ def run_test_FalconCausalLM_end_to_end(
         past_key_values = ()
         tt_layer_past = ()
         for i in range(num_layers):
-            k_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            v_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            past_key_values += ((k_cache, v_cache),)
-
-            tt_k_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_v_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_k_cache[:, :kv_cache_len, :] = k_cache.squeeze(1)
-            tt_v_cache[:, :kv_cache_len, :] = v_cache.squeeze(1)
-            tt_k_cache = ttnn.from_torch(
-                tt_k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
+            current_layer_past, tt_current_layer_past = create_kv_cache(
+                llm_mode, dtype, batch, kv_cache_len, configuration, device
             )
-            tt_v_cache = ttnn.from_torch(
-                tt_v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            past_key_values += (current_layer_past,)
+            tt_layer_past += (tt_current_layer_past,)
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
@@ -103,7 +87,7 @@ def run_test_FalconCausalLM_end_to_end(
     def convert_to_ttnn(model, name):
         return not isinstance(model, torch.nn.Embedding)
 
-    tt_cache_path = get_tt_cache_path(f"{model_version}")
+    tt_cache_path = get_tt_cache_path(model_version)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
@@ -114,7 +98,7 @@ def run_test_FalconCausalLM_end_to_end(
         device,
         num_layers,
         configuration,
-        max_position_embeddings,
+        configuration.max_position_embeddings,
         model_config,
         parameters,
     )
@@ -135,29 +119,17 @@ def run_test_FalconCausalLM_end_to_end(
     if llm_mode == "prefill":
         tt_layer_past = ()
         for i in range(num_layers):
-            tt_k_cache = ttnn.from_torch(
-                k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_v_cache = ttnn.from_torch(
-                v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
+            tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
 
     elif llm_mode == "decode":
         tt_layer_past = ()
         for i in range(num_layers):
-            tt_k_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_v_cache = torch.zeros(batch, configuration.max_position_embeddings, head_dim)
-            tt_k_cache[:, :kv_cache_len, :] = k_cache.squeeze(1)
-            tt_v_cache[:, :kv_cache_len, :] = v_cache.squeeze(1)
-            tt_k_cache = ttnn.from_torch(
-                tt_k_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
+            current_layer_past, tt_current_layer_past = create_kv_cache(
+                llm_mode, dtype, batch, kv_cache_len, configuration, device
             )
-            tt_v_cache = ttnn.from_torch(
-                tt_v_cache.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT, dtype=model_config["DEFAULT_DTYPE"]
-            )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
+            tt_layer_past += (tt_current_layer_past,)
 
     if llm_mode == "prefill":
         model_inputs = torch.split(model_input, 1)

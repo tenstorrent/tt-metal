@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
-from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
@@ -16,7 +14,7 @@ from models.utility_functions import (
 from .falcon_rotary_embedding import TtFalconRotaryEmbedding
 
 
-class TtFalconAttention(nn.Module):
+class TtFalconAttention:
     """Mulit-Query Attention: https://arxiv.org/pdf/1911.02150.pdf"""
 
     def __init__(
@@ -54,11 +52,11 @@ class TtFalconAttention(nn.Module):
 
         self.scalar = 1 / math.sqrt(self.head_dim)
 
-    def forward(
+    def __call__(
         self,
         hidden_states: ttnn.Tensor,
-        alibi: torch.Tensor,
-        attention_mask: torch.Tensor,
+        alibi: ttnn.Tensor,
+        attention_mask: ttnn.Tensor,
         llm_mode: str,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
