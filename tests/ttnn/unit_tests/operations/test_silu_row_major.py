@@ -11,14 +11,11 @@ import torch.nn as nn
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
-from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-
 
 TILE_WIDTH = 32
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -33,7 +30,7 @@ TILE_WIDTH = 32
     ],
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
-def test_upsample_multi_core(device, input_shape, shard_strategy):
+def test_silu_multi_core(device, input_shape, shard_strategy):
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
@@ -50,7 +47,7 @@ def test_upsample_multi_core(device, input_shape, shard_strategy):
 
     ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
     ncores = None
-    max_grid_size = (9, 12)  ## (y, x)
+    max_grid_size = (device.compute_with_storage_grid_size().y, device.compute_with_storage_grid_size().x)
     if shard_strategy == ttnn.ShardStrategy.HEIGHT:
         ## nsticks per shard should be divisible by in_w
         max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
