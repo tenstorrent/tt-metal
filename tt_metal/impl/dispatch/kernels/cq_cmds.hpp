@@ -5,7 +5,6 @@
 // Prefetcher/Dispatcher CMD interfaces
 //  - CMD ID enums: identify the command to execute
 //  - CMD structures: contain parameters for each command
-//  - FLAGs: densely packed bits to configure commands
 
 #pragma once
 
@@ -167,8 +166,23 @@ struct CQDispatchCmd {
     } __attribute__((packed));
 };
 
+//////////////////////////////////////////////////////////////////////////////
+
+// PrefetchH to PrefetchD packet header
+struct CQPrefetchHToPrefetchDHeader {
+    uint32_t length;
+    uint32_t pad1;
+    uint32_t pad2;
+    uint32_t pad3;
+    uint32_t pad4;
+    uint32_t pad5;
+    uint32_t pad6;
+    uint32_t pad7;
+};
+
 
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
-static_assert((sizeof(CQPrefetchCmd) & 0xf) == 0);
-static_assert((sizeof(CQDispatchCmd) & 0xf) == 0);
+static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
