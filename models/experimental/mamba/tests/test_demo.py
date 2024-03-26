@@ -10,8 +10,10 @@ from transformers import AutoTokenizer
 
 from models.experimental.mamba.demo.demo import run_demo
 from models.experimental.mamba.reference.decode_model import MambaPretrainedModelName
+from models.utility_functions import skip_for_grayskull 
 
 
+@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, genlen",
     (
