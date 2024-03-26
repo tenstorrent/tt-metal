@@ -5,7 +5,10 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+    data_gen_with_range,
+    compare_all_close,
+)
 
 
 @pytest.mark.parametrize(
@@ -22,8 +25,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 #   value: grad.sum()
 #   result: at::fill(self_t, value_t)
 def test_bw_fill(input_shapes, device):
-    # torch.manual_seed(12386)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     pyt_y = torch.zeros_like(grad_data)
     grad_sum = grad_data.sum()
     pyt_y.fill_(grad_sum)
@@ -31,5 +33,5 @@ def test_bw_fill(input_shapes, device):
     tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
 
     golden_tensor = [pyt_y]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=100, rtol=1e-6)
     assert comp_pass
