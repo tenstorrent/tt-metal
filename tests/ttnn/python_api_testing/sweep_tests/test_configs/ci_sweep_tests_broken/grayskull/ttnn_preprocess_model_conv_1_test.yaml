@@ -18,7 +18,7 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       args:
-        data-layout: ["ROW_MAJOR"]
+        data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
