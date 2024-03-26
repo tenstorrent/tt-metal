@@ -109,10 +109,29 @@ struct PageRange {
     uint32_t end;
 };
 
+struct Stride {
+    CoreCoord core;
+    uint32_t data;
+};
+
+struct PageStride {
+    CoreCoord start_core;
+    uint32_t start_data;
+    uint32_t stride_size; //number of pages per stride
+    Stride stride;
+    uint32_t num_strides;
+};
+
 struct CorePageRange {
     CoreCoord core;
     PageRange range;
 };
+
+struct CorePageStride {
+    CoreCoord core;
+    PageStride page_stride;
+};
+
 
 // TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
