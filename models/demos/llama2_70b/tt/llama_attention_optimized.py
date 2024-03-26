@@ -1007,6 +1007,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
                     is_causal_mask=True,
                 )
+                attn_mask_slices[i].deallocate(True)
 
             # POST-SOFTMAX MM
             attn_output = []
