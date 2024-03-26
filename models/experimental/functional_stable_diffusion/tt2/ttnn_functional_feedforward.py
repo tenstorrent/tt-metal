@@ -13,7 +13,13 @@ class feedforward:
         self.geglu = geglu(device, parameters.net[0])
 
     def __call__(self, config, hidden_states):
-        act = self.geglu(config, hidden_states)
-        output = act @ self.parameters.net[2].weight
-        output = ttnn.add(output, self.parameters.net[2].bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        return output
+        hidden_states = self.geglu(config, hidden_states)
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.parameters.net[2].weight,
+            bias=self.parameters.net[2].bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            # dtype=ttnn.bfloat8_b,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
+        return hidden_states

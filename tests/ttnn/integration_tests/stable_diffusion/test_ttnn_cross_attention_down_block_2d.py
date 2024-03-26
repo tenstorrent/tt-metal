@@ -8,14 +8,23 @@ from torch import nn
 from diffusers import StableDiffusionPipeline
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
     cross_attention_down_block_2d,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    pre_process_input,
+    post_process_output,
+)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, in_channels",
@@ -25,16 +34,16 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
             320,
             32,
             32,
-            0,
-            320,
+            1,
+            640,
         ),
         (
             2,
             320,
             16,
             16,
-            0,
-            320,
+            1,
+            640,
         ),
         (
             2,
@@ -55,6 +64,13 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
     state_dict = pipe.unet.state_dict()
     config = pipe.unet.config
 
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: down_block,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
+    )
+    model = cross_attention_down_block_2d(device, parameters, None, N, H, W)
+
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.randn(hidden_states_shape)
 
@@ -75,22 +91,19 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
-    hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
+    hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
-    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device)
+    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
+    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device)
+    temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: down_block,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-
-    ttnn_output, _ = cross_attention_down_block_2d(
+    hidden_states = pre_process_input(device, hidden_states)
+    ttnn_output, _ = model(
         hidden_states,
         encoder_hidden_states,
         temb,
@@ -100,14 +113,13 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
         add_downsample=True,
         cross_attention_kwargs={},
         config=config,
-        parameters=parameters,
-        device=device,
     )
-
+    ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.98)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, in_channels",
@@ -125,8 +137,8 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
             320,
             32,
             32,
-            0,
-            320,
+            1,
+            640,
         ),
         (
             2,
@@ -146,6 +158,14 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
     down_block.eval()
     state_dict = pipe.unet.state_dict()
     config = pipe.unet.config
+    reader_patterns_cache = {}
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: down_block,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
+    )
+    model = cross_attention_down_block_2d(device, parameters, reader_patterns_cache, N, H, W)
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.randn(hidden_states_shape)
@@ -166,35 +186,30 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
-    hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
+    hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
-    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device)
+    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
+    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device)
+    temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: down_block,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-
-    reader_patterns_cache = {}
-    ttnn_output, _ = cross_attention_down_block_2d(
+    hidden_states = pre_process_input(device, hidden_states)
+    ttnn_output, _ = model(
         hidden_states,
         encoder_hidden_states,
         temb,
-        in_channels=in_channels,
+        in_channels=C,
         out_channels=in_channels,
         attention_mask=None,
         add_downsample=True,
         cross_attention_kwargs={},
         config=config,
-        parameters=parameters,
-        device=device,
-        reader_patterns_cache=reader_patterns_cache,
     )
+    ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)
+
     assert_with_pcc(torch_output, ttnn_output, 0.94)

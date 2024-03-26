@@ -444,3 +444,19 @@ def is_close(a, b, rtol=8e-2, atol=8e-2, max_mag=4.0, max_mag_fraction=0.02):
         w = (debug_index % 1024) % 32
         print("****    at ", debug_index, " --- ", "HTWT=", ht, wt, "HW=", h, w)
     return torch.all(or_abs_rel)
+
+
+def find_closest_largest_divisor(num: int, start_divisor: int):
+    divisor = start_divisor
+    while num % divisor != 0:
+        divisor = divisor - 1
+    return divisor
+
+
+def find_closest_largest_divisor_with_num_padding(num: int, start_divisor: int):
+    divisor = start_divisor
+    padded_num = _nearest_y(num, divisor)
+    while (padded_num - num) >= (int)(padded_num / divisor):
+        divisor = divisor - 1
+        padded_num = _nearest_y(num, divisor)
+    return divisor

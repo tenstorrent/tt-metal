@@ -20,7 +20,7 @@ void NlpCreateHeadsFalcon7B::validate(const std::vector<Tensor>& input_tensors) 
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0);
@@ -70,7 +70,7 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input shape");
@@ -126,9 +126,21 @@ std::vector<Shape> NlpCreateHeads::compute_output_shapes(const std::vector<Tenso
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
-    const Shape q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const Shape v_output_shape = {input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
-    const Shape k_output_shape = this->transpose_k_heads ? (Shape) {input_shape[0], this->num_kv_heads, this->head_dim, input_shape[2]} : v_output_shape;
+
+    auto sequence_length = input_shape[2];
+    auto head_dim = this->head_dim;
+    if (sequence_length % TILE_HEIGHT != 0) {
+        sequence_length = (sequence_length / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    }
+    if (head_dim % TILE_WIDTH != 0) {
+        head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
+    }
+
+    const Shape q_output_shape = {input_shape[0], this->num_q_heads, sequence_length, head_dim};
+    const Shape v_output_shape = {input_shape[0], this->num_kv_heads, sequence_length, head_dim};
+    const Shape k_output_shape = this->transpose_k_heads
+                                     ? (Shape){input_shape[0], this->num_kv_heads, head_dim, sequence_length}
+                                     : v_output_shape;
     output_shape_vec = {q_output_shape, k_output_shape, v_output_shape};
 
     return output_shape_vec;
@@ -188,7 +200,7 @@ void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     if (input_tensor.is_sharded()) {
@@ -209,7 +221,14 @@ std::vector<Shape> NlpConcatHeads::compute_output_shapes(const std::vector<Tenso
     const auto input_shape = input_tensor.get_legacy_shape();
     output_shape_vec = {(Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
 
-    return output_shape_vec;
+    auto num_heads = input_shape[1];
+    auto sequence_length = input_shape[2];
+    auto head_dim = input_shape[3];
+
+    auto hidden_dim = num_heads * head_dim;
+
+    const Shape output_shape = {input_shape[0], 1, sequence_length, hidden_dim};
+    return {output_shape};
 }
 
 std::vector<Tensor> NlpConcatHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

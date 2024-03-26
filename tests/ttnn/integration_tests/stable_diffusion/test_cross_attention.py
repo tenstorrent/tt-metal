@@ -10,10 +10,17 @@ import ttnn
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attention import (
     cross_attention as ttnn_cross_attention,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention import (
+    cross_attention as tt2_ttnn_cross_attention,
+)
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, has_encoder_hidden_states",
@@ -129,6 +136,7 @@ def test_cross_attention_256x256(device, model_name, N, C, H, W, index, has_enco
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, has_encoder_hidden_states",
@@ -227,15 +235,23 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
 
     parameters = preprocess_model_parameters(initialize_model=lambda: cross_attn, device=device)
 
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16)
+    if encoder_hidden_states is not None:
+        encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
+        ttnn_encoder_hidden_states = ttnn.from_torch(
+            encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+    else:
+        ttnn_encoder_hidden_states = None
+
+    ttnn_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
 
-    ttnn_output = ttnn_cross_attention(
+    model = tt2_ttnn_cross_attention(device, parameters)
+    ttnn_output = model(
         ttnn_hidden_states,
         ttnn_encoder_hidden_states,
         attention_mask=None,
-        parameters=parameters,
-        device=device,
+        dim_head=W // 8,
     )
 
     ttnn_output = ttnn.from_device(ttnn_output)

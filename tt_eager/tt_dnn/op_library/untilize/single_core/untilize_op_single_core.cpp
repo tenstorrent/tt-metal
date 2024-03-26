@@ -194,6 +194,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
+    log_debug("untilize_with_unpadding_single_core");
+    log_debug("input_cb_data_format: {}", input_cb_data_format);
+    log_debug("output_cb_data_format: {}", output_cb_data_format);
+
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     int32_t num_tiles = a.volume() / TILE_HW;
@@ -288,6 +292,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         (std::uint32_t) out_is_dram,
         (std::uint32_t) stick_size_is_power_of_two,
         (std::uint32_t) log2_stick_size,
+        (std::uint32_t) (input_cb_data_format == tt::DataFormat::Float32)
     };
 
     // Tilized reader

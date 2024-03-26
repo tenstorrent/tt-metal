@@ -18,7 +18,7 @@ Device = ttl.device.Device
 Device.core_grid = property(get_device_core_grid)
 
 
-def open_device(*, device_id: int):
+def open_device(device_id: int):
     """
     open_device(device_id: int) -> ttnn.Device:
 
@@ -54,7 +54,7 @@ def synchronize_device(device):
 
 
 @contextlib.contextmanager
-def manage_device(*, device_id: int):
+def manage_device(device_id: int):
     """
     manage_device(device_id: int) -> ttnn.Device:
 
@@ -67,8 +67,8 @@ def manage_device(*, device_id: int):
         close_device(device)
 
 
-def dump_device_memory_state(device):
-    ttl.device.DumpDeviceMemoryState(device)
+def dump_device_memory_state(device, prefix=""):
+    ttl.device.DumpDeviceMemoryState(device, prefix)
 
 
 __all__ = []

@@ -12,11 +12,22 @@ from torch import nn
 from models.utility_functions import tt_to_torch_tensor, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attn_upblock import (
-    cross_attention_upblock2d,
+    cross_attention_upblock2d as ttnn_cross_attention_upblock2d,
 )
+from models.utility_functions import (
+    skip_for_grayskull,
+)
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+    cross_attention_upblock2d as tt2_ttnn_cross_attention_upblock2d,
+)
+
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input,
+    post_process_output,
+)
 
 
 def ttnn_to_torch(input):
@@ -26,6 +37,7 @@ def ttnn_to_torch(input):
     return input
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel,in_channels,  out_channels",
     [
@@ -127,7 +139,7 @@ def test_cross_attn_up_block_2d_256x256(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    op = cross_attention_upblock2d(
+    op = ttnn_cross_attention_upblock2d(
         hidden_state,
         res_hidden_states_tuple,
         parameters,
@@ -169,6 +181,7 @@ def test_cross_attn_up_block_2d_256x256(
     assert_with_pcc(torch_output, op, 0.90)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel, in_channels ,out_channels",
     [
@@ -209,6 +222,7 @@ def test_cross_attn_up_block_2d_512x512(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
     parameters = parameters.up_blocks[index]
+    _, Cout, Hout, Wout = res_hidden_states_tuple[2]
 
     # synthesize the input
     temb_channels = 1280
@@ -223,6 +237,7 @@ def test_cross_attn_up_block_2d_512x512(
     cross_attention_kwargs = None
     upsample_size = None
     attention_mask = None
+    reader_patterns_cache = {}
 
     # execute pytorch
     torch_output = unet_upblock(
@@ -234,6 +249,9 @@ def test_cross_attn_up_block_2d_512x512(
         cross_attention_kwargs=cross_attention_kwargs,
         upsample_size=upsample_size,
     )
+
+    N, _, H, W = input_shape
+    model = tt2_ttnn_cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W)
 
     timestep = (None,)
     class_labels = (None,)
@@ -259,6 +277,18 @@ def test_cross_attn_up_block_2d_512x512(
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
     hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    res0 = ttnn.from_torch(res0, ttnn.bfloat16)
+    res0 = ttnn.to_layout(res0, ttnn.TILE_LAYOUT)
+    res0 = ttnn.to_device(res0, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res1 = ttnn.from_torch(res1, ttnn.bfloat16)
+    res1 = ttnn.to_layout(res1, ttnn.TILE_LAYOUT)
+    res1 = ttnn.to_device(res1, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res2 = ttnn.from_torch(res2, ttnn.bfloat16)
+    res2 = ttnn.to_layout(res2, ttnn.TILE_LAYOUT)
+    res2 = ttnn.to_device(res2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -270,11 +300,15 @@ def test_cross_attn_up_block_2d_512x512(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    reader_patterns_cache = {}
-    op = cross_attention_upblock2d(
+    hidden_state = pre_process_input(device, hidden_state)
+    res_hidden_states_tuple = (
+        pre_process_input(device, res0),
+        pre_process_input(device, res1),
+        pre_process_input(device, res2),
+    )
+    op = model(
         hidden_state,
         res_hidden_states_tuple,
-        parameters,
         in_channels,
         prev_output_channel,
         out_channels,
@@ -287,7 +321,6 @@ def test_cross_attn_up_block_2d_512x512(
         resnet_pre_norm=True,
         output_scale_factor=1.0,
         add_upsample=add_upsample,
-        device=device,
         temb=temb,
         upsample_size=upsample_size,
         config=config,
@@ -306,9 +339,13 @@ def test_cross_attn_up_block_2d_512x512(
         attn_num_head_channels=attn_num_head_channels,
         attention_mask=attention_mask,
         cross_attention_dim=cross_attention_dim,
-        reader_patterns_cache=reader_patterns_cache,
     )
 
     op = ttnn_to_torch(op)
+    if in_channels == out_channels:
+        op = torch.reshape(op, (N, H, W, Cout))
+    else:
+        op = torch.reshape(op, (N, H * 2, W * 2, Cout))
+    op = op.permute(0, 3, 1, 2)
 
     assert_with_pcc(torch_output, op, 0.84)

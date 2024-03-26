@@ -113,6 +113,11 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
+    log_debug("transpose_hc_multi_core");
+    log_debug("sub_tile_line_bytes: {}", sub_tile_line_bytes);
+    log_debug("cb_data_format: {}", cb_data_format);
+    log_debug("single_tile_size: {}", single_tile_size);
+
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
@@ -139,7 +144,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
-        (std::uint32_t) sub_tile_line_bytes
+        (std::uint32_t) sub_tile_line_bytes,
+        (std::uint32_t) (cb_data_format == tt::DataFormat::Float32)
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
