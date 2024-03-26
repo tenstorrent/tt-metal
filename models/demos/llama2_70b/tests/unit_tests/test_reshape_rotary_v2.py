@@ -67,13 +67,17 @@ class TtLlamaRotary(torch.nn.Module):
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads
         self.head_dim = hidden_size // n_heads
+        self.device = device
         self.transformation_mat = torch2tt_tensor(get_rot_transformation_mat(self.head_dim), device)
 
     def apply_rotary(self, x, cos, sin):
         batch, n_heads, _, _ = x.shape
+
         cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
         sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
-        x_transformed = tt_lib.operations.primary.matmul(x, self.transformation_mat)
+
+        x_transformed = ttnn.matmul(x, self.transformation_mat)
+
         x_cos = ttnn.mul(cos, x)
         x_sin = ttnn.mul(sin, x_transformed)
         return ttnn.add(x_cos, x_sin)
