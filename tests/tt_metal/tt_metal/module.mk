@@ -15,6 +15,8 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_dispatcher \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_prefetcher \
+		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data \
+		 tests/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 \
@@ -60,6 +62,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_reduce_hw \
 		 tests/tt_metal/test_untilize_eltwise_binary \
 		 tests/tt_metal/test_bfp8_conversion \
+		 tests/tt_metal/test_bfp4_conversion \
 		 tests/tt_metal/tt_dispatch/test_enqueue_program \
 		 tests/tt_metal/test_core_range_set \
 		 tests/tt_metal/test_compile_sets_kernel_binaries \

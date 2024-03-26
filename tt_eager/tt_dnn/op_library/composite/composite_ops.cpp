@@ -105,15 +105,20 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _log1p)(x, output_mem_config);
 }
 
-// softplus[x] = log[1 + exp[x]]
+// softplus[x] =(1/beta) * log[1 + exp[x * beta]]
+// (x*beta) > threshold ==> x
 // use transformation y = log[1+exp[x]] by broadcast
-Tensor _softplus(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor exp_x = exp(x, output_mem_config);
+Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfig& output_mem_config) {
+    float oned_beta = (1 / beta);
+    Tensor x_beta = mul_unary(x, beta, output_mem_config);
+    Tensor exp_x = exp(x_beta, output_mem_config);
     Tensor result_log1p = log1p(exp_x, output_mem_config);
-    return result_log1p;
+    Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
+    sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x, sp_result, output_mem_config);
+    return sp_result;
 }
-Tensor softplus(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _softplus)(a, output_mem_config);
+Tensor softplus(const Tensor& a, float beta, float threshold, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _softplus)(a, beta, threshold, output_mem_config);
 }
 
 // tanhshrink(x) = x - tanh(x)
@@ -227,7 +232,7 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
 // use transformation y = x*tanh[softplus[x]] by broadcast
 // Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
 Tensor _mish(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor sp_x = softplus(x, output_mem_config);
+    Tensor sp_x = softplus(x, 1.0f, 20.0f, output_mem_config);
     Tensor tanh_x = tanh(sp_x, output_mem_config);
     sp_x.deallocate();
     Tensor mish_x = mul(x, tanh_x, std::nullopt, output_mem_config);
@@ -825,55 +830,19 @@ Tensor addcdiv(
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
-    Tensor t_eps = mk_filled_tensor_like(input_a, eps, output_mem_config);
-    Tensor t_one = ones_like(input_a, output_mem_config);
-    Tensor t_inf = mul_unary(t_one, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor partial_output(input_a);
-    {
-        Tensor result(input_a);
-        {
-            Tensor output(input_a);
-            {
-                Tensor mul_input(input_a);
-                {
-                    Tensor sub_input(input_a);
-                    {
-                        Tensor neg_input = neg(input_a, output_mem_config);
-                        sub_input = add_unary(neg_input, 1.0f, output_mem_config);
-                    }
-                    mul_input = mul(input_a, recip(sub_input, output_mem_config), std::nullopt, output_mem_config);
-                }
-
-                Tensor mul_eps(input_a);
-                {
-                    Tensor sub_eps(input_a);
-                    {
-                        Tensor neg_eps = neg(t_eps, output_mem_config);
-                        sub_eps = add_unary(neg_eps, 1.0f, output_mem_config);
-                    }
-                    mul_eps = mul(t_eps, recip(sub_eps, output_mem_config), std::nullopt, output_mem_config);
-                }
-                {
-                    Tensor ia_lt_eps = lt(input_a, t_eps, std::nullopt, output_mem_config);
-                    output = where(ia_lt_eps, mul_eps, mul_input, output_mem_config);
-                }
-            }
-            result = log(output, output_mem_config);
-        }
-        {
-            Tensor in_eq_one = eq(input_a, t_one, std::nullopt, output_mem_config);
-            partial_output = where(in_eq_one, t_inf, result, output_mem_config);
-        }
-    }
-    Tensor final_result(input_a);
-    {
-        float t_nan = std::nanf("");
-        Tensor eps_gt_one = gt(t_eps, t_one, std::nullopt, output_mem_config);
-        Tensor eps_eq_one = eq(t_eps, t_one, std::nullopt, output_mem_config);
-        final_result =
-            where(eps_eq_one, t_inf, where(eps_gt_one, t_nan, partial_output, output_mem_config), output_mem_config);
-    }
-    return final_result;
+    Tensor t_eps = full_like(input_a, eps, output_mem_config);
+    Tensor t1m_eps = full_like(input_a, (1 - eps), output_mem_config);
+    Tensor logit_input = where( ltz(t_eps, output_mem_config), input_a,  where( lt(input_a, t_eps, std::nullopt, output_mem_config), t_eps,
+                         where( gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a, output_mem_config), output_mem_config), output_mem_config);
+    t_eps.deallocate();
+    t1m_eps.deallocate();
+    Tensor linput_m1 = rsub(logit_input, 1.0, output_mem_config);
+    Tensor log_input = mul(logit_input, recip(linput_m1, output_mem_config), std::nullopt, output_mem_config);
+    linput_m1.deallocate();
+    Tensor t_inf = mul_unary(sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor logit_result = where(eq_unary(logit_input, 1.0, output_mem_config), t_inf,
+                          where(ltz(log_input, output_mem_config), std::nanf(" "), log(log_input, output_mem_config), output_mem_config), output_mem_config);
+    return logit_result;
 }
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
@@ -917,18 +886,9 @@ Tensor logical_xori(const Tensor& input_a, float value, const MemoryConfig& outp
 
 // xlogy(x,y))=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(std::nanf(""));
-    Tensor t_nan = bcast(ltz(input_b, output_mem_config), t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
-    t_value.deallocate();
-    Tensor t_temp = add(eqz(input_b, output_mem_config), t_nan, std::nullopt, output_mem_config);
-    Tensor t_gtz = mul(gtz(input_b, output_mem_config), input_b, std::nullopt, output_mem_config);
-    t_temp = add(t_gtz, t_temp, std::nullopt, output_mem_config);
-    t_gtz.deallocate();
-    Tensor t_log = log(t_temp, output_mem_config);
-    t_temp.deallocate();
-    Tensor result = mac(input_a, t_log, t_nan, output_mem_config);
-    t_log.deallocate();
-    t_nan.deallocate();
+    Tensor t_nan = full_like(input_b, std::nanf(" "), output_mem_config);
+    Tensor result = mul(input_a, log(input_b, output_mem_config), std::nullopt, output_mem_config);
+    result = where(logical_or(ltz(input_b, output_mem_config), eq(input_b, t_nan, std::nullopt, output_mem_config), std::nullopt, output_mem_config), t_nan, result, output_mem_config);
     return result;
 }
 Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
@@ -1415,30 +1375,6 @@ Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem
 Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config) {
     return power(input_a, exponent, output_mem_config);
 }
-
-// repeat a input tensor @input_a as specified by the number of dimensions
-Tensor _repeat(const Tensor& input_a, const Shape& shape, const MemoryConfig& output_mem_config) {
-    auto& input_shape = input_a.get_legacy_shape();
-    TT_FATAL(input_shape.rank() == shape.rank(), "repeat dimensions should be same rank as input tensor");
-
-    Tensor y = input_a;
-    for (uint32_t dim = 0; dim < shape.rank(); dim++) {
-        TT_FATAL(
-            shape[dim] > 0, "repetition dimension should be 1 or more; unable to delete tensor dimension at this time");
-        std::vector<Tensor> Yrepetitions;
-        for (uint32_t idx = 0; idx < shape[dim]; idx++) Yrepetitions.emplace_back(y);
-        y = concat(Yrepetitions, dim, output_mem_config);
-        Yrepetitions.clear();
-    }
-    return y;
-}
-Tensor repeat(
-    const Tensor& input_a,
-    const Shape& shape_b,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _repeat)(input_a, shape_b, output_mem_config);
-}
-
 
 // Argmax returns the index of maximum element in the tensor
 Tensor _argmax(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {

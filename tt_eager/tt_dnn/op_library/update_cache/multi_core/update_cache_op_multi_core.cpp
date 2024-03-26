@@ -8,6 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include <stdint.h>
 
 using namespace tt::constants;
 
@@ -15,7 +16,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx) {
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
@@ -24,22 +25,50 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat interm_cb_data_format = tt::DataFormat::Float16_b;
+    tt_metal::Device *device = input_tensor.device();
+
+    bool fp32_dest_acc_en;
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_cb_data_format);
 
     uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
 
     // Width size after untilize
-    uint32_t Wbytes = cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
+
+    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug("input_cb_data_format: {}", input_cb_data_format);
+    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug("Wbytes: {}", Wbytes);
+    log_debug("Wt: {}", Wt);
+
 
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.get_legacy_shape()[1];
 
+    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+
     uint32_t B = input_tensor.get_legacy_shape()[-2];
+    uint32_t Bcache = cache_tensor.get_legacy_shape()[0];
+    const uint32_t granularity = min(static_cast<uint32_t>(2), Bcache); // granularity = 2 best for performance
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
-    tt_metal::Device *device = input_tensor.device();
+    uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -71,7 +100,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         num_input_tiles = 2 * Wt; // double buffered
     }
     uint32_t src0_cb_index = CB::c_in0;
-    uint32_t num_cache_tiles = 2 * Wt; // double buffered
+    uint32_t num_cache_tiles = 2 * granularity * Wt; // double buffered
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_cache_tiles * cache_single_tile_size, {{src0_cb_index, cache_cb_data_format}})
 		.set_page_size(src0_cb_index, cache_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
@@ -85,7 +114,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     uint32_t interm0_cb_index = CB::c_intermed0;
     uint32_t interm1_cb_index = CB::c_intermed1;
-    uint32_t num_interm_tiles = Wt;
+
+    uint32_t num_interm_tiles = 2 * granularity * Wt; // double buffered
     std::map<uint8_t, tt::DataFormat> interim_data_format_spec = {
         {interm0_cb_index, interm_cb_data_format},
         {interm1_cb_index, interm_cb_data_format}
@@ -102,7 +132,9 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     // Output is same tensor as cache input, so cb/tile size is same
     uint32_t output_cb_index = CB::c_out0;
-    uint32_t num_output_tiles = 2 * Wt;
+
+    // Must buffer all tiles for a single head
+    uint32_t num_output_tiles = B * Wt;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * cache_single_tile_size, {{output_cb_index, cache_cb_data_format}})
 		.set_page_size(output_cb_index, cache_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
@@ -112,12 +144,16 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
+    const uint32_t u_count = u_range/granularity;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)dst_is_dram,
-        (uint32_t)src_is_dram,
+        (std::uint32_t) dst_is_dram,
+        (std::uint32_t) src_is_dram,
         (std::uint32_t) src0_cb_index,
-        (std::uint32_t) src1_cb_index
+        (std::uint32_t) src1_cb_index,
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -125,7 +161,9 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         (std::uint32_t) output_cb_index,
         (std::uint32_t) interm0_cb_index,
         (std::uint32_t) interm1_cb_index,
-        (std::uint32_t) interm2_cb_index
+        (std::uint32_t) interm2_cb_index,
+        (std::uint32_t) granularity,
+        (std::uint32_t) u_count
     };
 
     std::map<string, string> reader_kernel_defines;
@@ -153,14 +191,16 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         interm2_cb_index,
         output_cb_index,
         num_batched_heads_per_core_group_1,
-        Wt
+        Wt,
+        granularity,
+        u_count
     };
 
     auto compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
 
     if (!core_group_2.ranges().empty()) {
@@ -169,7 +209,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_2,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
     }
 
@@ -206,7 +246,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             {
                 dst_buffer->address(),
                 src_buffer->address(),
-                Wt, B, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, input_start_id, batch_start_id
+                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, input_start_id, batch_start_id
             }
         );
 
@@ -216,7 +256,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             core,
             {
                 dst_buffer->address(),
-                Wt, B, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset
+                Wt, Bcache, num_batched_heads_per_core, cache_total_num_tiles, cache_batch_num_tiles, cache_head_num_tiles, cache_start_id, batch_start_id, Wbytes, tile_update_offset, batch_read_offset
             }
         );
         total_batched_heads += num_batched_heads_per_core;

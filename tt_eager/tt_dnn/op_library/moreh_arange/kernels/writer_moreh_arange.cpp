@@ -6,6 +6,8 @@
 
 #include "dataflow_api.h"
 
+#define TILE_WIDTH 32
+
 void kernel_main() {
     // Kernel args
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -36,25 +38,52 @@ void kernel_main() {
         uint32_t tile_idx = tile_offset + t;
 
         uint32_t w_addr = get_write_ptr(cb_out);
+
+        #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t *>(w_addr);
-        // sub tile 0
-        {
-            for (uint32_t w = 0; w < 16; w++) {
-                int32_t idx = w + tile_idx * 32;
-                u val;
-                val.f = start_u.f + step_u.f * idx;
-                ptr[w] = uint16_t(val.u >> 16);
-            }
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = w + tile_idx * TILE_WIDTH;
+            u val;
+            val.f = start_u.f + step_u.f * idx;
+            ptr[w] = uint16_t(val.u >> 16);
         }
-        // sub tile 1
-        {
-            for (uint32_t w = 0; w < 16; w++) {
-                int32_t idx = (w + 16) + tile_idx * 32;
-                u val;
-                val.f = start_u.f + step_u.f * idx;
-                ptr[w + 256] = uint16_t(val.u >> 16);
-            }
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = (w + 16) + tile_idx * TILE_WIDTH;
+            u val;
+            val.f = start_u.f + step_u.f * idx;
+            ptr[w + 256] = uint16_t(val.u >> 16);
         }
+        #endif
+        #ifdef OUTPUT_DTYPE_UINT32
+        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = w + tile_idx * TILE_WIDTH;
+            uint32_t val;
+            val = start_u.f + step_u.f * idx;
+            ptr[w] = val;
+        }
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = (w + 16) + tile_idx * TILE_WIDTH;
+            uint32_t val;
+            val = start_u.f + step_u.f * idx;
+            ptr[w + 256] = val;
+        }
+        #endif
+        #ifdef OUTPUT_DTYPE_FLOAT32
+        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = w + tile_idx * TILE_WIDTH;
+            u val;
+            val.f = start_u.f + step_u.f * idx;
+            ptr[w] = val.u;
+        }
+        for (uint32_t w = 0; w < 16; w++) {
+            int32_t idx = (w + 16) + tile_idx * TILE_WIDTH;
+            u val;
+            val.f = start_u.f + step_u.f * idx;
+            ptr[w + 256] = val.u;
+        }
+        #endif
 
         uint64_t dst_noc_addr = get_noc_addr(tile_idx, s0);
         noc_async_write(w_addr, dst_noc_addr, num_bytes_per_tile);

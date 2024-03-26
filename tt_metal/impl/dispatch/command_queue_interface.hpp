@@ -14,8 +14,9 @@
 using namespace tt::tt_metal;
 
 // Starting L1 address of commands
-inline uint32_t get_command_start_l1_address() {
-    return L1_UNRESERVED_BASE;
+inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
+    //place holder for future relocatoin of unreserved base on ethernet cores.
+    return use_eth_l1 ? ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE;
 }
 
 inline uint32_t get_eth_command_start_l1_address(SyncCBConfigRegion cq_region) {
@@ -30,17 +31,25 @@ inline uint32_t get_eth_command_start_l1_address(SyncCBConfigRegion cq_region) {
 }
 
 // Where issue queue interface core pulls in data (follows command)
-inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
+inline uint32_t get_data_section_l1_address(bool use_eth_l1, bool use_idle_eth) {
     if (use_eth_l1) {
-        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        if (use_idle_eth) {
+            return L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        } else {
+            return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        }
     } else {
         return L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }
 }
 
-inline uint32_t get_cq_data_buffer_size(bool use_eth_l1) {
+inline uint32_t get_cq_data_buffer_size(bool use_eth_l1, bool use_idle_eth) {
     if (use_eth_l1) {
-        return eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        if (use_idle_eth) {
+            return MEM_ETH_SIZE - L1_UNRESERVED_BASE -  DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        } else {
+            return eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        }
     } else {
         return MEM_L1_SIZE - L1_UNRESERVED_BASE -  DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }
@@ -49,7 +58,7 @@ inline uint32_t get_cq_data_buffer_size(bool use_eth_l1) {
 // Space available in command_queue_consumer
 inline uint32_t get_consumer_data_buffer_size() {
     uint32_t num_consumer_cmd_slots = 2;
-    uint32_t producer_data_buffer_size = get_cq_data_buffer_size(false);
+    uint32_t producer_data_buffer_size = get_cq_data_buffer_size(false, false);
     return (producer_data_buffer_size - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND) / num_consumer_cmd_slots;
 }
 
@@ -173,17 +182,26 @@ class SystemMemoryManager {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         char* hugepage_start = (char*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         this->cq_sysmem_start = hugepage_start;
-        this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+
+        // TODO(abhullar): Remove env var and expose sizing at the API level
+        char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
+        if (cq_size_override_env != nullptr) {
+            uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
+            this->cq_size = cq_size_override;
+        } else {
+            this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+        }
         this->channel_offset = DeviceCommand::MAX_HUGEPAGE_SIZE * channel;
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair issue_queue_reader_core = dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(device_id, channel, cq_id);
-            const std::tuple<uint32_t, uint32_t> issue_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(issue_queue_reader_core.chip, tt::get_physical_core_coordinate(issue_queue_reader_core, CoreType::WORKER))).value();
+            CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
+            const std::tuple<uint32_t, uint32_t> issue_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(issue_queue_reader_core.chip, tt::get_physical_core_coordinate(issue_queue_reader_core, core_type))).value();
             auto [issue_tlb_offset, issue_tlb_size] = issue_interface_tlb_data;
             this->issue_byte_addrs[cq_id] = issue_tlb_offset + CQ_ISSUE_WRITE_PTR % issue_tlb_size;
 
             tt_cxy_pair completion_queue_writer_core = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
-            const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(completion_queue_writer_core.chip, tt::get_physical_core_coordinate(completion_queue_writer_core, CoreType::WORKER))).value();
+            const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(completion_queue_writer_core.chip, tt::get_physical_core_coordinate(completion_queue_writer_core, core_type))).value();
             auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + CQ_COMPLETION_READ_PTR % completion_tlb_size;
 
@@ -271,13 +289,6 @@ class SystemMemoryManager {
         uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
 
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-        // if (cq_interface
-        //         .issue_fifo_wr_ptr + cmd_size_16B > cq_interface.issue_fifo_limit) {
-
-        //     // If we try reserving past the bounds, we need to wrap
-        //     cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;
-        //     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
-        // }
 
         uint32_t rd_ptr_and_toggle;
         uint32_t rd_ptr;
@@ -409,6 +420,10 @@ class SystemMemoryManager {
 
         // Notify dispatch core
         this->send_completion_queue_read_ptr(cq_id);
+    }
+
+    uint32_t get_cq_size() const {
+        return this->cq_size;
     }
 
 };

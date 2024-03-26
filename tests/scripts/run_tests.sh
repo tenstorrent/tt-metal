@@ -103,21 +103,35 @@ run_frequent_api_pipeline_tests() {
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
-    # Please put model runs in here from now on - thank you
     if [[ $dispatch_mode == "slow" ]]; then
         TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent
         echo "Running Python API unit tests in SD for frequent..."
         ./tests/scripts/run_python_api_unit_tests.sh
     else
-        echo "API tests are not available for fast dispatch because they're already covered in post-commit"
+        if [[ $tt_arch == "wormhole_b0" ]]; then
+            pytest  tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k nightly
+        else
+            echo "API tests are not available for fast dispatch because they're already covered in post-commit"
+        fi
     fi
+}
+
+# Run frequent multi device pipeline tests - these are the t3000 + 4xn300 tests
+run_frequent_multi_device_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    # Switch to modules only soon
+    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
+    ./tests/scripts/run_frequent_regressions_multi_device.sh
 }
 
 run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type
+    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
 }
 
 run_models_performance_bare_metal_pipeline_tests() {
@@ -151,13 +165,7 @@ run_stress_post_commit_pipeline_tests() {
 
     # Run for 23.5h to allow next run to kick off
     RUNTIME_MAX=84600
-
-    if [[ $tt_arch == "grayskull" ]]; then
-        suite_duration=2700
-    elif [[ $tt_arch == "wormhole_b0" ]]; then
-        suite_duration=900
-    fi
-
+    suite_duration=4500
     max_duration=$((RUNTIME_MAX-suite_duration))
     iter=1
     while [ $SECONDS -lt $max_duration ]; do
@@ -219,7 +227,7 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
+    elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
@@ -227,6 +235,8 @@ run_pipeline_tests() {
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "post_commit_multi_device" ]]; then
         run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "frequent_multi_device" ]]; then
+        run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then

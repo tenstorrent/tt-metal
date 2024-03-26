@@ -7,21 +7,36 @@
 #include "tt_dnn/op_library/run_operation.hpp"
 
 namespace tt::tt_metal {
+FoldOpParallelizationStrategy Fold::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    if (is_sharded) {
+        return FoldOpParallelizationStrategy::SHARDED_MULTI_CORE;
+    } else {
+        return FoldOpParallelizationStrategy::SINGLE_CORE;
+    }
+}
+
 void Fold::validate(const std::vector<Tensor> &input_tensors) const {
     const Tensor &input_tensor = input_tensors.at(0);
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Expect input tensor to be stored on device.");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Expect input tensor to be allocated on a device buffer.");
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "Expect input tensor in row-major layout.");
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Folding of sharded tensors is not supported.");
+    const Shape &input_shape = input_tensor.get_legacy_shape();
 
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Reshape input tensor to [1 , 1, NHW, C].");
-    TT_FATAL(input_tensor.get_legacy_shape()[1] == 1, "Reshape input tensor to [1 , 1, NHW, C].");
-    TT_FATAL(input_tensor.get_legacy_shape()[2] % width == 0);
-    TT_FATAL(input_tensor.get_legacy_shape()[2] % (stride_h * stride_w) == 0);
-    TT_FATAL((input_tensor.get_legacy_shape()[-1] * input_tensor.element_size()) % 16 == 0, "Expect input tensor's pages to be multiples of 16 bytes.");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "Fold: Expect input tensor in row-major layout.");
+    if (is_sharded) {
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Fold: Only height-sharded input tensors are supported.");
+
+        auto shard_shape = input_tensor.shard_spec().value().shape;
+        TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0);
+    } else {
+        TT_FATAL(input_shape[1] % stride_h == 0);
+        TT_FATAL(input_shape[2] % stride_w == 0);
+    }
+    TT_FATAL(
+        (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
+        "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
 }
 
 std::vector<Shape> Fold::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -31,7 +46,7 @@ std::vector<Shape> Fold::compute_output_shapes(const std::vector<Tensor> &input_
     return {{
         1,
         1,
-        input_shape[2] / (stride_h * stride_w) + pad_rows,
+        input_shape[0] * input_shape[1] * input_shape[2] / (stride_h * stride_w),
         input_shape[3] * stride_h * stride_w,
     }};
 }
@@ -40,8 +55,22 @@ std::vector<Tensor> Fold::create_output_tensors(const std::vector<Tensor> &input
     const Tensor &input_tensor = input_tensors.at(0);
     DataType output_dtype = input_tensor.get_dtype();
 
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, output_dtype, Layout::ROW_MAJOR, input_tensor.memory_config());
+    if (is_sharded) {
+        MemoryConfig mem_config = input_tensor.memory_config();
+        mem_config.shard_spec->shape[0] /= stride_h * stride_w;
+        mem_config.shard_spec->shape[1] *= stride_h * stride_w;
+
+        return {create_sharded_device_tensor(
+            compute_output_shapes(input_tensors).at(0),
+            output_dtype,
+            input_tensor.get_layout(),
+            input_tensor.device(),
+            mem_config,
+            true)};
+    } else {
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, output_dtype, Layout::ROW_MAJOR, input_tensor.memory_config());
+    }
 }
 
 operation::ProgramWithCallbacks Fold::create_program(
@@ -49,12 +78,17 @@ operation::ProgramWithCallbacks Fold::create_program(
     const Tensor &input_tensor = input_tensors.at(0);
     Tensor &output_tensor = output_tensors.at(0);
 
-    return fold_single_core(input_tensor, output_tensor, width, stride_h, stride_w, pad_rows);
+    if (is_sharded) {
+        return fold_multi_core(input_tensor, output_tensor, stride_h, stride_w);
+    } else {
+        return fold_single_core(input_tensor, output_tensor, stride_h, stride_w);
+    }
 }
 
-Tensor fold(const Tensor &input_tensor_a, uint32_t width, uint8_t stride_h, uint8_t stride_w, uint32_t pad_rows) {
-    return operation::run(
-               Fold{.width = width, .stride_h = stride_h, .stride_w = stride_w, .pad_rows = pad_rows}, {input_tensor_a})
+Tensor fold(const Tensor &input_tensor, uint8_t stride_h, uint8_t stride_w) {
+    bool is_sharded = input_tensor.is_sharded();
+
+    return operation::run(Fold{.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded}, {input_tensor})
         .at(0);
 }
 

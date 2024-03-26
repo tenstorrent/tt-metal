@@ -20,6 +20,7 @@ ifeq ($(CONFIG), release)
 CONFIG_CFLAGS += -O3
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
 CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
+CONFIG_LDFLAGS += -Wl,--verbose
 else ifeq ($(CONFIG), assert)
 CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG
 else ifeq ($(CONFIG), asan)

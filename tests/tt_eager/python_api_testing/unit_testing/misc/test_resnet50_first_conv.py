@@ -44,10 +44,10 @@ import torch
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
 @pytest.mark.parametrize("sharded_out", (True, False))
 def test_resnet50_first_conv(
+    device,
     use_program_cache,
     N,
     extra_padding_for_32B_alignment,
-    device,
     untilize_out,
     has_bias,
     fuse_relu,
@@ -211,13 +211,11 @@ def test_resnet50_first_conv(
                 grid_size=grid_size,
                 num_cores_nhw=grid_size[0],
                 per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
-                per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+                per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
             ttl.tensor.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
-                weight_block_w_ntiles=weight_block_w,
-                out_block_h_ntiles=out_block_h,
                 out_subblock_h_ntiles=out_subblock_h,
                 out_subblock_w_ntiles=out_subblock_w,
             ),

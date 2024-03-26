@@ -1055,7 +1055,7 @@ class Bottleneck:
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.tensor.relu_without_autoformat
+        self.relu = tt_lib.operations.primary.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -1114,6 +1114,8 @@ class Bottleneck:
                 packer_l1_acc=False,
             )
 
+        untilize_out = False
+
         self.conv1 = resnet50_1x1_conv_as_matmul(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
@@ -1123,8 +1125,9 @@ class Bottleneck:
             fuse_relu=True,
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            output_dtype=tt_lib.tensor.DataType.BFLOAT16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
+            untilize_out=untilize_out,
         )
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
@@ -1145,6 +1148,7 @@ class Bottleneck:
             per_core_weight_w,
             num_cores_nhw,  # This number is only meaningful for batch 8, 16
         ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][(conv2_output_padded_face_size, width)]
+
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
@@ -1168,16 +1172,17 @@ class Bottleneck:
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": grid_size[1] if conv_2d else 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
+
             move_utwh_output = False
             if self.deallocate and (
                 self.module_input_shape[0] == 20
@@ -1316,7 +1321,7 @@ class Bottleneck:
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
 
         # logger.info("Running eltwise add")
-        out = tt_lib.tensor.add_without_autoformat(
+        out = tt_lib.operations.primary.add(
             out,
             ds_out,
             fused_activations,
@@ -1456,6 +1461,20 @@ class ResNet(nn.Module):
 
         self.first_conv_num_cores_nhw = 98
         if sharded:
+            self.fold_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(10, 7),
+                    ),
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 8),
+                        tt_lib.tensor.CoreCoord(3, 8),
+                    ),
+                }
+            )
+            self.n_fold_cores = 92
+
             self.shard_grid = tt_lib.tensor.CoreRangeSet(
                 {
                     tt_lib.tensor.CoreRange(
@@ -1512,16 +1531,16 @@ class ResNet(nn.Module):
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": self.first_conv_num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
 
             tt_tensor_conv_weight = tt_lib.tensor.Tensor(
                 conv1_weight.reshape(-1).tolist(),
@@ -1594,7 +1613,7 @@ class ResNet(nn.Module):
             self.conv1_params,
             [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
         )
-        self.relu = tt_lib.tensor.relu_without_autoformat
+        self.relu = tt_lib.operations.primary.relu
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.max_pool_reader_patterns_cache = {}
@@ -2035,33 +2054,48 @@ class ResNet(nn.Module):
         C = _nearest_y(x.shape[3], 4)
         x = torch.nn.functional.pad(x, (0, C - x.shape[3], 3, 3, 3, 3))
 
-        # reshape to [1, 1, NHW / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
-        x = x.reshape(1, 1, x.shape[0] * x.shape[1] * x.shape[2] // stride_w, x.shape[3] * stride_w)
+        # reshape to [N, H, W / stride_w, C * stride_w]. It's a no-op in torch, and this way we only need to fold on height.
+        x = x.reshape(x.shape[0], x.shape[1], x.shape[2] // stride_w, x.shape[3] * stride_w)
 
-        NHW = x.shape[2] // stride_h
-        NHW_even = _nearest_y(NHW, self.first_conv_num_cores_nhw * 32)
+        NHW = x.shape[0] * x.shape[1] * x.shape[2]
+        NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
+        shard_spec = tt_lib.tensor.ShardSpec(
+            self.fold_grid, [NHW // self.n_fold_cores, x.shape[3]], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+        )
         x = torch2tt_tensor(
             x,
             self.device,
             tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
             tt_memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                shard_spec,
             ),
         )
 
-        # fold and pad for unity stride on device
-        x = tt_lib.tensor.fold(x, width=115, stride_h=stride_h, stride_w=1, pad_rows=NHW_even - NHW)
-        x = tt_lib.tensor.interleaved_to_sharded(
+        # fold for unity stride on device
+        x = tt_lib.tensor.fold(x, stride_h=stride_h, stride_w=1)
+
+        shard_shape = [
+            NHW_even // self.first_conv_num_cores_nhw,
+            x.get_legacy_shape()[3],
+        ]
+
+        x = tt_lib.tensor.reshard(
             x,
-            self.shard_grid,
-            [
-                x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
-                x.get_legacy_shape()[3],
-            ],
-            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.ShardSpec(
+                    self.shard_grid,
+                    shard_shape,
+                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
         )
+
         return x
 
     def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:

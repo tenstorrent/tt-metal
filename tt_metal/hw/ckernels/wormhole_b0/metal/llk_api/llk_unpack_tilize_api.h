@@ -65,6 +65,7 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, face_r_dim*FACE_C_DIM-1, 0x0);
     std::uint32_t operand_id = get_operand_id(operand);
     unpack_config_u config = {0};
 
@@ -136,29 +137,35 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
     llk_unpack_tilizeA_B_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_tilizeA_B_params, within_face_16x16_transpose);
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
 
-    const uint32_t outerloop = narrow_tile ? 1 : ((num_faces>2) ? num_faces/2 : ((num_faces>1) ? 2 : 1));
     constexpr uint32_t innerloop = 1;
+    const uint32_t outerloop = (num_faces>2) ? num_faces/2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
+    if constexpr (neginf_srcA) {
+        tmp.set_start_op(unpack_neginf_srca);
+    }
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4) {
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
+inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
     const std::uint32_t operand_id = get_operand_id(operandA); // Use operandA to get operand_id tile dims must be the same for both operands
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    //const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
+    const std::uint32_t block_c_dim = ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM);
 
     // Set face dim
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
 
     // Override default settings to enable tilize mode
     unpack_config_u config = {0};
@@ -172,7 +179,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config(narrow_tile, num_faces);
+    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB>(narrow_tile, num_faces);
 }
 
 inline void llk_unpack_tilizeA_B(
@@ -195,7 +202,7 @@ inline void llk_unpack_tilizeA_B(
                                                     // Offset address is in 16B words
                                                     // Datum count = tile_index*face_r_dim (/16 to get word count)
 
-    const std::uint32_t block_c_dim_16B = block_ct_dim * (narrow_tile ? FACE_C_DIM/16 : TILE_C_DIM/16);
+    const std::uint32_t block_c_dim_16B = block_ct_dim * ((narrow_tile || (num_faces==1)) ? FACE_C_DIM/16 : TILE_C_DIM/16);
     std::uint32_t bot_face_offset_address =
         SCALE_DATUM_SIZE(unpack_src_format[operandA_id], face_r_dim*block_c_dim_16B);  //*N rows / 16 to get 16B word aligned address
 

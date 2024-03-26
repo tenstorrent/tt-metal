@@ -120,7 +120,8 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
         input_tensor.device(),
-        mem_config
+        mem_config,
+        true
         )};
 }
 

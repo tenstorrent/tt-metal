@@ -47,8 +47,15 @@ namespace tt_metal {
                 auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
                 return rm_tensor.to(Layout::TILE);
             }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
         } else {
-            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
         }
         auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
@@ -92,8 +99,15 @@ namespace tt_metal {
                 auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
                 return rm_tensor.to(Layout::TILE);
             }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
         } else {
-            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
         }
         auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
@@ -109,7 +123,7 @@ namespace tt_metal {
             {DataType::UINT32, &to_weight_tile_layout<uint32_t>},
         };
         if (output_dtype.has_value()) {
-            if (output_dtype == DataType::BFLOAT8_B) {
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
@@ -128,7 +142,7 @@ namespace tt_metal {
             {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}
         };
         if (output_dtype.has_value()) {
-            if (output_dtype == DataType::BFLOAT8_B) {
+            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
                 TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
@@ -189,6 +203,35 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
   }
 
   bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+
+Tensor get_device_tensor(const Device* device, const Tensor& multi_device_tensor) {
+    const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
+    for (const auto& device_buffer : tensor_storage.buffers) {
+        if (device_buffer->device() == device) {
+            return Tensor{
+                DeviceStorage{device_buffer},
+                multi_device_tensor.get_legacy_shape(),
+                multi_device_tensor.get_dtype(),
+                multi_device_tensor.get_layout()
+            };
+        }
+    }
+    TT_THROW("Device not found in multi-device tensor");
+}
+
+std::vector<Device*> get_devices(const Tensor& tensor) {
+    std::vector<Device*> devices;
+    if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
+        const auto& tensor_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
+        for (int i = 0; i < tensor_storage.buffers.size(); ++i) {
+            devices.push_back(tensor_storage.buffers[i]->device());
+        }
+        return devices;
+    } else {
+        TT_THROW("Tensor is not a multi-device tensor");
+    }
+}
+
 }
 
 }

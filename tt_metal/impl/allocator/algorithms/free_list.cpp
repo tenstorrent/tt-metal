@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -20,14 +20,14 @@ FreeList::FreeList(uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_
 }
 
 void FreeList::init() {
-    auto block = new FreeList::Block{.address = 0, .size = this->max_size_bytes_};
+    auto block = std::make_shared<FreeList::Block>(0, this->max_size_bytes_);
     this->block_head_ = block;
     this->block_tail_ = block;
     this->free_block_head_ = block;
     this->free_block_tail_ = block;
 }
 
-bool FreeList::is_allocated(const Block *block) const {
+bool FreeList::is_allocated(const std::shared_ptr<Block> block) const {
     return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and block != this->free_block_tail_;
 }
 
@@ -35,7 +35,7 @@ std::vector<std::pair<uint64_t, uint64_t>> FreeList::available_addresses(uint64_
     uint64_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     std::vector<std::pair<uint64_t, uint64_t>> addresses;
-    FreeList::Block *curr_block = this->free_block_head_;
+    std::shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
             uint64_t end_range = (curr_block->address + curr_block->size) - alloc_size;
@@ -46,9 +46,9 @@ std::vector<std::pair<uint64_t, uint64_t>> FreeList::available_addresses(uint64_
     return addresses;
 }
 
-FreeList::Block *FreeList::search_best(uint64_t size_bytes, bool bottom_up) {
-    FreeList::Block *best_block = nullptr;
-    FreeList::Block *curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
+std::shared_ptr<FreeList::Block> FreeList::search_best(uint64_t size_bytes, bool bottom_up) {
+    std::shared_ptr<FreeList::Block> best_block = nullptr;
+    std::shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
     while (curr_block != nullptr) {
         if (curr_block->size == size_bytes) {
             best_block = curr_block;
@@ -64,9 +64,9 @@ FreeList::Block *FreeList::search_best(uint64_t size_bytes, bool bottom_up) {
     return best_block;
 }
 
-FreeList::Block *FreeList::search_first(uint64_t size_bytes, bool bottom_up) {
-    FreeList::Block *curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
-    FreeList::Block *first_fit_block = nullptr;
+std::shared_ptr<FreeList::Block> FreeList::search_first(uint64_t size_bytes, bool bottom_up) {
+    std::shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
+    std::shared_ptr<FreeList::Block> first_fit_block = nullptr;
     while (curr_block != nullptr) {
         if (curr_block->size >= size_bytes) {
             first_fit_block = curr_block;
@@ -78,7 +78,7 @@ FreeList::Block *FreeList::search_first(uint64_t size_bytes, bool bottom_up) {
     return first_fit_block;
 }
 
-FreeList::Block *FreeList::search(uint64_t size_bytes, bool bottom_up) {
+std::shared_ptr<FreeList::Block> FreeList::search(uint64_t size_bytes, bool bottom_up) {
     switch (this->search_policy_) {
         case FreeList::SearchPolicy::BEST:
             return search_best(size_bytes, bottom_up);
@@ -92,7 +92,7 @@ FreeList::Block *FreeList::search(uint64_t size_bytes, bool bottom_up) {
     return nullptr;
 }
 
-void FreeList::allocate_entire_free_block(Block *free_block_to_allocate) {
+void FreeList::allocate_entire_free_block(std::shared_ptr<Block> free_block_to_allocate) {
     TT_ASSERT(not is_allocated(free_block_to_allocate));
     if (free_block_to_allocate->prev_free != nullptr) {
         free_block_to_allocate->prev_free->next_free = free_block_to_allocate->next_free;
@@ -120,7 +120,7 @@ void FreeList::allocate_entire_free_block(Block *free_block_to_allocate) {
 
 // free_block range: [a, b)
 // allocated_block range: [a, c), where c < b
-void FreeList::update_left_aligned_allocated_block_connections(Block *free_block, Block *allocated_block) {
+void FreeList::update_left_aligned_allocated_block_connections(std::shared_ptr<Block> free_block, std::shared_ptr<Block> allocated_block) {
     allocated_block->prev_block = free_block->prev_block;
     allocated_block->next_block = free_block;
     if (free_block->prev_block != nullptr) {
@@ -137,7 +137,7 @@ void FreeList::update_left_aligned_allocated_block_connections(Block *free_block
 
 // free_block range: [a, b)
 // allocated_block range: [c, b), where c > a
-void FreeList::update_right_aligned_allocated_block_connections(Block *free_block, Block *allocated_block) {
+void FreeList::update_right_aligned_allocated_block_connections(std::shared_ptr<Block> free_block, std::shared_ptr<Block> allocated_block) {
     allocated_block->prev_block = free_block;
     allocated_block->next_block = free_block->next_block;
     if (free_block->next_block != nullptr) {
@@ -152,7 +152,7 @@ void FreeList::update_right_aligned_allocated_block_connections(Block *free_bloc
 }
 
 // Offset marks the start of the allocated block
-FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, uint64_t offset, uint64_t size_bytes) {
+std::shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(std::shared_ptr<FreeList::Block> free_block, uint64_t offset, uint64_t size_bytes) {
     TT_ASSERT(free_block->address + offset + size_bytes <= free_block->address + free_block->size);
 
     // Allocated slice spans the entire space of free_block
@@ -161,10 +161,7 @@ FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, uint6
         return free_block;
     }
 
-    auto allocated_block = new FreeList::Block{
-        .address = free_block->address + offset,
-        .size = size_bytes,
-    };
+    auto allocated_block = std::make_shared<Block>(free_block->address + offset, size_bytes);
 
     // Allocated slice takes up a portion of free_block, three cases to consider:
     // 1. allocated_block is left aligned with free_block with free space remaining on the right
@@ -185,14 +182,14 @@ FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, uint6
         // Result:   | free_block_mod | allocated_block | next_free_block  |
         uint64_t next_free_block_addr = free_block->address + offset + size_bytes;
         uint64_t next_free_block_size = (free_block->address + free_block->size) - next_free_block_addr;
-        auto next_free_block = new FreeList::Block{
-            .address = next_free_block_addr,
-            .size = next_free_block_size,
-            .prev_block = allocated_block,
-            .next_block = free_block->next_block,
-            .prev_free = free_block,
-            .next_free = free_block->next_free
-        };
+        auto next_free_block = std::make_shared<FreeList::Block>(
+            next_free_block_addr,
+            next_free_block_size,
+            allocated_block,
+            free_block->next_block,
+            free_block,
+            free_block->next_free
+        );
         if (free_block->next_block != nullptr) {
             free_block->next_block->prev_block = next_free_block;
         }
@@ -248,7 +245,7 @@ std::optional<uint64_t> FreeList::allocate(uint64_t size_bytes, bool bottom_up, 
 std::optional<uint64_t> FreeList::allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes) {
     TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address " + std::to_string(absolute_start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
     auto start_address = absolute_start_address - this->offset_bytes_;
-    FreeList::Block *curr_block = this->free_block_head_;
+    std::shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
     uint64_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     // Look for a free block of size at least size_bytes that encompasses start_address
@@ -273,9 +270,9 @@ std::optional<uint64_t> FreeList::allocate_at_address(uint64_t absolute_start_ad
     return absolute_start_address;
 }
 
-FreeList::Block *FreeList::find_block(uint64_t address) {
-    FreeList::Block *block = nullptr;
-    FreeList::Block *curr_block = this->block_head_;
+std::shared_ptr<FreeList::Block> FreeList::find_block(uint64_t address) {
+    std::shared_ptr<Block> block = nullptr;
+    std::shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         if (curr_block->address == address) {
             return curr_block;
@@ -286,7 +283,7 @@ FreeList::Block *FreeList::find_block(uint64_t address) {
 }
 
 void FreeList::update_lowest_occupied_address() {
-    FreeList::Block *block = this->block_head_;
+    std::shared_ptr<Block> block = this->block_head_;
     while (block != nullptr) {
         if (this->is_allocated(block)) {
             break;
@@ -302,7 +299,7 @@ void FreeList::update_lowest_occupied_address() {
 
 void FreeList::deallocate(uint64_t absolute_address) {
     uint64_t address = absolute_address - this->offset_bytes_;
-    FreeList::Block *block_to_free = find_block(address);
+    std::shared_ptr<Block> block_to_free = find_block(address);
     if (block_to_free == nullptr or not this->is_allocated(block_to_free)) {
         return;
     }
@@ -377,20 +374,7 @@ void FreeList::deallocate(uint64_t absolute_address) {
     }
 }
 
-void FreeList::reset() {
-    Block *curr_block = this->block_head_;
-    Block *next;
-    while (curr_block != nullptr) {
-        next = curr_block->next_block;
-        delete curr_block;
-        curr_block = next;
-    }
-    this->block_head_ = nullptr;
-    this->free_block_head_ = nullptr;
-}
-
 void FreeList::clear() {
-    this->reset();
     this->init();
 }
 
@@ -402,7 +386,7 @@ Statistics FreeList::get_statistics() const {
         .largest_free_block_bytes = 0
     };
 
-    Block *curr_block = this->block_head_;
+    std::shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         if (this->is_allocated(curr_block)) {
             stats.total_allocated_bytes += curr_block->size;
@@ -422,11 +406,7 @@ Statistics FreeList::get_statistics() const {
     return stats;
 }
 
-FreeList::~FreeList() {
-    this->reset();
-}
-
-void FreeList::dump_block(const Block *block, std::ofstream &out) const {
+void FreeList::dump_block(const std::shared_ptr<Block> block, std::ofstream &out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
     out << ",,," << (block->address + this->offset_bytes_)
         << "," << (block->size)
@@ -435,7 +415,7 @@ void FreeList::dump_block(const Block *block, std::ofstream &out) const {
 
 void FreeList::dump_blocks(std::ofstream &out) const {
     out << ",,Blocks:,Address (B),Size (B),Allocated (Y/N)\n";
-    Block *curr_block = this->block_head_;
+    std::shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         this->dump_block(curr_block, out);
         curr_block = curr_block->next_block;

@@ -16,6 +16,8 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+
 using std::unique_lock;
 using std::mutex;
 
@@ -121,6 +123,17 @@ namespace tt::tt_metal{
 
 
         /**
+         * Initialize device profiling data buffers
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type            | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
+         * */
+	void InitDeviceProfiler(Device *device);
+
+        /**
          * Read device side profiler data and dump results into device side CSV log
          *
          * Return value: void
@@ -129,19 +142,43 @@ namespace tt::tt_metal{
          * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
          * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
          * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
+         * | free_buffers  | Free up the profiler buffer spaces for the device | bool                                                         |                           | False    |
          * */
-        void DumpDeviceProfileResults(Device *device,const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores);
+        void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool free_buffers = false);
 
         /**
-         * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
+         * Traverse all cores and read device side profiler data and dump results into device side CSV log
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
+         * | free_buffers  | Free up the profiler buffer spaces for the device | bool                                                         |                           | False    |
+         * */
+        void DumpDeviceProfileResults(Device *device, bool free_buffers = false);
+
+        /**
+         * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
          *
          * Return value: void
          *
          * | Argument     | Description                                             |  Data type  | Valid range              | required |
          * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
-         * | output_dir   | The output directory that will hold the outpu CSV logs  | std::string | Any valid directory path | No       |
+         * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path | No       |
          * */
-        void SetProfilerDir(std::string output_dir = "");
+        void SetDeviceProfilerDir(std::string output_dir = "");
+
+        /**
+         * Set the directory for all host-side CSV logs produced by the profiler instance in the tt-metal module
+         *
+         * Return value: void
+         *
+         * | Argument     | Description                                             |  Data type  | Valid range              | required |
+         * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+         * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path | No       |
+         * */
+        void SetHostProfilerDir(std::string output_dir = "");
 
         /**
          * Start a fresh log for the host side profile results
@@ -162,20 +199,6 @@ namespace tt::tt_metal{
          * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
          * */
         void FreshProfilerDeviceLog();
-
-        /**
-         * Profile scopes in tt_metal API
-         *
-         * */
-
-        class ProfileTTMetalScope
-        {
-            private:
-                string scopeName = "";
-            public:
-                ProfileTTMetalScope (const string& scopeNameArg);
-                ~ProfileTTMetalScope ();
-        };
 
         /**
          * Copies data from a host buffer into a buffer within the device DRAM channel
@@ -230,9 +253,10 @@ namespace tt::tt_metal{
          * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
          * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
          */
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
+        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type = CoreType::WORKER)
         {
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            ZoneScoped;
+            auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
             llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
             return true;
         }
@@ -286,6 +310,10 @@ namespace tt::tt_metal{
             DispatchStateCheck(true);
             LAZY_COMMAND_QUEUE_MODE = lazy;
         }
+        inline void DumpDeviceProfiler(Device * device, bool free_buffers)
+        {
+            tt::tt_metal::detail::DumpDeviceProfileResults(device, free_buffers);
+        }
 
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
@@ -329,7 +357,9 @@ namespace tt::tt_metal{
                 dram_noc_coord_per_bank,
                 dram_offsets_per_bank,
                 l1_noc_coord_per_bank,
-                l1_offset_per_bank
+                l1_offset_per_bank,
+                soc_d.profiler_ceiled_core_count_perf_dram_bank,
+                soc_d.physical_routing_to_profiler_flat_id
             );
 
             // Determine which noc-coords are harvested
@@ -355,7 +385,8 @@ namespace tt::tt_metal{
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
             const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
             tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).command_dispatcher_core(device->id(), channel, cq_id);
-            CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, CoreType::WORKER);
+            CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+            CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, core_type);
 
             jit_build_genfiles_noc_addr_ranges_header(
                 path,
@@ -388,7 +419,7 @@ namespace tt::tt_metal{
             for (const auto &core_range : core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                        const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y));
+                        const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
                         if (kernel_group != nullptr) {
                             bool local_noc0_in_use = false; bool local_noc1_in_use = false;
                             if (kernel_group->riscv0_id.has_value()) {

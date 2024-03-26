@@ -7,6 +7,7 @@ from loguru import logger
 
 import tt_lib as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
+from models.utility_functions import is_grayskull
 import torch
 
 
@@ -85,8 +86,8 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
@@ -98,11 +99,13 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
     ],
 )
 def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
+    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
     ttl.profiler.set_profiler_location(f"nlp_create_qkv_heads_falcon7b_tm_{request.node.callspec.id}")
     run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
-def test_nlp_create_qkv_heads_falcon7b_with_program_cache(use_program_cache, device):
+def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
@@ -118,7 +121,7 @@ def test_nlp_create_qkv_heads_falcon7b_with_program_cache(use_program_cache, dev
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert ttl.program_cache.num_entries() == 2
+    assert device.num_program_cache_entries() == 2
 
 
 """
@@ -200,6 +203,8 @@ def run_nlp_create_qkv_heads_test(
 
     if dtype == ttl.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
+    elif dtype == ttl.tensor.DataType.FLOAT32:  # conversion from fp32 to tf32 will decrease pcc
+        pcc = 0.9999999
     else:
         pcc = 1.0
 
@@ -237,8 +242,8 @@ def run_nlp_create_qkv_heads_test(
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, num_q_heads, num_kv_heads, transpose_k_heads, read_from_input_tensor_kv",
@@ -262,22 +267,32 @@ def test_nlp_create_qkv_heads_test(
     request,
     device,
 ):
-    run_nlp_create_qkv_heads_test(
-        batch,
-        seq_len,
-        head_dim,
-        num_q_heads,
-        num_kv_heads,
-        transpose_k_heads,
-        read_from_input_tensor_kv,
-        dtype,
-        in_mem_config,
-        out_mem_config,
-        device,
-    )
+    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    if (
+        dtype == ttl.tensor.DataType.FLOAT32
+        and (batch == 111 or batch == 5)
+        and in_mem_config
+        == ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    ):
+        logger.warning("fp32 tensor too large to fit L1")
+    else:
+        run_nlp_create_qkv_heads_test(
+            batch,
+            seq_len,
+            head_dim,
+            num_q_heads,
+            num_kv_heads,
+            transpose_k_heads,
+            read_from_input_tensor_kv,
+            dtype,
+            in_mem_config,
+            out_mem_config,
+            device,
+        )
 
 
-def test_nlp_create_qkv_heads_with_program_cache(use_program_cache, device):
+def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
@@ -288,7 +303,7 @@ def test_nlp_create_qkv_heads_with_program_cache(use_program_cache, device):
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert ttl.program_cache.num_entries() == 2
+    assert device.num_program_cache_entries() == 2
 
 
 def run_sharded_nlp_create_qkv_heads_test(
@@ -416,8 +431,8 @@ def run_sharded_nlp_create_qkv_heads_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "batch, seq_len, head_dim, num_q_heads, num_kv_heads, read_from_input_tensor_kv",
@@ -440,6 +455,9 @@ def test_sharded_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
+    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     run_sharded_nlp_create_qkv_heads_test(
         batch,
         seq_len,
@@ -452,7 +470,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     )
 
 
-def test_sharded_nlp_create_qkv_heads_with_program_cache(use_program_cache, device):
+def test_sharded_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
@@ -463,4 +481,4 @@ def test_sharded_nlp_create_qkv_heads_with_program_cache(use_program_cache, devi
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert ttl.program_cache.num_entries() == 2
+    assert device.num_program_cache_entries() == 2

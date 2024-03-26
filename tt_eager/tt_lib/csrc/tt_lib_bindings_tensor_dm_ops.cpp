@@ -15,11 +15,16 @@
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
+#include "tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
+#include "tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
+
 
 namespace tt::tt_metal::detail{
 
@@ -55,7 +60,7 @@ namespace tt::tt_metal::detail{
 
                 Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,UINT32 and UINT16.
+                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32 and UINT16.
 
                 Output tensor will be on device, in same layout, and have the given data type.
 
@@ -82,6 +87,20 @@ namespace tt::tt_metal::detail{
                 "dim", "dimension of concat", "int", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
+
+        m_tensor.def("repeat", &tt::tt_metal::repeat,
+            py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``size``. The rank of ``size`` should be less than or equal to the rank of tensor ``input_a``.
+
+                    Output tensor will have same data type as input.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "size", "The number of times to repeat this tensor along each dimension", "List[Int]", "Positive repetition values", "Yes"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                )doc");
 
         m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&>(&assign),
             py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(
@@ -205,6 +224,7 @@ namespace tt::tt_metal::detail{
             py::arg("ncores_height").noconvert(),
             py::arg("max_out_nsticks_per_core").noconvert(),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("remote_read").noconvert() = false,
             R"doc(
                 Untilizes input tiled data to row major format and constructs halo'd output shards.
             )doc");
@@ -282,7 +302,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("fold", &fold,
-            py::arg("input").noconvert(), py::arg("width"), py::arg("stride_h"), py::arg("stride_w"), py::arg("pad_rows") = 0, R"doc(
+            py::arg("input").noconvert(), py::arg("stride_h"), py::arg("stride_w"), R"doc(
             Fold TT Tensor.
 
             Input tensor must be on TT accelerator device, in ROW_MAJOR.
@@ -324,37 +344,9 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("bcast_without_autoformat", &bcast_without_autoformat,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
-
-            Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
-
-            For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-            For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-            For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
-
-            Both input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            Auto formatting is disabled. Input tensors must have TILE layout. Output tensors will have TILE layout.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0", "Yes"
-                "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0", "Yes"
-                "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
-                "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         m_tensor.def("reduce", &reduce,
             py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
-            Perform a reduction of input tensor ``arg0`` using mathematical operation ``arg1`` on dimension ``arg2``.
+            Perform a reduction of input tensor ``input`` using mathematical operation ``math_op`` on dimension ``dim``.
 
             For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
 
@@ -507,6 +499,26 @@ namespace tt::tt_metal::detail{
         m_tensor.def("reshard", &reshard,
             py::arg("input"), py::arg("output_mem_config").noconvert(),
             R"doc(Converts a tensor sharded one way to another way)doc"
+        );
+
+        //MOE ops
+        m_tensor.def("indexed_fill", &indexed_fill,
+            py::arg("batch_id"), py::arg("input_a"), py::arg("input_b"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("dim") = 0,
+            R"doc(Replaces batch of input in input_b denoted by batch_ids into input_a)doc"
+        );
+        m_tensor.def("nonzero", &non_zero_indices,
+            py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            R"doc(Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements )doc"
+        );
+
+
+        m_tensor.def("interleaved_to_sharded_partial", py::overload_cast<const Tensor &, const std::variant<CoreCoord, CoreRangeSet>, std::array<uint32_t, 2>, const uint32_t, const uint32_t, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded_partial),
+         py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts a part of tensor from interleaved to sharded memory layout)doc");
+
+        m_tensor.def("sharded_to_interleaved_partial", &sharded_to_interleaved_partial,
+            py::arg("input"), py::arg("cache_tensor"), py::arg("num_slices"), py::arg("slice_index"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts a partial tensor from sharded_to_interleaved memory layout)doc"
         );
 
         // Multi-Device ops

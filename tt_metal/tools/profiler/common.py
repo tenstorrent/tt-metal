@@ -26,6 +26,14 @@ PROFILER_OUTPUT_DIR = PROFILER_ARTIFACTS_DIR / "reports"
 PROFILER_OPS_LOGS_DIR = PROFILER_LOGS_DIR / "ops"
 PROFILER_LOG_LOCATIONS_RECORD = PROFILER_LOGS_DIR / ".locations.log"
 
+TRACY_OPS_TIMES_FILE_NAME = "tracy_ops_times.csv"
+TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
+TRACY_MODULE_PATH = TT_METAL_HOME / "tt_metal/third_party/tracy"
+TRACY_FILE_NAME = "tracy_profile_log_host.tracy"
+
+TRACY_CAPTURE_TOOL = "capture"
+TRACY_CSVEXPROT_TOOL = "csvexport"
+
 
 def rm(path):
     if not os.path.exists(path):
@@ -38,20 +46,6 @@ def rm(path):
 
 def clear_profiler_runtime_artifacts():
     rm(PROFILER_ARTIFACTS_DIR)
-
-
-def test_profiler_build():
-    from tt_eager import tt_lib
-
-    ret = False
-
-    tt_lib.profiler.start_profiling("test")
-    tt_lib.profiler.stop_profiling("test")
-
-    if os.path.isfile(PROFILER_LOG_LOCATIONS_RECORD):
-        ret = True
-
-    return ret
 
 
 def get_log_locations():

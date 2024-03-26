@@ -14,9 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
           {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"], machine-type: "bare_metal"},
+          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
         ]
+        model-type: [llm_javelin, cnn_javelin, other]
+    name: "${{ matrix.model-type }} ${{ matrix.runner-info.arch }}"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
@@ -40,7 +42,7 @@ jobs:
         timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_${{ matrix.runner-info.machine-type }}
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.runner-info.machine-type }}
       - name: Check perf report exists
         id: check-perf-report
         run: |
@@ -51,5 +53,5 @@ jobs:
       - name: Upload perf report
         uses: actions/upload-artifact@v4
         with:
-          name: perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"

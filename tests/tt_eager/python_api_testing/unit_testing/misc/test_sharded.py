@@ -278,6 +278,74 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
 
 
 @skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@pytest.mark.parametrize("M", [127 * 32])
+@pytest.mark.parametrize("K", [1 * 32])
+@pytest.mark.parametrize("N", [1 * 32])
+@pytest.mark.parametrize("num_cores", [64])
+def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
+    grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (grid_size.x * grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    height_shard_spec = [2 * 32, 32]  # [2, 1] in tiles
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+
+    in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t,
+        grid_size,
+        height_shard_spec,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=K // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=2,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    output_t = ttl.operations.primary.matmul_1d(
+        in0_t,
+        in1_t,
+        bias=None,
+        program_config=program_config,
+        output_mem_config=sharded_mem_config,
+        output_dtype=ttl.tensor.DataType.BFLOAT16,
+    )
+
+    output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+
+    pt_out = in0 @ in1
+    tt_out = tt2torch_tensor(output_t)
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98], [50176, 98]])
@@ -349,6 +417,320 @@ def test_sharded_matmul_1d_in1(
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("H, num_cores", [[64, 64]])
+@pytest.mark.parametrize("num_slices", [2])
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+)
+def test_sharded_partial_op(
+    device,
+    H,
+    num_cores,
+    num_slices,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, 64]
+    W = in0_shape[-1]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.ones(in0_shape).bfloat16().float()
+    out_initial = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    out_tt_tensor = torch2tt_tensor(
+        out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype
+    )
+
+    height_shard_spec = [H // 2, W]
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            in0_t_slice,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0
+
+    tt_out = tt2torch_tensor(out_tt_tensor)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("H, W, num_cores", [[32 * 32, 16 * 32, 64]])
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+)
+def test_block_sharded_partial_op(
+    device,
+    H,
+    W,
+    num_cores,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, W]
+    W = in0_shape[-1]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    out_initial = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    out_tt_tensor = torch2tt_tensor(
+        out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype
+    )
+
+    block_shard_spec = [2 * 32, 2 * 32]
+    num_slices = 2
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            block_shard_spec,
+            num_slices,  # num_slices
+            slice_index,  # slice_index
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            in0_t_slice,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0
+
+    tt_out = tt2torch_tensor(out_tt_tensor)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+)
+def test_width_sharded_partial_op(
+    device,
+    H,
+    W,
+    num_cores,
+    num_slices,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, W]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    out_initial = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    out_tt_tensor = torch2tt_tensor(
+        out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype
+    )
+
+    width_shard_spec = [H // num_slices, 1 * 32]
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            width_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            in0_t_slice,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0
+
+    tt_out = tt2torch_tensor(out_tt_tensor)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("in1_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
+@pytest.mark.parametrize("H, num_cores", [[128 * 32, 64]])
+@pytest.mark.parametrize("num_slices", [2])
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+)
+def test_partial_sharded_op_binary(
+    device,
+    in0_sharded,
+    in1_sharded,
+    out_sharded,
+    H,
+    num_cores,
+    num_slices,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, 96]
+    in1_shape = in0_shape
+    W = in0_shape[-1]
+
+    if out_sharded and not in0_sharded and not in1_sharded and H == 64:
+        pytest.skip("Unsupported sharding config")
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    out_values = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    out_tt_tensor = torch2tt_tensor(
+        out_values, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype
+    )
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+    height_shard_spec = [32, W]
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        in1_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+            in1_t,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        sliced_tensor = ttl.tensor.add(
+            in0_t_slice, in1_t_slice, output_mem_config=output_mem_config, output_dtype=output_dtype
+        )
+        ttl.tensor.sharded_to_interleaved_partial(
+            sliced_tensor,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0 + in1
+
+    tt_out = tt2torch_tensor(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -532,12 +914,12 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
 @pytest.mark.parametrize("N", [1024])
+@pytest.mark.parametrize("K", [256, 512])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_2d(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device, in0_sharded, out_sharded, M, N, K, activations_dtype, weights_dtype, function_level_defaults
 ):
-    K = 256
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
@@ -1263,12 +1645,13 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
-@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("M", [32, 64])
 @pytest.mark.parametrize("N", [1024])
+@pytest.mark.parametrize("K", [2048, 4096])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_1d_in0(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device, in0_sharded, out_sharded, M, K, N, activations_dtype, weights_dtype, function_level_defaults
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -1277,7 +1660,6 @@ def test_sharded_matmul_1d_in0(
     if activations_dtype != weights_dtype and is_wormhole_b0():
         pytest.skip("WH does not work with mixed precision")
     num_cores = grid_size[0] * grid_size[1]
-    K = 2048
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
@@ -1315,7 +1697,7 @@ def test_sharded_matmul_1d_in0(
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=1,
+        per_core_M=M // 32,
         per_core_N=1,
         fuse_batch=True,
         fused_activation=None,
@@ -1335,7 +1717,7 @@ def test_sharded_matmul_1d_in0(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
+    passing, output = comp_pcc(pt_out, tt_out, 0.98)
     logger.info(output)
     assert passing
 
@@ -1573,6 +1955,7 @@ def test_sharded_concat_heads(
         ),
     ],
 )
+@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_reshard(
     device,
     input_shape,
@@ -1585,6 +1968,7 @@ def test_reshard(
     output_shard_shape,
     output_shard_orientation,
     output_sharding_scheme,
+    tt_dtype,
 ):
     compute_grid = ttl.tensor.CoreCoord(input_shard_grid[0], input_shard_grid[1])
     input_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
@@ -1593,7 +1977,8 @@ def test_reshard(
     output_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
     output_shard_spec = ttl.tensor.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
     output_mem_config = ttl.tensor.MemoryConfig(output_sharding_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
-    tt_dtype = ttl.tensor.DataType.BFLOAT16
+    if input_layout == ttl.tensor.Layout.ROW_MAJOR and tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        pytest.skip("Illegal layout/dtype config")
 
     dram_memory_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -1621,10 +2006,60 @@ def test_reshard(
     tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
 
-    assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
-    if not passing:
-        print(torch_tensor)
-        print(torch_tensor_after_round_trip)
+    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
+@pytest.mark.parametrize(
+    "input_shape, shard_scheme",
+    [
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
+)
+def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation):
+    input_dtype = ttl.tensor.DataType.BFLOAT16
+    output_dtype = ttl.tensor.DataType.BFLOAT16
+
+    assert input_shape[-2] % 32 == 0
+    assert input_shape[-1] % 32 == 0
+    if shard_scheme == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+        grid_x = input_shape[-2] // 32
+        grid_y = 1
+        shard_shape = [input_shape[-2] // grid_x, input_shape[-1] // grid_y]
+    elif shard_scheme == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+        grid_x = input_shape[-1] // 32
+        grid_y = 1
+        shard_shape = [input_shape[-2] // grid_y, input_shape[-1] // grid_x]
+    elif shard_scheme == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+        grid_x = input_shape[-1] // 32
+        grid_y = input_shape[-2] // 32
+        shard_shape = [input_shape[-2] // grid_y, input_shape[-1] // grid_x]
+    else:
+        assert False, f"Unsupported {shard_scheme}"
+
+    shard_grid = ttl.tensor.CoreRangeSet(
+        {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_x - 1, grid_y - 1))}
+    )
+    shard_halo = False
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+
+    volume = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+    golden = torch.arange(volume).reshape(input_shape).bfloat16()
+    ttl_golden = ttl.tensor.Tensor(golden.reshape(-1).tolist(), golden.shape, input_dtype, ttl.tensor.Layout.ROW_MAJOR)
+
+    ## TEST to/from ##
+    ttl_device = ttl_golden.to(device, mem_config)
+    result = ttl_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    passing, output = comp_equal(result, golden)
     assert passing

@@ -21,14 +21,16 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class Layout { ROW_MAJOR = 0, TILE = 1 };
+enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 enum class DataType {
     BFLOAT16 = 0,
     FLOAT32 = 1,
     UINT32 = 2,
     BFLOAT8_B = 3,
-    UINT16 = 4,
+    BFLOAT4_B = 4,
+    UINT16 = 6,
+    INVALID = 7,
 };
 
 enum class StorageType {
@@ -217,6 +219,7 @@ static_assert(std::variant_size_v<OwnedBuffer> + 1 == std::variant_size_v<tt::tt
 struct OwnedStorage {
     OwnedBuffer buffer;
 
+    OwnedStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
@@ -225,6 +228,7 @@ using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
 
+    DeviceStorage() = default;
     const MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
@@ -240,8 +244,8 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    static constexpr auto attribute_names = std::make_tuple("memory_config", "device_id");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config(), this->buffer->device()->id()); }
+    static constexpr auto attribute_names = std::make_tuple("memory_config");
+    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -251,6 +255,8 @@ using BorrowedBuffer = std::variant<
     borrowed_buffer::Buffer<bfloat16>>;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
+
+    BorrowedStorage() = default;
     std::function<void()> on_creation_callback = [] {};
     std::function<void()> on_destruction_callback = [] {};
 
@@ -304,6 +310,7 @@ struct MultiDeviceHostStorage {
     std::vector<OwnedBuffer> buffers;
     std::vector<Shape> shapes;
 
+    MultiDeviceHostStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
@@ -311,6 +318,8 @@ struct MultiDeviceHostStorage {
 struct MultiDeviceStorage {
     std::vector<DeviceBuffer> buffers;
     std::vector<Shape> shapes;
+
+    MultiDeviceStorage() = default;
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
@@ -358,8 +367,8 @@ static tt::tt_metal::Shape compute_ttl_shape(
 
 template <std::size_t Rank>
 struct RankedShape {
-    const std::size_t rank;
-    const tt::tt_metal::Shape value;
+    std::size_t rank;
+    tt::tt_metal::Shape value;
 
     explicit RankedShape(tt::tt_metal::Shape &&shape) : rank{Rank}, value(shape) {}
     explicit RankedShape(const tt::tt_metal::Shape &shape) : rank{Rank}, value(shape) {}
@@ -399,6 +408,9 @@ struct RankedShape {
     }
 
     const auto &operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+
+    static constexpr auto attribute_names = std::make_tuple("rank", "value");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->rank), std::cref(this->value)); }
 };
 
 template <std::size_t Rank>
@@ -421,16 +433,16 @@ static std::ostream &operator<<(std::ostream &os, const RankedShape<Rank> &shape
 
 struct Shape {
     using RankedShapeVariant = std::variant<
-        const RankedShape<1>,
-        const RankedShape<2>,
-        const RankedShape<3>,
-        const RankedShape<4>,
-        const RankedShape<5>,
-        const RankedShape<6>,
-        const RankedShape<7>,
-        const RankedShape<8>>;
+        RankedShape<1>,
+        RankedShape<2>,
+        RankedShape<3>,
+        RankedShape<4>,
+        RankedShape<5>,
+        RankedShape<6>,
+        RankedShape<7>,
+        RankedShape<8>>;
 
-    const RankedShapeVariant ranked_shape;
+    RankedShapeVariant ranked_shape;
 
    private:
     RankedShapeVariant ttl_shape_to_ttnn_shape(const tt::tt_metal::Shape &shape) {
@@ -482,6 +494,10 @@ struct Shape {
             other.ranked_shape);
     }
 
+    const auto &value() const {
+        return std::visit([](const auto &shape) -> const auto & { return shape.value; }, this->ranked_shape);
+    }
+
     template <std::size_t Rank>
     bool operator==(const std::array<std::uint32_t, Rank> &other) const {
         return Shape{this->value().without_padding()} == Shape{other};
@@ -489,10 +505,6 @@ struct Shape {
 
     const auto &operator[](std::int64_t index) const {
         return std::visit([index](const auto &shape) -> decltype(auto) { return shape[index]; }, this->ranked_shape);
-    }
-
-    const auto &value() const {
-        return std::visit([](const auto &shape) -> const auto & { return shape.value; }, this->ranked_shape);
     }
 
     const auto volume() const {
@@ -536,6 +548,9 @@ struct Shape {
             },
             this->ranked_shape);
     }
+
+    static constexpr auto attribute_names = std::make_tuple("ranked_shape");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->ranked_shape)); }
 };
 
 static std::ostream &operator<<(std::ostream &os, const Shape &self) {

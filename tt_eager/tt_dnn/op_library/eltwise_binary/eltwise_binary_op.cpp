@@ -235,10 +235,8 @@ const operation::Hash EltwiseBinary::compute_program_hash(
         parallelization_strategy,
         input_tensor_a.get_dtype(),
         input_tensor_a.memory_config(),
-        input_tensor_a.device()->id(),
         input_tensor_b.get_dtype(),
         input_tensor_b.memory_config(),
-        input_tensor_b.device()->id(),
         this->output_dtype,
         this->output_mem_config,
         this->in_place);

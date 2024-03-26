@@ -16,6 +16,7 @@ constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t cmd_cb_base = get_compile_time_arg_val(4);
 constexpr uint32_t cmd_cb_pages = get_compile_time_arg_val(5);
 constexpr uint32_t page_batch_size = get_compile_time_arg_val(6);
+constexpr uint32_t dispatch_sync_sem = get_compile_time_arg_val(7);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -28,7 +29,11 @@ void dispatch_cb_acquire_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
     DEBUG_STATUS('A', 'P', 'W');
-    while (*sem_addr == 0);
+
+    // Ensure last sem_inc has landed
+    noc_async_write_barrier();
+
+    while (*sem_addr < n);
     DEBUG_STATUS('A', 'P', 'D');
     noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, (uint32_t)sem_addr), -n);
 }

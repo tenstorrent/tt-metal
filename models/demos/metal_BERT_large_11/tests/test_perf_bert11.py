@@ -117,14 +117,12 @@ def run_perf_bert11(
             tt_output = tt_model(tt_embedding, tt_attention_mask)
             tt_output = tt_output.cpu(blocking=False)
             outputs.append(tt_output)
-
+            del tt_attention_mask
+            del tt_embedding_inputs
+            del tt_embedding
         # Run last inference iteration
         tt_lib.device.Synchronize(device)
         profiler.end(second_run_accum_key, force_enable=True)
-
-        del tt_attention_mask
-        del tt_embedding_inputs
-        del tt_embedding
         del tt_output
 
     first_iter_time = profiler.get(first_run_key)
@@ -155,6 +153,7 @@ def run_perf_bert11(
     ),
 )
 def test_perf_virtual_machine(
+    device,
     use_program_cache,
     batch_size,
     model_config_str,
@@ -162,7 +161,6 @@ def test_perf_virtual_machine(
     expected_compile_time,
     inference_iterations,
     model_location_generator,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Bert large 11 is not supported on E75")
@@ -187,6 +185,7 @@ def test_perf_virtual_machine(
     ),
 )
 def test_perf_bare_metal(
+    device,
     use_program_cache,
     batch_size,
     model_config_str,
@@ -194,7 +193,6 @@ def test_perf_bare_metal(
     expected_compile_time,
     inference_iterations,
     model_location_generator,
-    device,
 ):
     if is_e75(device):
         pytest.skip("Bert large 11 is not supported on E75")

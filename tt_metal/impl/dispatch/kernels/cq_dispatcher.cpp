@@ -15,10 +15,18 @@ void kernel_main() {
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
 
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+    while (db_semaphore_addr[0] == 0) {
+        RISC_POST_HEARTBEAT(heartbeat);
+    }
+#else
     while (db_semaphore_addr[0] == 0);
+#endif
     db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
     uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     while (true) {
+        //DeviceZoneScopedMainN("CQ-DISPATCHER");
         // Wait for producer to supply a command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, 0>(db_buf_switch);
         uint32_t program_transfer_start_addr = command_start_addr + ((DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));

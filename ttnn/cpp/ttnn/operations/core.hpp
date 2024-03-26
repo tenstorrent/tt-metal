@@ -21,7 +21,7 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
     ttnn::TensorSchema{
         1,
         8,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::uint16, ttnn::uint32, ttnn::float32},
+        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16, ttnn::uint32, ttnn::float32},
         {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
         true,
         true,
@@ -32,7 +32,7 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
 inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     ttnn::validate_input_tensor("ttnn.reshape", tensor, reshape_input_schemas[0]);
 
-    auto tensor_shape = tensor.ttnn_shape();
+    auto tensor_shape = tensor.get_shape();
     if (tensor_shape == shape) {
         return tensor;
     }
@@ -58,12 +58,16 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
         const auto new_shape_with_tile_padding = shape.with_tile_padding();
         const auto new_height = new_shape_with_tile_padding[-2];
         const auto new_width = new_shape_with_tile_padding[-1];
-        if (new_height % ttnn::TILE_SIZE == 0 && new_width % ttnn::TILE_SIZE == 0) {
-            return reshape_helper(tensor, shape);
-        } else {
+
+        const auto is_tile_multiple = (new_height % ttnn::TILE_SIZE == 0 && new_width % ttnn::TILE_SIZE == 0);
+        if (not is_tile_multiple) {
             TT_THROW(
                 "Unable to reshape a tensor in TILE_LAYOUT to non-tile height and width! Please convert the tensor to "
                 "ROW_MAJOR_LAYOUT first.");
+        }
+
+        if (tensor_shape.with_tile_padding()[-1] == new_width) {
+            return reshape_helper(tensor, shape);
         }
     }
 
@@ -102,14 +106,14 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t
     std::array<std::uint32_t, Rank> new_shape{};
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (new_volume < 0) {
-        const auto volume = tensor.ttnn_shape().with_tile_padding().volume();
+        const auto volume = tensor.get_shape().with_tile_padding().volume();
         new_shape[index_of_negative_1] = volume / (-new_volume);
     }
     return reshape(tensor, ttnn::Shape(new_shape));
 }
 
 inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    const auto tensor_shape = tensor.ttnn_shape();
+    const auto tensor_shape = tensor.get_shape();
     const auto rank = tensor_shape.rank();
     if (rank == 4) {
         return tensor;
@@ -123,7 +127,7 @@ inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
 }
 
 inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
-    auto shape = tensor.ttnn_shape();
+    auto shape = tensor.get_shape();
     if (shape.rank() != 4) {
         TT_THROW("Tensor has to be of rank 4!");
     }

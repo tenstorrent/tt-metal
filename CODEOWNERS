@@ -45,36 +45,36 @@ tt_metal/impl/buffers/ @tarafdarTT @kmabeeTT
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
 # metal - dispatch
-tt_metal/impl/dispatch/ @DrJessop @pgkeller @tooniz @tt-asaigal
-tt_metal/impl/dispatch/**/module.mk @DrJessop @tt-rkim @pgkeller
-tt_metal/kernels/dataflow/dispatch/ @DrJessop @tarafdarTT @pgkeller
-docs/source/frameworks/tt_dispatch.rst @DrJessop @pgkeller
+tt_metal/impl/dispatch/ @pgkeller @tooniz @tt-asaigal
+tt_metal/impl/dispatch/**/module.mk @tt-rkim @pgkeller
+tt_metal/kernels/dataflow/dispatch/ @tarafdarTT @pgkeller
+docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
 
 # metal - fw, llks, risc-v
 # tt_metal/hw/ckernels/ @davorchap
 # tt_metal/hw/ckernels/**/module.mk @tt-rkim @davorchap
 # tt_metal/hw/ckernels/**/Makefile @tt-rkim @davorchap
-# tt_metal/hw/firmware/ @davorchap @pgkeller @DrJessop
+# tt_metal/hw/firmware/ @davorchap @pgkeller
 tt_metal/hw/ckernels/ @rtawfik01
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
-# tt_metal/hw/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
+# tt_metal/hw/meta/ @davorchap @pgkeller @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
 tt_metal/include/compute_kernel_api/ @rtawfik01
-tt_metal/include/dataflow_kernel_api.h @davorchap @DrJessop @mywoodstock @tarafdarTT
-tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @mywoodstock
+tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @tarafdarTT
+tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT
 tt_metal/hw/inc/ethernet/ @aliuTT
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT
 tt_metal/third_party/tt_llk_* @rtawfik01 @acejkov
 
 # metal - profiler
-# tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
-# tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent @TT-billteng
-# tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
-# tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
-# docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
+tt_metal/**/profiler/ @mo-tenstorrent
+tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent
+tests/tt_metal/tools/profiler/ @mo-tenstorrent
+tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent
+docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent
 tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
@@ -126,8 +126,8 @@ docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchi
 docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
-# docs/source/apis/kernel_apis/ @davorchap @DrJessop @pgkeller @tt-rkim
-# docs/source/apis/kernel_apis.rst @davorchap @DrJessop @pgkeller @tt-rkim
+# docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim
+# docs/source/apis/kernel_apis.rst @davorchap @pgkeller @tt-rkim
 
 # misc
 tests/**/dtx/ @tt-nshanker

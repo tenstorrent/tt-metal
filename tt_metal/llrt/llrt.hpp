@@ -64,6 +64,8 @@ void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vec
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
+
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg);
 
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
@@ -94,7 +96,7 @@ void set_config_for_circular_buffer(
 void write_circular_buffer_config_vector_to_core(
     chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
-void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
+void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
 bool test_load_write_read_risc_binary(
     ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);

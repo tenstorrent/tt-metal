@@ -448,8 +448,8 @@ hardcoded_conv_blocking_and_parallelization_config = {
     "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
 )
 def test_resnet50_conv(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -546,11 +546,8 @@ def test_resnet50_conv(
         config_override = {
             "act_block_w": act_block_w,
             "act_block_h": act_block_h,
-            "weight_block_w": weight_block_w,
             "out_subblock_h": out_subblock_h,
             "out_subblock_w": out_subblock_w,
-            "out_block_h": out_block_h,
-            "act_c_num_blocks": act_c_num_blocks,
             "grid_size": grid_size,
             "per_core_out_matrix_height": per_core_out_matrix_h,
             "per_core_weight_matrix_width": per_core_weight_matrix_w,
@@ -577,7 +574,6 @@ def test_resnet50_conv(
             weights_dtype=weights_dtype,
             output_dtype=activations_dtype,
             math_fidelity=math_fidelity,
-            act_c_num_blocks=act_c_num_blocks,
         )
 
         conv_input_on_device = tt_lib.tensor.Tensor(

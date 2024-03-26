@@ -5,7 +5,7 @@
 #pragma once
 #include <type_traits>
 
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tensor/owned_buffer_functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
@@ -83,7 +83,7 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation:
 
 // softplus[x] = log[1 + exp[x]]
 // use transformation y = log[1+exp[x]] by broadcast
-Tensor softplus(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor softplus(const Tensor& x, float beta=1.0, float threshold=20.0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // mish[x] = x*tanh[softplus[x]]
 // use transformation y = x*tanh[softplus[x]] by broadcast
@@ -483,12 +483,6 @@ Tensor triu(
 Tensor power_fp(
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// repeat a input tensor @input_a as specified by the number of dimensions
-Tensor repeat(
-    const Tensor& input_a,
-    const Shape& shape,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor pow(

@@ -5,17 +5,19 @@ on:
 
 jobs:
   unit-tests-slow-dispatch:
+    name: ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
+
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["grayskull"]},
+          {arch: grayskull, runs-on: ["grayskull"], name: E150},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -33,11 +35,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - name: Build python env
         run: |
           make python_env/dev PYTHON_ENV=$HOME/python_env -B
-      - name: Build tt-metal CPP tests
-        run: make tests
       - name: Run pre/post regression tests
         timeout-minutes: 15
         run: |

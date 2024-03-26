@@ -16,7 +16,6 @@
 #include "dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"
-#include "tools/cpuprof/cpuprof.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
 
@@ -130,6 +129,7 @@ namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
     std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -138,6 +138,7 @@ std::map<chip_id_t, Device *> CreateDevices(
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
                 Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
+                detail::InitDeviceProfiler(dev);
             }
         }
     }
@@ -247,8 +248,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("WriteToDevice ") + std::to_string(buffer.device()->id()));
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
             WriteToDeviceInterleavedContiguous(buffer, host_buffer);
         }
@@ -387,9 +386,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer,  bool shard_order) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ReadFromDevice ") + std::to_string(buffer.device()->id()));
-
         host_buffer.clear();  // overwrite the data
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
             || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
@@ -468,8 +464,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
@@ -485,7 +479,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         std::unordered_set<CoreCoord> not_done_cores;
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
+                launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
@@ -506,8 +500,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         // Used to Launch programs for Slow dispatch.
         bool using_fast_dispatch = fd_bootloader_mode;
         detail::DispatchStateCheck( using_fast_dispatch );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
         auto device_id = device->id();
 
@@ -517,18 +509,18 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
-                KernelGroup *kernel_group = program.kernels_on_core(logical_core);
+                KernelGroup *kernel_group = program.kernels_on_core(logical_core, core_type);
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
                 ConfigureKernelGroup(
-                    program, kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                    program, kernel_group, device, logical_core);
                 // TODO: add support for CB for ethernet cores
                 if (core_type == CoreType::WORKER) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     llrt::CircularBufferConfigVec circular_buffer_config_vec =
                         llrt::create_circular_buffer_config_vector();
 
-                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);  // PROF_BEGIN("CBS")
+                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                     for (auto circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                             llrt::set_config_for_circular_buffer(
@@ -544,11 +536,11 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                         llrt::write_circular_buffer_config_vector_to_core(
                             device_id,
                             physical_core,
-                            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+                            circular_buffer_config_vec);
                     }
 
-                    program.init_semaphores(*device, logical_core);
                 }
+                program.init_semaphores(*device, logical_core, core_type);
             }
         }
 
@@ -587,7 +579,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
                 auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
                 const auto & rt_args = kernel->runtime_args(logical_core);
-                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, get_l1_arg_base_addr(processor));
+                auto arg_addr = get_l1_arg_base_addr(processor);
+                if (processor == RISCV::ERISC) {
+                    auto config = std::get<EthernetConfig>(kernel->config());
+                    if (config.eth_mode == Eth::IDLE) {
+                        arg_addr = IDLE_ERISC_L1_ARG_BASE;
+                    }
+                }
+                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, arg_addr);
             }
         }
     }
@@ -634,6 +633,7 @@ Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::v
     ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    detail::InitDeviceProfiler(dev);
     return dev;
 }
 
@@ -660,13 +660,15 @@ KernelHandle CreateKernel(
                             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                                 detail::CheckDataMovementConfig(program, file_name, core_ranges);
                                 kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::WORKER);
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
                                 kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::WORKER);
                             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
                                 kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+                                return detail::AddKernel(program, kernel, CoreType::ETH);
                             }
-                            return detail::AddKernel(program, kernel);
                         },
                         config
                     );
@@ -701,7 +703,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
     detail::GetCircularBuffer(program, cb_handle)->assign_global_address();
 }
 
-uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value) {
+uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type) {
     return std::visit(
         [&](auto&& c) -> uint32_t
         {
@@ -727,7 +729,7 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
             }
             TT_FATAL(address.has_value(), "Expecting a valid Semaphore address!");
 
-            program.add_semaphore(crs, address.value(), initial_value);
+            program.add_semaphore(crs, address.value(), initial_value, core_type);
 
             return address.value();
         },

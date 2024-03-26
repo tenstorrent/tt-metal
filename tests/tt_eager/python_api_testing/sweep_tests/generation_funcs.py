@@ -737,6 +737,26 @@ def gen_reshape_args(
             break
 
 
+def gen_split_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            maxdim = len(input_shapes[0]) - 1
+            dim = random.randint(-maxdim - 1, maxdim)
+
+            max_split = input_shapes[0][dim] // 2
+            max_split = max(max_split, 1)
+            split_size = random.randint(1, max_split)
+
+            input_info["dim"] = dim
+            input_info["split_size"] = split_size
+            yield input_info
+
+
 def gen_tilize_with_val_padding_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
@@ -1709,6 +1729,35 @@ def gen_repeat_interleave_args(
         yield input_info
 
 
+def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            # max_dim = len(input_shapes[0]) - 1
+            # dim = random.randint(-max_dim-1, max_dim)
+            # For now onlu last dim is supported
+            input_info.update({"dim": -1})
+            yield input_info
+
+
+def gen_dim_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            max_dim = len(input_shapes[0]) - 1
+            dim = random.randint(-max_dim - 1, max_dim)
+            input_info.update({"dim": dim})
+            yield input_info
+
+
 def gen_rmsnorm_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
@@ -1857,3 +1906,76 @@ def gen_ttnn_groupnorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_upsample_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    buffer_types,
+    low=2,
+    high=10,
+    dtype=torch.int32,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        buffer_types,
+        "scale_factor",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
+
+
+def gen_softplus_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "beta",
+        "threshold",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
+
+
+def gen_min_max_dim_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0,
+    high=4,
+    dtype=torch.int,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "dim",
+        low,
+        high,
+        dtype,
+    ):
+        rank = len(input_shapes[0])
+        choices = [(rank - 1,), (rank - 2,)]
+        idx = np.random.choice(len(choices), 1)
+        dims = choices[idx.item()]
+
+        input_info.update({"dim": dims})
+        yield input_info

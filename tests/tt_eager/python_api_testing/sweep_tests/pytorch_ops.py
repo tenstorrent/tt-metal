@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import tt_lib as ttl
 import ttnn
 import torch
 from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
@@ -349,7 +350,9 @@ def log1p(x, *args, **kwargs):
 
 
 def softplus(x, *args, **kwargs):
-    return torch.nn.functional.softplus(x)
+    beta = kwargs.pop("beta")
+    threshold = kwargs.pop("threshold")
+    return torch.nn.functional.softplus(x, beta=beta, threshold=threshold)
 
 
 def add1(x, *args, **kwargs):
@@ -357,7 +360,7 @@ def add1(x, *args, **kwargs):
 
 
 def mish(x, *args, **kwargs):
-    return x * torch.tanh(softplus(x))
+    return x * torch.tanh(softplus(x, beta=1.0, threshold=20.0))
 
 
 def recip(x, *args, **kwargs):
@@ -941,8 +944,18 @@ def max_bw(x, y, z, *args, **kwargs):
     return [in_data.grad, other_data.grad]
 
 
+def minimum(x, y, *args, **kwargs):
+    return torch.minimum(x, y)
+
+
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
+
+
+def ttnn_min(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    print(f"PT: {dim[0]}")
+    return torch.min(x, dim=dim[0], keepdim=True).values
 
 
 def min_bw(x, y, z, *args, **kwargs):
@@ -1114,6 +1127,10 @@ def reshape(x, *args, reshape_dims, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
+def split(x, *args, split_size, dim, **kwargs):
+    return torch.split(x, split_size, dim)
+
+
 def split_last_dim_two_chunks_tiled(x, *args, **kwargs):
     W = x.shape[-1]
     half = W // 2
@@ -1167,6 +1184,7 @@ def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **
 #################### Tensor ####################
 ################################################
 def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
+    print("PT")
     input_tensor_shape = x.shape
     input_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] for i in range(len(input_tensor_shape)))
     out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
@@ -1176,6 +1194,8 @@ def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
         input_tensor_start[2] : input_tensor_end[2],
         input_tensor_start[3] : input_tensor_end[3],
     ] = x
+
+    print("PT 2")
 
     return out
 
@@ -1220,7 +1240,7 @@ def conv(x, y, *args, **kwargs):
 
 
 def activation_glu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", -1)
     return torch.nn.functional.glu(x, dim)
 
 
@@ -1239,7 +1259,7 @@ def activation_geglu(x, *args, **kwargs):
 
 
 def activation_swiglu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", -1)
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.silu(b)
     # return torch.matmul(a,torch.nn.functional.silu(b))
@@ -1347,7 +1367,6 @@ def pt_embedding_bw(x, y, z, *args, **kwargs):
 def ttnn_embeddings(x, y, *args, **kwargs):
     x = x.int()
     x = torch.clamp(x, min=0, max=y.shape[0] - 1)
-
     z = torch.nn.functional.embedding(x, y)
     return z
 
@@ -1783,3 +1802,91 @@ def transformer_concatenate_heads(x, *args, **kwargs):
 def ttnn_groupnorm(x, y, z, *args, **kwargs):
     torch_output_tensor = torch.nn.functional.group_norm(x, num_groups=1, weight=y, bias=z)
     return torch_output_tensor
+
+
+def global_avg_pool2d(x, *args, **kwargs):
+    output_size = (1, 1)
+    return torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+
+
+def upsample(x, *args, scale_factor, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+
+    tt_input = x.permute(0, 3, 1, 2)
+
+    m = torch.nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = m(tt_input)
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    return torch_result
+
+
+def l1_loss(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="none")(x, y)
+    return torch_output_tensor
+
+
+def l1_loss_sum(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="sum")(x, y)
+
+    return torch_output_tensor
+
+
+def l1_loss_mean(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
+    return torch_output_tensor
+
+
+def mse_loss(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.MSELoss(reduction="none")(x, y)
+    return torch_output_tensor
+
+
+def mse_loss_sum(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.MSELoss(reduction="sum")(x, y)
+
+    return torch_output_tensor
+
+
+def mse_loss_mean(x, y, *args, **kwargs):
+    # return torch.nn.functional.upsample(x, scale_factor=2)
+    torch_output_tensor = torch.nn.L1Loss(reduction="mean")(x, y)
+    return torch_output_tensor
+
+
+def rotary_embedding(x, *args, **kwargs):
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
+        seq_len = x.shape[-2]
+        if token_idx is None:
+            cos = cos_cached[:, :, :seq_len, ...]
+            sin = sin_cached[:, :, :seq_len, ...]
+        else:
+            cos = cos_cached[:, :, token_idx : token_idx + 1, ...]
+            sin = sin_cached[:, :, token_idx : token_idx + 1, ...]
+
+        x_embed = (x * cos) + (rotate_half(x) * sin)
+        return x_embed
+
+    torch.manual_seed(0)
+
+    cache_size = 2048
+    input_dtype = ttl.tensor.DataType.BFLOAT16
+    sincos_dtype = ttl.tensor.DataType.BFLOAT16
+
+    sin_cos_shape = (1, 1, cache_size, 64)
+    cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
+    sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
+
+    pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
+
+    return pt_out[0]

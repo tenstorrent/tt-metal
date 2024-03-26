@@ -11,6 +11,7 @@ black==23.10.1
 build==0.10.0
 twine==4.0.2
 yamllint==1.32.0
+mypy==1.9.0
 
 # For docs
 -r ../../docs/requirements-docs.txt
@@ -18,6 +19,7 @@ yamllint==1.32.0
 # testing
 pytest==7.2.2
 pytest-timeout==2.2.0
+pytest-split==0.8.2
 jsbeautifier==1.14.7
 datasets==2.9.0
 torch==2.2.1.0+cpu

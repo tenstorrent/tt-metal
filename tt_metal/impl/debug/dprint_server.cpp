@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <thread>
 #include <future>
 #include <iostream>
@@ -18,6 +19,8 @@
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/dprint_common.h"
+
+#include "tensix_types.h"
 
 using std::uint32_t;
 using std::int32_t;
@@ -117,6 +120,9 @@ private:
     // A flag to signal to the main thread if the print server detected a print-based hang.
     bool server_killed_due_to_hang_;
 
+    // A counter to keep track of how many iterations the print server has gone through without
+    std::atomic<int> wait_loop_iterations_ = 0;
+
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
 
@@ -147,6 +153,9 @@ private:
         int hart_index,
         bool new_data_this_iter
     );
+
+    // Stores the last value of setw, so that array elements can reuse the width.
+    char most_recent_setw = 0;
 };
 
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
@@ -193,6 +202,82 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
         }
     }
 } // PrintTileSlice
+
+// Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
+// Assumes the following order of bits in the input data:
+//   [sign bit][mantissa bits][exponent bits]
+static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+    int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
+    const int exp_mask = (1 << (exp_bit_count)) - 1;
+    int exp_bias = (1 << (exp_bit_count - 1)) - 1;
+    int exp_val = (data & exp_mask) - exp_bias;
+    const int mantissa_mask = ((1 << mantissa_bit_count) - 1) << exp_bit_count;
+    int mantissa_val = (data & mantissa_mask) >> exp_bit_count;
+    float result = 1.0 + ((float) mantissa_val / (float) (1 << mantissa_bit_count));
+    result = result * pow(2, exp_val);
+    if (sign) {
+        result = -result;
+    }
+    return result;
+}
+
+// Prints a given datum in the array, given the data_format
+static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t datum, uint16_t data_format) {
+    switch (data_format) {
+        case static_cast<std::uint8_t>(tt::DataFormat::Float16):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2):
+        case static_cast<std::uint8_t>(tt::DataFormat::Lf8):
+            stream << setw(setwidth) << make_float (5, 10, datum & 0xffff) << " ";
+            stream << setw(setwidth) << make_float (5, 10, (datum >> 16) & 0xffff) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2_b):
+        case static_cast<std::uint8_t>(tt::DataFormat::Float16_b):
+            stream << setw(setwidth) << make_float (8, 7, datum & 0xffff) << " ";
+            stream << setw(setwidth) << make_float (8, 7, (datum >> 16) & 0xffff) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
+            stream << setw(setwidth) << make_float(8, 10, datum) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Float32):
+            stream << setw(setwidth) << *reinterpret_cast<float*>(&datum) << " "; // Treat datum as if it stores bits for a float
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::UInt32):
+            stream << setw(setwidth) << datum << " ";
+            break;
+        default:
+            stream << "Unknown data format " << data_format;
+            break;
+   }
+}
+
+// Prints a typed uint32 array given the number of elements including the type.
+// If force_element_type is set to a valid type, it is assumed that the type is not included in the
+// data array, and the type is forced to be the given type.
+static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t* data, TypedU32_ARRAY_Format force_array_type = TypedU32_ARRAY_Format_INVALID ) {
+    uint16_t array_type = data[raw_element_count-1] >> 16;
+    uint16_t array_subtype = data[raw_element_count-1] & 0xffff;
+
+    raw_element_count = (force_array_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
+
+    // stream << setwidth << "  ARRAY[len=" << std::dec << raw_element_count - 1 << ", type=" << array_type << "] = ";
+    for (uint32_t i = 0; i < raw_element_count - 1; i++) {
+        switch (array_type) {
+            case TypedU32_ARRAY_Format_Raw:
+                stream << std::hex << "0x" << data[i] << " ";
+                break;
+            case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
+                PrintTensixRegisterData(stream, setwidth, raw_element_count, data[i], array_subtype);
+                break;
+            default:
+                stream << "Unknown type " << array_type;
+                break;
+        }
+    }
+}
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
@@ -269,6 +354,10 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
     // TODO(dma): once we have access to the device is there a way we can poll the device to
     // check whether more print data is coming?
     size_t num_harts_waiting = 0;
+
+    // Make sure to run at least one full iteration inside PollPrintData before returning.
+    wait_loop_iterations_ = 0;
+
     do {
         // No need to await if the server was killed already due to a hang.
         if (server_killed_due_to_hang_)
@@ -277,7 +366,7 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
         raise_wait_lock_.lock();
         num_harts_waiting = hart_waiting_on_signal_.size();
         raise_wait_lock_.unlock();
-    } while (num_harts_waiting > 0 || new_data_last_iter_);
+    } while (num_harts_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
 } // WaitForPrintsFinished
 
 void DebugPrintServerContext::AttachDevice(Device* device) {
@@ -582,6 +671,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
+                    most_recent_setw = val;
                     TT_ASSERT(sz == 1);
                 break;
                 case DPrintSETPRECISION:
@@ -653,6 +743,12 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
                     TT_ASSERT(sz == 1);
+                break;
+                case DPrintU32_ARRAY:
+                    PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
+                break;
+                case DPrintTYPED_U32_ARRAY:
+                    PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr));
                 break;
                 case DPrintRAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
@@ -779,6 +875,8 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         // Sleep for a few ms if no data was processed.
         if (!new_data_last_iter_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        wait_loop_iterations_++;
     }
 } // PollPrintData
 

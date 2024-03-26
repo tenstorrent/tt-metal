@@ -78,26 +78,18 @@ def profile_results():
     setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
-    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["T0 -> ANY CORE ANY RISC FW end"][
-        "stats"
-    ]["Average"]
+    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_fw_duration"]["stats"][
+        "Average"
+    ]
     return total_cycle
 
 
 def profile_results_kernel_duration():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
-    setup.timerAnalysis = {
-        "KERNEL_START->KERNEL_END": {
-            "across": "device",
-            "type": "session_first_last",
-            "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
-            "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
-        },
-    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
-    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["KERNEL_START->KERNEL_END"]["stats"][
+    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_kernel_duration"]["stats"][
         "Average"
     ]
     return total_cycle

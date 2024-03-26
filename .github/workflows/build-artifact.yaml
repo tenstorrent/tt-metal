@@ -1,4 +1,4 @@
-name: "Build TTMetal artifacts"
+name: "Build tt-metal artifacts"
 
 on:
   workflow_call:
@@ -13,21 +13,22 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
+      SILENT: 0
     environment: dev
     runs-on: build
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: |
           make build PYTHON_ENV=$HOME/python_env
-      - uses: actions/upload-artifact@v4
+          make tests
+      - name: 'Tar files'
+        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.arch }}
-          path: |
-            build/hw
-            build/lib
-            tt_eager/tt_lib/*.so
-            ttnn/ttnn/*.so
+          path: ttm_${{ matrix.arch }}.tar

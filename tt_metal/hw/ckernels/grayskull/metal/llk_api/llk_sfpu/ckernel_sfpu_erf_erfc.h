@@ -72,15 +72,5 @@ inline void calculate_sfpu_erf_erfc() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void erf_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void erfc_init() {
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

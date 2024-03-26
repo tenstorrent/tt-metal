@@ -18,5 +18,4 @@ void py_module(py::module& module) {
 }
 
 }  // namespace core
-using namespace core;
 }  // namespace ttnn

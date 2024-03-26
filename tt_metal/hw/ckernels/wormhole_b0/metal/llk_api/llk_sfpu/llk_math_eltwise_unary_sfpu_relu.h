@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
+
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
 #include "ckernel_sfpu_relu.h"
@@ -15,21 +15,21 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>(sfpu::relu_min_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>(sfpu::lrelu_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
 }
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>(sfpu::relu_max_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>(sfpu::relu_min_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
 }
 
 

@@ -11,6 +11,7 @@
 #include "stream_io_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_pack_common.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
 
@@ -43,7 +44,8 @@ inline void llk_setup_outputs() {
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
-    kernel_profiler::mark_function_sum_start(CB_RESERVE_BACK_MARKER);
+    // TODO(MO): Manually uncomment until issue #6619 is resolved
+    //DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -63,7 +65,6 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
         std::uint32_t free_tiles_wrap = cb_interface[output].fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t) free_tiles_wrap;
     } while (free_tiles < num_tiles);
-    kernel_profiler::mark_function_sum_end(CB_RESERVE_BACK_MARKER);
 }
 
 inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t num_words) {

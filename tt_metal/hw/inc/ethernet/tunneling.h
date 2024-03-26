@@ -17,15 +17,28 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
+struct eth_channel_sync_t {
+    // Do not reorder fields without also updating the corresponding APIs that use
+    // any of them
+
+    // Notifies how many bytes were sent by the sender. Receiver resets this to 0
+    // and sends the change to sender to signal second level ack, that the
+    // receiver buffer can be written into
+    volatile uint32_t bytes_sent;
+
+    // First level ack that signals to sender that the payload was received by receiver,
+    // indicating that sender can reuse the sender side buffer safely.
+    volatile uint32_t receiver_ack;
+    uint32_t reserved_1;
+    uint32_t reserved_2;
+};
+
 struct erisc_info_t {
     volatile uint32_t launch_user_kernel;
     volatile uint32_t unused_arg0;
     volatile uint32_t unused_arg1;
     volatile uint32_t unused_arg2;
-    volatile uint32_t user_buffer_bytes_sent;
-    uint32_t reserved_0_;
-    uint32_t reserved_1_;
-    uint32_t reserved_2_;
+    volatile eth_channel_sync_t channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS]; // user_buffer_bytes_sent
 };
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
@@ -47,9 +60,14 @@ static constexpr uint32_t data_buffer_size = eth_l1_mem::address_map::ERISC_L1_T
 
 namespace internal_ {
 
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
+    return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
+}
+
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
     while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+        // Note, this is overly eager... Kills perf on allgather
         risc_context_switch();
     }
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
@@ -175,7 +193,7 @@ void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
 
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
 template <uint8_t buffer_id, uint8_t other_buffer_id, bool sender_is_issue_path>
-FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding) {
+FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding, tt_l1_ptr uint32_t* remote_issue_cmd_slots) {
     volatile tt_l1_ptr uint32_t *eth_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
 
@@ -223,6 +241,13 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
         }
         // TODO: add timer to restrict this
     }
+
+    // Decrement available remote cmd slot on local SRC
+    if constexpr(sender_is_issue_path) {
+        *remote_issue_cmd_slots += 1;
+    } else {
+        *remote_issue_cmd_slots -= 1;
+    }
     routing_info->src_sent_valid_cmd = 0;
     noc_semaphore_inc(
         ((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr),
@@ -262,7 +287,7 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
 
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
 template <uint8_t buffer_id, uint8_t other_buffer_id, bool sender_is_issue_path>
-FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding) {
+FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t relay_noc_encoding, tt_l1_ptr uint32_t* remote_issue_cmd_slots) {
     volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
     volatile tt_l1_ptr uint32_t *eth_dst_db_semaphore_addr =
@@ -315,6 +340,13 @@ FORCE_INLINE void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
     internal_::ack_fd_packet(buffer_id);
 
     routing_info->dst_acked_valid_cmd = 0;
+
+    // Increment available issue slot on remote DST
+    if constexpr(sender_is_issue_path) {
+        *remote_issue_cmd_slots -= 1;
+    } else {
+        *remote_issue_cmd_slots += 1;
+    }
 
     for (uint32_t i = 0; i < num_buffer_transfers; i++) {
         const uint32_t num_pages = command_ptr[2];

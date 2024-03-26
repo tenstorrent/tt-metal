@@ -107,6 +107,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
+    bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -161,7 +162,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/compute/transpose_wh.cpp",
         total_cores,
-        tt_metal::ComputeConfig{}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en}
     );
 
     auto all_runtime_args = get_runtime_args(a, output, num_cores_total, num_cores, num_cores_y,
@@ -260,6 +261,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt_metal::Device *device = a.device();
 
+    bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -319,7 +321,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/compute/transpose_wh_sharded.cpp",
         total_cores,
-        tt_metal::ComputeConfig{.compile_args = compute_compile_time_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_compile_time_args}
     );
 
     uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;

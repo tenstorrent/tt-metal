@@ -88,14 +88,26 @@ class MaxPool2d:
             pad_val=0xF7FF,
             parallel_config_override=parallel_config_override,
             deallocate_activation=deallocate_activation,
+            act_dtype=dtype,
         )
 
+    @ttnn.register_operation(
+        name="ttnn.MaxPool2d.__call__", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
+    )
     def __call__(self, activation: ttnn.Tensor):
         return self.max_pool(activation)
 
+    @ttnn.register_operation(
+        name="ttnn.MaxPool2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
+    )
     def copy_input_to_device(self, input: ttnn.Tensor):
         return self.max_pool.copy_input_to_device(input)
 
+    @ttnn.register_operation(
+        name="ttnn.MaxPool2d.copy_output_from_device",
+        validate_input_tensors=lambda *args, **kwargs: None,
+        is_method=True,
+    )
     def copy_output_from_device(self, output: ttnn.Tensor):
         return self.max_pool.copy_output_from_device(output)
 

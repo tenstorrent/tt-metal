@@ -56,9 +56,10 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         )
     );
 }
-
-TEST_F(DPrintFixture, TestPrintFinish) {
-    for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
-    }
+// see issue #6659
+TEST_F(DPrintFixture, DISABLED_TestPrintFinish) {
+    auto devices = this->devices_;
+    // Run only on the first device, as this tests disconnects devices and this can cause
+    // issues on multi-device setups.
+    this->RunTestOnDevice(RunTest, devices[0]);
 }

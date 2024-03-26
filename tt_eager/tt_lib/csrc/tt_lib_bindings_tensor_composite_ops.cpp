@@ -12,19 +12,6 @@
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
 
-	m_tensor.def("repeat", &tt::tt_metal::repeat,
-            py::arg("input"), py::arg("shape"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a`` and contain positive integer entries - a limitation in our implementation.
-
-                    Output tensor will have BFLOAT16 data type.
-
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
-                        "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
 	m_tensor.def("pow", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&tt::tt_metal::pow),
 		     py::arg("input"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
@@ -165,7 +152,6 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op(m_tensor, "sinh", &tt::tt_metal::sinh, R"doc(Returns tensor with the hyperbolic sine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
         detail::bind_unary_op(m_tensor, "cosh", &tt::tt_metal::cosh, R"doc(Returns tensor with the hyperbolic cosine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
         detail::bind_unary_op(m_tensor, "softsign", &softsign, R"doc(Applies the softsign function to the elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "softplus", &softplus, R"doc(Returns tensor with the softplus activation of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "log1p", &log1p, R"doc(Returns tensor with the natural log of 1 added to all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "swish", swish, R"doc(Returns tensor with the swish all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "mish", &mish, R"doc(Returns tensor with the mish activation of elements of the input tensor ``{0}``.)doc");
@@ -186,7 +172,7 @@ namespace tt::tt_metal::detail{
         );
         detail::bind_unary_op(m_tensor, "digamma", &digamma, R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}`` for the input range 1 to inf.)doc");
         detail::bind_unary_op(m_tensor, "lgamma", &lgamma, R"doc(Computes the natural logarithm of the absolute value of the gamma function on the  ``{0}`` tensor for inputs greater than 0.)doc");
-        detail::bind_unary_op(m_tensor, "multigammaln", &multigammaln, R"doc(Computes the multivariate log-gamma function with dimension 4 element-wise on the input tensor ``{0}`` for inputs greater than 1.5f.)doc");
+        detail::bind_unary_op(m_tensor, "multigammaln", &multigammaln, R"doc(Computes the multivariate log-gamma function with dimension 4 element-wise on the input tensor ``{0}`` for inputs greater than 1.5f. mvlgamma is refered as multigammaln.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "softshrink", &softshrink,
@@ -381,8 +367,8 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
             py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
-            Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
-            scalar ``arg2`` and returns the resulting out tensor.
+            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
+            scalar ``weight`` and returns the resulting out tensor.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -399,8 +385,8 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&lerp),
             py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
-            tensor ``arg2`` and returns the resulting out tensor.
+            Applies the linear interpolation of two tensors ``input`` and ``end`` based on a
+            tensor ``weight`` and returns the resulting out tensor.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -652,6 +638,24 @@ namespace tt::tt_metal::detail{
                 "end", "End", "int", "> start", "Yes"
                 "step", "Step", "int", "> 0", "Yes"
                 "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("softplus", &softplus,
+            py::arg("input_a").noconvert(), py::arg("beta")=1.0f, py::arg("threshold") = 20.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns tensor with the softplus activation of elements of the input tensor ``{0}``.
+            If ``input * beta`` > ``threshold`` returns input
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Tensor softplus is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "beta", "Beta value", "float", "default to 1.0f", "No"
+                "threshold", "Threshold value", "float", "default to 20.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

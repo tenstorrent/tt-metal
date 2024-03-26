@@ -229,11 +229,11 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
     ((8, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(
+    device,
     use_program_cache,
     batch_size,
     input_loc,
     imagenet_label_dict,
-    device,
 ):
     run_resnet_inference(
         batch_size,

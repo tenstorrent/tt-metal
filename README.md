@@ -1,21 +1,58 @@
 <div align="center">
 
-<img src="./docs/source/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
-<img src="./docs/source/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
+<h1>
+   
+[Buy hardware](https://tenstorrent.com/cards/) | [Discord](https://discord.gg/tvhGzHQwaj)
 
-**TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
+</h1>
+   
+<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
 
-**TT-NN** is our neural network OP library with a PyTorch-like Python, and C++ API.
+**TT-NN** is python & C++ Neural Network OP library.
 
 <h3>
 
-[Documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html) | [Working models](./models/demos/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Tenstorrent website](https://tenstorrent.com)
+[TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
 
 </h3>
 
 </div>
 
 ---
+
+## Grayskull (GS) Models
+
+| Model                                                    | Batch               | End-to-end throughput        | Device throughput [1] | Target                              |
+|----------------------------------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
+| [ResNet-50](./models/demos/resnet) (fps)                 | 20                  | 2,070                        | 7,200                       | 10,000                              |
+| [BERT-Large](./models/demos/bert) (sen/s)                | 12                  | 362                          | 406                         | 410                                 |
+| [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)    | 32                  | 135                          | 135                         | 140                                 |
+| U-Net                                                    | coming soon         |                              |                             |                                     |
+| T5 small                                                 | coming soon         |                              |                             |                                     |
+| Bloom                                                    | coming soon         |                              |                             |                                     |
+
+[1] - Throughput on device ignores the overhead of host runtime, which is being currently optimized.
+
+## Wormhole (WH) Models
+
+| Model                                                    | Batch               | End-to-end throughput        | Device throughput [1] | Target                              |
+|----------------------------------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
+| Falcon-7B-decode (t/s/u)                                 | 32                  | 6.6                          | 11.6                        | 14                                  |
+| Mistral-7B-decode (t/s/u)                                | 32                  | 3.3                          | 12.6                        | 14                                  |
+| Mamba-2.8B-decode (t/s/u)                                | 32                  | coming soon                  |                             | 17                                  |
+| Stable Diffusion 1.4 512x512                             | 1                   | coming soon                  |                             |                                     |
+
+
+## LoudBox (2x4 mesh of WHs) Models 
+
+| Model                                    | Batch                    | Throughput |
+|------------------------------------------|--------------------------|----------------------------|
+| [Falcon40B](./models/demos/falcon40b)    | coming soon              |               |
+| [LLaMA-2-70B](./models/demos/llama2_70b) | coming soon              |               |
+| Mixtral7Bx8                              | coming soon              |               |
+
+
+
 
 ## Using TT-NN ops and tensors
 
@@ -36,69 +73,21 @@ with ttnn.manage_device(device_id=0) as device:
 print(output)
 ```
 
-You can use simple conversion APIs to use PyTorch tensors with Tenstorrent hardware.
+---
 
-## Tracing graphs for TT-NN operators
+<div align="center">
 
-```python
-import ttnn
-import torch
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
 
-with ttnn.manage_device(device_id=0) as device, ttnn.tracer.trace():
-   a = torch.ones((5, 7))
-   b = torch.ones((1, 7))
+**TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
-   a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-   b = ttnn.from_torch(b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-   output = a + b
-   output = ttnn.to_torch(output)
+<h3>
+   
+[TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
 
-ttnn.tracer.visualize(output)
-```
-
-We also provide tools to review the graphs you create and run in TT-NN.
-
-<img src="./docs/source/_static/add.svg" alt="ttnn tracer example" height="250"/>
-
-## Running performant out-of-the-box models
-
-We have working demos for models such as [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
-
-These are some performance metrics for our models running on Grayskull (GS). We constantly improve these
-and publish these metrics on [GitHub
-Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-models.yaml).
-
-| Model                            | Batch size          | GS end-to-end throughput [1] | GS on-device throughput [2] | Target GS end-to-end throughput [1] |
-|----------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
-| ResNet-50 (fps)                  | 20                  | 2070                         | 6943                        | 10000                               |
-| BERT-Large (sen/s)                  | 12                  | 362                          | 406                         | 410                                 |
-| TT-NN Falcon-7B decode (t/s)     | 32                  | 135                          | coming soon      | 140                                 |
-| ViT                              | Coming end of March |                              |                             |                                     |
-| U-Net                            | Coming end of March |                              |                             |                                     |
-
-[1] - Throughput is measured by taking batch size and dividing by accelerator inference time, and reported per sec.
-
-[2] - Throughput on device is measured by directly counting the clock cycles for operations done on device.
-
-## What's coming for models
-
-We are writing efficient versions of the following models to run on our Wormhole (WH) architecture (N300 2x WH card):
-
-| Model            | N300 (2x WH) Throughput |
-|------------------|-------------------------|
-| Falcon-7B        | Coming end of March     |
-| Mistral-7B        | Coming end of March     |
-| Mamba-2.8B       | Coming end of March     |
-| Stable Diffusion | Coming end of March     |
-
-And are also mapping models to run on our T3000 workstation with a 2x4 mesh of Wormhole devices (8x WH), and Galaxy systems with a 4x8 mesh of Wormhole devices (32x WH):
-
-| Model       | T3000 (8x WH) Throughput  | Galaxy (32x WH) Throughput |
-|-------------|---------------------------|----------------------------|
-| Falcon-40B  | Coming end of March       | Coming end of March        |
-| LLaMA-2-70B | Coming end of March       | Coming end of March        |
-| Mixtral7Bx8 | Coming end of March       | Coming end of March        |
+</h3>
+</div>
 
 ## Table of contents
 
@@ -163,7 +152,7 @@ source build/python_env/bin/activate
 ### Running example programs
 
 After installing, please refer to our [Getting Started
-page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html)
+page](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/get_started/get_started.html)
 in our documentation.
 
 Note that example programs are only available through source installation at
@@ -171,8 +160,10 @@ this time.
 
 ## Documentation
 
-Please refer to our
-[documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html).
+Please refer to our documentation:
+
+- [TT-Metalium](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
+- [TT-NN](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn)
 
 ## Troubleshooting and debugging tips
 
@@ -203,7 +194,6 @@ page](https://github.com/tenstorrent-metal/tt-metal/discussions/categories/gener
 We also have a Discord channel that you can join. You may discuss with other
 members of the community and developers there. You may use this invite
 [link](https://discord.gg/tvhGzHQwaj).
-
 If you would like to formally propose a new feature, report a bug, or have
 issues with permissions, please file through [GitHub
 issues](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose).

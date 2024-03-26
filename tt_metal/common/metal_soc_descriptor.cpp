@@ -8,7 +8,7 @@
 #include <iostream>
 #include <string>
 
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "dev_mem_map.h"
 #include "tt_metal/third_party/umd/device/tt_device.h"
 #include "yaml-cpp/yaml.h"
@@ -79,6 +79,19 @@ CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const Cor
         "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
         logical_coord.str());
     return this->physical_ethernet_cores.at(eth_chan_map.at(logical_coord));
+}
+
+CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const CoreCoord &physical_coord) const {
+    const auto &phys_eth_map = this->physical_ethernet_cores;
+    auto it = std::find(phys_eth_map.begin(), phys_eth_map.end(), physical_coord);
+
+    TT_ASSERT(
+        (it != phys_eth_map.end()),
+        "Bounds-Error -- Physical_core={} is outside of ethernet physical grid",
+        physical_coord.str());
+
+    int chan = it - phys_eth_map.begin();
+    return this->chan_to_logical_eth_core_map.at(chan);
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const {
@@ -288,6 +301,35 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     }
 }
 
+void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
+#if defined(PROFILER)
+    for (auto &core : this->physical_workers)
+    {
+        this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
+    }
+
+    for (auto &core : this->physical_ethernet_cores)
+    {
+        this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
+    }
+
+    int flat_id = 0;
+    for (auto &core : this->physical_routing_to_profiler_flat_id)
+    {
+        this->physical_routing_to_profiler_flat_id[core.first] = flat_id;
+        flat_id++;
+    }
+
+    int coreCount = this->physical_routing_to_profiler_flat_id.size();
+    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_channels();
+    if ((coreCount % this->get_num_dram_channels()) > 0)
+    {
+        this->profiler_ceiled_core_count_perf_dram_bank++;
+    }
+
+#endif
+}
+
 // UMD initializes and owns tt_SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
 // tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
@@ -302,4 +344,5 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t
     this->generate_physical_descriptors_from_virtual(harvesting_mask);
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
+    this->generate_physical_routing_to_profiler_flat_id();
 }

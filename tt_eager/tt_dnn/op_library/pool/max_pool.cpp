@@ -84,7 +84,7 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         if (input.shard_spec().has_value() && input.shard_spec().value().halo) {
             ncores = input.shard_spec().value().num_cores();
         } else {
-            ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
+            ncores = max_pool_helpers::get_num_cores(input.device(), out_nhw, nbatch);
         }
         // uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
         // uint32_t ncores = input.shard_spec().value().num_cores();
@@ -204,7 +204,7 @@ Tensor max_pool2d_v2(const Tensor &input,
 
 operation::OpPerformanceModel MaxPool::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_shape();
     uint32_t batch_size = this->in_n_;
     uint32_t conv_activation_h = this->in_h_;
     uint32_t conv_activation_w = this->in_w_;

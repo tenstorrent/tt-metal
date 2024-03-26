@@ -64,7 +64,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, output_mem_config=memory_config)
@@ -72,7 +72,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor`.
 
@@ -154,7 +154,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         if not _is_scalar(parameter):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, parameter, output_mem_config=memory_config)
@@ -162,7 +162,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 
@@ -184,10 +184,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
 
 def register_ttl_activation_function_with_two_float(name, ttl_activation_function, op_name, param1_name, param2_name):
     def _torch_activation(input_tensor: ttnn.Tensor, parameter1, parameter2, **_):
-        name_to_torch_function = {
-            "clip": torch.clamp,
-            "threshold": F.threshold,
-        }
+        name_to_torch_function = {"clip": torch.clamp, "threshold": F.threshold, "softplus": F.softplus}
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, parameter1, parameter2)
@@ -224,7 +221,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         if not _is_scalar(parameter1) or not _is_scalar(parameter2):
             raise TypeError("Expected parameters to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, parameter1, parameter2, output_mem_config=memory_config)
@@ -233,7 +230,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
 
@@ -319,7 +316,7 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
         if not _is_scalar(dim):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_activation_function(input_tensor, dim, output_mem_config=memory_config)
@@ -328,7 +325,7 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
         return output_tensor
 
     activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
 
@@ -359,7 +356,6 @@ TTL_ACTIVATION_FUNCTIONS_UNARY = [
     ("sign", ttl.tensor.sign, "sign"),
     ("softsign", ttl.tensor.softsign, "softsign"),
     ("swish", ttl.tensor.swish, "swish"),
-    ("softplus", ttl.tensor.softplus, "softplus"),
     ("tanhshrink", ttl.tensor.tanhshrink, "tanhshrink"),
 ]
 
@@ -375,6 +371,7 @@ TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
     ("clip", ttl.tensor.clip, "clip", "min", "max"),
     ("threshold", ttl.tensor.threshold, "threshold", "value", "threshold"),
+    ("softplus", ttl.tensor.softplus, "softplus", "beta", "threshold"),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [

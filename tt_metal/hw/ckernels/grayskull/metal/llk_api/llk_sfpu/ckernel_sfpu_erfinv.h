@@ -123,10 +123,5 @@ inline void calculate_erfinv()
     }
 }
 
-template <bool APPROXIMATE>
-inline void erfinv_init() {
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

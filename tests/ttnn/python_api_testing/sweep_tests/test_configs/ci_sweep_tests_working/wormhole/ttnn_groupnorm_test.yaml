@@ -7,11 +7,10 @@ test-list:
         interval: [32, 32]
         #num-dims: [2]
         num-shapes: 3
-        num-samples: 64
+        num-samples: 128
         args-sampling-strategy: "all"
         method: ttnn-groupnorm
       env:
-        # TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand

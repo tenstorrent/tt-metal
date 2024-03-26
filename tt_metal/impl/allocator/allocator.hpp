@@ -10,8 +10,8 @@
 #include <unordered_set>
 
 #include "allocator_types.hpp"
-#include "common/assert.hpp"
-#include "common/core_coord.h"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
@@ -52,6 +52,8 @@ class BankManager {
     void dump_blocks(std::ofstream &out) const;
 
    private:
+    void deallocate_buffer_(uint64_t address);
+
     constexpr static uint32_t min_allocation_size_bytes_ = 32;
 
     // Types of buffers allocated in the banks

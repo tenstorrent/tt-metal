@@ -1,8 +1,9 @@
-personal_ws-1.1 en 530
+personal_ws-1.1 en 545
 ABI
 ADDI
 API
 APIs
+AST
 AnotherVecType
 AssignGlobalBufferToProgram
 BFLOAT
@@ -36,6 +37,7 @@ ConfigureDeviceWithProgram
 CoreCoord
 CoreRange
 CoreRangeSet
+CoreType
 CreateBuffer
 CreateCircularBuffer
 CreateComputeKernel
@@ -44,6 +46,7 @@ CreateDevice
 CreateKernel
 CreateProgram
 CreateSemaphore
+DATAMOVEMENT
 DEFAULTFLOAT
 DPRINT
 DataFormat
@@ -53,6 +56,7 @@ DataType
 DeallocateBuffer
 DeviceOperation
 DeviceStorage
+DeviceZoneScopedN
 DstMode
 DumpDeviceProfileResults
 ENDL
@@ -152,6 +156,7 @@ TSLICE
 TT
 TTNN
 TTNN's
+TT-NN
 TensTorrent's
 TensorMemoryLayout
 Tensorflow
@@ -173,6 +178,7 @@ WriteToBuffer
 WriteToDevice
 XXXX
 ZoneScoped
+ZoneScopedN
 abovementioned
 acc
 acos
@@ -206,6 +212,7 @@ bool
 boolean
 breakpoint
 brisc
+brisck
 cachable
 cb
 cbid
@@ -233,6 +240,7 @@ csv
 ctl
 datacopy
 dataflow
+datamovement
 datatypes
 deallocate
 deallocation
@@ -327,6 +335,7 @@ iw
 iy
 jupyter
 kv
+kwargs
 labelled
 ld
 ldexp
@@ -488,6 +497,7 @@ tmp
 toctree
 todo
 tracy
+tracy's
 transp
 tril
 trisc
@@ -508,6 +518,7 @@ undoc
 unicast
 uninit
 unpad
+unpause
 unsharded
 unsqueeze
 untilize

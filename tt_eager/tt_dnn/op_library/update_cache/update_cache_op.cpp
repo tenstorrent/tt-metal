@@ -23,8 +23,8 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B);
 
     TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1]);
     TT_FATAL(input_tensor.get_legacy_shape()[0] == 1);
@@ -62,7 +62,10 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         } else {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
-        TT_FATAL(cache_tensor.get_legacy_shape()[0] == input_tensor.get_legacy_shape()[-2]);
+        TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-2]);
+        // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
+        if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32);
+        else TT_FATAL(this->batch_offset == 0);
     }
 }
 
@@ -85,14 +88,14 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
-                return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx);
+                return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset, this->compute_kernel_config);
             }
         case UpdateCacheOpParallelizationStrategy::SINGLE_CORE:
         default:
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_single_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
-                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx);
+                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset, this->compute_kernel_config);
             }
     };
     return {};
@@ -120,6 +123,7 @@ tt::stl::reflection::Attributes UpdateCache::attributes() const {
         {"batch_idx", this->batch_idx},
         {"update_idx", this->update_idx},
         {"op_type", this->op_type},
+        {"batch_offset", this->batch_offset},
     };
 }
 

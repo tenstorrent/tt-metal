@@ -98,7 +98,7 @@ bool test_tensor_move_semantics(Device *device) {
     Tensor dev_a = Tensor(OwnedStorage{bfloat_data}, single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     auto og_buffer_a = dev_a.buffer();
     Tensor dev_a_copy = std::move(dev_a);
-    pass &= (dev_a.buffer() == nullptr and dev_a_copy.buffer() == og_buffer_a);
+    pass &= (dev_a.tensor_attributes == nullptr and dev_a_copy.buffer() == og_buffer_a);
     auto dev_a_copy_on_host = dev_a_copy.cpu();
     auto dev_a_copy_data = owned_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     pass &= dev_a_copy_data == bfloat_data;
@@ -107,13 +107,13 @@ bool test_tensor_move_semantics(Device *device) {
     auto random_tensor_three = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_three = owned_buffer::get_as<bfloat16>(random_tensor_three);
     Tensor host_c = Tensor(OwnedStorage{bfloat_data_three}, single_tile_shape, DataType::BFLOAT16, Layout::TILE);
-    Tensor host_c_copy = Tensor(dev_a_copy_on_host.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor host_c_copy = Tensor(dev_a_copy_on_host.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
     host_c_copy = std::move(host_c);
     auto host_c_copy_data = owned_buffer::get_as<bfloat16>(host_c_copy);
     pass &= host_c_copy_data == bfloat_data_three;
 
     // host tensor updated with dev tensor move assignment
-    Tensor host_d_copy = Tensor(host_c_copy.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor host_d_copy = Tensor(host_c_copy.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
     host_d_copy = std::move(dev_a_copy);
     pass &= (host_d_copy.storage_type() == StorageType::DEVICE);
     auto host_d_copy_on_host = host_d_copy.cpu();
@@ -123,8 +123,9 @@ bool test_tensor_move_semantics(Device *device) {
     // dev tensor updated with host tensor copy assignment
     auto random_tensor_four = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_four = owned_buffer::get_as<bfloat16>(random_tensor_four);
-    Tensor host_e = Tensor(random_tensor_four.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
-    Tensor dev_e_copy = Tensor(host_c_copy.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
+    Tensor host_e = Tensor(random_tensor_four.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor dev_e_copy =
+        Tensor(host_c_copy.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     dev_e_copy = std::move(host_e);
     pass &= (dev_e_copy.storage_type() == StorageType::OWNED);
     auto dev_e_copy_data = owned_buffer::get_as<bfloat16>(dev_e_copy);
@@ -133,8 +134,10 @@ bool test_tensor_move_semantics(Device *device) {
     // dev tensor updated with dev tensor copy assignment
     auto random_tensor_five = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_five = owned_buffer::get_as<bfloat16>(random_tensor_five);
-    Tensor dev_b = Tensor(random_tensor_four.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
-    Tensor dev_b_copy = Tensor(dev_e_copy.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
+    Tensor dev_b =
+        Tensor(random_tensor_four.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
+    Tensor dev_b_copy =
+        Tensor(dev_e_copy.get_storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     dev_b_copy = std::move(dev_b);
     pass &= (dev_b_copy.storage_type() == StorageType::DEVICE);
     auto dev_b_copy_on_host = dev_b_copy.cpu();

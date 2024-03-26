@@ -35,7 +35,9 @@
     DPRINT_PREFIX(HEX)   \
     DPRINT_PREFIX(OCT)               \
     DPRINT_PREFIX(DEC)               \
-    DPRINT_PREFIX(TILESLICE)
+    DPRINT_PREFIX(TILESLICE)         \
+    DPRINT_PREFIX(U32_ARRAY)         \
+    DPRINT_PREFIX(TYPED_U32_ARRAY)   // Same as U32_ARRAY, but with the last element indicating the type of array elements
 
 enum DPrintTypeID : uint8_t {
 // clang-format off
@@ -94,5 +96,14 @@ struct TileSliceHostDev {
     uint16_t endl_rows_          ATTR_ALIGN2;
     uint16_t samples_[MAXCOUNT]  ATTR_ALIGN2;
 } ATTR_PACK;
+
+enum TypedU32_ARRAY_Format {
+    TypedU32_ARRAY_Format_INVALID,
+
+    TypedU32_ARRAY_Format_Raw,                                     // A raw uint32_t array
+    TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, // Array of numbers with format specified in subtype
+
+    TypedU32_ARRAY_Format_COUNT,
+};
 
 static_assert(sizeof(DebugPrintMemLayout) == PRINT_BUFFER_SIZE);

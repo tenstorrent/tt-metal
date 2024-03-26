@@ -158,7 +158,7 @@ def split_query_key_value_and_split_heads(
     if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+    if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise RuntimeError("input_tensor must be on device!")
 
     if num_kv_heads is not None:
@@ -395,7 +395,7 @@ def attention_softmax(
     else:
         scaled_input_tensor = input_tensor * scaler
         output_tensor = ttl.tensor.softmax(scaled_input_tensor, output_mem_config=memory_config)
-        return output_tensor
+    return output_tensor
 
 
 @ttnn.register_operation(
@@ -404,7 +404,7 @@ def attention_softmax(
     torch_function=_torch_attention_softmax,
 )
 def attention_softmax_(
-    input_tensor: ttnn.Tensor,
+    tensor: ttnn.Tensor,
     *,
     head_size: Optional[int],
     attention_mask: Optional[ttnn.Tensor],
@@ -413,22 +413,22 @@ def attention_softmax_(
     ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
 ) -> ttnn.Tensor:
     """
-    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
+    attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
 
-    In-Place divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
+    In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
     Args:
-        * :attr:`input_tensor`: Input Tensor
+        * :attr:`tensor`: Input Tensor
         * :attr:`head_size`: Number of heads
         * :attr:`attention_mask`: Attention Mask
         * :attr:`program_config`: Program Config of the output tensor
 
 
     """
-    if len(input_tensor.shape) != 4:
+    if len(tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
-    if input_tensor.layout != ttnn.TILE_LAYOUT:
+    if tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
     if head_size is not None:
@@ -437,10 +437,22 @@ def attention_softmax_(
         scaler = 1.0
 
     if attention_mask is not None:
-        input_tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            input_tensor, scaler, attention_mask, program_config=program_config
+        input_shape = tensor.shape
+        input_shape_with_tile_padding = tensor.shape.with_tile_padding()
+        tensor = ttnn.reshape(
+            tensor,
+            (
+                input_shape_with_tile_padding[0],
+                1,
+                input_shape_with_tile_padding[1] * input_shape_with_tile_padding[2],
+                input_shape_with_tile_padding[3],
+            ),
         )
-        return input_tensor
+        tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+            tensor, scaler, attention_mask, program_config=program_config
+        )
+        tensor = ttnn.reshape(tensor, input_shape)
+        return tensor
     else:
         raise RuntimeError("Cannot apply divide by sqrt(head_size) using in-place version!")
 

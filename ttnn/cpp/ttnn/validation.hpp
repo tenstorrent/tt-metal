@@ -37,11 +37,11 @@ void validate_input_tensor(
 
     const auto& tensor = std::get<ttnn::Tensor>(tensor_to_validate);
 
-    if (tensor.ttnn_shape().rank() < input_schema.min_rank or tensor.ttnn_shape().rank() > input_schema.max_rank) {
+    if (tensor.get_shape().rank() < input_schema.min_rank or tensor.get_shape().rank() > input_schema.max_rank) {
         TT_THROW(
             "{}: Tensor rank is not valid: rank is {} but must be  {} <= rank <- {}",
             operation_name,
-            tensor.ttnn_shape().rank(),
+            tensor.get_shape().rank(),
             input_schema.min_rank,
             input_schema.max_rank);
     }
@@ -57,7 +57,7 @@ void validate_input_tensor(
     if (input_schema.can_be_on_device and input_schema.can_be_on_cpu) {
         // pass
     } else if (input_schema.can_be_on_device) {
-        if (not ttnn::has_storage_type_of(tensor, ttnn::DEVICE_STORAGE_TYPE)) {
+        if (not ttnn::is_tensor_on_device_or_multidevice(tensor)) {
             TT_THROW("{}: Tensor must be on device!", operation_name);
         }
     } else if (input_schema.can_be_on_cpu) {

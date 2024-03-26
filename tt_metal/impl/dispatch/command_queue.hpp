@@ -81,6 +81,7 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t command_queue_id;
     uint32_t event;
     bool stall;
+    CoreType dispatch_core_type;
 
     virtual const DeviceCommand create_buffer_transfer_instruction(uint32_t dst_address, uint32_t padded_page_size, uint32_t num_pages) = 0;
    protected:
@@ -171,6 +172,7 @@ class EnqueueWriteBufferCommand : public Command {
     const void* src;
     uint32_t pages_to_write;
     uint32_t command_queue_id;
+    CoreType dispatch_core_type;
 
     virtual const DeviceCommand create_buffer_transfer_instruction(uint32_t dst_address, uint32_t padded_page_size, uint32_t num_pages) = 0;
    protected:
@@ -258,6 +260,7 @@ class EnqueueProgramCommand : public Command {
     SystemMemoryManager& manager;
     uint32_t event;
     bool stall;
+    CoreType dispatch_core_type;
     std::optional<std::reference_wrapper<Trace>> trace = {};
 
    public:
@@ -342,6 +345,7 @@ class EnqueueWaitForEventCommand : public Command {
     SystemMemoryManager& manager;
     uint32_t event;
     const Event& sync_event;
+    CoreType dispatch_core_type;
 
    public:
     EnqueueWaitForEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event, const Event& sync_event);
@@ -472,6 +476,7 @@ class HWCommandQueue {
 
     Device* device;
 
+    CoreType get_dispatch_core_type();
 
     void copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel);
     void read_completion_queue();
@@ -521,6 +526,7 @@ struct CommandInterface {
 };
 
 class CommandQueue {
+   friend class Device;
    public:
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
@@ -531,9 +537,11 @@ class CommandQueue {
     ~CommandQueue();
 
     // Command queue constructor
+    private:
     CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
 
     // Trace queue constructor
+    public:
     CommandQueue(Trace* trace);
 
     // Getters for private members

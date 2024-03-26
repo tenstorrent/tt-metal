@@ -10,7 +10,7 @@
 // A version of CommonFixture with watcher enabled
 class WatcherFixture: public CommonFixture {
 public:
-    inline static const string log_file_name = "built/watcher.log";
+    inline static const string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
@@ -27,6 +27,7 @@ protected:
     int  watcher_previous_interval;
     bool watcher_previous_dump_all;
     bool watcher_previous_append;
+    bool watcher_previous_auto_unpause;
     bool test_mode_previous;
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
@@ -34,11 +35,13 @@ protected:
         watcher_previous_interval = tt::llrt::OptionsG.get_watcher_interval();
         watcher_previous_dump_all = tt::llrt::OptionsG.get_watcher_dump_all();
         watcher_previous_append = tt::llrt::OptionsG.get_watcher_append();
+        watcher_previous_auto_unpause = tt::llrt::OptionsG.get_watcher_auto_unpause();
         test_mode_previous = tt::llrt::OptionsG.get_test_mode_enabled();
         tt::llrt::OptionsG.set_watcher_enabled(true);
         tt::llrt::OptionsG.set_watcher_interval(interval_ms);
         tt::llrt::OptionsG.set_watcher_dump_all(false);
         tt::llrt::OptionsG.set_watcher_append(false);
+        tt::llrt::OptionsG.set_watcher_auto_unpause(true);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
         tt::watcher_clear_log();
 
@@ -58,6 +61,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
         tt::llrt::OptionsG.set_watcher_dump_all(watcher_previous_dump_all);
         tt::llrt::OptionsG.set_watcher_append(watcher_previous_append);
+        tt::llrt::OptionsG.set_watcher_auto_unpause(watcher_previous_auto_unpause);
         tt::llrt::OptionsG.set_test_mode_enabled(test_mode_previous);
         tt::watcher_server_set_error_flag(false);
     }

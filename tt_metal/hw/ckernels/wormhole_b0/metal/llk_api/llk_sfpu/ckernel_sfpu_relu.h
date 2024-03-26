@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "sfpi.h"
+#include "ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -75,22 +75,6 @@ inline void calculate_lrelu(uint slope)
         dst_reg++;
     }
 }
-
-template <bool APPROXIMATION_MODE>
-void relu_max_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void relu_min_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void lrelu_init() {
-    ;
-}
-
 
 }  // namespace sfpu
 }  // namespace ckernel

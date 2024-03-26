@@ -279,6 +279,7 @@ def device(device_init_destroy):
 
     device = ttl.device.GetDefaultDevice()
     yield device
+    ttl.device.DumpDeviceProfiler(device, True)
     ttl.device.DeallocateBuffers(device)
 
 
@@ -294,6 +295,7 @@ def pcie_devices(request):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
+        ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -311,47 +313,57 @@ def all_devices(request):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
+        ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
-def device_mesh(request):
+def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
 
     device_ids = ttnn.get_device_ids()
-    if len(device_ids) <= 1:
+    try:
+        num_devices_requested = min(request.param, len(device_ids))
+    except (ValueError, AttributeError):
+        num_devices_requested = len(device_ids)
+
+    if num_devices_requested <= 1:
         pytest.skip("Requires multiple devices to run")
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, len(device_ids)), device_ids)
+
+    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
     logger.info(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
 
     ttnn.close_device_mesh(device_mesh)
+    del device_mesh
 
 
 @pytest.fixture(scope="function")
-def pcie_device_mesh(request):
+def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
 
     device_ids = ttnn.get_pcie_device_ids()
-    if len(device_ids) <= 1:
+    try:
+        num_pcie_devices_requested = min(request.param, len(device_ids))
+    except (ValueError, AttributeError):
+        num_pcie_devices_requested = len(device_ids)
+
+    if num_pcie_devices_requested <= 1:
         pytest.skip("Requires multiple devices to run")
-    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, len(device_ids)), device_ids)
+
+    device_mesh = ttnn.open_device_mesh(
+        ttnn.DeviceGrid(1, num_pcie_devices_requested), device_ids[:num_pcie_devices_requested]
+    )
 
     logger.info(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
 
     ttnn.close_device_mesh(device_mesh)
-
-
-@pytest.fixture(autouse=True)
-def clear_program_cache():
-    yield
-    import tt_lib as ttl
-
-    ttl.program_cache.disable_and_clear()
+    del device_mesh
 
 
 @pytest.fixture()
@@ -372,10 +384,16 @@ def reset_default_device():
 
 
 @pytest.fixture(scope="function")
-def use_program_cache(clear_program_cache):
+def use_program_cache(request):
     import tt_lib as ttl
 
-    ttl.program_cache.enable()
+    if "device" in request.fixturenames:
+        dev = ttl.device.GetDefaultDevice()
+        dev.enable_program_cache()
+    elif "all_devices" in request.fixturenames:
+        devices = request.getfixturevalue("all_devices")
+        for dev in devices:
+            dev.enable_program_cache()
     yield
 
 

@@ -11,8 +11,6 @@
 #include <unordered_set>
 #include <mutex>
 #include <fmt/ranges.h>
-
-#include "tools/cpuprof/cpuprof.h"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -103,6 +101,10 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
             range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
             break;
+        case 6:
+            range_min = MEM_IERISC_FIRMWARE_BASE;
+            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
+            break;
         default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
     }
 
@@ -141,22 +143,43 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
     return read_hex_vec;
 }
 
-void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+}
+
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg) {
+
+    bool is_eth_core = is_ethernet_core(core, chip);
+    bool is_active_eth_core = false;
+    bool is_inactive_eth_core = false;
+
+    // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
+    if (is_eth_core) {
+        auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(chip);
+        auto inactive_eth_cores =  tt::Cluster::instance().get_inactive_ethernet_cores(chip);
+        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != active_eth_cores.end();
+        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != inactive_eth_cores.end();
+        //we should not be operating on any reserved cores here.
+        assert(is_active_eth_core or is_inactive_eth_core);
+    }
+
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    if (is_ethernet_core(core, chip)) {
+    if (is_active_eth_core) {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
     } else {
-        tt::Cluster::instance().write_core(
-            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
-    }
-
-    // Ethernet cores use a different address for starting the kernel
-    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
-        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+        if (is_inactive_eth_core) {
+            tt::Cluster::instance().write_core(
+                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_IERISC_MAILBOX_ADDRESS_HOST(launch));
+        } else {
+            tt::Cluster::instance().write_core(
+                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+        }
     }
 }
+
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
     llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
@@ -205,7 +228,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     return read_mem;
 }
 
-void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
@@ -216,12 +239,13 @@ void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     constexpr uint32_t jal_opcode = 0x6f;
     constexpr uint32_t jal_max_offset = 0x0007ffff;
     uint32_t opcode = jal_opcode;
-    assert(MEM_BRISC_FIRMWARE_BASE < jal_max_offset);
+    uint32_t firmware_base = is_ethernet_core(core, chip_id) ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
+    assert(firmware_base < jal_max_offset);
     // See riscv spec for offset encoding below
     uint32_t jal_offset_bit_20 = 0;
-    uint32_t jal_offset_bits_10_to_1 = (MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20;
-    uint32_t jal_offset_bit_11 = (MEM_BRISC_FIRMWARE_BASE & 0x800) << 9;
-    uint32_t jal_offset_bits_19_to_12 = (MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0;
+    uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
+    uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
+    uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
     uint32_t jal_offset =
         jal_offset_bit_20 |
         jal_offset_bits_10_to_1 |
@@ -242,6 +266,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
         case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
         case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
         case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
+        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE; break;
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
@@ -276,32 +301,43 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    if (is_ethernet_core(core, chip_id)) {
-        const auto &readback_vec =
-            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE, sizeof(uint32_t));
-        return (readback_vec[0] == 0);
-    } else {
-        std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
-            constexpr int RUN_MAILBOX_BOGUS = 3;
-            std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-            // read a single uint32_t even though launch.run is smaller than that
-            run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-            uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
-            if (run != run_state && run != RUN_MSG_DONE) {
-                fprintf(
-                    stderr,
-                    "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
-                    run,
-                    run_state,
-                    RUN_MSG_DONE);
-                TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
-            }
+    bool is_eth_core = is_ethernet_core(core, chip_id);
+    bool is_active_eth_core = false;
+    bool is_inactive_eth_core = false;
 
-            return run == RUN_MSG_DONE;
-        };
-
-        return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
+        // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
+    if (is_eth_core) {
+        auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(chip_id);
+        auto inactive_eth_cores =  tt::Cluster::instance().get_inactive_ethernet_cores(chip_id);
+        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
+        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != inactive_eth_cores.end();
+        //we should not be operating on any reserved cores here.
+        assert(is_active_eth_core or is_inactive_eth_core);
     }
+
+    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.run) :
+                              is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.run) : GET_MAILBOX_ADDRESS_HOST(launch.run);
+
+    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+        constexpr int RUN_MAILBOX_BOGUS = 3;
+        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
+        // read a single uint32_t even though launch.run is smaller than that
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        if (run != run_state && run != RUN_MSG_DONE) {
+            fprintf(
+                stderr,
+                "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
+                run,
+                run_state,
+                RUN_MSG_DONE);
+            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+        }
+
+        return run == RUN_MSG_DONE;
+    };
+
+    return get_mailbox_is_done(run_mailbox_addr);
 }
 
 void wait_until_cores_done(chip_id_t device_id,

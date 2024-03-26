@@ -8,8 +8,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "common/bfloat16.hpp"
-#include "common/logger.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/logger.hpp"
 
 
 using namespace tt;
@@ -140,7 +140,7 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
 }
 
 TEST_F(CommonFixture, DRAMLoopbackSingleCore){
-    uint32_t buffer_size = 2 * 1024 * 50;
+    uint32_t buffer_size = 2 * 1024 * 25;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {

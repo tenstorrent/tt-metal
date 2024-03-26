@@ -50,7 +50,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             input_tensor,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -69,7 +69,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_unary_function(input_tensor, output_mem_config=memory_config)
@@ -77,7 +77,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{name}"
-    unary_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    unary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies {name} to :attr:`input_tensor` element-wise.
 
@@ -170,7 +170,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         if not _is_scalar(parameter):
             raise TypeError("Expected second argument to be a float")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_unary_function(input_tensor, parameter, output_mem_config=memory_config)
@@ -178,7 +178,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{(name)}"
-    unary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 

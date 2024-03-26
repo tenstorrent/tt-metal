@@ -81,7 +81,6 @@ void kernel_main() {
         for(uint32_t h = 0; h < in0_block_h; h++) {
             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in0_block_w; w++) {
-                // kernel_profiler::mark_time(5);
                 uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
                 noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
                 l1_write_addr_in0 += single_tile_size_bytes;

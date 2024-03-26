@@ -12,6 +12,8 @@ inline uint8_t* get_debug_print_buffer() {
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_BR);
     #elif defined(COMPILE_FOR_ERISC)
         return reinterpret_cast<uint8_t*>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
+    #elif defined(COMPILE_FOR_IDLE_ERISC)
+        return reinterpret_cast<uint8_t*>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
     #elif defined(UCK_CHLKC_UNPACK)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T0);
     #elif defined(UCK_CHLKC_MATH)

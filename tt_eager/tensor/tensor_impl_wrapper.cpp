@@ -20,6 +20,7 @@ uint32_t element_size_bytes_wrapper(DataType dtype) {
         {DataType::UINT32, &element_size_bytes<uint32_t>},
         {DataType::UINT16, &element_size_bytes<uint16_t>},
         {DataType::BFLOAT8_B, &element_size_bytes<std::byte>},
+        {DataType::BFLOAT4_B, &element_size_bytes<std::byte>},
     };
     return element_size_bytes_map.at(dtype)();
 }
@@ -30,6 +31,7 @@ uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpack
         {DataType::FLOAT32, &packed_buffer_size_bytes<float>},
         {DataType::UINT32, &packed_buffer_size_bytes<uint32_t>},
         {DataType::BFLOAT8_B, &packed_buffer_size_bytes<uint32_t>},
+        {DataType::BFLOAT4_B, &packed_buffer_size_bytes<uint32_t>},
         {DataType::UINT16, &packed_buffer_size_bytes<uint16_t>},
     };
     return packed_buffer_size_bytes_map.at(dtype)(volume_unpacked_data);
@@ -41,6 +43,7 @@ Tensor to_host_wrapper(const Tensor &tensor, bool blocking) {
         {DataType::FLOAT32, &to_host<float>},
         {DataType::UINT32, &to_host<uint32_t>},
         {DataType::BFLOAT8_B, &to_host<uint32_t>},
+        {DataType::BFLOAT4_B, &to_host<uint32_t>},
         {DataType::UINT16, &to_host<uint16_t>},
     };
     return to_host_map.at(tensor.get_dtype())(tensor, blocking);
@@ -53,6 +56,7 @@ Tensor to_extract_shard_wrapper(const Tensor &tensor, const uint32_t & core_id) 
         {DataType::FLOAT32, &extract_shard<float>},
         {DataType::UINT32, &extract_shard<uint32_t>},
         {DataType::BFLOAT8_B, &extract_shard<uint32_t>},
+        {DataType::BFLOAT4_B, &extract_shard<uint32_t>},
         {DataType::UINT16, &extract_shard<uint16_t>},
     };
     return to_host_map.at(tensor.get_dtype())(tensor, core_id);
@@ -64,6 +68,7 @@ Tensor to_host_wrapper_sharded(const Tensor &tensor) {
         {DataType::FLOAT32, &to_host_sharded<float>},
         {DataType::UINT32, &to_host_sharded<uint32_t>},
         {DataType::BFLOAT8_B, &to_host_sharded<uint32_t>},
+        {DataType::BFLOAT4_B, &to_host_sharded<uint32_t>},
         {DataType::UINT16, &to_host_sharded<uint16_t>},
     };
     return to_host_map.at(tensor.get_dtype())(tensor);
@@ -76,6 +81,7 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
             {DataType::FLOAT32, &to_device<float>},
             {DataType::UINT32, &to_device<uint32_t>},
             {DataType::BFLOAT8_B, &to_device<uint32_t>},
+            {DataType::BFLOAT4_B, &to_device<uint32_t>},
             {DataType::UINT16, &to_device<uint16_t>},
         };
     return to_device_map.at(tensor.get_dtype())(tensor, target_device, mem_config, q);
@@ -88,6 +94,7 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
         {DataType::FLOAT32, &to_layout<float>},
         {DataType::UINT32, &to_layout<uint32_t>},
         {DataType::BFLOAT8_B, &to_layout_bfloat8_b},
+        {DataType::BFLOAT4_B, &to_layout_bfloat4_b},
         {DataType::UINT16, &to_layout<uint16_t>},
     };
     return to_layout_map.at(tensor.get_dtype())(tensor, target_layout);
@@ -100,6 +107,7 @@ Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const
             {DataType::FLOAT32, &pad<float>},
             {DataType::UINT32, &pad<uint32_t>},
             {DataType::BFLOAT8_B, &pad_bfloat8_b},
+            {DataType::BFLOAT4_B, &pad_bfloat4_b},
             {DataType::UINT16, &pad<uint16_t>},
         };
     return pad_map.at(tensor.get_dtype())(tensor, output_tensor_shape, input_tensor_start, pad_value);
@@ -111,6 +119,7 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
         {DataType::FLOAT32, &unpad<float>},
         {DataType::UINT32, &unpad<uint32_t>},
         {DataType::BFLOAT8_B, &unpad_bfloat8_b},
+        {DataType::BFLOAT4_B, &unpad_bfloat4_b},
         {DataType::UINT16, &unpad<uint16_t>},
     };
     return unpad_map.at(tensor.get_dtype())(tensor, output_tensor_start, output_tensor_end);
@@ -123,6 +132,7 @@ std::string to_string_wrapper(const Tensor &tensor) {
             {DataType::FLOAT32, &to_string<float>},
             {DataType::UINT32, &to_string<uint32_t>},
             {DataType::BFLOAT8_B, &to_string<uint32_t>},
+            {DataType::BFLOAT4_B, &to_string<uint32_t>},
             {DataType::UINT16, &to_string<uint16_t>},
         };
     return to_string_map.at(tensor.get_dtype())(tensor, std::nullopt);

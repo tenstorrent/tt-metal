@@ -113,7 +113,8 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_)) {
-        const auto noc_coord = this->worker_core_from_logical_core(core);
+        CoreType dispatch_core_type = tt::get_dispatch_core_type(id_, num_hw_cqs_);
+        const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
@@ -134,7 +135,7 @@ void Device::initialize_build() {
     auto init_helper = [this] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
 
-        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 6);
+        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 7);
 
         build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 0] =
             std::make_shared<JitBuildDataMovement>(this->build_env_, 0, is_fw);
@@ -150,6 +151,8 @@ void Device::initialize_build() {
         if (arch() != tt::ARCH::GRAYSKULL) {
             build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0] =
                 std::make_shared<JitBuildEthernet>(this->build_env_, 0, is_fw);
+            build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1] =
+                std::make_shared<JitBuildEthernet>(this->build_env_, 1, is_fw);
         }
 
        return build_states;
@@ -170,14 +173,29 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
     ZoneScoped;
 
     if (llrt::is_ethernet_core(phys_core, this->id())) {
-        int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
-        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
-        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
-        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
-        llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
+        //ethernet core.
+        //Determine if its a connected or unconnected ethernet core.
+        //Unconnected ethernet cores will get idle_erisc fw.
+        auto active_eth_cores = this->get_active_ethernet_cores();
+
+        if (active_eth_cores.find(logical_core_from_ethernet_core(phys_core)) != active_eth_cores.end()) {
+            int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
+            ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+            log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
+        } else {
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
+            int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
+            ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+            log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            llrt::program_risc_startup_addr(this->id(), phys_core);
+        }
     } else {
-        llrt::program_brisc_startup_addr(this->id(), phys_core);
+        llrt::program_risc_startup_addr(this->id(), phys_core);
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
             ll_api::memory binary_mem =
                 llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
@@ -189,6 +207,9 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
             llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
         }
     }
+    //This is an initialization launch message.
+    //Clears launch message fields to 0 in target core L1.
+    //Sets launch.run to RUN_MSG_INIT.
     llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
@@ -214,6 +235,7 @@ void Device::initialize_and_launch_firmware() {
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
 
+
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
@@ -229,6 +251,12 @@ void Device::initialize_and_launch_firmware() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         this->initialize_firmware(phys_eth_core, &launch_msg);
+    }
+
+    for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
+        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        this->initialize_firmware(phys_eth_core, &launch_msg);
+        not_done_cores.insert(phys_eth_core);
     }
 
     // Barrier between L1 writes above and deassert below
@@ -260,13 +288,28 @@ void Device::clear_l1_state() {
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        std::vector<uint32_t> init_erisc_info_vec(
-            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE) / sizeof(uint32_t),
+        // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
+        // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
+        std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
+                sizeof(uint32_t),
             0);
 
         llrt::write_hex_vec_to_core(
-            this->id(), physical_core, init_erisc_info_vec, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(),
+            physical_core,
+            zero_vec_above_tile_header_buffer,
+            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
+
+        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
+        std::vector<uint32_t> zero_vec_below_command_q_base(
+            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
+
+        llrt::write_hex_vec_to_core(
+            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
+        */
     }
+    // TODO: clear idle eriscs as well
 }
 
 // TODO: This will be removed once FD v1.3 is backported to Grayskull
@@ -275,14 +318,14 @@ void Device::compile_command_queue_programs_for_grayskull() {
     unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
 
     const uint32_t num_tensix_command_slots = 2;
-    uint32_t cmd_start_tensix = get_command_start_l1_address();
-    uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
+    uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+    uint32_t data_section_addr_tensix = get_data_section_l1_address(false, false);
+    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false, false);
     uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size();
 
     uint8_t num_hw_cqs = this->num_hw_cqs();
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
-    uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), channel) / num_hw_cqs;
+    uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(this->id(), channel, cq_id);
@@ -371,35 +414,41 @@ void Device::compile_command_queue_programs() {
     const uint32_t num_eth_command_slots = 1;
     const uint32_t accept_cmd_sem_value = 0;
 
-    uint32_t cmd_start_tensix = get_command_start_l1_address();
-    uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
-    uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
+    uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+    uint32_t data_section_addr_tensix = get_data_section_l1_address(false, false);
+    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false, false);
+    uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false, false);
 
+    // Idle erisc dispatch
+    uint32_t cmd_start_eth_dispatch = get_command_start_l1_address(true);
+    uint32_t consumer_data_buffer_size_eth_dispatch = get_cq_data_buffer_size(true, true);
+
+    uint32_t producer_data_buffer_size_eth = get_cq_data_buffer_size(true, false);
+    uint32_t consumer_data_buffer_size_eth = get_cq_data_buffer_size(true, false);
+
+    // Eth tunneller kernel
     uint32_t issue_path_cmd_start_eth = get_eth_command_start_l1_address(SyncCBConfigRegion::ROUTER_ISSUE);
     uint32_t completion_path_cmd_start_eth = get_eth_command_start_l1_address(SyncCBConfigRegion::ROUTER_COMPLETION);
-
-    uint32_t producer_data_buffer_size_eth = get_cq_data_buffer_size(true);
-    uint32_t consumer_data_buffer_size_eth = get_cq_data_buffer_size(true);
 
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
             // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
             uint8_t num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), channel) / num_hw_cqs;
+            uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(device_id, channel, cq_id);
                 tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
                 tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(device_id, channel, cq_id);
+                CoreType dispatch_core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
 
                 TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
                     "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
 
-                CoreCoord issue_q_physical_core = get_physical_core_coordinate(issue_q_reader_location, CoreType::WORKER);
-                CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, CoreType::WORKER);
-                CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, CoreType::WORKER);
+                CoreCoord issue_q_physical_core = get_physical_core_coordinate(issue_q_reader_location, dispatch_core_type);
+                CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, dispatch_core_type);
+                CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
 
                 CoreCoord consumer_physical_core = completion_q_physical_core;
                 CoreCoord producer_physical_core = issue_q_physical_core;
@@ -429,7 +478,7 @@ void Device::compile_command_queue_programs() {
                         {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
                         {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
                     };
-                    std::vector<uint32_t> eth_tunneller_compile_args = {true};
+                    std::vector<uint32_t> eth_tunneller_compile_args = {true, num_eth_command_slots};
                     std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
@@ -460,6 +509,7 @@ void Device::compile_command_queue_programs() {
                 };
 
                 // Address in sysmem for CQ to write back its read ptr to
+                bool eth_core = dispatch_core_type == CoreType::ETH;
                 uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
@@ -469,8 +519,12 @@ void Device::compile_command_queue_programs() {
                 uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
                 uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
 
-                uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? issue_path_cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
-                uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? issue_path_cmd_start_eth : eth_core ? cmd_start_eth_dispatch : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : eth_core ? consumer_data_buffer_size_eth_dispatch : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+
+                uint32_t cmd_start_producer = eth_core ? cmd_start_eth_dispatch : cmd_start_tensix;
+                uint32_t data_section_addr_producer = eth_core ? get_data_section_l1_address(true, true) : data_section_addr_tensix;
+                uint32_t producer_data_buffer_size = eth_core ? get_cq_data_buffer_size(true, true) : producer_data_buffer_size_tensix;
 
                 tt::PullAndPushConfig pull_and_push_config = (device_id != this->id()) ? tt::PullAndPushConfig::PUSH_TO_REMOTE : tt::PullAndPushConfig::LOCAL;
                 std::vector<uint32_t> producer_compile_args = {
@@ -481,45 +535,70 @@ void Device::compile_command_queue_programs() {
                     completion_queue_start_addr,
                     completion_queue_size,
                     host_finish_addr,
-                    cmd_start_tensix,
-                    data_section_addr_tensix,
-                    producer_data_buffer_size_tensix,
+                    cmd_start_producer,
+                    data_section_addr_producer,
+                    producer_data_buffer_size,
                     consumer_cmd_base_addr,
                     consumer_data_buff_size,
                     (uint32_t)pull_and_push_config
                 };
 
                 std::string pull_and_push_kernel = "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp";
-
-                tt::tt_metal::CreateKernel(
-                    *command_queue_program_ptr,
-                    pull_and_push_kernel,
-                    issue_q_reader_location,
-                    tt::tt_metal::DataMovementConfig {
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt::tt_metal::NOC::RISCV_0_default,
-                        .compile_args = producer_compile_args,
-                        .defines = producer_defines});
-
-                uint32_t num_command_slots = (device_id == this->id()) ? num_tensix_command_slots : num_eth_command_slots;
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_command_slots);
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, 0);
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_tensix_command_slots); // semaphore between push&pull kernel and dispatch kernel
-
-                if (device_id == this->id()) {
-                    std::vector<uint32_t> consumer_compile_args = {cmd_start_tensix, consumer_data_buffer_size_tensix};
-
+                if (dispatch_core_type != CoreType::ETH) {
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
-                        "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
-                        dispatch_location,
+                        pull_and_push_kernel,
+                        issue_q_reader_location,
                         tt::tt_metal::DataMovementConfig {
                             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                             .noc = tt::tt_metal::NOC::RISCV_0_default,
-                            .compile_args = consumer_compile_args,
-                            .defines = consumer_defines});
+                            .compile_args = producer_compile_args,
+                            .defines = producer_defines});
+                } else {
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        pull_and_push_kernel,
+                        issue_q_reader_location,
+                        tt::tt_metal::EthernetConfig {
+                            .eth_mode = Eth::IDLE,
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = producer_compile_args,
+                            .defines = producer_defines});
+                }
 
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
+                uint32_t num_command_slots = (device_id == this->id()) ? num_tensix_command_slots : num_eth_command_slots;
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_command_slots, dispatch_core_type);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, 0, dispatch_core_type);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_tensix_command_slots, dispatch_core_type); // semaphore between push&pull kernel and dispatch kernel
+
+                if (device_id == this->id()) {
+                    uint32_t cmd_start_consumer = eth_core ? cmd_start_eth_dispatch : cmd_start_tensix;
+                    uint32_t consumer_data_buffer_size = eth_core ? consumer_data_buffer_size_eth_dispatch : consumer_data_buffer_size_tensix;
+                    std::vector<uint32_t> consumer_compile_args = {cmd_start_consumer, consumer_data_buffer_size};
+
+                    if (dispatch_core_type != CoreType::ETH) {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr,
+                            "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
+                            dispatch_location,
+                            tt::tt_metal::DataMovementConfig {
+                                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                                .compile_args = consumer_compile_args,
+                                .defines = consumer_defines});
+                    } else {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr,
+                            "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
+                            dispatch_location,
+                            tt::tt_metal::EthernetConfig {
+                                .eth_mode = Eth::IDLE,
+                                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                                .compile_args = consumer_compile_args,
+                                .defines = consumer_defines});
+                    }
+
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0, dispatch_core_type);
                 } else {
                     // program the completion queue writer for the remote command queue
 
@@ -549,19 +628,43 @@ void Device::compile_command_queue_programs() {
                         (uint32_t)tt::PullAndPushConfig::PULL_FROM_REMOTE
                     };
 
-                    tt::tt_metal::CreateKernel(
-                        *command_queue_program_ptr,
-                        pull_and_push_kernel,
-                        completion_q_writer_location,
-                        tt::tt_metal::DataMovementConfig {
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                            .noc = tt::tt_metal::NOC::RISCV_0_default,
-                            .compile_args = completion_q_writer_args,
-                            .defines = completion_q_defines});
+                    if (dispatch_core_type != CoreType::ETH) {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr,
+                            pull_and_push_kernel,
+                            completion_q_writer_location,
+                            tt::tt_metal::DataMovementConfig{
+                                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                                .compile_args = completion_q_writer_args,
+                                .defines = completion_q_defines});
+                    } else {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr,
+                            pull_and_push_kernel,
+                            completion_q_writer_location,
+                            tt::tt_metal::EthernetConfig{
+                                .eth_mode = Eth::IDLE,
+                                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                                .compile_args = completion_q_writer_args,
+                                .defines = completion_q_defines});
+                    }
 
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, completion_q_writer_location, num_eth_command_slots); // push semaphore
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, completion_q_writer_location, 0); // pull semaphore
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, completion_q_writer_location, num_tensix_command_slots); // semaphore between push&pull kernel and dispatch kernel
+                    tt::tt_metal::CreateSemaphore(
+                        *command_queue_program_ptr,
+                        completion_q_writer_location,
+                        num_eth_command_slots,
+                        dispatch_core_type);  // push semaphore
+                    tt::tt_metal::CreateSemaphore(
+                        *command_queue_program_ptr,
+                        completion_q_writer_location,
+                        0,
+                        dispatch_core_type);  // pull semaphore
+                    tt::tt_metal::CreateSemaphore(
+                        *command_queue_program_ptr,
+                        completion_q_writer_location,
+                        num_tensix_command_slots,
+                        dispatch_core_type);  // semaphore between push&pull kernel and dispatch kernel
                 }
             }
         }
@@ -571,12 +674,15 @@ void Device::compile_command_queue_programs() {
         const uint8_t cq_id = 0;
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
-        uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+        uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
         tt_cxy_pair remote_processor_location = dispatch_core_manager::get(num_hw_cqs).remote_push_and_pull_core(this->id(), channel, cq_id);
         tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(this->id(), channel, cq_id);
-        CoreCoord remote_processor_physical_core = get_physical_core_coordinate(remote_processor_location, CoreType::WORKER);
-        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, CoreType::WORKER);
+        CoreType dispatch_core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->id());
+
+        CoreCoord remote_processor_physical_core =
+            get_physical_core_coordinate(remote_processor_location, dispatch_core_type);
+        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
 
         // Set up the dst router to receive fast dispatch packets
         tt_cxy_pair logical_eth_router_remote_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::BI_DIR_TUNNELING, mmio_device_id);
@@ -602,7 +708,7 @@ void Device::compile_command_queue_programs() {
                 {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
                 {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
             };
-            std::vector<uint32_t> eth_tunneller_compile_args = {false}; // SENDER is ISSUE
+            std::vector<uint32_t> eth_tunneller_compile_args = {false, num_eth_command_slots}; // SENDER is ISSUE
             std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
             tt::tt_metal::CreateKernel(
                 *command_queue_program_ptr,
@@ -613,6 +719,11 @@ void Device::compile_command_queue_programs() {
                     .compile_args = eth_tunneller_compile_args,
                     .defines = eth_tunneller_defines});
 
+        bool eth_core = dispatch_core_type == CoreType::ETH;
+        uint32_t cmd_start_consumer = eth_core ? cmd_start_eth_dispatch : cmd_start_tensix;
+        uint32_t consumer_data_buffer_size = eth_core ? consumer_data_buffer_size_eth_dispatch : consumer_data_buffer_size_tensix;
+        uint32_t data_section_addr_producer = eth_core ? get_data_section_l1_address(true, true) : data_section_addr_tensix;
+        uint32_t producer_data_buffer_size = eth_core ? get_cq_data_buffer_size(true, true) : producer_data_buffer_size_tensix;
         std::vector<uint32_t> remote_pull_and_push_compile_args = {
             0, // host_issue_queue_read_ptr_addr,
             0, // issue_queue_start_addr,
@@ -621,11 +732,11 @@ void Device::compile_command_queue_programs() {
             0, // completion_queue_start_addr,
             0, // completion_queue_size,
             0, // host_finish_addr
-            cmd_start_tensix,
-            data_section_addr_tensix,
-            producer_data_buffer_size_tensix,
-            cmd_start_tensix,
-            consumer_data_buffer_size_tensix,
+            cmd_start_consumer,
+            data_section_addr_producer,
+            producer_data_buffer_size,
+            cmd_start_consumer,
+            consumer_data_buffer_size,
             (uint32_t)tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH
         };
 
@@ -639,23 +750,40 @@ void Device::compile_command_queue_programs() {
             {"DISPATCH_NOC_Y", std::to_string(dispatch_physical_core.y)},
         };
 
-        tt::tt_metal::CreateKernel(
-            *command_queue_program_ptr,
-            "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",
-            remote_processor_location,
-            tt::tt_metal::DataMovementConfig {
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = remote_pull_and_push_compile_args,
-                .defines = remote_pull_and_push_defines});
+        if (dispatch_core_type != CoreType::ETH) {
+            tt::tt_metal::CreateKernel(
+                *command_queue_program_ptr,
+                "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",
+                remote_processor_location,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = remote_pull_and_push_compile_args,
+                    .defines = remote_pull_and_push_defines});
+        } else {
+            tt::tt_metal::CreateKernel(
+                *command_queue_program_ptr,
+                "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",
+                remote_processor_location,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = Eth::IDLE,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = remote_pull_and_push_compile_args,
+                    .defines = remote_pull_and_push_defines});
+        }
 
         // first semaphore is between pull_and_relay and pusher
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, num_eth_command_slots);
+        tt::tt_metal::CreateSemaphore(
+            *command_queue_program_ptr, remote_processor_location, num_eth_command_slots, dispatch_core_type);
         // second semaphore is between processor and dispatcher to detect whether dispatcher can accept commands
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, 0);
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, num_tensix_command_slots); // semaphore between push&pull kernel and dispatch kernel
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, 0, dispatch_core_type);
+        tt::tt_metal::CreateSemaphore(
+            *command_queue_program_ptr,
+            remote_processor_location,
+            num_tensix_command_slots,
+            dispatch_core_type);  // semaphore between push&pull kernel and dispatch kernel
 
-        std::vector<uint32_t> dispatch_compile_args = {cmd_start_tensix, consumer_data_buffer_size_tensix};
+        std::vector<uint32_t> dispatch_compile_args = {cmd_start_consumer, consumer_data_buffer_size};
 
         std::map<string, string> remote_dispatch_defines = {
             {"DISPATCH_KERNEL", "1"},
@@ -663,17 +791,29 @@ void Device::compile_command_queue_programs() {
             {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
         };
 
-        tt::tt_metal::CreateKernel(
-            *command_queue_program_ptr,
-            "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
-            dispatch_location,
-            tt::tt_metal::DataMovementConfig {
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = dispatch_compile_args,
-                .defines = remote_dispatch_defines});
+        if (dispatch_core_type != CoreType::ETH) {
+            tt::tt_metal::CreateKernel(
+                *command_queue_program_ptr,
+                "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
+                dispatch_location,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = dispatch_compile_args,
+                    .defines = remote_dispatch_defines});
+        } else {
+            tt::tt_metal::CreateKernel(
+                *command_queue_program_ptr,
+                "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
+                dispatch_location,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = Eth::IDLE,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = dispatch_compile_args,
+                    .defines = remote_dispatch_defines});
+        }
 
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0, dispatch_core_type);
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
@@ -685,8 +825,7 @@ void Device::configure_command_queue_programs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
 
     std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-    const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-    const uint32_t cq_size = hugepage_size / this->num_hw_cqs();
+    uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
     TT_ASSERT(this->command_queue_programs.size() == 1);
     Program& command_queue_program = *this->command_queue_programs[0];
@@ -705,11 +844,12 @@ void Device::configure_command_queue_programs() {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
             uint8_t curr_num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
             uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            uint32_t curr_cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), curr_channel) / curr_num_hw_cqs;
+            uint32_t curr_cq_size = this->sysmem_manager().get_cq_size();
 
             for (uint8_t cq_id = 0; cq_id < curr_num_hw_cqs; cq_id++) {
                 tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(curr_num_hw_cqs).issue_queue_reader_core(device_id, curr_channel, cq_id);
                 tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(curr_num_hw_cqs).completion_queue_writer_core(device_id, curr_channel, cq_id);
+                CoreType dispatch_core_type = dispatch_core_manager::get(curr_num_hw_cqs).get_dispatch_core_type(device_id);
 
                 TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
                     "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
@@ -719,16 +859,16 @@ void Device::configure_command_queue_programs() {
                 uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
                 uint32_t issue_queue_start_addr_16B = issue_queue_start_addr >> 4;
                 vector<uint32_t> issue_queue_read_ptr = {issue_queue_start_addr_16B};
-                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_READ_PTR, issue_queue_read_ptr);
-                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr);
+                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_READ_PTR, issue_queue_read_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr, dispatch_core_type);
 
                 uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 vector<uint32_t> completion_queue_last_event = {0x0}; // Reset state in case L1 Clear is disabled.
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event, dispatch_core_type);
             }
         }
     }
@@ -741,10 +881,10 @@ void Device::initialize_command_queue() {
     using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
-    sw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
-        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+        // Need to do this since CommandQueue constructor is private
+        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
     if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
         this->compile_command_queue_programs_for_grayskull();
@@ -758,7 +898,7 @@ void Device::initialize_command_queue() {
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
             for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core)->launch_msg;
+                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
                 tt::llrt::write_launch_msg_to_core(this->id(), this->physical_core_from_logical_core(logical_dispatch_core, core_type), &msg);
             }
         }
@@ -769,9 +909,9 @@ void Device::initialize_command_queue() {
 void Device::initialize_synchronous_sw_cmd_queue() {
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
-    sw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+        // Need to do this since CommandQueue constructor is private
+        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
         sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
     }
 }
@@ -792,7 +932,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     this->initialize_and_launch_firmware();
 
-    watcher_attach(this, build_env_.get_out_root_path());
+    watcher_attach(this);
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;
@@ -841,8 +981,12 @@ bool Device::close() {
     allocator::clear(*this->allocator_);
 
     this->active_devices_.deactivate_device(this->id_);
+    this->disable_and_clear_program_cache();
+    this->sw_command_queues_.clear();
+    this->hw_command_queues_.clear();
 
     this->initialized_ = false;
+
     return true;
 }
 
@@ -895,6 +1039,11 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
     return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
+}
+
+CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &physical_core) const {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
@@ -990,7 +1139,7 @@ float Device::sfpu_eps() const {
 pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {
     constexpr int DataMovementBuildCount = 2;
     constexpr int ComputeBuildCount = 3;
-    constexpr int EthernetBuildCount = 1;
+    constexpr int EthernetBuildCount = 2;
 
     switch (t) {
     case JitBuildProcessorType::DATA_MOVEMENT: return pair<int, int>(0, DataMovementBuildCount);

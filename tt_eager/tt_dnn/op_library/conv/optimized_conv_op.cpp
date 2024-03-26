@@ -101,15 +101,14 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     // TODO: ...
     TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
-        TT_FATAL(this->output_dtype == DataType::BFLOAT16);
+        TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));
     }
     if (this->output_mem_config.is_sharded()) {
-//        TT_FATAL(not has_bias or !untilize_out, "Optimized conv only supports tiled out if bias isn't present");
-        uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
+        uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_FATAL(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
+            TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles);
             TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
@@ -162,16 +161,16 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
-            auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->block_config.out_block_h_ntiles, extra_padding_for_32B_alignment);
+            auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
             uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
             uint32_t weight_matrix_width = weight_tensor.get_legacy_shape()[-1];
             uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
-            uint32_t num_weight_slices_width = weight_matrix_width_ntiles / this->parallelization_config.per_core_weight_matrix_width_ntiles ;
+            uint32_t num_weight_slices_width = weight_matrix_width_ntiles / this->parallelization_config.per_core_out_matrix_width_ntiles ;
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
             CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
-            std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_weight_matrix_width_ntiles * TILE_WIDTH};
+            std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::COL_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
@@ -203,50 +202,6 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     }
 }
 
-#if 0
-void analyze_op(OperationSpec& op_spec, OperationAnalysis& op_analysis, const ExecutionConfig& exec_config) {
-    // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
-    op_spec.output_height = std::floor((op_spec.in0_height - op_spec.filter_height + 2 * op_spec.pad) / op_spec.stride + 1);
-    op_spec.output_width = std::floor((op_spec.in0_width - op_spec.filter_width + 2 * op_spec.pad) / op_spec.stride + 1);
-
-    // deduct the FW launch latency to get more accurate kernel execution time
-    op_analysis.measured_nano_sec -= exec_config.fw_launch_latency_nano_sec;
-
-    // compute the amout of data that needs to be consumed on in0 (Bytes)
-    if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool" || op_spec.op_code == "Downsample") {
-        // filter window is only relevant for maxpool/convs, it's 1x1, s1 for all ohter OPs
-        // for each output we gather a filter window of data from input0
-        // for strided OPs, the output is smaller than input, so we need to read less data (eg, downsample)
-        op_analysis.in0_read_bytes = op_spec.output_height * op_spec.output_width * op_spec.in0_channels * op_spec.batch_size * exec_config.row_major_act_bytes_per_datum;
-        op_analysis.in0_read_bytes *= op_spec.filter_height * op_spec.filter_width;
-    } else {
-        // other OPs modeled as reading full input
-        // for eltwise binary OPs, we read both inputs but the each input and output is limited to 32 B/c because unpacker's 64 B/c is split across in0/in1, so each input and output get 32 B/c
-        op_analysis.in0_read_bytes = op_spec.in0_height * op_spec.in0_width * op_spec.in0_channels * op_spec.batch_size * exec_config.tile_act_bytes_per_datum;
-    }
-
-    if (op_spec.op_code == "Matmul" || op_spec.op_code == "OptimizedConv") {
-        // Calculate number of mul/add operations
-        // TODO: add bias modeling
-        long long num_mul_adds_per_elem = op_spec.in0_channels * op_spec.filter_height * op_spec.filter_width * 2; // 1 multiply and 1 add per element
-        op_analysis.num_mul_adds = num_mul_adds_per_elem * op_spec.output_height * op_spec.output_width * op_spec.output_channels * op_spec.batch_size;
-
-        op_analysis.ideal_dev_clock_cycles = std::ceil(((float)op_analysis.num_mul_adds / (float)(exec_config.device_num_rows * exec_config.device_num_cols * exec_config.tensix_mul_adds_per_cycle_lofi)) * (float)exec_config.num_fidelity_phases);
-        op_analysis.weights_bytes = op_spec.filter_height * op_spec.filter_width * op_spec.in0_channels * op_spec.output_channels * exec_config.weights_bytes_per_datum;
-    } else {
-        // eltwise and data movement OPs
-        op_analysis.weights_bytes = 0;
-        op_analysis.num_mul_adds = 0; // not modeled for eltwise and data movement OPs
-        // divide in0_read_bytes by 32B/c , the ideal BW unpackerA / single NOC can achieve
-        op_analysis.ideal_dev_clock_cycles = (float)op_analysis.in0_read_bytes / (32 * exec_config.device_num_rows * exec_config.device_num_cols);
-    }
-
-    // common for all OPs
-    op_analysis.ideal_dev_nano_sec = std::ceil((float)op_analysis.ideal_dev_clock_cycles / (float)exec_config.frequency_GHZ);
-    op_analysis.dev_util_pct = ((float)op_analysis.ideal_dev_nano_sec / (float)op_analysis.measured_nano_sec) * 100;
-}
-#endif
-
 operation::OpPerformanceModel OptimizedConv::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a_shape = this->input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -261,9 +216,14 @@ operation::OpPerformanceModel OptimizedConv::create_op_performance_model(const s
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
 
-    // GS Specific parameters
-    constexpr int num_cores = 9 * 12;
-    constexpr int tensix_mul_adds_per_cycle_lofi = 2048;
+    const auto& t = output_tensors.at(0);
+    if(t.storage_type() != StorageType::DEVICE) {
+        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+    const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
+    const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
     int output_height = std::floor((conv_activation_h - filter_h + 2 * pad_h) / stride_h + 1);

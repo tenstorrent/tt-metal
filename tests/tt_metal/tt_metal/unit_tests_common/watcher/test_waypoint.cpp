@@ -13,19 +13,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Some machines will run this test on different physical cores, so wildcard the exact coordinates
-// and replace them at runtime.
-std::vector<string> ordered_waypoints = {
-    "Device *, Core (x=*,y=*):    AAAA,AAAA,AAAA,AAAA,AAAA",
-    "Device *, Core (x=*,y=*):    BBBB,BBBB,BBBB,BBBB,BBBB",
-    "Device *, Core (x=*,y=*):    CCCC,CCCC,CCCC,CCCC,CCCC"
-};
-std::vector<string> ordered_waypoints_eth = {
-    "Device *, Core (x=*,y=*):    AAAA",
-    "Device *, Core (x=*,y=*):    BBBB",
-    "Device *, Core (x=*,y=*):    CCCC"
-};
-
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
     Program program = Program();
@@ -51,26 +38,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange(xy_start, xy_end),
         ComputeConfig{});
-
-    // Also run on ethernet cores if they're present
-    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    // TODO: Change back to a single erisc_kid once the bug with CoreRange fast dispatch is fixed.
-    vector<KernelHandle> erisc_kids;
-    if (has_eth_cores) {
-        std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            eth_core_ranges.insert(CoreRange(core, core));
-            auto erisc_kid = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-                core,
-                tt_metal::EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
-            erisc_kids.push_back(erisc_kid);
-        }
-    }
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
@@ -108,27 +75,65 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             );
         }
     }
-    int idx = 0;
-    for (const auto& core : device->get_active_ethernet_cores(true)) {
-        SetRuntimeArgs(
+    // Also run on ethernet cores if they're present
+    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
+    if (has_eth_cores) {
+        KernelHandle erisc_kid;
+        std::set<CoreRange> eth_core_ranges;
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
+            eth_core_ranges.insert(CoreRange(core, core));
+        }
+        erisc_kid = CreateKernel(
             program,
-            erisc_kids[idx++],
-            core,
-            args
-        );
+            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+            eth_core_ranges,
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
+            SetRuntimeArgs(program, erisc_kid, core, args);
+        }
     }
+
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
     auto check_core = [&](const CoreCoord &phys_core, bool is_eth_core) {
-        auto expected_waypoints = (is_eth_core)? ordered_waypoints_eth : ordered_waypoints;
+        vector<string> expected_waypoints;
+        string expected;
         // Need to update the expected strings based on each core.
-        for (int idx = 0; idx < expected_waypoints.size(); idx++) {
-            expected_waypoints[idx][7] = '0' + device->id();
-            expected_waypoints[idx][18] = '0' + phys_core.x;
-            expected_waypoints[idx][22] = '0' + phys_core.y;
+        for (string waypoint : {"AAAA", "BBBB", "CCCC"}) {
+            if (is_eth_core) {
+                int k_id = 5 + 3 * (fixture->NumDevices()-1) + 4 * (device->id() + 1);
+                // Different k_ids for slow dispatch
+                if (fixture->IsSlowDispatch()) {
+                    k_id = 4 * (device->id() + 1);
+                }
+                expected = fmt::format(
+                    "Device {}, Core {}:    {},X,X,X,X  k_id:{}",
+                    device->id(), phys_core.str(),
+                    waypoint,
+                    k_id
+                );
+            } else {
+                int k_id = 5 + 3 * (fixture->NumDevices()-1) + 4 * device->id() + 1;
+                // Different k_ids for single chip
+                if (fixture->NumDevices() == 1) {
+                    k_id = 3;
+                }
+                // Different k_ids for slow dispatch
+                if (fixture->IsSlowDispatch()) {
+                    k_id = 4 * device->id() + 1;
+                }
+                expected = fmt::format(
+                    "Device {}, Core {}:    {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}|{}|{}",
+                    device->id(), phys_core.str(),
+                    waypoint, waypoint, waypoint, waypoint, waypoint,
+                    k_id, k_id + 1, k_id + 2
+                );
+            }
+            expected_waypoints.push_back(expected);
         }
         EXPECT_TRUE(
             FileContainsAllStringsInOrder(

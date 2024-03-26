@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t granularity = get_compile_time_arg_val(4);
+    constexpr uint32_t u_count = get_compile_time_arg_val(5);
 
-    // ublocks size defined in tiles
-    constexpr uint32_t onetile = 1;
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -62,21 +62,24 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
         #endif
-        for (uint32_t u = 0; u < 32; ++u) {
-            cb_reserve_back(cache_cb_id, Wt);
+        for (uint32_t u = 0; u < u_count; ++u) {
+            cb_reserve_back(cache_cb_id, Wt * granularity);
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
-            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
-                cache_l1_write_addr += cache_tile_bytes;
+            for (uint32_t g = 0; g < granularity; ++g) {
+                for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                    noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                    cache_l1_write_addr += cache_tile_bytes;
+                }
+                cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
+                b++;
+                if (b == B) {
+                    b = 0;
+                    cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
+                }
             }
-            cache_id += cache_batch_num_tiles; // Input is read in by batch, then heads so skip to next batch
-            b++;
-            if (b == B) {
-                b = 0;
-                cache_id = cache_id - cache_total_num_tiles + cache_head_num_tiles; // Start of next head
-            }
+
             noc_async_read_barrier();
-            cb_push_back(cache_cb_id, Wt);
+            cb_push_back(cache_cb_id, Wt * granularity);
         }
     }
 }

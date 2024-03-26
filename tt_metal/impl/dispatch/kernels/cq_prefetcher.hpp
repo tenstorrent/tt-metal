@@ -84,10 +84,16 @@ void issue_queue_wait_front() {
     uint32_t issue_write_ptr_and_toggle;
     uint32_t issue_write_ptr;
     uint32_t issue_write_toggle;
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
     do {
         issue_write_ptr_and_toggle = *get_cq_issue_write_ptr();
         issue_write_ptr = issue_write_ptr_and_toggle & 0x7fffffff;
         issue_write_toggle = issue_write_ptr_and_toggle >> 31;
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     } while (cq_read_interface.issue_fifo_rd_ptr == issue_write_ptr and cq_read_interface.issue_fifo_rd_toggle == issue_write_toggle);
     DEBUG_STATUS('N', 'Q', 'D');
 }
@@ -139,7 +145,7 @@ FORCE_INLINE volatile uint32_t* get_16b_scratch_l1() {
 
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t data_size_B) {
-    DEBUG_STATUS('N', 'Q', 'R', 'B', 'W');
+    DEBUG_STATUS('Q', 'R', 'B', 'W');
     uint32_t data_size_16B = align(data_size_B, 32) >> 4;
     uint32_t completion_rd_ptr_and_toggle;
     uint32_t completion_rd_ptr;
@@ -153,7 +159,7 @@ void completion_queue_reserve_back(uint32_t data_size_B) {
         (completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle) and (cq_write_interface.completion_fifo_wr_ptr == completion_rd_ptr)
     );
 
-    DEBUG_STATUS('N', 'Q', 'R', 'B', 'D');
+    DEBUG_STATUS('Q', 'R', 'B', 'D');
 }
 
 FORCE_INLINE
@@ -312,12 +318,13 @@ class ProgramEventBuffer {
         this->push_noc_encoding = push_noc_encoding;
     }
 
+    template <bool write_to_completion_queue>
     void push_event(uint32_t event) {
         if (this->num_events == 2) {
             volatile tt_l1_ptr uint32_t *dispatch_semaphore_addr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));   // Should be initialized to num commands slots on dispatch core by host
             wait_consumer_idle<2>(dispatch_semaphore_addr);
-            this->write_events<true>();
+            this->write_events<write_to_completion_queue>();
             this->num_events = 0;
         }
 
@@ -331,13 +338,12 @@ class ProgramEventBuffer {
 
     template <bool write_to_completion_queue>
     void write_events() {
-        uint32_t event_addr;
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
             if constexpr (write_to_completion_queue) {
                 completion_queue_reserve_back(32); // Need to clean up
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
-                write_event(event_addr);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(this->event_addr) = event;
+                write_event(this->event_addr);
                 record_last_completed_event(event);
                 completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
             } else {

@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
+#include "ckernel_debug.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "risc_attribs.h"
 
@@ -644,4 +645,155 @@ ALWI void silu_tile(uint32_t idst) {
 ALWI void silu_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_silu_init<APPROX>() ));
 }
+
+//topK local sort
+/**
+ * Performs local sort stage of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The algorithm used to implement TopK is found here:
+ * https://anilshanbhag.in/static/papers/gputopk_sigmod18.pdf
+ *
+ * The local sort stage sorts the data into length-K subsequences of
+ * alternating directions, in place. If i_start_phase != i_end_phase, all
+ * phases in the range i_start_phase to i_end_phase (inclusive) are computed.
+ * If i_start_phase == i_end_phase, only that phase is computed, with
+ * i_start_step and i_end_step defining how many steps are computed. This can
+ * be used to extend the OP support for cases when K > 64.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that local sort is done across columns on 64 values spanning across
+ * 2 tiles.
+ *
+ * Note: idist should be set to 0
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32    | 0 to 1                                                | True     |
+ * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     |
+ * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
+ * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
+ * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
+ */
+ALWI void topk_local_sort(uint32_t idst, int idir, int i_end_phase, int i_start_phase=0, int i_end_step=0, int i_start_step=0) {
+    MATH(( llk_math_eltwise_unary_sfpu_topk_local_sort<true, SyncHalf>(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step) ));
+}
+
+//topK merge
+/**
+ * Performs merge stage of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The merge stage combines length-K subsequences that are 2^m_iter apart,
+ * such that the first subsequence receives the top K values, and the
+ * second subsequence receives the bottom K values.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that merge is done across columns on values spanning across 2
+ * tiles.
+ *
+ * Note: idist should be set to 0
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ */
+ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
+    MATH(( llk_math_eltwise_unary_sfpu_topk_merge<true, SyncHalf>(idst, m_iter, k) ));
+}
+
+//topK rebuild
+/**
+ * Performs rebuild stage of TopK algorithm on the two data tiles and two
+ * index tiles that are pre-loaded in DST register. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * The rebuild stage sorts the length-K subsequences that are 2^(m_iter+1)
+ * apart, such that they alternate directions.
+ *
+ * Note that the two data tiles need to be loaded into the DST register
+ * before the invocation of this call. The corresponding index tiles should
+ * also be loaded in with the data tiles, at a DST offset of 2 tiles.
+ *
+ * Note that rebuild is done across columns on values spanning across 2
+ * tiles.
+ *
+ * Note: idist should be set to 0
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1                                                | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
+ * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
+ */
+ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
+    MATH(( llk_math_eltwise_unary_sfpu_topk_rebuild<true, SyncHalf>(idst, idir, m_iter, k, logk, skip_second) ));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void topk_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_topk_init<true>() ));
+}
+
+/**
+ * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
+ *
+ * Return value: None
+ */
+ALWI void dbg_halt() {
+    PACK (dbg_thread_halt<PackThreadId>());
+    UNPACK (dbg_thread_halt<UnpackThreadId>());
+    MATH (dbg_thread_halt<MathThreadId>());
+}
+
+/**
+ * Resumes the execution of the cores after a debug halt.
+ *
+ * Return value: None
+ */
+ALWI void dbg_unhalt() {
+    PACK (dbg_thread_unhalt<PackThreadId>());
+    UNPACK (dbg_thread_unhalt<UnpackThreadId>());
+    MATH (dbg_thread_unhalt<MathThreadId>());
+}
+
+/**
+ * Reads the contents of the specified row of the destination register. It reads 8 dwords at a time.
+ *
+ * | Argument        | Description                                                                | Type      | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | row_addr        | The row address in the destination register to read                        | int       |                                                       | True     |
+ * | rd_data         | The array of 8 dwords to store the data                                    | uint32_t* |                                                       | True     |
+ *
+ * Return value: None
+*/
+ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t *rd_data) {
+    MATH (( dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
+}
+
 } // namespace ckernel

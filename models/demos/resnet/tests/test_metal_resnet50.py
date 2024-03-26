@@ -8,7 +8,7 @@ from torchvision import models
 import pytest
 import tt_lib
 
-from models.utility_functions import is_e75
+from models.utility_functions import is_e75, skip_for_wormhole_b0
 
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -117,6 +117,7 @@ golden_pcc = {
 }
 
 
+@skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
 @pytest.mark.parametrize("batch_size", [1, 2, 8, 16, 20], ids=["batch_1", "batch_2", "batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
@@ -134,7 +135,7 @@ golden_pcc = {
     ids=["HiFi4", "HiFi2", "LoFi"],
 )
 def test_run_resnet50_inference(
-    use_program_cache, device, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
 ):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
@@ -143,7 +144,8 @@ def test_run_resnet50_inference(
         activations_dtype != tt_lib.tensor.DataType.BFLOAT8_B or weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B
     ):
         pytest.skip("Batch > 8 must be run fully bfp8")
-
+    if batch_size <= 2:
+        pytest.skip("batch 1 and 2 are not supported with sharded data")
     image1 = imagenet_sample_input
     image = image1
     model_config = {

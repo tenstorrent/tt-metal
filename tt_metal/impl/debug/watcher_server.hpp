@@ -9,7 +9,7 @@
 namespace tt {
 
 void watcher_init(Device *device);
-void watcher_attach(Device *device, const string& log_path);
+void watcher_attach(Device *device);
 void watcher_detach(Device *dev);
 
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);

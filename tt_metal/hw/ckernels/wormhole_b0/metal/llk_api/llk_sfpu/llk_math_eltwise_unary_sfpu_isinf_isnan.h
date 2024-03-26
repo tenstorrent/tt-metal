@@ -4,8 +4,6 @@
 
 #pragma once
 
-
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_isinf_isnan.h"
@@ -18,7 +16,7 @@ namespace ckernel {
 //isinf
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isinf_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::isinf, APPROXIMATE>(sfpu::isinf_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::isinf, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -33,7 +31,7 @@ inline void llk_math_eltwise_unary_sfpu_isinf(uint dst_index) {
 //isposinf
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isposinf_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::isposinf, APPROXIMATE>(sfpu::isposinf_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::isposinf, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -49,7 +47,7 @@ inline void llk_math_eltwise_unary_sfpu_isposinf(uint dst_index) {
 //isneginf
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isneginf_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::isneginf, APPROXIMATE>(sfpu::isneginf_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::isneginf, APPROXIMATE>();
 }
 
 
@@ -65,7 +63,7 @@ inline void llk_math_eltwise_unary_sfpu_isneginf(uint dst_index) {
 //isnan
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isnan_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::isnan, APPROXIMATE>(sfpu::isnan_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::isnan, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -80,7 +78,7 @@ inline void llk_math_eltwise_unary_sfpu_isnan(uint dst_index) {
 //isfinite
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isfinite_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::isfinite, APPROXIMATE>(sfpu::isfinite_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::isfinite, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>

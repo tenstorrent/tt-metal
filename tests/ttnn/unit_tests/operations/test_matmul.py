@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull, is_grayskull
 
 
 # fmt: off
@@ -170,7 +171,7 @@ def test_tutorial_matmul(device):
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -190,7 +191,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -214,7 +215,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
     m_size = 1024
     k_size = 1024
-    n_size = 1024
+    n_size = 512
 
     torch_input_tensor_a = torch.randn((m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
@@ -228,7 +229,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     )
 
     output = ttnn.matmul(
-        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8)
+        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=4)
     )
 
     output = ttnn.to_torch(output)
@@ -265,6 +266,16 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         ),  # mcast 2d transposed
         (
             2,
+            1,
+            128,
+            256,
+            512,
+            True,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+        ),  # mcast 2d with shard width > 1 TILE
+        (
+            2,
             3,
             64,
             32 * 7,
@@ -275,7 +286,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
             None,
-        ),  # mcast input_a
+        ),  # mcast in0
         (
             2,
             3,
@@ -288,7 +299,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
                 strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             None,
-        ),  # mcast input_a
+        ),  # mcast in1
         (
             7,
             7,
@@ -308,7 +319,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             ),
         ),  # bmm
     ],
-    ids=["mcast_2d", "mcast_2d_transposed", "mcast_in0", "mcast_in1", "bmm"],
+    ids=["mcast_2d", "mcast_2d_transposed", "mcast_2d_shard_width_gt_1", "mcast_in0", "mcast_in1", "bmm"],
 )
 def test_sharded_matmul(
     device,
@@ -361,7 +372,7 @@ def test_sharded_matmul(
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("batch_size", [1, 7])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)
 
@@ -381,14 +392,14 @@ def test_matmul_with_core_grid(device, batch_size):
             output_tensor = ttnn.matmul(
                 input_tensor_a,
                 input_tensor_b,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=12),
+                core_grid=ttnn.CoreGrid(y=batch_size, x=8),
             )
-        assert "1D mcast for in0 or in1 is not implemented ye" in str(exception.value)
+        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=12),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=8),
         )
 
         output_tensor = ttnn.to_torch(output_tensor)
@@ -477,7 +488,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
 @pytest.mark.parametrize("n_size", [4672])
-@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=8, x=8)])
+@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=7, x=8)])
 def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_size, core_grid):
     torch.manual_seed(0)
 
@@ -497,3 +508,110 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
+
+
+# @skip_for_grayskull()
+@pytest.mark.parametrize(
+    "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
+    [
+        (1, 2, 1, 1024, 640, 2560, False),
+        (2, 8, 8, 64, 96, 160, False),
+        (1, 2, 1, 4096, 320, 1280, False),
+        (1, 2, 1, 64, 1280, 5120, False),
+        (2, 8, 8, 64, 64, 160, False),
+        (1, 2, 1, 1024, 640, 768, False),
+        (2, 8, 8, 96, 160, 96, False),
+        (2, 8, 8, 1024, 1024, 96, False),
+        (1, 2, 1, 96, 768, 1024, False),
+        (1, 1, 1, 32, 1280, 1280, True),
+        (2, 8, 8, 4096, 96, 64, False),
+        (1, 2, 1, 64, 5120, 1280, True),
+        (2, 8, 8, 4096, 64, 96, False),
+        (1, 2, 1, 1024, 768, 640, True),
+        (1, 2, 1, 256, 1280, 1280, True),
+        (2, 8, 8, 1024, 96, 96, False),
+        (1, 2, 1, 1024, 640, 2304, False),
+        (1, 1, 1, 32, 1280, 320, True),
+        (1, 2, 1, 96, 768, 2560, False),
+        (1, 2, 1, 4096, 1280, 320, True),
+        (1, 2, 1, 1024, 2560, 640, True),
+        (1, 2, 1, 256, 1280, 3840, False),
+        (1, 1, 1, 32, 320, 1280, True),
+        (1, 2, 1, 4096, 512, 320, True),
+        (1, 2, 1, 64, 1280, 1280, True),
+        (1, 2, 1, 256, 5120, 1280, True),
+        (1, 2, 1, 256, 1280, 1280, False),
+        (2, 8, 8, 256, 160, 96, False),
+        (2, 8, 8, 256, 256, 160, False),
+        (1, 2, 1, 96, 768, 1536, False),
+        (1, 2, 1, 64, 1280, 3840, False),
+        (2, 8, 8, 1024, 96, 1024, False),
+        (2, 8, 8, 256, 96, 160, False),
+        (1, 2, 1, 64, 1280, 1280, False),
+        (2, 8, 8, 4096, 64, 4096, False),
+        (1, 1, 1, 32, 1280, 640, True),
+        (2, 8, 8, 64, 160, 64, False),
+        (1, 2, 1, 4096, 320, 1536, False),
+        (1, 2, 1, 256, 1280, 5120, False),
+        (2, 8, 8, 4096, 4096, 64, False),
+        (2, 8, 8, 256, 160, 256, False),
+        (1, 2, 1, 4096, 320, 512, False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias, dtype):
+    torch.manual_seed(0)
+    core_grid = ttnn.CoreGrid(x=8, y=8)
+    TILE_HEIGHT = 32
+
+    if batch_size == 2:
+        if (m_size == 1024 and k_size == 96 and n_size == 1024) or (m_size == 4096 and k_size == 64 and n_size == 4096):
+            # NOTE: matmul errors out with OOM otherwise
+            core_grid = None
+
+    # if batch_size == 2:
+    #     if m_size == 1024 and k_size == 96 and n_size == 1024 and (dtype == ttnn.bfloat16 or is_grayskull()):
+    #         pytest.skip("skip: Raises OOM")
+    #     if m_size == 4096 and k_size == 64 and n_size == 4096:
+    #         pytest.skip("skip: Raises OOM without decomposition")
+    #     if is_grayskull():
+    #         if m_size == 4096 and (
+    #             (k_size == 96 and n_size == 64) or (k_size == 64 and n_size == 96) or (k_size == 4096 and n_size == 64)
+    #         ):
+    #             pytest.skip("skip: Raises OOM on GS")
+
+    torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+    if has_bias:
+        torch_input_tensor_c = torch.randn((1, 1, TILE_HEIGHT, n_size), dtype=torch.bfloat16)
+        _torch_input_tensor_c = torch.repeat_interleave(
+            torch_input_tensor_c, torch_output_tensor.shape[2] // TILE_HEIGHT, dim=2
+        )
+        torch_output_tensor = torch_output_tensor + _torch_input_tensor_c
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor_c = (
+        ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) if has_bias else None
+    )
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+
+    if has_bias:
+        output_tensor = ttnn.linear(
+            input_tensor_a,
+            input_tensor_b,
+            bias=input_tensor_c,
+            # use_1d_systolic_array=True,
+            core_grid=core_grid,
+        )
+    else:
+        output_tensor = ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            # use_1d_systolic_array=True,
+            core_grid=core_grid,
+        )
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)

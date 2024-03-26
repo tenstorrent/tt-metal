@@ -10,6 +10,7 @@
 #include "stream_io_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 
 using namespace ckernel;
@@ -38,7 +39,8 @@ inline void llk_setup_operands() {
 
 // Wait for N tiles available in the incoming stream
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
-    kernel_profiler::mark_function_sum_start(CB_WAIT_FRONT_MARKER);
+    // TODO(MO): Manually uncomment until issue #6619 is resolved
+    //DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
     volatile tt_l1_ptr std::uint32_t * tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
@@ -50,7 +52,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         tiles_received = (std::uint16_t) reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
-    kernel_profiler::mark_function_sum_end(CB_WAIT_FRONT_MARKER);
 }
 
 // Pop N tiles from the incoming stream

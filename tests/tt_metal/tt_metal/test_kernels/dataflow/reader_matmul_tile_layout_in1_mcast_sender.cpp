@@ -7,7 +7,6 @@
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
-    // kernel_profiler::mark_time(20);
     // in0 tensor args
     uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
@@ -85,9 +84,6 @@ void kernel_main() {
     // to receive the mcast
     volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
 
-    bool one_time_noc_wait = true;
-    bool one_time_cb_push = true;
-
     for(uint32_t b = 0; b < num_blocks; b++) {
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
         l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -137,7 +133,6 @@ void kernel_main() {
         // the semaphore_addr value back to zero for the next block
         noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
         noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
-        // kernel_profiler::mark_time_once(21, &one_time_noc_wait);
 
         // Now we have the block in the CB address, we can mcast to dests!
         uint64_t in1_multicast_data_addr = get_noc_multicast_addr(
@@ -161,6 +156,5 @@ void kernel_main() {
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);
         cb_push_back(cb_id_in1, in1_block_num_tiles);
-        // kernel_profiler::mark_time_once(22, &one_time_cb_push);
     }
 }

@@ -89,6 +89,7 @@ def resnet50_1x1_conv_as_matmul(
     weights_dtype=None,
     output_dtype=None,
     compute_kernel_config=None,
+    untilize_out=False,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
@@ -143,6 +144,7 @@ def resnet50_1x1_conv_as_matmul(
             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
             output_dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
+            untilize_out=untilize_out,
         )
 
         return output
@@ -194,6 +196,10 @@ def resnet50_optimized_conv(
     assert out_subblock_h * out_subblock_w <= 8
 
     assert dilation == 1 and groups == 1
+    assert (
+        weight_block_w == per_core_weight_matrix_w_ntiles
+    ), "weight_block_w should be equal to per_core_weight_matrix_w_ntiles"
+    assert out_block_h == per_core_out_matrix_h_ntiles, "out_block_h should be equal to per_core_out_matrix_h_ntiles"
 
     weights_shape = [K, C, R, S]
     weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
@@ -239,14 +245,11 @@ def resnet50_optimized_conv(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-        per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+        per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
     opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
-        act_c_num_blocks=act_c_num_blocks,
-        weight_block_w_ntiles=weight_block_w,
-        out_block_h_ntiles=out_block_h,
         out_subblock_h_ntiles=out_subblock_h,
         out_subblock_w_ntiles=out_subblock_w,
     )
@@ -361,13 +364,11 @@ def resnet50_first_conv(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-        per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+        per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
     opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
         act_block_w_ntiles=act_block_w,
-        weight_block_w_ntiles=weight_block_w,
-        out_block_h_ntiles=out_block_h,
         out_subblock_h_ntiles=out_subblock_h,
         out_subblock_w_ntiles=out_subblock_w,
     )

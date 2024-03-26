@@ -107,10 +107,12 @@ def run_bert_question_and_answering_inference(
         return_tensors="pt",
     )
     profiler.start(f"preprocessing_input")
+    torch_attention_mask = None
     ttnn_bert_inputs = bert.preprocess_inputs(
         bert_input["input_ids"],
         bert_input["token_type_ids"],
-        torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+        torch.zeros(batch_size, sequence_size),
+        torch_attention_mask,
         device=device,
     )
     profiler.end(f"preprocessing_input")
@@ -212,10 +214,12 @@ def run_bert_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
+                torch_attention_mask = None
                 ttnn_bert_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+                    torch.zeros(batch_size, sequence_size),
+                    torch_attention_mask,
                     device=device,
                 )
 

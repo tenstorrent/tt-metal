@@ -6,6 +6,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/all_gather/multi_core/all_gather_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/sharded/sharded_op.cpp \
 	tt_eager/tt_dnn/op_library/sharded/multi_core/sharded_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/sharded_partial/sharded_op_partial.cpp \
+	tt_eager/tt_dnn/op_library/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/copy_op.cpp \
 	tt_eager/tt_dnn/op_library/copy/single_core/copy_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/multi_core/copy_op_multi_core.cpp \
@@ -20,11 +22,16 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core_height_block_sharded.cpp \
 	tt_eager/tt_dnn/op_library/pad/pad_op.cpp \
 	tt_eager/tt_dnn/op_library/pad/pad_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/single_core/unpad_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/multi_core/unpad_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/unpad_op.cpp \
+	tt_eager/tt_dnn/op_library/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/indexed_fill/indexed_fill_op.cpp \
+	tt_eager/tt_dnn/op_library/non_zero_indices/single_core/non_zero_indices_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.cpp \
 	tt_eager/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
 	tt_eager/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \
 	tt_eager/tt_dnn/op_library/pool/average_pool.cpp \
@@ -72,6 +79,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp \
@@ -160,6 +169,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/concat/multi_core/concat_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/single_core/concat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/concat_op.cpp \
+	tt_eager/tt_dnn/op_library/repeat/multi_core/repeat_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/repeat/single_core/repeat_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/repeat/repeat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
@@ -178,6 +190,10 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/upsample/upsample_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/fold_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/single_core/fold_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/fold/multi_core/fold_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp \
+	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =

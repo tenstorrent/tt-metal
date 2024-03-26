@@ -56,8 +56,6 @@ inline void reblock_and_untilize(
 
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
-    constexpr uint32_t num_faces_in_tile = 4;
-    constexpr uint32_t tile_face_r_dim = 16;
 
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
@@ -72,7 +70,7 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, tile_face_r_dim, num_faces_in_tile, n);
+            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
@@ -252,20 +250,21 @@ void MAIN {
                         tile_regs_wait();
 
                         #ifdef PACKER_L1_ACC
-                            //Fuse bias always uses intermediate buffer
-                            //l1 accumulation flag needs to remain set to true
-                            #ifdef FUSE_BIAS
+                            // no accumulation for first iteration, last iteration
+                            // accumulation happens with copying tiles to dst
+                            if (in0_block_w_i == 0) {
+                                pack_reconfig_l1_acc(0);
+                            } else if(last_out) {
+                                //Fuse bias always uses intermediate buffer
+                                //no need to spill and reload last iteration
+                                #ifdef FUSE_BIAS
                                 pack_reconfig_l1_acc(1);
-                            #else
-                                // no accumulation for first iteration
-                                // last iteration accumulation happens with copying tiles
-                                // to dst
-                                if (in0_block_w_i == 0 || last_out) {
-                                    pack_reconfig_l1_acc(0);
-                                } else {
-                                    pack_reconfig_l1_acc(1);
-                                }
-                            #endif
+                                #else
+                                pack_reconfig_l1_acc(0);
+                                #endif
+                            } else {
+                                pack_reconfig_l1_acc(1);
+                            }
                         #endif
 
                         uint32_t start_dst_index = 0;
@@ -314,10 +313,11 @@ void MAIN {
             #endif
             #ifdef PACKER_L1_ACC
             pack_reconfig_l1_acc(0);
-            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             #endif
+            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+
             cb_wait_front(bias_cb_id, bias_ntiles_w);
             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -356,7 +356,7 @@ void MAIN {
             } // in0_num_subblocks
             #endif
             if constexpr(untilize_out) {
-                #ifdef PACKER_L1_ACC
+                #if defined PACKER_L1_ACC and not defined FUSE_BIAS
                 pack_reconfig_l1_acc(0);
                 pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
                 #endif
@@ -376,7 +376,7 @@ void MAIN {
                         matmul_partials_cb,
                         out_cb_id);
                 }
-                pack_untilize_uninit(in1_cb_id);
+                pack_untilize_uninit(matmul_partials_cb);
             }
             if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                 #ifdef FUSE_BIAS

@@ -114,7 +114,11 @@ void kernel_main() {
     volatile db_cb_config_t* local_dispatch_multicore_cb_cfg = get_local_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
     volatile db_cb_config_t* dispatch_multicore_cb_cfg = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
 
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    constexpr uint32_t dispatch_cb_num_pages = (MEM_ETH_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE / DeviceCommand::SYNC_NUM_PAGES * DeviceCommand::SYNC_NUM_PAGES;
+#else
     constexpr uint32_t dispatch_cb_num_pages = (MEM_L1_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE / DeviceCommand::SYNC_NUM_PAGES * DeviceCommand::SYNC_NUM_PAGES;
+#endif
     constexpr uint32_t dispatch_cb_size = dispatch_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     if constexpr (pull_and_push_config == tt::PullAndPushConfig::LOCAL or pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
@@ -134,7 +138,11 @@ void kernel_main() {
     PullAndRelayCfg dst_pr_cfg(program_event_buffer);
     dst_pr_cfg.dispatch_synchronization_semaphore = dispatch_semaphore_addr;
 
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
     while (true) {
+        //DeviceZoneScopedMainN("CQ-PREFETCHER");
         if constexpr (read_from_issue_queue) {
             // we will also need to poll the program event buffer
             while (not issue_queue_space_available()) {
@@ -143,6 +151,9 @@ void kernel_main() {
                         program_event_buffer.write_events<write_to_completion_queue>(); // write number of events in program event buffer
                     }
                 }
+#if defined(COMPILE_FOR_IDLE_ERISC)
+                RISC_POST_HEARTBEAT(heartbeat);
+#endif
             }
 
             uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
@@ -156,6 +167,9 @@ void kernel_main() {
                     if (consumer_is_idle<2>(dispatch_semaphore_addr)) {
                         program_event_buffer.write_events<write_to_completion_queue>();
                     }
+#if defined(COMPILE_FOR_IDLE_ERISC)
+                    RISC_POST_HEARTBEAT(heartbeat);
+#endif
                 }
                 noc_semaphore_inc(my_noc_encoding | uint32_t(pull_semaphore_addr), -1); // Two's complement addition
                 noc_async_write_barrier();
@@ -235,7 +249,7 @@ void kernel_main() {
             uint32_t num_pages_to_read = pull_and_push_cb_num_pages / 2;
 
             if (is_program) {
-                program_event_buffer.push_event(event);
+                program_event_buffer.push_event<write_to_completion_queue>(event);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, dispatch_noc_encoding, dispatch_semaphore_addr, get_semaphore(0));
                 for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                     uint32_t num_pages_in_transfer = program_pull_and_push_config<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER>(
@@ -418,7 +432,7 @@ void kernel_main() {
                 // if there is any program data then we need to read it in from DST CB and send it to dispatcher core CB
                 relay_command<command_start_addr, L1_UNRESERVED_BASE, 0>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
                 db_dispatch_cmd_slot_switch = not db_dispatch_cmd_slot_switch;
-                program_event_buffer.push_event(event);
+                program_event_buffer.push_event<write_to_completion_queue>(event);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, dispatch_noc_encoding, dispatch_semaphore_addr, get_semaphore(0));
 
                 volatile tt_l1_ptr uint32_t* buffer_transfer_ptr = command_ptr + DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;

@@ -6,6 +6,7 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/dtx/collapse_transformations \
 		 tests/tt_eager/dtx/test_dtx \
 		 tests/tt_eager/dtx/test_dtx_tilized_row_to_col_major \
+		 tests/tt_eager/ops/ccl/test_all_gather_utils \
 		 tests/tt_eager/ops/test_average_pool \
 		 tests/tt_eager/ops/test_eltwise_binary_op \
 		 tests/tt_eager/ops/test_eltwise_unary_op \
@@ -32,12 +33,13 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/tensors/test_host_device_loopback \
 		 tests/tt_eager/tensors/test_raw_host_memory_pointer \
 		 tests/tt_eager/tensors/test_sharded_loopback \
+		 tests/tt_eager/tensors/test_async_tensor_apis \
 		 tests/tt_eager/integration_tests/test_bert \
 
 TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))
 
 TT_EAGER_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
-TT_EAGER_TESTS_LDFLAGS = $(TT_METAL_TESTS_LDFLAGS) $(TT_LIB_LDFLAGS)
+TT_EAGER_TESTS_LDFLAGS = $(TT_METAL_TESTS_LDFLAGS) $(TT_LIB_LDFLAGS) -lgtest -lgtest_main
 
 TT_EAGER_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.o))
 TT_EAGER_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.d))

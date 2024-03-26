@@ -91,7 +91,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         ):
             raise TypeError("Expected other two inputs as either both tensor or scalar")
 
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(input_tensor):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_ternary_function(input_tensor, input_tensor1, input_tensor2)
@@ -99,7 +99,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
 
@@ -208,9 +208,9 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
             raise TypeError("Expected one argument to be a float")
 
         if (
-            not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
-            or not ttnn.has_storage_type_of(input_tensor1, ttnn.DEVICE_STORAGE_TYPE)
-            or not ttnn.has_storage_type_of(input_tensor2, ttnn.DEVICE_STORAGE_TYPE)
+            not ttnn.is_tensor_storage_on_device(input_tensor)
+            or not ttnn.is_tensor_storage_on_device(input_tensor1)
+            or not ttnn.is_tensor_storage_on_device(input_tensor2)
         ):
             raise RuntimeError("input_tensor must be on device!")
 
@@ -222,7 +222,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{(name)}"
-    ternary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
 
@@ -319,7 +319,7 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         if not isinstance(predicate, ttnn.Tensor):
             raise TypeError("Expected input_tensor arguments to be a ttnn.Tensor")
 
-        if not ttnn.has_storage_type_of(predicate, ttnn.DEVICE_STORAGE_TYPE):
+        if not ttnn.is_tensor_storage_on_device(predicate):
             raise RuntimeError("input_tensor must be on device!")
 
         output_tensor = ttl_ternary_function(predicate, true_value, false_value, output_mem_config=memory_config)
@@ -328,7 +328,7 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         return output_tensor
 
     ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ternary_function.decorated_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Perform an ternary {name} operation on two tensors based on predicate input tensor.
 

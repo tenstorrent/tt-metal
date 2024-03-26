@@ -607,11 +607,7 @@ namespace stress_tests {
 
 
 TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Skipping 10k enqueue program on grayskull because of event sync bug";
-    }
-
-    uint32_t NUM_ITER = 10000;
+    uint32_t NUM_ITER = 100000;
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -771,7 +767,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     // This loop caches program and runs
     for (Program& program: programs) {
-        EnqueueProgram(*this->cmd_queue, program, false);
+        EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
     // This loops assumes already cached
@@ -780,11 +776,11 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         auto rng = std::default_random_engine {};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         for (Program& program: programs) {
-            EnqueueProgram(*this->cmd_queue, program, false);
+            EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }
 
-    Finish(*this->cmd_queue);
+    Finish(this->device_->command_queue());
 }
 
 }  // namespace stress_tests

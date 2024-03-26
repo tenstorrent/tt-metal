@@ -528,11 +528,28 @@ class TtFalconAttention:
             key_layer[i].deallocate(True)
 
         if llm_mode == "prefill":
-            attn_weights = self.prefill_grouped_attention_matmul_for_4_chips(
-                query_layer,
-                key_layer_transposed,
-                output_mem_config=self.model_config["PREFILL_4CHIPS_PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            )
+            if self.model_config["NUM_DEVICES"] == 4:
+                attn_weights = self.prefill_grouped_attention_matmul_for_4_chips(
+                    query_layer,
+                    key_layer_transposed,
+                    output_mem_config=self.model_config["PREFILL_4CHIPS_PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                )
+            elif self.model_config["NUM_DEVICES"] == 8:
+                attn_weights = []
+                for i in range(len(key_layer_transposed)):
+                    key_layer_transposed[i] = tt_lib.tensor.sharded_to_interleaved(
+                        key_layer_transposed[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                    )
+                for i in range(len(query_layer)):
+                    attn_weights.append(
+                        tt_lib.tensor.matmul(
+                            query_layer[i],
+                            key_layer_transposed[i],
+                            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        )
+                    )
+                    query_layer[i].deallocate(True)
+                    key_layer_transposed[i].deallocate(True)
 
         elif llm_mode == "decode":
             attn_weights = []
@@ -603,11 +620,28 @@ class TtFalconAttention:
         ### POST-SOFTMAX MM ###
         ########################
         if llm_mode == "prefill":
-            attn_output = self.prefill_grouped_attention_matmul_for_4_chips(
-                attn_weights,
-                value_layer,
-                output_mem_config=self.model_config["PREFILL_4CHIPS_POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            )
+            if self.model_config["NUM_DEVICES"] == 4:
+                attn_output = self.prefill_grouped_attention_matmul_for_4_chips(
+                    attn_weights,
+                    value_layer,
+                    output_mem_config=self.model_config["PREFILL_4CHIPS_POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                )
+            elif self.model_config["NUM_DEVICES"] == 8:
+                attn_output = []
+                for i in range(len(value_layer)):
+                    value_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                        value_layer[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                    )
+                for i in range(len(attn_weights)):
+                    attn_output.append(
+                        tt_lib.tensor.matmul(
+                            attn_weights[i],
+                            value_layer[i],
+                            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        )
+                    )
+                    attn_weights[i].deallocate(True)
+                    value_layer[i].deallocate(True)
 
         elif llm_mode == "decode":
             attn_output = []
@@ -621,8 +655,8 @@ class TtFalconAttention:
                         output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                     )
                 )
-            attn_weights[i].deallocate(True)
-            value_layer[i].deallocate(True)
+                attn_weights[i].deallocate(True)
+                value_layer[i].deallocate(True)
 
         #########################
         ### ATTENTION SELFOUT ###

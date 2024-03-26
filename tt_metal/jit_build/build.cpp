@@ -18,6 +18,8 @@
 #include "tools/profiler/profiler_state.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "common/executor.hpp"
+#include "tools/profiler/common.hpp"
 
 using namespace std;
 using namespace tt;
@@ -309,48 +311,83 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
 
 JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw)
 {
-    this->target_name_ = "erisc";
-
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
-
-    this->defines_ = env_.defines_ +
-        "-DCOMPILE_FOR_ERISC "
-        "-DERISC "
-        "-DRISC_B0_HW ";
-    if (this->is_fw_) {
-        this->defines_ += "-DLOADING_NOC=0 ";
-    }
-
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
-    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
-    if (this->is_fw_) {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
-    } else {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
-    }
+    this->defines_ = env_.defines_;
 
-    string linker_str;
-    if (this->is_fw_) {
-        linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
-    } else {
-        linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
-    }
-    this->lflags_ = env_.lflags_ +
-                    "-Os "
-                    "-L" +
-                    env_.root_ +
-                    "/tt_metal/hw/toolchain "
-                    "-T" +
-                    env_.root_ + linker_str;
+    switch (this->core_id_) {
+    case 0:
+    {
+        this->target_name_ = "erisc";
+        this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
 
+        this->defines_ +=
+            "-DCOMPILE_FOR_ERISC "
+            "-DERISC "
+            "-DRISC_B0_HW ";
+        if (this->is_fw_) {
+            this->defines_ += "-DLOADING_NOC=0 ";
+        }
+
+        this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+
+        this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+            this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+        }
+
+        string linker_str;
+        if (this->is_fw_) {
+            linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+        } else {
+            linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
+        }
+        this->lflags_ = env_.lflags_ +
+                        "-Os "
+                        "-L" +
+                        env_.root_ +
+                        "/tt_metal/hw/toolchain "
+                        "-T" +
+                        env_.root_ + linker_str;
+        break;
+    }
+    case 1:
+        this->target_name_ = "idle_erisc";
+        this->cflags_ = env_.cflags_ +
+            "-Os " +
+            "-fno-tree-loop-distribute-patterns "; // don't use memcpy for cpy loops
+
+        this->defines_ += "-DCOMPILE_FOR_IDLE_ERISC "
+                    "-DERISC "
+                    "-DRISC_B0_HW ";
+
+        this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+        // TODO(pgk): build these once at init into built/libs!
+        this->srcs_.push_back("tt_metal/hw/firmware/src/risc_common.cc");
+        this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+        this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisc.cc");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+        }
+        this->lflags_ = env_.lflags_ + "-Os ";
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/idle-erisc.ld ";
+        break;
+    }
     this->process_defines_at_compile = true;
 
     finish_init();
@@ -428,7 +465,7 @@ void JitBuildState::compile_one(const string& log_file,
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
     if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
+        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
     if (!tt::utils::run_command(cmd, log_file, false)) {
@@ -437,15 +474,15 @@ void JitBuildState::compile_one(const string& log_file,
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
-    tt::utils::ThreadManager manager;
-
+    std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        manager.start([this, &log_file, &out_dir, settings, i]() {
+        events.emplace_back( detail::async ([this, &log_file, &out_dir, settings, i] {
             this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
-        });
+        } ) );
     }
 
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -557,6 +594,26 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const
     }
 }
 
+void JitBuildState::extract_zone_src_locations(const string& log_file) const
+{
+    static std::atomic<bool> new_log = true;
+    if (tt::tt_metal::getDeviceProfilerState()) {
+        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+            std::remove(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+        }
+
+        if (!std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG))
+        {
+            tt::utils::create_file(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
+        }
+
+        // Only interested in log entries with KERNEL_PROFILER inside them as device code
+        // tags source location info with it using pragma messages
+        string cmd = "cat " +  log_file + " | grep KERNEL_PROFILER";
+        tt::utils::run_command(cmd, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+    }
+}
+
 void JitBuildState::build(const JitBuildSettings *settings) const
 {
     string out_dir = (settings == nullptr) ?
@@ -575,6 +632,9 @@ void JitBuildState::build(const JitBuildSettings *settings) const
     if (this->is_fw_) {
         weaken(log_file, out_dir);
     }
+
+    extract_zone_src_locations(log_file);
+
 }
 
 void jit_build(const JitBuildState& build,
@@ -591,37 +651,37 @@ void jit_build(const JitBuildState& build,
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
-    tt::utils::ThreadManager manager;
+    std::vector<std::shared_future<void>> events;
 
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
         auto& build = build_set[i];
-        manager.start([build, settings, &kernel_in_path]() {
+        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        });
+        } ) );
     }
-
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
-    tt::utils::ThreadManager manager;
+    std::vector<std::shared_future<void>> events;
 
     for (size_t i = 0; i < build_subset.size; ++i) {
         // Capture the necessary objects by reference
         auto& build = build_subset.build_ptr[i];
-        manager.start([build, settings, &kernel_in_path]() {
+        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        });
+        } ) );
     }
-
-    manager.join_and_rethrow();
+    for (auto & f : events)
+        f.get();
 }
 
 } // namespace tt_metal
