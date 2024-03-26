@@ -1840,6 +1840,41 @@ std::vector<Tensor> repeat_bw(const Tensor& grad, const Tensor& input, const Sha
 }
 
 
+std::vector<Tensor> _floor_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> floor_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _floor_bw)(grad, output_mem_config);
+}
+
+std::vector<Tensor> _round_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> round_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _round_bw)(grad, output_mem_config);
+}
+
+std::vector<Tensor> _unary_div_no_nan_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zeros = zeros_like(grad, output_mem_config);
+    Tensor val = full_like(input, scalar, output_mem_config);
+    Tensor result = where(eq_unary(val, 0, output_mem_config), zeros, mul_unary(grad, 1/scalar, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_div_no_nan_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_div_no_nan_bw)(grad, input, scalar, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
