@@ -26,7 +26,7 @@ test-list:
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
       output-file: fill_bw_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: [""]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
   - fill-bw:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -53,4 +53,4 @@ test-list:
         out-buffer-type: ["DRAM"]
       output-file: fill_bw_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: [""]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
