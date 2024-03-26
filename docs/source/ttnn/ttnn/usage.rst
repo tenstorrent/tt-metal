@@ -169,14 +169,17 @@ Basic Examples
 
 .. code-block:: bash
 
-    # To generate a csv with all of the operations, their attributes and their input tensors:
+    # To print currently executing ttnn operations with their durations
+    export TTNN_ENABLE_LOGGING=True
+
+    # To generate a csv with all of the ttnn and tt_lib operations, their attributes and their input tensors:
     export OPERATION_HISTORY_CSV=operation_history.csv
 
-    # To print the currently executing operation and its input tensors to stdout
+    # To print the currently executing ttnn and tt_lib operation and its input tensors to stdout
     export TT_METAL_LOGGER_TYPES=Op
     export TT_METAL_LOGGER_LEVEL=Debug
 
-Logging cannot provide duration because the operations run asynchronously.
+Logging is not a substitute for profiling.
 Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
