@@ -345,13 +345,12 @@ class resnetBlock2D:
                 memory_config=ttnn.get_memory_config(hidden_states),
                 core_grid=self.first_group_norm_core_grid,
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)  # avoid OOM
             hidden_states = ttnn.reshape(
                 hidden_states,
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, in_channels),
             )
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        hidden_states = nonlinearity(hidden_states)
+        hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
 
         if up:
             assert False, "Up block within residual block is not implemented!"
@@ -427,7 +426,6 @@ class resnetBlock2D:
             hidden_states,
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
@@ -456,14 +454,7 @@ class resnetBlock2D:
                 memory_config=self.second_gn_expected_input_sharded_memory_config,
                 core_grid=self.second_group_norm_core_grid,
             )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.reshape(
-            hidden_states,
-            (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
-        )
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-
-        hidden_states = nonlinearity(hidden_states)
+        hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
         hidden_states = self.conv2(hidden_states)
