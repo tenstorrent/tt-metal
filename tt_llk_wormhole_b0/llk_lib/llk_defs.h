@@ -97,6 +97,9 @@ enum ReluType {
     MAX_THRESHOLD_RELU,
 };
 
+constexpr bool UnpackToDestEn = true;
+constexpr bool UnpackToDestDis = false;
+
 /*
 Stochastic rounding modes:
     None: No stochastic rounding enabled, default rounding is round to nearest even.

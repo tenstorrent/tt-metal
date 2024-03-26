@@ -412,8 +412,8 @@ namespace ckernel::unpacker
    }
 
    inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
-       const uint input_df = unpack_src_format;
-       const uint output_df = unpack_dst_format;
+       const uint input_df = unpack_src_format & 0xF;
+       const uint output_df = unpack_dst_format & 0xF;
        return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
               ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
    }
