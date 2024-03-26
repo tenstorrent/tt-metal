@@ -541,6 +541,166 @@ def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args
     )
 
 
+def _core_to_host_pages(total_pages, pages_per_shard, num_shards, layout, page_shape, shard_shape, tensor2d_size):
+    ret_vec = []
+    shard_in_pages = (shard_shape[0] / page_shape[0], shard_shape[1] / page_shape[1])
+    if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_pages_per_shard = pages_per_shard
+        num_pages_per_shard_last = num_pages_per_shard
+
+        if total_pages != num_shards * pages_per_shard:
+            num_pages_per_shard_last = total_pages % pages_per_shard
+
+        page_id = 0
+        for i in range(0, num_shards):
+            if i == (num_shards - 1):
+                num_cols = num_pages_per_shard_last
+            else:
+                num_cols = num_pages_per_shard
+            ret_vec_shard = []
+            for j in range(0, num_cols):
+                ret_vec_shard.append(page_id)
+                page_id = page_id + 1
+            ret_vec.append(ret_vec_shard)
+
+    elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED or layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        i_offset = 0
+        j_offset = 0
+        num_shard_columns = tensor2d_size[1] // shard_in_pages[1]
+        shard_in_row = 0
+        for shard_idx in range(0, num_shards):
+            ret_vec_shard = []
+            host_idx = 0
+            for i in range(0, shard_in_pages[0] + i_offset):
+                if i >= tensor2d_size[0]:
+                    break
+                for j in range(0, shard_in_pages[1] + j_offset):
+                    if j >= tensor2d_size[1]:
+                        break
+                    host_page = i * tensor2d_size[1] + j
+                    ret_vec_shard.append(host_page)
+                    host_idx = host_idx + 1
+            ret_vec.append(ret_vec_shard)
+            if (shard_in_row + 1) == num_shard_columns:
+                shard_in_row = 0
+                j_offset = 0
+                i_offset = i_offset + shard_in_pages[0]
+            else:
+                shard_in_row = shard_in_row + 1
+                j_offset = j_offset + shard_in_pages[1]
+
+    return ret_vec
+
+
+def get_core_page_ranks(tensor, output_memory_config: ttnn.MemoryConfig):
+    input_memory_config = ttnn.get_memory_config(tensor)
+    input_shard_spec = input_memory_config.shard_spec
+    input_shard_shape = input_shard_spec.shape
+    if tensor.layout == ttnn.TILE_LAYOUT:
+        input_page_shape = (1, input_shard_shape[1])
+    else:
+        input_page_shape = (32, 32)
+    input_shape = tensor.shape
+    input_tensor2d_size = (
+        input_shape[0] * input_shard_shape[1] * input_shard_shape[2] / input_page_shape[0],
+        input_shape[3] / input_page_shape[1],
+    )
+    input_num_cores = input_shard_spec.num_cores
+    input_shard_num_pages_width = input_tensor2d_size[0] / input_page_shape[0]
+    input_shard_num_pages_height = input_tensor2d_size[1] / input_page_shape[1]
+    input_shard_num_pages = input_shard_num_pages_height * input_shard_num_pages_width
+    input_num_pages = input_tensor2d_size[0] * input_tensor2d_size[1]
+    input_core_to_host_pages = _core_to_host_pages(
+        input_num_pages,
+        input_shard_num_pages,
+        input_num_cores,
+        input_memory_config.memory_layout,
+        input_shard_shape,
+        input_tensor2d_size,
+    )
+
+    input_dev_page_to_host_page_mapping = [0] * input_num_pages
+    input_dev_page_to_core_mapping = [0] * input_num_pages
+    input_host_page_to_local_shard_page_mapping = [0] * input_num_pages
+    input_host_page_to_dev_page_mapping = [0] * input_num_pages
+
+    dev_page_index = 0
+    for core_index in range(0, len(input_core_to_host_pages)):
+        for shard_page_id in range(0, input_core_to_host_pages[core_index]):
+            host_page = input_core_to_host_pages[core_index][shard_page_id]
+            input_dev_page_to_core_mapping[dev_page_index] = core_index
+            input_dev_page_to_host_page_mapping[dev_page_index] = host_page
+            input_host_page_to_local_shard_page_mapping[host_page] = shard_page_id
+            input_host_page_to_dev_page_mapping[host_page] = dev_page_index
+            dev_page_index = dev_page_index + 1
+
+    output_shard_spec = output_memory_config.shard_spec
+    output_shard_shape = output_shard_spec.shape
+    if tensor.layout == ttnn.TILE_LAYOUT:
+        output_page_shape = (1, output_shard_shape[1])
+    else:
+        output_page_shape = (32, 32)
+    output_shape = tensor.shape
+    output_tensor2d_size = (
+        output_shape[0] * output_shard_shape[1] * output_shard_shape[2] / output_page_shape[0],
+        output_shape[3] / output_page_shape[1],
+    )
+    output_num_cores = input_shard_spec.num_cores
+    output_shard_num_pages_width = output_tensor2d_size[0] / output_page_shape[0]
+    output_shard_num_pages_height = output_tensor2d_size[1] / output_page_shape[1]
+    output_shard_num_pages = output_shard_num_pages_height * output_shard_num_pages_width
+    output_num_pages = output_tensor2d_size[0] * output_tensor2d_size[1]
+    output_core_to_host_pages = _core_to_host_pages(
+        output_num_pages,
+        output_shard_num_pages,
+        output_num_cores,
+        output_memory_config.memory_layout,
+        output_shard_shape,
+        output_tensor2d_size,
+    )
+
+    output_dev_page_to_host_page_mapping = [0] * output_num_pages
+    output_dev_page_to_core_mapping = [0] * output_num_pages
+    output_host_page_to_local_shard_page_mapping = [0] * output_num_pages
+    output_host_page_to_dev_page_mapping = [0] * output_num_pages
+
+    dev_page_index = 0
+    for core_index in range(0, len(output_core_to_host_pages)):
+        for shard_page_id in range(0, output_core_to_host_pages[core_index]):
+            host_page = output_core_to_host_pages[core_index][shard_page_id]
+            output_dev_page_to_core_mapping[dev_page_index] = core_index
+            output_dev_page_to_host_page_mapping[dev_page_index] = host_page
+            output_host_page_to_local_shard_page_mapping[host_page] = shard_page_id
+            output_host_page_to_dev_page_mapping[host_page] = dev_page_index
+            dev_page_index = dev_page_index + 1
+
+    output_core_to_vector_input_core_pages = {}
+    output_cores = []
+    for output_page_id in range(0, output_num_pages):
+        output_core = output_dev_page_to_core_mapping[output_page_id]
+        output_cores.push_back(output_core)
+        host_page = output_dev_page_to_host_page_mapping[output_page_id]
+        input_page = input_host_page_to_dev_page_mapping[host_page]
+        local_input_page = input_host_page_to_local_shard_page_mapping[host_page]
+        input_core = input_dev_page_to_core_mapping[input_page]
+        if output_core in output_core_to_vector_input_core_pages:
+            output_core_to_vector_input_core_pages[output_core].append((input_core, local_input_page))
+        else:
+            output_core_to_vector_input_core_pages[output_core] = [(input_core, local_input_page)]
+
+    ret_map = {}
+
+    for output_core in output_cores:
+        ret_map[output_core] = []
+        input_cores_with_pages = output_core_to_vector_input_core_pages[output_core]
+        it = 0
+        end_it = len(input_cores_with_pages) - 1
+        while it != end_it:
+            start_core = it[0]
+            start_page = it[1]
+            expected_next_page = start_page + 1
+
+
 @ttnn.register_operation(name="ttnn.to_memory_config", validate_input_tensors=_to_memory_config_validate_input_tensors)
 def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[ttnn.DataType] = None):
     """
@@ -577,7 +737,8 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[t
             if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
                 if dtype is not None:
                     raise RuntimeError("dtype cannot be specified when converting sharded tensor to sharded tensor")
-                tensor = ttl.tensor.reshard(tensor, memory_config)
+                tensor = ttl.tensor.reshard_config_tensor(tensor, memory_config)
+                # tensor = ttl.tensor.reshard(tensor, memory_config)
 
             else:
                 # for row-major tensors where shard-spec[1] is different for input shard and output shard

@@ -268,10 +268,13 @@ void TensorModule(py::module &m_tensor) {
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
         Class defining a set of CoreRanges required for sharding)doc"
     );
-    pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+    pyCoreRangeSet
+        .def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
         .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
             return fmt::format("{}", core_range_set);
-        });
+        })
+        .def_readonly("num_cores", &CoreRangeSet::num_cores, "Num cores in a core range set");
+
 
     auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.

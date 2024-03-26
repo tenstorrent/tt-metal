@@ -129,7 +129,7 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
         mem_config,
         true
         );
-    if (this->rt_type == ReshardRunTimeArgType::CONFIG_TENSOR) {
+    if (this->rt_type == ReshardRunTimeArgType::RUNTIME_ARGS) {
         return {output_tensor};
     }
     else {
@@ -141,7 +141,6 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
 
         //get maximum number of page_range per core for sharded size
         uint32_t max_ranges = 0;
-        std::vector<uint32_t> args;
         auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
         uint32_t page_size;
         if (input_tensor.get_layout() == Layout::TILE) {
@@ -156,31 +155,34 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
             max_ranges = std::max((uint32_t)page_range_vector.size(), max_ranges);
         }
 
-        args.reserve(cores.size()*(2+(max_ranges*4)));
 
-        for(auto core: cores) {
-            auto page_range_vector = output_core_to_page_range_pair.at(core);
-            auto physical_input_core = input_tensor.device()->worker_core_from_logical_core(core);
-            for (const auto& [core, range] : page_range_vector) {
-                args.push_back(physical_input_core.x);
-                args.push_back(physical_input_core.y);
-                args.push_back(range.start * page_size);
-                args.push_back((range.end - range.start) * page_size);
-            }
-            //padding for max_ranges
-            for(uint32_t i=page_range_vector.size(); i < max_ranges; i++) {
-                args.push_back(0);
-            }
-        }
+        uint32_t aligned_max_ranges = round_up_to_mul32(2+(max_ranges*4));
+        //std::vector<uint32_t> args;
+        //args.reserve(cores.size()*(aligned_max_ranges));
+
+        //for(auto core: cores) {
+        //    auto page_range_vector = output_core_to_page_range_pair.at(core);
+        //    auto physical_input_core = input_tensor.device()->worker_core_from_logical_core(core);
+        //    for (const auto& [core, range] : page_range_vector) {
+        //        args.push_back(physical_input_core.x);
+        //        args.push_back(physical_input_core.y);
+        //        args.push_back(range.start * page_size);
+        //        args.push_back((range.end - range.start) * page_size);
+        //    }
+        //    //padding for max_ranges
+        //    for(uint32_t i=((uint32_t)page_range_vector.size() * 4); i < aligned_max_ranges; i++) {
+        //        args.push_back(0);
+        //    }
+        //}
 
 
         ShardSpec shard_spec(mem_config.shard_spec.value().grid,
-                    {max_ranges, 1},
+                    {1, aligned_max_ranges},
                     mem_config.shard_spec.value().orientation);
 
         sharded_mem_config.shard_spec = shard_spec;
         auto config_tensor = create_sharded_device_tensor(
-            Shape({1,1,max_ranges*((uint32_t)cores.size()), 1}),
+            Shape({1,1,((uint32_t)cores.size()), aligned_max_ranges}),
             DataType::UINT32,
             Layout::ROW_MAJOR,
             input_tensor.device(),
@@ -188,7 +190,7 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
             true
         );
 
-        tt::tt_metal::detail::WriteToBuffer(*config_tensor.buffer(), args);
+        //tt::tt_metal::detail::WriteToBuffer(*config_tensor.buffer(), args);
         return {output_tensor, config_tensor};
     }
 

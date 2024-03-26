@@ -9,6 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::constants;
 
@@ -750,6 +751,33 @@ operation::ProgramWithCallbacks reshard_config_tensor_multi_core(const Tensor& i
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
     }
+
+    uint32_t max_ranges = 0;
+    for(auto core: cores) {
+        auto page_range_vector = output_core_to_page_range_pair.at(core);
+        max_ranges = std::max((uint32_t)page_range_vector.size(), max_ranges);
+    }
+
+
+    uint32_t aligned_max_ranges = round_up_to_mul32(2+(max_ranges*4));
+    std::vector<uint32_t> args;
+    args.reserve(cores.size()*(aligned_max_ranges));
+
+    for(auto core: cores) {
+        auto page_range_vector = output_core_to_page_range_pair.at(core);
+        auto physical_input_core = device->worker_core_from_logical_core(core);
+        for (const auto& [core, range] : page_range_vector) {
+            args.push_back(physical_input_core.x);
+            args.push_back(physical_input_core.y);
+            args.push_back(range.start * page_size);
+            args.push_back((range.end - range.start) * page_size);
+        }
+        //padding for max_ranges
+        for(uint32_t i=((uint32_t)page_range_vector.size() * 4); i < aligned_max_ranges; i++) {
+            args.push_back(0);
+        }
+    }
+    tt::tt_metal::detail::WriteToBuffer(*config_vector.buffer(), args);
 
     auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_config, cb_dst](
                                                    const void* operation,

@@ -117,6 +117,7 @@ enum class ReshardRunTimeArgType { RUNTIME_ARGS, CONFIG_TENSOR };
 struct Reshard {
     const MemoryConfig output_mem_config;
     const ReshardRunTimeArgType rt_type;
+    std::unordered_map<CoreCoord, std::vector<CorePageRange>> output_core_to_page_range_pair;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;

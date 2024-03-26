@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
 	constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
@@ -17,7 +18,9 @@ void kernel_main() {
 	uint32_t config_l1_addr = get_read_ptr(config_cb);
 	volatile tt_l1_ptr int* config_addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(config_l1_addr);
 	uint32_t l1_write_addr = get_write_ptr(shard_cb);
-
+	DPRINT << "INPUT SHARD ADDR " << HEX() << input_shard_addr << DEC() << ENDL();
+	DPRINT << "NUM OUTPUT PAGES " << num_output_pages << ENDL();
+	DPRINT << "NUM RANGES " << num_ranges << ENDL();
 
 	uint32_t arg_index = 0;
 	for(uint32_t range_id = 0; range_id <num_ranges; range_id++) {
@@ -27,6 +30,11 @@ void kernel_main() {
 		uint32_t size = config_addr_ptr[arg_index++];
 		uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
 				input_shard_addr + offset);
+		DPRINT << "CORE ID X " << core_id_x << ENDL();
+		DPRINT << "CORE ID Y " << core_id_y << ENDL();
+		DPRINT << "OFFSET " << offset << ENDL();
+		DPRINT << "SIZE " << size << ENDL();
+		DPRINT << "NOC_ADDR " <<  HEX() << noc_address <<DEC() << ENDL();
 		noc_async_read(noc_address, l1_write_addr, size);
 		l1_write_addr+=size;
 
