@@ -1037,8 +1037,10 @@ std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const Memor
 // result: grad * (self * self + 1).rsqrt()
 std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(grad, rsqrt(add1(square(input, output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
-
+    UnaryWithParam op1 {UnaryOpType::SQUARE};
+    UnaryWithParam op2 {UnaryOpType::ADD_UNARY_SFPU, 1.0f};
+    UnaryWithParam op3 {UnaryOpType::RSQRT, true};
+    Tensor grad_result = mul(grad, unary_chain( input, {op1, op2, op3}, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1613,8 +1615,11 @@ std::vector<Tensor> logit_bw(const Tensor& grad, const Tensor& input, const Memo
 // result = grad_data / torch.square(1 + torch.abs(input))
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor temp = square( add1( abs(input, output_mem_config), output_mem_config), output_mem_config);
-    grad_tensor.emplace_back( mul(recip(temp,output_mem_config), grad, std::nullopt, output_mem_config) );
+    UnaryWithParam op1 {UnaryOpType::ABS};
+    UnaryWithParam op2 {UnaryOpType::ADD_UNARY_SFPU, 1.0f};
+    UnaryWithParam op3 {UnaryOpType::SQUARE};
+    UnaryWithParam op4 {UnaryOpType::RECIP};
+    grad_tensor.emplace_back( mul(grad, unary_chain( input, {op1, op2, op3, op4}, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 std::vector<Tensor> softsign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
