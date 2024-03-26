@@ -413,6 +413,14 @@ int main(int argc, char **argv) {
         gen_cmds(device, cmds, all_workers_g, worker_data, write_buffer_addr, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
+        if (is_paged_dram_test() && debug_g) {
+            initialize_dram_banks(device);
+        }
+
+        // Generate commands once and write them to prefetcher core.
+        gen_cmds(device, cmds, all_workers_g, worker_data, write_buffer_addr, dispatch_buffer_page_size_g);
+        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+
         constexpr uint32_t dispatch_cb_sem = 0;
         constexpr uint32_t prefetch_sync_sem = 1;
         tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);

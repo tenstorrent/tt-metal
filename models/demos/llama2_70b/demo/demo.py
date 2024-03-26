@@ -347,6 +347,9 @@ def test_LlamaModel_demo(
 
     devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
 
+    for device in devices:
+        device.enable_program_cache()
+
     args = construct_arg(
         implementation=implementation,
         ckpt_dir=ckpt_dir,
