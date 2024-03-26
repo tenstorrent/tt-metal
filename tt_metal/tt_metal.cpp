@@ -16,7 +16,6 @@
 #include "dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"
-#include "tools/cpuprof/cpuprof.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
 
@@ -514,14 +513,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
                 ConfigureKernelGroup(
-                    program, kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                    program, kernel_group, device, logical_core);
                 // TODO: add support for CB for ethernet cores
                 if (core_type == CoreType::WORKER) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     llrt::CircularBufferConfigVec circular_buffer_config_vec =
                         llrt::create_circular_buffer_config_vector();
 
-                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);  // PROF_BEGIN("CBS")
+                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                     for (auto circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                             llrt::set_config_for_circular_buffer(
@@ -537,7 +536,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                         llrt::write_circular_buffer_config_vector_to_core(
                             device_id,
                             physical_core,
-                            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+                            circular_buffer_config_vec);
                     }
 
                 }
