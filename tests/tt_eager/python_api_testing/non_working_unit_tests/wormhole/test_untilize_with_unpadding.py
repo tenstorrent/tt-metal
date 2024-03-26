@@ -16,7 +16,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
     untilize_with_unpadding as tt_untilize_with_unpadding,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
 def run_untilize_with_unpadding_tests(
@@ -28,11 +27,9 @@ def run_untilize_with_unpadding_tests(
     data_seed,
     output_tensor_start,
     output_tensor_end,
-    dispatch_mode,
     device,
 ):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -60,7 +57,6 @@ def run_untilize_with_unpadding_tests(
     logger.debug(pcc_value)
     logger.debug(success)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -74,13 +70,12 @@ test_sweep_args = [
         5263366,
         [0, 0, 0, 0],
         [10, 9, 4, 1],
-        "1",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, output_tensor_start, output_tensor_end, dispatch_mode",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, output_tensor_start, output_tensor_end",
     (test_sweep_args),
 )
 def test_untilize_with_unpadding_test(
@@ -92,7 +87,6 @@ def test_untilize_with_unpadding_test(
     data_seed,
     output_tensor_start,
     output_tensor_end,
-    dispatch_mode,
     device,
 ):
     random.seed(0)
@@ -105,6 +99,5 @@ def test_untilize_with_unpadding_test(
         data_seed,
         output_tensor_start,
         output_tensor_end,
-        dispatch_mode,
         device,
     )
