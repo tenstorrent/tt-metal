@@ -891,19 +891,12 @@ float factorial(int n) {
 
 std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-
-    Tensor result=zeros_like(input);
-    Tensor term=zeros_like(input);
-    Tensor final_res=zeros_like(input);
-
-    float fact;
-    for (int i=0; i<100; i++){
-        fact=factorial(i);
-        term = mul_unary(power(div_unary(input, 2.0, output_mem_config), 2*i-1, output_mem_config), i / (fact*fact), output_mem_config);
-        result = add(result,term);
-    }
-    final_res= mul(result, grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(final_res);
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor value = mul_unary(0.5, mul(i0(input, output_mem_config), recip(input, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor result = where(ltz(input, output_mem_config), mul(grad, sub(neg(i0(input, output_mem_config), output_mem_config), value, std::nullopt, output_mem_config), std::nullopt, output_mem_config), mul(grad, sub(i0(input, output_mem_config), value, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    result = where(gte_unary(abs(i0(input, output_mem_config), output_mem_config), 3.4e+38, output_mem_config), t_inf, result, output_mem_config);
+    result = where(gte_unary(abs(result, output_mem_config), 3.4e+38, output_mem_config), t_inf, result, output_mem_config);
+    grad_tensor.emplace_back(result);
     return grad_tensor;
 }
 std::vector<Tensor> i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
@@ -1335,7 +1328,12 @@ std::vector<Tensor> erfc_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan  = std::nanf("");
     Tensor grad_a = mul(grad, polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config), t_nan, grad_a, output_mem_config);
+    grad_a = where(logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, grad_a, output_mem_config);
+    grad_a = where(logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
