@@ -79,6 +79,46 @@ def get_tensor(shape, dtype):
                 }
             ),
         ),
+        (
+            [1, 1, 128, 8192],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (128, 256),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3)),  # 32 cores
+                }
+            ),
+        ),
+        (
+            [1, 1, 64, 8192],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 256),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3)),  # 32 cores
+                }
+            ),
+        ),
+        (
+            [1, 1, 256, 8192],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (256, 256),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3)),  # 32 cores
+                }
+            ),
+        ),
+        (
+            [1, 1, 512, 8192],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (512, 256),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3)),  # 32 cores
+                }
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
