@@ -34,10 +34,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
-    bool in0_is_sharded, bool output_is_sharded,
     bool untilize_out
 ) {
-
+    TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
@@ -50,6 +49,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+
+    const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
+    const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -139,7 +144,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
         std::swap(in0_end, in1_end);
     }
-    if (in0_is_sharded) {
+    if (in0_block_sharded) {
         in0_sender = all_cores;
     }
 
@@ -182,7 +187,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     std::vector<uint32_t> in0_sender_compile_time_args;
 
-    if (in0_is_sharded) {
+    if (in0_block_sharded) {
         uint32_t num_x, num_y;
         if (transpose_mcast) {
             num_x = 1;
@@ -322,6 +327,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     std::map<string, string> mm_kernel_defines;
+    std::map<string, string> mm_kernel_in0_sender_defines;
     std::map<string, string> mm_kernel_in1_sender_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
@@ -344,6 +350,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    if (in0_height_sharded) {
+        mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+    }
+    if (in1_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+
     // if (in0_is_sharded) {
     //     mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     // }
@@ -355,9 +368,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
-        in0_is_sharded ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        in0_block_sharded ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_sender,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines=mm_kernel_in0_sender_defines});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -373,7 +386,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
     KernelHandle mm_kernel_in0_receiver_id = 0;
-    if (!in0_is_sharded) {
+    if (!in0_block_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -445,19 +458,24 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
         .set_page_size(src0_cb_index, in0_single_tile_size);
+    if (in0_height_sharded) {
+        src0_cb_config.set_globally_allocated_address(*in0_buffer);
+    }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src0_cb_index, in0_single_tile_size, in0_CB_size / in0_single_tile_size, in0_CB_size);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-        .set_page_size(src1_cb_index, in1_single_tile_size);
+		.set_page_size(src1_cb_index, in1_single_tile_size);
+    if (in1_is_sharded) {
+        src1_cb_config.set_globally_allocated_address(*in1_buffer);
+    }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src1_cb_index, in1_single_tile_size, in1_CB_size / in1_single_tile_size, in1_CB_size);
 
     uint32_t src2_cb_index = 2;
     CBHandle cb_src2 = 0;
-
-    if (in0_is_sharded) {
+    if (in0_block_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
@@ -529,7 +547,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t diff_end_coord;
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
-    if (in0_is_sharded) {
+    if (in0_block_sharded) {
         if (transpose_mcast) {
             diff_start_coord = device->worker_core_from_logical_core({0, start_core_y}).y;
             diff_end_coord = device->worker_core_from_logical_core({0, start_core_y + num_cores_r - 1}).y;
@@ -594,7 +612,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             }
 
             // in0 sender
-            if (in0_is_sharded) {
+            if (in0_block_sharded) {
                 uint32_t worker_shard_same_coord;
                 std::vector<uint32_t> mm_in0_sender_args;
                 if (transpose_mcast) {
@@ -998,7 +1016,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
-            a.memory_config().is_sharded(), output.memory_config().is_sharded(),
             untilize_out
         );
     } else if (core_range.x > 1 or core_range.y > 1) {
