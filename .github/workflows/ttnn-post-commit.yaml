@@ -30,6 +30,7 @@ jobs:
       CONFIG: ci
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      TT_METAL_WATCHER: 60
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
@@ -51,3 +52,9 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+      - name: Upload watcher log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.name }}
+          path: built/watcher.log
