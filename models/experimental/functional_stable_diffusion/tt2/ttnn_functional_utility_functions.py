@@ -47,7 +47,7 @@ def pre_process_input(device, tensor):
     )
     tensor = ttnn.Tensor(tensor)
     tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True)
+    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True)
     return tensor
 
 

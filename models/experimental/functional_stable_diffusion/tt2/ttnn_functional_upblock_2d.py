@@ -61,7 +61,7 @@ class upblock_2d:
 
             if ttnn.is_sharded(hidden_states) and hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
                 hidden_states = ttnn.to_layout(
-                    hidden_states, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+                    hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
                 )
             elif ttnn.is_sharded(hidden_states):
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -69,7 +69,7 @@ class upblock_2d:
                 on_dev_res_hidden_states = ttnn.to_layout(
                     on_dev_res_hidden_states,
                     ttnn.TILE_LAYOUT,
-                    output_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                     use_multicore=True,
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):

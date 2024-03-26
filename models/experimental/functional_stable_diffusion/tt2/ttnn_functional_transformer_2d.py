@@ -183,7 +183,7 @@ class transformer_2d_model:
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.ROW_MAJOR_LAYOUT,
-            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
+            memory_config=self.proj_in.conv.input_sharded_memory_config,
             use_multicore=True,
         )
 
@@ -230,7 +230,7 @@ class transformer_2d_model:
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.TILE_LAYOUT,
-            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
+            memory_config=self.proj_in.conv.input_sharded_memory_config,
             use_multicore=True,
         )  # tilize
 
