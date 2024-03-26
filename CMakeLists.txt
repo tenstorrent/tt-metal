@@ -72,6 +72,8 @@ else()
                         ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME})
 endif()
 
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/python_env)
+
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/hw)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager)

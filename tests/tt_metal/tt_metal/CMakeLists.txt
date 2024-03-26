@@ -4,7 +4,7 @@ set (TT_METAL_TESTS
     test_bmm
     test_add_two_ints
     # test_compile_args             <- not tested in run_tt_metal.py
-    # test_eltwise_binary           <- fast dispatch
+    test_eltwise_binary
     # test_eltwise_unary            <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b
     test_matmul_single_tile_output_in_l1
@@ -53,14 +53,18 @@ foreach (TEST ${TT_METAL_TESTS})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
-add_subdirectory(unit_tests_common)
-add_subdirectory(unit_tests)
-add_subdirectory(unit_tests_fast_dispatch)
-add_subdirectory(unit_tests_fast_dispatch_single_chip_multi_queue)
-add_subdirectory(unit_tests_frequent)
-add_subdirectory(perf_microbenchmark)
+add_subdirectory(${CMAKE_SOURCE_DIR}/tt_metal/programming_examples ${CMAKE_BINARY_DIR}/programming_examples)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chip_multi_queue)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
+
+# add_subdirectory(perf_microbenchmark)
 
 add_custom_target(metal_tests DEPENDS
+                                programming_examples
                                 ${METAL_TEST_TARGETS}
                                 unit_tests
                                 unit_tests_fast_dispatch
