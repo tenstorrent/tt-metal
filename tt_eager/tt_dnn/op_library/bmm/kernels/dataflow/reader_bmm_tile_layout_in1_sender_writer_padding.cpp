@@ -95,25 +95,28 @@ void kernel_main() {
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
-    // WRITER
-    constexpr uint32_t cb_id_out0 = 16;
-
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat output_data_format = get_dataformat(cb_id_out0);
-
+    //  READER
+    #ifdef IN1_SHARDED
+    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+    cb_push_back(cb_id_in1, in1_block_num_tiles);
+    #else
     uint32_t l1_write_addr_in1;
 
-
+    constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = in1_single_tile_size_bytes,
         .data_format = in1_data_format
     };
+    #endif
 
-    // WRITER
+    //  WRITER
+    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    constexpr DataFormat output_data_format = get_dataformat(cb_id_out0);
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = output_single_tile_size_bytes,
@@ -141,17 +144,20 @@ void kernel_main() {
         in1_mcast_dest_noc_end_x,
         in1_mcast_dest_noc_end_y,
         0);
+    #ifdef IN1_SHARDED
+    uint64_t in1_start_address = get_write_ptr(cb_id_in1);
+    #endif
     #endif
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
-        for(uint32_t block = 0; block < num_blocks; ++block) {
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            #ifndef IN1_SHARDED
             // Operand 1
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
             uint64_t in1_start_address = l1_write_addr_in1; // copy start address of block, to be used for mcasting
-            uint32_t in1_block_size_bytes = 0; // can be optimized later, pass it to kernel
 
             // Copy in1 block into CB, as the default kernel
             uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
@@ -163,7 +169,6 @@ void kernel_main() {
                     }
                     l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
-                    in1_block_size_bytes += in1_single_tile_size_bytes;
                 }
                 in1_tensor_row_start_tile_id += in1_tensor_stride_h;
             }
@@ -171,8 +176,9 @@ void kernel_main() {
 
             // Barrier! make sure the reads are done
             noc_async_read_barrier();
-            #ifndef SKIP_MCAST
+            #endif
 
+            #ifndef SKIP_MCAST
             // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
             // the semaphore_addr value back to zero for the next block
             noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
@@ -193,7 +199,9 @@ void kernel_main() {
 
             #endif
 
+            #ifndef IN1_SHARDED
             cb_push_back(cb_id_in1, in1_block_num_tiles);
+            #endif
         }
         #ifdef FUSE_BIAS
             // Only read bias on first batch
