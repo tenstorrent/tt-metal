@@ -942,6 +942,19 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         (Pdb) attn_masks[0].shape: ttnn.Shape([1, 8, 2048, 2048])  -> each slice is [1,8,128,2048]
         """
 
+        # PRE-SOFTMAX MM
+        key_layer_transposed = []
+        for i in range(len(key_layer)):
+            key_layer_transposed.append(
+                tt_lib.tensor.transpose(
+                    key_layer[i],
+                    -2,
+                    -1,
+                    # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                )
+            )
+            key_layer[i].deallocate(True)
+
         for slice_i in range(num_slices):
             q_slices = []
             attn_mask_slices = []
@@ -969,18 +982,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     )
                 )
 
-            # PRE-SOFTMAX MM
-            key_layer_transposed = []
-            for i in range(len(key_layer)):
-                key_layer_transposed.append(
-                    tt_lib.tensor.transpose(
-                        key_layer[i],
-                        -2,
-                        -1,
-                        # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    )
-                )
-
             attn_weights = []
             for i in range(len(query_layer)):
                 attn_weights.append(
@@ -990,10 +991,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"],
                         output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                         output_dtype=self.model_config["ATTN_BATCHED_MM_OUTPUT_DTYPE"],
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
                 )
-                key_layer_transposed[i].deallocate(True)
+                q_slices[i].deallocate(True)
 
             # SOFTMAX
             softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
@@ -1034,10 +1035,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output[i].deallocate(True)
 
         # deallocate keys and values
-        for i in range(len(key_layer)):
-            key_layer[i].deallocate(True)
-            value_layer[i].deallocate(True)
+        for i in range(len(query_layer)):
             query_layer[i].deallocate(True)
+            key_layer_transposed[i].deallocate(True)
+            value_layer[i].deallocate(True)
 
         return attn_output_cat
 
