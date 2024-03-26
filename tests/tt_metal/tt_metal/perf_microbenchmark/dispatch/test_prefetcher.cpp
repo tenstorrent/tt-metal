@@ -25,8 +25,9 @@ constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
 // 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
 constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
+constexpr uint32_t PREFETCH_D_DEFAULT_BUFFER_SIZE = 256 * 1024;
 constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
-
+constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
 constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
@@ -79,6 +80,7 @@ bool initialize_device_g = true;
 uint32_t dispatch_wait_addr_g;
 bool split_prefetcher_g;
 bool split_dispatcher_g;
+uint32_t prefetch_d_buffer_size_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -108,8 +110,9 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
         log_info(LogTest, "  -hp: host huge page buffer size (default {})", DEFAULT_HUGEPAGE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
-        log_info(LogTest, "  -cs: max cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
+        log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", PREFETCH_D_DEFAULT_BUFFER_SIZE);
+        log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
         log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
@@ -134,6 +137,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", PREFETCH_D_DEFAULT_BUFFER_SIZE);
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
@@ -812,7 +816,6 @@ void gen_smoke_test(Device *device,
     // gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, 0, 32, 64, 128);
     // gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
     // gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 0, 32, 64, 128);
-
 }
 
 void gen_prefetcher_cmds(Device *device,
@@ -1106,7 +1109,7 @@ int main(int argc, char **argv) {
 
         uint32_t dispatch_buffer_base = l1_buf_base;
         uint32_t prefetch_d_buffer_base = l1_buf_base;
-        uint32_t prefetch_d_buffer_pages = 256 * 1024 >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE; // XXXX 256 for now, nothing below it in memory
+        uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         uint32_t prefetch_q_base = l1_buf_base;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
         dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
@@ -1116,8 +1119,6 @@ int main(int argc, char **argv) {
         uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(uint16_t);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
         // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
         // so far ahead in the hugepage that we overright un-read commands since we'll first
@@ -1158,9 +1159,12 @@ int main(int argc, char **argv) {
         constexpr uint32_t prefetch_sync_sem = 0;
         tt_metal::CreateSemaphore(program, {prefetch_core}, 0); // ugly, unused on _h
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
-
         constexpr uint32_t prefetch_downstream_cb_sem = 1;
-        tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+        if (split_prefetcher_g) {
+            tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+        } else {
+            tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+        }
 
         constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
         constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
@@ -1213,6 +1217,9 @@ int main(int argc, char **argv) {
                 {"DOWNSTREAM_NOC_Y", std::to_string(phys_dispatch_core.y)},
             };
 
+            uint32_t scratch_db_base = prefetch_d_buffer_base + (((prefetch_d_buffer_pages << PREFETCH_D_BUFFER_LOG_PAGE_SIZE) + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+            TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
+
             std::vector<uint32_t> prefetch_d_compile_args = {
                 dispatch_buffer_base,
                 DISPATCH_BUFFER_LOG_PAGE_SIZE,
@@ -1225,6 +1232,7 @@ int main(int argc, char **argv) {
                 prefetch_d_buffer_pages,
                 prefetch_d_upstream_cb_sem,
                 prefetch_downstream_cb_sem,
+                PREFETCH_D_BUFFER_BLOCKS,
 
                 scratch_db_base,
                 scratch_db_size_g,
@@ -1234,7 +1242,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch_d.cpp",
-                {prefetch_core},
+                {prefetch_d_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_0_default,
@@ -1243,6 +1251,9 @@ int main(int argc, char **argv) {
                 }
             );
         } else {
+            uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+            TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
+
             configure_host_connected_prefetcher<true>(
                 program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch_hd.cpp",
@@ -1264,9 +1275,10 @@ int main(int argc, char **argv) {
         if (split_dispatcher_g) {
             TT_FATAL("split dispatcher not implemented");
         } else {
+            CoreCoord phys_upstream_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
             std::map<string, string> defines = {
-                {"PREFETCH_NOC_X", std::to_string(phys_prefetch_core.x)},
-                {"PREFETCH_NOC_Y", std::to_string(phys_prefetch_core.y)},
+                {"PREFETCH_NOC_X", std::to_string(phys_upstream_core.x)},
+                {"PREFETCH_NOC_Y", std::to_string(phys_upstream_core.y)},
                 {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
                 {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
             };
