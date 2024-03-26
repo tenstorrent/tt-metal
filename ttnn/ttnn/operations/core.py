@@ -450,9 +450,15 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     def impl(tensor, device, *, memory_config):
         return tensor.to(device, memory_config)
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
+    original_rank = len(tensor.shape)
+    tensor = ttnn.unsqueeze_to_4D(tensor)
+
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
         tensor, device, memory_config=memory_config
     )
+    while len(tensor.shape) != original_rank:
+        tensor = squeeze(tensor, 0)
+    return tensor
 
 
 def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):

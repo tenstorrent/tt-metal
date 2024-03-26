@@ -230,6 +230,50 @@ def test_falcon_split_query_key_value_and_split_heads(
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
+@pytest.mark.skip(reason="This test is failing due to the issue in the implementation")
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("sequence_size", [224])
+@pytest.mark.parametrize("num_heads", [12])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+def test_sharded_split_query_key_value_and_split_heads(
+    batch_size, num_heads, sequence_size, head_size, input_dtype, *, device
+):
+    torch.manual_seed(0)
+
+    input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
+
+    input_memory_config = ttnn.create_sharded_memory_config(
+        input_shape, core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK
+    )
+
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(torch_input_tensor, num_heads=num_heads)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+        input_tensor, num_heads=num_heads, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+    )
+    query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.to_torch(key_tensor)
+    value_tensor = ttnn.to_torch(value_tensor)
+
+    assert_with_pcc(torch_query_tensor, query_tensor, 0.999)
+    assert_with_pcc(torch_key_tensor, key_tensor, 0.999)
+    assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
+
+
 def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_of_32(device):
     """
     This test is to check that the split_query_key_value_and_split_heads function raises an error when the head size is not a multiple of 32

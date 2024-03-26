@@ -32,7 +32,7 @@ if TTNN_ENABLE_FAST_RUNTIME_MODE:
 
 TTNN_ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
 if TTNN_ENABLE_LOGGING:
-    logger.info(f"ttnn: enabled logging (and disabled fast runtime mode)")
+    logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
 
 import tt_lib as _tt_lib
 import ttnn._ttnn
