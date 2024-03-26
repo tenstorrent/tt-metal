@@ -3,12 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tt_lib as ttl
 from typing import Union, Tuple
 
 
 def get_shard_grid_from_num_cores(ncores: Union[int, Tuple[int, int]], device) -> ttnn.experimental.tensor.CoreRangeSet:
-    max_grid_size = (8, 8) if device.arch() == ttl.device.Arch.WORMHOLE_B0 else (9, 12)  ## (y, x)
+    max_grid_size = (device.compute_with_storage_grid_size().y, device.compute_with_storage_grid_size().x)
     if isinstance(ncores, int):
         if ncores % max_grid_size[1] == 0:
             core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
