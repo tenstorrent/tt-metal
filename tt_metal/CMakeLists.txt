@@ -25,7 +25,6 @@ target_include_directories(tt_metal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(tt_metal PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt)
 target_compile_options(tt_metal PUBLIC ${METAL_COMPILE_OPTIONS} -DFMT_HEADER_ONLY -Werror -Wno-int-to-pointer-cast)
 
-# ${UMD_OBJS}
 if(${TT_METAL_CREATE_STATIC_LIB} EQUAL 1)
     add_library(tt_metal_libs STATIC $<TARGET_OBJECTS:tt_metal> $<TARGET_OBJECTS:profiler> $<TARGET_OBJECTS:common> $<TARGET_OBJECTS:jit_build> $<TARGET_OBJECTS:llrt> $<TARGET_OBJECTS:impl> $<TARGET_OBJECTS:detail> $<TARGET_OBJECTS:tracy>)
 else()

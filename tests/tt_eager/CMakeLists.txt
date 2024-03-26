@@ -89,37 +89,3 @@ CREATE_EXEC("${TT_EAGER_TESTS_TENSORS}")
 CREATE_EXEC("${TT_EAGER_TESTS_INTEGRATION}")
 
 add_custom_target(eager_tests DEPENDS ${EAGER_TEST_TARGETS})
-
-# function(CREATE_EXEC TEST_PATH)
-#     STRING(REGEX REPLACE ".*/(.*)" "\\1" TEST_NAME ${TEST_PATH})
-#     set(TEST_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_PATH})
-#     # bc unit_tests and tensor are already taken as target names/executables
-#     if(${TEST_NAME} STREQUAL "unit_tests")
-#         set(TEST_TARGET "test_unit_tests")
-#     elseif(${TEST_NAME} STREQUAL "tensor")
-#         set(TEST_TARGET "test_tensor")
-#     else()
-#         set(TEST_TARGET ${TEST_NAME})
-#     endif()
-#     add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
-
-#     target_link_libraries(${TEST_TARGET} PUBLIC tt_dnn tt_metal_libs)
-#     target_link_libraries(${TEST_TARGET} PUBLIC stdc++fs yaml-cpp gtest gtest_main m)
-#     target_include_directories(${TEST_TARGET} PRIVATE
-#         ${UMD_HOME}
-#         ${CMAKE_SOURCE_DIR}
-#         ${CMAKE_SOURCE_DIR}/tt_metal
-#         ${CMAKE_SOURCE_DIR}/tt_metal/common
-#         ${CMAKE_SOURCE_DIR}/tests
-#         ${CMAKE_CURRENT_SOURCE_DIR}
-#     )
-#     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
-#     list(APPEND EAGER_TEST_TARGETS ${TEST_TARGET})
-#     set(EAGER_TEST_TARGETS "${EAGER_TEST_TARGETS}" PARENT_SCOPE)   # set parent scope so variable is available outside of function
-
-# endfunction()
-
-# foreach(TEST ${TT_EAGER_TESTS_DTX})
-#     message("TESTS: ${TEST}")
-#     CREATE_EXEC(${TEST})
-# endforeach()

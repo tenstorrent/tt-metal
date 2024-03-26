@@ -18,7 +18,6 @@ else()
 endif()
 
 foreach(CORE IN LISTS CORES)
-    # Define the output file
     set(OUTPUT_FILE "${OUTPUT_DIR}/${CORE}.ld")
 
     # custom command to preprocess/generate the output file
@@ -35,5 +34,5 @@ foreach(CORE IN LISTS CORES)
     list(APPEND PREPROCESSED_LD_FILES ${OUTPUT_FILE})
 endforeach()
 
-# Add a custom target that depends on all the output files
+# custom target that depends on all the output files
 add_custom_target(hw_toolchain ALL DEPENDS ${PREPROCESSED_LD_FILES})

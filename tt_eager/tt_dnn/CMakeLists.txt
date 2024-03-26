@@ -23,7 +23,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/eltwise_unary/eltwise_unary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core_height_block_sharded.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/op_library/eltwise_unary/multi_core/eltwise_unary_op_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/pad/pad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/pad/pad_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/unpad/single_core/unpad_op_single_core.cpp
@@ -207,4 +207,4 @@ target_include_directories(tt_dnn PUBLIC
                             ${CMAKE_SOURCE_DIR}/tt_eager
                             ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_compile_options(dtx PUBLIC ${METAL_COMPILE_OPTIONS} -Wno-int-to-pointer-cast)
+target_compile_options(tt_dnn PUBLIC ${METAL_COMPILE_OPTIONS} -Wno-int-to-pointer-cast)

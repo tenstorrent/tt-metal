@@ -39,8 +39,7 @@ set (TT_METAL_TESTS
 
 foreach (TEST ${TT_METAL_TESTS})
     add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST})
-    target_link_libraries(${TEST} PUBLIC ${COMMON_LIBS} tt_metal_libs)
-    target_link_libraries(${TEST} PUBLIC stdc++fs yaml-cpp gtest gtest_main m)
+    target_link_libraries(${TEST} PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
     target_include_directories(${TEST} PRIVATE
         ${UMD_HOME}
         ${CMAKE_SOURCE_DIR}
@@ -59,5 +58,12 @@ add_subdirectory(unit_tests)
 add_subdirectory(unit_tests_fast_dispatch)
 add_subdirectory(unit_tests_fast_dispatch_single_chip_multi_queue)
 add_subdirectory(unit_tests_frequent)
+add_subdirectory(perf_microbenchmark)
 
-add_custom_target(metal_tests DEPENDS ${METAL_TEST_TARGETS} unit_tests unit_tests_fast_dispatch unit_tests_fast_dispatch_single_chip_multi_queue unit_tests_frequent)
+add_custom_target(metal_tests DEPENDS
+                                ${METAL_TEST_TARGETS}
+                                unit_tests
+                                unit_tests_fast_dispatch
+                                unit_tests_fast_dispatch_single_chip_multi_queue
+                                unit_tests_frequent)
+                                # metal_perf_microbenchmark_tests)
