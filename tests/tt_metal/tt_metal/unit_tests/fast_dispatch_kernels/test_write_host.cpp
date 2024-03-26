@@ -234,7 +234,6 @@ TEST_F(DeviceSingleCardFixture, TestWriteHostWrap) {
 }
 
 TEST_F(DeviceSingleCardFixture, TestWriteHostStall) {
-    std::cout<<dev_hugepage_base + 10 * dispatch_buffer_page_size_g<<std::endl;
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {hugepage_buffer_size_g - 5 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 1 * dispatch_buffer_page_size_g, 1)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1}, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1)));

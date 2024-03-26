@@ -168,7 +168,9 @@ void process_write_host() {
         completion_queue_reserve_back(npages);
         uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
         uint64_t host_completion_queue_write_addr = get_noc_addr_helper(pcie_noc_xy_encoding, completion_queue_write_addr);
-        if (completion_queue_write_addr + xfer_size >= completion_queue_end_addr) {
+        // completion_queue_write_addr will never be equal to completion_queue_end_addr due to completion_queue_push_back
+        // wrap logic so we don't need to handle this case explicitly to avoid 0 sized transactions
+        if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
             uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
             noc_async_write(data_ptr, host_completion_queue_write_addr, last_chunk_size);
             completion_queue_write_addr = completion_queue_base_addr;
