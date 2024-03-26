@@ -14,7 +14,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_equal
+        function: comp_shape
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
@@ -36,7 +36,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_equal
+        function: comp_shape
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["ROW_MAJOR"]
