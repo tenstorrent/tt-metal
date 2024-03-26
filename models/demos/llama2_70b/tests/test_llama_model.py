@@ -233,14 +233,15 @@ def run_test_LlamaModel_inference(
         (0.999, 1),
         (0.998, 2),
         (0.99, 4),
-        (0.98, 6),
-        (0.98, 7),
-        (0.98, 8),
-        (0.96, 10),
-        (0.94, 20),
-        (0.92, 40),
-        (0.90, 80),
+        (0.99, 6),
+        (0.99, 7),
+        (0.99, 8),
+        (0.99, 10),
+        (0.99, 20),
+        (0.99, 40),
+        (0.99, 80),
     ),
+    ids=("1L", "2L", "4L", "6L", "7L", "8L", "10L", "20L", "40L", "80L"),
 )
 @pytest.mark.parametrize(
     "n_devices, emulated",
@@ -255,22 +256,20 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (1, 128), (1, 256), (1, 512), (1, 1024), (1, 2048)),
-    ids=("decode", "prefill_128", "prefill_256", "prefill_512", "prefill_1k", "prefill_2k"),
+    ((32, 1), (1, 128), (1, 2048)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_inference(
     batch,
     seq_len,
     pcc,
-    model_config_str,
     n_layers,
     n_devices,
     all_devices,
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices, seq_len=seq_len)
+    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")

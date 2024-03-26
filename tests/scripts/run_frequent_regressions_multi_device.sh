@@ -22,7 +22,7 @@ export LLAMA_CKPT_DIR=/opt/cache/llama2_70b_cache/llama-data-repacked-2/llama-2-
 export LLAMA_TOKENIZER_PATH=/opt/cache/llama2_70b_cache/llama-data/tokenizer.model
 export LLAMA_CACHE_PATH=/opt/cache/llama2_70b_cache/llama-data-cache/weights-cache-2
 
-pytest models/demos/llama2_70b/tests/test_llama_mlp.py::test_LlamaMLP_inference[BFLOAT16-DRAM-0.9999-decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_attention.py::test_LlamaAttention_inference[BFLOAT16-DRAM-0.9997-decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_decoder.py::test_LlamaDecoder_inference[BFLOAT16-DRAM-0.999-decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[BFLOAT16-DRAM-decode-8chip-T3000-0.999-1]
+pytest models/demos/llama2_70b/tests/test_llama_mlp.py::test_LlamaMLP_inference[decode-8chip-T3000]
+pytest models/demos/llama2_70b/tests/test_llama_attention.py::test_LlamaAttention_inference[decode-8chip-T3000]
+pytest models/demos/llama2_70b/tests/test_llama_decoder.py::test_LlamaDecoder_inference[decode-8chip-T3000]
+pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-1L]

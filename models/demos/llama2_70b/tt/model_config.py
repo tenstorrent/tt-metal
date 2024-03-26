@@ -74,7 +74,7 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, num_devices=8, seq_len=1):
+def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1):
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     assert num_devices in (8, 32)
@@ -122,7 +122,7 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
             packer_l1_acc=True,
         ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -319,8 +319,8 @@ def get_model_config(model_config_str, num_devices=8, seq_len=1):
     # For Prefill. we can calculate based on the dynamic seqlen for block sharded layernorm.
     # shard_height_slice = 128 for prefill
     shard_height_slice = 128
-    layernorm_num_cores_x = 8
-    layernorm_max_num_cores_y = 7
+    layernorm_num_cores_x = model_config["MAX_GRID_SIZE"][0]
+    layernorm_max_num_cores_y = model_config["MAX_GRID_SIZE"][1]
     for i in range(layernorm_max_num_cores_y, 0, -1):
         if (shard_height_slice // 32) % i == 0:
             layernorm_num_cores_y = i
