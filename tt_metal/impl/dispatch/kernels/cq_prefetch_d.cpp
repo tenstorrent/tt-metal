@@ -21,20 +21,23 @@ constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(4);
 
 constexpr uint32_t cmddat_cb_base = get_compile_time_arg_val(5);
 constexpr uint32_t cmddat_cb_log_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t cmddat_cb_size = get_compile_time_arg_val(7);
+constexpr uint32_t cmddat_cb_pages = get_compile_time_arg_val(7);
 constexpr uint32_t local_upstream_cb_sem_id = get_compile_time_arg_val(8);
 constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(9);
+constexpr uint32_t cmddat_cb_blocks = get_compile_time_arg_val(10);
 
-constexpr uint32_t scratch_db_base = get_compile_time_arg_val(10);
-constexpr uint32_t scratch_db_size = get_compile_time_arg_val(11);
+constexpr uint32_t scratch_db_base = get_compile_time_arg_val(11);
+constexpr uint32_t scratch_db_size = get_compile_time_arg_val(12);
 
-constexpr uint32_t dispatch_sync_sem_id = get_compile_time_arg_val(11);
+constexpr uint32_t dispatch_sync_sem_id = get_compile_time_arg_val(13);
 
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
+constexpr uint32_t cmddat_cb_page_size = 1 << cmddat_cb_log_page_size;
+constexpr uint32_t cmddat_cb_size = cmddat_cb_page_size * cmddat_cb_pages;
 constexpr uint32_t cmddat_cb_end = cmddat_cb_base + cmddat_cb_size;
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
@@ -45,113 +48,123 @@ static uint32_t downstream_data_ptr = downstream_cb_base;
 
 const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
+constexpr uint32_t cmddat_cb_pages_per_block = cmddat_cb_pages / cmddat_cb_blocks;
+
+static uint32_t block_next_start_addr[cmddat_cb_blocks];
+static uint32_t block_noc_writes_to_clear[cmddat_cb_blocks];
+static uint32_t rd_block_idx;
+
 static_assert((downstream_cb_base & (downstream_cb_page_size - 1)) == 0);
 
 
+// Gets cmds from upstream prefetch_h
+// Note the prefetch_h uses the HostQ and grabs whole commands
+// Shared command processor assumes whole commands are present, really
+// just matters for the inline command which could be re-implemented
+// This grabs whole (possibly sets of if multiple in a page) commands
+inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
+
+    DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_cb_base << " " << cmddat_cb_end << ENDL();
+    if (data_ptr == fence) {
+        upstream_get_cb_page<
+            cmddat_cb_base,
+            cmddat_cb_blocks,
+            cmddat_cb_log_page_size,
+            my_noc_xy,
+            local_upstream_cb_sem_id>(data_ptr,
+                                      fence,
+                                      block_noc_writes_to_clear,
+                                      block_next_start_addr,
+                                      rd_block_idx);
+    }
+
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *cmd_ptr =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *)data_ptr;
+    uint32_t length = cmd_ptr->length;
+
+    uint32_t pages_ready = (fence - data_ptr) >> cmddat_cb_log_page_size;
+    uint32_t pages_needed = (length + cmddat_cb_page_size - 1) >> cmddat_cb_log_page_size;
+    int32_t pages_pending = pages_needed - pages_ready;
+    int32_t npages = 0;
+
+    // TODO
+    // Ugly: upstream_get_cb_page was written to process 1 page at a time, we need multiple
+    // If it wraps, it resets the data_ptr to the top of the buffer, hand it a dummy for now
+    uint32_t dummy_data_ptr = data_ptr;
+    while (npages < pages_pending) {
+        npages += upstream_get_cb_page<
+            cmddat_cb_base,
+            cmddat_cb_blocks,
+            cmddat_cb_log_page_size,
+            my_noc_xy,
+            local_upstream_cb_sem_id>(dummy_data_ptr,
+                                      fence,
+                                      block_noc_writes_to_clear,
+                                      block_next_start_addr,
+                                      rd_block_idx);
+    }
+
+    data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
+
+    return length - sizeof(CQPrefetchHToPrefetchDHeader);
+}
+
 void kernel_main() {
+
+    for (uint32_t i = 0; i < cmddat_cb_blocks; i++) {
+        uint32_t next_block = i + 1;
+        uint32_t offset = next_block * cmddat_cb_pages_per_block * cmddat_cb_page_size;
+        block_next_start_addr[i] = cmddat_cb_base + offset;
+    }
+
+    rd_block_idx = 0;
+    block_noc_writes_to_clear[0] = noc_nonposted_writes_num_issued[noc_index] + 1;
 
     uint32_t cmd_ptr = cmddat_cb_base;
     uint32_t fence = cmddat_cb_base;
 
-    DPRINT << "prefetcher" << ENDL();
+    DPRINT << "prefetch_d" << ENDL();
 
     bool done = false;
     while (!done) {
-        // Hang...need to write this code!!!
-        while(1);
+        // cmds come in packed batches based on HostQ reads in prefetch_h
+        // once a packed batch ends, we need to jump to the next page
+        uint32_t length = relay_cb_get_cmds(fence, cmd_ptr);
 
-        volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-
-        switch (cmd->base.cmd_id) {
-        case CQ_PREFETCH_CMD_RELAY_LINEAR:
-            DPRINT << "relay linear: " << fence << " " << cmd_ptr << ENDL();
-            cmd_ptr = process_relay_linear_cmd<
+        uint32_t amt_processed = 0;
+        while (length > amt_processed) {
+            uint32_t stride;
+            done = process_cmd<
+                true,
                 my_noc_xy,
                 local_downstream_cb_sem_id,
                 downstream_noc_xy,
                 downstream_cb_sem_id,
-                downstream_cb_base,
-                downstream_cb_end,
-                downstream_cb_page_size,
-                scratch_db_half_size>(cmd_ptr, downstream_data_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_RELAY_PAGED:
-            DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
-            if (cmd->relay_paged.is_dram) {
-                cmd_ptr = process_relay_paged_cmd<
-                    true,
-                    my_noc_xy,
-                    local_downstream_cb_sem_id,
-                    downstream_noc_xy,
-                    downstream_cb_sem_id,
-                    downstream_cb_base,
-                    downstream_cb_end,
-                    downstream_cb_page_size,
-                    scratch_db_half_size>(cmd_ptr, downstream_data_ptr);
-            } else {
-                cmd_ptr = process_relay_paged_cmd<
-                    false,
-                    my_noc_xy,
-                    local_downstream_cb_sem_id,
-                    downstream_noc_xy,
-                    downstream_cb_sem_id,
-                    downstream_cb_base,
-                    downstream_cb_end,
-                    downstream_cb_page_size,
-                    scratch_db_half_size>(cmd_ptr, downstream_data_ptr);
-            }
-            break;
-
-        case CQ_PREFETCH_CMD_RELAY_INLINE:
-            DPRINT << "inline" << ENDL();
-            cmd_ptr = process_relay_inline_cmd<
-                my_noc_xy,
-                local_downstream_cb_sem_id,
-                downstream_noc_xy,
-                downstream_cb_sem_id,
+                cmddat_cb_base,
+                cmddat_cb_end,
                 downstream_cb_base,
                 downstream_cb_end,
                 downstream_cb_log_page_size,
-                downstream_cb_page_size>(cmd_ptr, downstream_data_ptr);
-            break;
+                downstream_cb_page_size,
+                dispatch_sync_sem_id,
+                scratch_db_half_size>(cmd_ptr, downstream_data_ptr, stride);
 
-        case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
-            DPRINT << "inline no flush" << ENDL();
-            cmd_ptr = process_relay_inline_noflush_cmd<
-                my_noc_xy,
-                local_downstream_cb_sem_id,
-                downstream_noc_xy,
-                downstream_cb_base,
-                downstream_cb_end>(cmd_ptr, downstream_data_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_STALL:
-            DPRINT << "stall" << ENDL();
-            cmd_ptr = process_stall<dispatch_sync_sem_id>(cmd_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_DEBUG:
-            DPRINT << "debug" << ENDL();
-            cmd_ptr = process_debug_cmd(cmd_ptr);
-            break;
-
-        case CQ_PREFETCH_CMD_TERMINATE:
-            DPRINT << "terminating\n";
-            done = true;
-            break;
-
-        default:
-            DPRINT << "prefetcher invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << fence << " " << ENDL();
-            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
-            DEBUG_STATUS('!', 'C', 'M', 'D');
-            ASSERT(0);
+            amt_processed += stride;
+            if (cmd_ptr + stride >= cmddat_cb_end) {
+                stride -= cmddat_cb_end - cmd_ptr;
+                cmd_ptr = cmddat_cb_base;
+            }
+            cmd_ptr += stride;
         }
+
+        // XXXXX should free in blocks...
+        uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
+        uint32_t pages_to_free = (total_length + cmddat_cb_page_size - 1) >> cmddat_cb_log_page_size;
+        upstream_cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+
+        // Move to next page
+        cmd_ptr += (cmddat_cb_page_size - (cmd_ptr & (cmddat_cb_page_size - 1))) & (cmddat_cb_page_size - 1);
     }
 
-    DPRINT << "prefetch out\n" << ENDL();
+    DPRINT << "prefetch_d out\n" << ENDL();
 }
