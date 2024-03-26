@@ -133,6 +133,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
         log_dispatch_buffer_page_size_g,
         dispatch_buffer_pages,
         dispatch_cb_sem,
+        dispatch_cb_sem, // ugly, share an address
         dispatch_buffer_size_blocks_g,
         prefetch_sync_sem,
         dev_hugepage_base,
@@ -149,9 +150,9 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
         prefetch_sync_sem,
         };
 
-    std::map<string, string> defines = {
-        {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
-        {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
+    std::map<string, string> prefetch_defines = {
+        {"MY_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
+        {"MY_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
         {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
         {"DISPATCH_NOC_Y", std::to_string(phys_dispatch_core.y)},
     };
@@ -164,11 +165,18 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = spoof_prefetch_compile_args,
-            .defines = defines});
+            .defines = prefetch_defines});
 
     // Hardcode outer loop to 1
     vector<uint32_t> args = {1};
     tt::tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
+
+    std::map<string, string> dispatch_defines = {
+        {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
+        {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
+        {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
+        {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
+    };
 
     auto d1 = tt::tt_metal::CreateKernel(
         program,
@@ -178,7 +186,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = dispatch_compile_args,
-            .defines = defines});
+            .defines = dispatch_defines});
 
     // Need a separate thread for SD
     if (read_ptr_update.has_value()) {
