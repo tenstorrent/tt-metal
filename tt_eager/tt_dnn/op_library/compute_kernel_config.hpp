@@ -83,5 +83,37 @@ inline DeviceComputeKernelConfig init_device_compute_kernel_config(
     }
 }
 
+inline std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(
+    ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
+
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+    bool packer_l1_acc;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(arch == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+            packer_l1_acc = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(arch == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+            packer_l1_acc = compute_kernel_config.packer_l1_acc;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    return std::make_tuple(
+        math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc);
+}
+
 }
 }
