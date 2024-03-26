@@ -10,7 +10,8 @@ import torch
 
 import tt_lib as ttl
 
-from models.utility_functions import get_debug_tensor
+from models.utility_functions import get_debug_tensor, get_devices_for_t3000, comp_pcc
+from loguru import logger
 
 tt_dtype_to_torch_dtype = {
     ttl.tensor.DataType.UINT32: torch.int32,
@@ -219,4 +220,94 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
 
     passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "tt_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_shape, shard_scheme, shard_shape, grid_override",
+    [
+        (
+            [1, 1, 64, 1024],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 256),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(3, 0)),  # 32 cores
+                }
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    ],
+)
+def test_tensor_conversion_between_torch_and_tt_tile_multichip(
+    tt_dtype, all_devices, tensor_shape, shard_scheme, shard_shape, grid_override, shard_orientation
+):
+    num_devices = 8
+    devices = get_devices_for_t3000(all_devices, num_devices)
+    # devices = [all_devices[i] for i in [1, 2, 3, 4]]
+
+    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    device_compute_with_storage_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid = ttl.tensor.CoreCoord(
+        device_compute_with_storage_grid_size.x - 1, device_compute_with_storage_grid_size.y - 1
+    )
+
+    if grid_override == None:
+        shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
+    else:
+        shard_grid = grid_override
+    shard_halo = False
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+
+    two_d_shape = (tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3])
+    num_tiles_width = (two_d_shape[1]) / TILE_WIDTH
+    num_tiles_height = (two_d_shape[0]) / TILE_HEIGHT
+
+    if debug:
+        torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype)
+    else:
+        torch_tensor = get_tensor(tensor_shape, dtype)
+    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+
+    tt_tensor_list = []
+    for device in devices:
+        tt_tensor_list.append(tt_tensor.to(device, mem_config))
+
+    passing = True
+    # 0, 7, 6, 1, 2, 5, 4, 3
+    torch.set_printoptions(threshold=100000)
+    print(torch_tensor[:, :, ::32, ::32])
+    for i, tt_tensor in enumerate(tt_tensor_list):
+        device_id = tt_tensor.device().id()
+        tt_tensor = ttl.tensor.sharded_to_interleaved(
+            tt_tensor,
+            ttl.tensor.MemoryConfig(
+                memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+                buffer_type=ttl.tensor.BufferType.DRAM,
+            ),
+        )
+        tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+
+        torch_tensor_after_round_trip = tt_tensor.to_torch()
+
+        assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
+        assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+
+        _passing, output_pcc = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+        print(f"Comparing tensor on device {device_id}: {output_pcc}")
+        print(torch_tensor_after_round_trip[:, :, ::32, ::32])
+        passing &= _passing
+
     assert passing

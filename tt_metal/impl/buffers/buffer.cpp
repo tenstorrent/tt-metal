@@ -103,6 +103,13 @@ inline std::vector< std::vector<uint32_t> > core_to_host_pages(
 
 
     }
+    for (uint32_t i=0; i<ret_vec.size(); i++) {
+        std::cout << "Core " << i << std::endl;
+        for (uint32_t j=0; j<ret_vec[0].size(); j++) {
+            std::cout << "    Page " << j << ": " << ret_vec[i][j] << std::endl;
+        }
+    }
+
     return ret_vec;
 }
 
