@@ -245,6 +245,15 @@ class ResNet50:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.math_fidelity = math_fidelity
+        if is_wormhole_b0():
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=math_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+        else:
+            self.compute_kernel_config = None
 
         torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
         self.impl = preprocess_model(
@@ -280,16 +289,6 @@ class ResNet50:
             layout,
             True,
         )
-
-        if is_wormhole_b0():
-            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=math_fidelity,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
-        else:
-            self.compute_kernel_config = None
 
         self.input_tensor_height_snapped_to_tile = self.sharded_mem_config.shard_spec.shape[0] * ncores_nhw
 
