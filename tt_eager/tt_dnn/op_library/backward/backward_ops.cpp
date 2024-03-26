@@ -1253,8 +1253,11 @@ std::vector<Tensor> log10_bw(const Tensor& grad, const Tensor& input, const Memo
 // for -1 = inf
 std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_a = mul(grad, recip(add1(input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), grad_a, output_mem_config);
+    Tensor t_inf = where(ltz(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_inp1 = add1(input, output_mem_config);
+    Tensor grad_a = mul(grad, recip(t_inp1, output_mem_config), std::nullopt, output_mem_config);
+    grad_a = where(eq(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
+    grad_a = where(logical_and(eqz(t_inp1, output_mem_config), eqz(grad, output_mem_config)), std::nanf(" "), grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
