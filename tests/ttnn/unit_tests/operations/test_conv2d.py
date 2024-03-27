@@ -1659,7 +1659,7 @@ def test_yolov4_conv_groups_1_low_resolution(
         (1, 512, 256, 20, 20, 3, 3, 2, 2, 1, 1, True, None, False),
         (1, 128, 256, 40, 40, 1, 1, 1, 1, 0, 0, True, None, False),
         (1, 255, 256, 40, 40, 1, 1, 1, 1, 0, 0, True, None, False),
-        (1, 512, 2048, 10, 10, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 512, 2048, 10, 10, 1, 1, 1, 1, 0, 0, False, None, False),
         (1, 512, 512, 10, 10, 1, 1, 1, 1, 0, 0, True, None, False),
         (1, 64, 32, 160, 160, 3, 3, 1, 1, 1, 1, True, None, False),
         (1, 128, 128, 40, 40, 3, 3, 1, 1, 1, 1, True, None, False),
