@@ -546,12 +546,15 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
+                    ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     operation::log_operation(op, input_tensors);
-                    auto profile_scope = tt::tt_metal::op_profiler::OpProfileScope(
-                        op.get_type_name(), tt::tt_metal::op_profiler::OpType::python_fallback);
+                    uint32_t op_id = tt::tt_metal::operation::assign_id();
 
                     auto output_tensors = function(*args, **kwargs);
+
+                    TracyOpTTNNExternal(op_id, op, input_tensors);
+
                     return output_tensors;
                 }));
             },

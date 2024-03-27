@@ -14,7 +14,12 @@ Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_in0, bool untilize_out, bool has_bias) {
+                           bool tilize_in0, bool untilize_out, bool has_bias,
+                           std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, false, false);
+
     // NOTE: Currently only single core implementation exists.
     return operation::run(BMMTilizeUntilize {
                             out_dt,
@@ -22,7 +27,7 @@ Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias,
                             a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
                             out_subblock_height_ntiles, out_subblock_width_ntiles,
                             tilize_in0, untilize_out,
-                            has_bias},
+                            has_bias, kernel_config_val},
                           {a, b, bias},
                           {}).at(0);
 }
@@ -137,7 +142,8 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                     bool tilize_in0,
                                     bool untilize_out,
                                     bool has_bias,
-                                    Tensor &out) {
+                                    Tensor &out,
+                                    DeviceComputeKernelConfig compute_kernel_config) {
 
     uint32_t in0_batch = in0.get_legacy_shape()[0];
     uint32_t in0_channel = in0.get_legacy_shape()[1];
@@ -224,6 +230,29 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     Buffer *dst_dram_buffer = out.buffer();
     TT_FATAL(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // compute kernel config
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = in0_df == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
 
     // TODO [AS]: support non-tile multiple shapes
     // Convert tensor dims to tile dims
@@ -463,7 +492,10 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         };
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (uint32_t) fp32_dest_acc_en
+    };
 
     auto writer_id = CreateKernel(
         program,                        // program
@@ -576,7 +608,7 @@ operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vec
                                            out_subblock_ntiles_h_, out_subblock_ntiles_w_,
                                            tilize_in0_, untilize_out_,
                                            has_bias_,
-                                           out);
+                                           out, this->compute_kernel_config);
 }
 
 }  // namespace tt_metal

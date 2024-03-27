@@ -16,9 +16,9 @@ inline void tilize_activation(
     for (uint32_t in0_subblock = 0U; in0_subblock < in0_num_subblocks; in0_subblock++) {
         for (uint32_t i = 0U; i < in0_subblock_h; i++) {
             for (uint32_t j = 0U; j < in0_block_w; j++) {
-                llk_math_wait_for_dest_available<SyncHalf>();
-                llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0);
-                llk_math_dest_section_done<SyncHalf>();
+                llk_math_wait_for_dest_available();
+                llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0);
+                llk_math_dest_section_done();
             }
         }
     }
@@ -30,9 +30,9 @@ inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_bl
     for (uint32_t i = 0; i < out_subblock_h; i++) {
         for (int j = 0; j < 2; j++) {
             for (uint32_t k = 0; k < out_block_w; k++) {
-                llk_math_wait_for_dest_available<SyncHalf>();
-                llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0);
-                llk_math_dest_section_done<SyncHalf>();
+                llk_math_wait_for_dest_available();
+                llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0);
+                llk_math_dest_section_done();
             }
         }
     }
@@ -41,7 +41,7 @@ inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_bl
 void math_main()
 {
 uint32_t in0_block_w = get_compile_time_arg_val(0);
-llk_math_pack_sync_init<SyncHalf>();
+llk_math_pack_sync_init();
 
 // inner block size in tiles
 uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
@@ -88,11 +88,11 @@ for (uint32_t block = 0U; block < num_blocks; block++) {
   for (uint32_t in0_subblock = 0U; in0_subblock < in0_num_subblocks; in0_subblock++) {
     for (uint32_t in1_subblock = 0U; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-      llk_math_wait_for_dest_available<SyncHalf>();
+      llk_math_wait_for_dest_available();
       if (enable_reload) {
         llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>();
         for (uint32_t i = 0U; i < out_subblock_num_tiles; i++) {
-          llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(i);
+          llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(i);
         }
       }
       llk_math_matmul_init<MATH_FIDELITY>(0);
@@ -107,7 +107,7 @@ for (uint32_t block = 0U; block < num_blocks; block++) {
         }
       }
 
-      llk_math_dest_section_done<SyncHalf>();
+      llk_math_dest_section_done();
     }
     if constexpr (untilize_out) {
       if (last_out) {

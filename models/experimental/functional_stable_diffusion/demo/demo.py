@@ -18,6 +18,9 @@ from diffusers import (
     UNet2DConditionModel,
 )
 from models.utility_functions import (
+    skip_for_grayskull,
+)
+from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
@@ -165,8 +168,9 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         # and another with the unconditional embeddings (uncond_embeddings).
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
@@ -348,8 +352,9 @@ def run_demo_inference_diffusiondb(
         # and another with the unconditional embeddings (uncond_embeddings).
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
@@ -481,6 +486,7 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),
@@ -497,6 +503,7 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
     return run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),

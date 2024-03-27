@@ -16,7 +16,6 @@
 #include "dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"
-#include "tools/cpuprof/cpuprof.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
 
@@ -44,30 +43,39 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address;
-    auto start_core = core_range.start;
-    auto end_core = core_range.end;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord{x, y};
-            auto num_semaphores = program.num_semaphores(logical_core);
-            if (num_semaphores == NUM_SEMAPHORES) {
+    std::optional<uint32_t> address = nullopt;
+    static std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+    std::fill(semaphore_histogram.begin(), semaphore_histogram.end(), 0);
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            CoreCoord logical_core(x, y);
+            auto semaphores = program.semaphores_on_core(logical_core);
+            if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" +
                     std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
-            uint32_t addr = num_semaphores == 0
-                                ? SEMAPHORE_BASE
-                                : program.semaphore_address(num_semaphores - 1) + L1_ALIGNMENT;
-            if (!address.has_value()) {
-                address = addr;
-            } else if (addr != address) {
-                TT_THROW(
-                    "Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " +
-                    std::to_string(address.value()) + " but it is at " + std::to_string(addr));
+
+            for (const auto &semaphore : semaphores) {
+                semaphore_histogram[semaphore.get().id()]++;
             }
         }
     }
+
+    std::optional<uint32_t> uninitialized_sem_id = nullopt;
+    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
+        if (semaphore_histogram.at(sem_id) == 0) {
+            uninitialized_sem_id = sem_id;
+            break;
+        }
+    }
+
+    if (uninitialized_sem_id.has_value()) {
+        address = SEMAPHORE_BASE + (L1_ALIGNMENT * uninitialized_sem_id.value());
+    } else {
+        TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
+    }
+
     return address;
 }
 
@@ -130,6 +138,7 @@ namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
     std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -138,6 +147,7 @@ std::map<chip_id_t, Device *> CreateDevices(
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
                 Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
+                detail::InitDeviceProfiler(dev);
             }
         }
     }
@@ -247,8 +257,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("WriteToDevice ") + std::to_string(buffer.device()->id()));
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
             WriteToDeviceInterleavedContiguous(buffer, host_buffer);
         }
@@ -387,9 +395,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer,  bool shard_order) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ReadFromDevice ") + std::to_string(buffer.device()->id()));
-
         host_buffer.clear();  // overwrite the data
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
             || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
@@ -468,8 +473,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
@@ -506,8 +509,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         // Used to Launch programs for Slow dispatch.
         bool using_fast_dispatch = fd_bootloader_mode;
         detail::DispatchStateCheck( using_fast_dispatch );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
         auto device_id = device->id();
 
@@ -521,14 +522,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
                 ConfigureKernelGroup(
-                    program, kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                    program, kernel_group, device, logical_core);
                 // TODO: add support for CB for ethernet cores
                 if (core_type == CoreType::WORKER) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     llrt::CircularBufferConfigVec circular_buffer_config_vec =
                         llrt::create_circular_buffer_config_vector();
 
-                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);  // PROF_BEGIN("CBS")
+                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                     for (auto circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                             llrt::set_config_for_circular_buffer(
@@ -544,7 +545,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                         llrt::write_circular_buffer_config_vector_to_core(
                             device_id,
                             physical_core,
-                            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+                            circular_buffer_config_vec);
                     }
 
                 }
@@ -641,6 +642,7 @@ Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::v
     ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    detail::InitDeviceProfiler(dev);
     return dev;
 }
 
@@ -727,14 +729,14 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
                 CoreCoord start_core = core_range.start;
                 CoreCoord end_core = core_range.end;
                 TT_FATAL(start_core == end_core or start_core < end_core && "Invalid core range!");
-                auto addr = get_semaphore_address(program, core_range);
+                std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
-                    address = addr;
+                    address = addr_candidate;
                 } else {
-                    TT_ASSERT(addr == address);
+                    address = std::max(address.value(), addr_candidate.value());
                 }
             }
-            TT_FATAL(address.has_value(), "Expecting a valid Semaphore address!");
+            TT_FATAL(address.has_value(), "Unable to initialize Semaphore!");
 
             program.add_semaphore(crs, address.value(), initial_value, core_type);
 

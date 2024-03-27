@@ -24,23 +24,23 @@ template<bool at_start>
 ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb, icb_scaler) ));
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler) ));
     UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb, icb_scaler) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
-    MATH(( llk_math_pack_sync_init<SYNC>() ));
+    MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start, false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, false>() ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 }
 
 ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
 
     UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb, icb_scaler) ));
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false>(ocb) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, false, DST_ACCUM_MODE>(ocb) ));
 }
 
 // Delta from binary_op_init_common
@@ -52,7 +52,7 @@ ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start, false, DST_ACCUM_MODE>(ocb) ));
 }
 
 ALWI void reduce_init_delta_no_pack(uint32_t icb0 = 0, uint32_t icb1 = 1)
@@ -70,7 +70,7 @@ ALWI void reduce_init_delta_math()
 
 ALWI void reduce_revert_delta(uint32_t ocb = 16)
 {
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(ocb) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true, DST_ACCUM_MODE>(ocb) ));
 }
 
 /**
@@ -97,13 +97,13 @@ ALWI void reduce_revert_delta(uint32_t ocb = 16)
  */
 ALWI void reduce_tile(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
-    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
+    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY, DST_ACCUM_MODE>(idst) ));
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
 }
 
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4)
 {
-    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst, num_faces) ));
+    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY, DST_ACCUM_MODE>(idst, num_faces) ));
 }
 #endif
 

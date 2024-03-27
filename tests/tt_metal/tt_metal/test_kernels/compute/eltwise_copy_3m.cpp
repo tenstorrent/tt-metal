@@ -20,12 +20,12 @@ void math_main()
 {
     int __outer_loop_iter;
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, 0) ));
-    llk_math_pack_sync_init<SyncHalf>();
+    llk_math_pack_sync_init();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        llk_math_wait_for_dest_available<SyncHalf>();
-        llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0);
-        llk_math_dest_section_done<SyncHalf>();
+        llk_math_wait_for_dest_available();
+        llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0);
+        llk_math_dest_section_done();
     }
 }
 #endif
@@ -40,14 +40,14 @@ void pack_main()
     llk_pack_init();
     llk_pack_hw_configure_disaggregated<false>(16);
     llk_setup_outputs();
-    llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>();
+    llk_pack_dest_init<DstTileFaceLayout::RowMajor, false>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_packer_wait_for_math_done();
         llk_wait_for_free_tiles<false,false,false>(16,1);
-        llk_pack<false, SyncHalf, false >(0,16);
+        llk_pack<false, false >(0,16);
         llk_push_tiles<false,false>(16,1);
-        llk_pack_dest_section_done<SyncHalf>();
+        llk_pack_dest_section_done();
     }
 }
 #endif

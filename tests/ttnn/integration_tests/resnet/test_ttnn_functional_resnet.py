@@ -24,11 +24,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_wormhole_b0,
     pad_and_fold_conv_activation_for_unity_stride,
-    is_wormhole_b0,
-    is_grayskull,
 )
 
-from models.experimental.functional_resnet.tt.ttnn_functional_resnet import resnet_basic_block, resnet_bottleneck_block
+from models.experimental.resnet.tt.ttnn_functional_resnet import resnet_basic_block
 
 
 def create_core_range_set_from_ncores(ncores: int, bb_ncores_w: int, bb_ncores_h: int):
@@ -59,81 +57,6 @@ def create_core_range_set_from_ncores(ncores: int, bb_ncores_w: int, bb_ncores_h
         assert False, "Invalid bounding box grid size"
 
     return None
-
-
-def create_sharded_mem_config_resnet(
-    tensor_shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
-    ncores: int,  ## total num cores to use
-    ncores_nhw: int,  ## num cores along the tensor nhw dimension
-    max_grid_w: int,  ## grid max size
-    max_grid_h: int,  ## grid max size
-    shard_strategy: ttnn.ShardStrategy,
-    shard_orientation: ttnn.ShardOrientation,
-    snap_shard_height_to_tile: bool = False,
-):
-    ncores_w, ncores_h = 0, 0
-    ncores_w_cliff = 0
-    if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        assert ncores <= max_grid_w * max_grid_h
-        assert ncores_nhw <= max_grid_h
-        assert ncores % ncores_nhw == 0
-        ncores_h = ncores_nhw
-        ncores_w = ncores // ncores_h
-    elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        assert ncores == ncores_nhw
-        assert ncores_nhw <= max_grid_w * max_grid_h
-        ncores_w = max_grid_w
-        ncores_h = int(math.ceil(ncores_nhw / ncores_w))
-        ncores_w_cliff = ncores_nhw % ncores_w
-
-    logger.debug(f"ncores_nhw: {ncores_nhw}")
-    logger.debug(f"(bb_ncores_w, bb_ncores_h): {ncores_w}, {ncores_h}")
-
-    if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
-    elif shard_strategy == ttnn.ShardStrategy.WIDTH:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED
-    elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    else:
-        raise RuntimeError("Invalid sharding strategy")
-
-    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-        tensor_shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-    elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-        tensor_shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
-    else:
-        raise RuntimeError("Invalid shard orientation")
-
-    shard_grid = create_core_range_set_from_ncores(ncores_nhw, ncores_w, ncores_h)
-
-    tensor_height = tensor_shape[0] * tensor_shape[1] * tensor_shape[2]
-    tensor_width = tensor_shape[3]
-
-    if snap_shard_height_to_tile:
-        shard_height = int(math.ceil(tensor_height / (ncores_nhw * 32)) * (ncores_nhw * 32)) // ncores_nhw
-    else:
-        shard_height = int(math.ceil(tensor_height / ncores_nhw))
-
-    if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        assert tensor_width % ncores_w == 0
-        shard_width = tensor_width // ncores_w
-    elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        shard_width = tensor_width
-
-    logger.debug(f"tensor_shape: {tensor_shape}")
-    logger.debug(f"shard_height: {shard_height}")
-    logger.debug(f"shard_width: {shard_width}")
-
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid,
-        [shard_height, shard_width],
-        tensor_shard_orientation,
-        False,
-    )
-    return ttnn.experimental.tensor.MemoryConfig(
-        tensor_memory_layout, ttnn.experimental.tensor.BufferType.L1, shard_spec
-    )
 
 
 def update_ttnn_module_args(ttnn_module_args):

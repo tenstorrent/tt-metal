@@ -408,26 +408,14 @@ void py_module(py::module& m_primary) {
     py::class_<LayerNormDefaultProgramConfig>(m_primary, "LayerNormDefaultProgramConfig")
         .def(py::init<>());
 
-    py::class_<LayerNormInterleavedMultiCoreProgramConfig>(m_primary, "LayerNormInterleavedMultiCoreProgramConfig")
-        .def(
-            py::init<MathFidelity, DataType, DataType>(),
-            py::kw_only(),
-            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert(),
-            py::arg("out_data_format").noconvert()
-        );
-
     py::class_<LayerNormShardedMultiCoreProgramConfig>(m_primary, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType, DataType, bool>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
             py::arg("block_h").noconvert(),
             py::arg("block_w").noconvert(),
-            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert(),
-            py::arg("out_data_format").noconvert(),
             py::arg("inplace").noconvert())
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
@@ -441,6 +429,7 @@ void py_module(py::module& m_primary) {
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
             Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
         )doc");
@@ -455,6 +444,7 @@ void py_module(py::module& m_primary) {
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
             Performs a layernorm(a+b)*gamma + beta operation.
         )doc");
@@ -468,6 +458,7 @@ void py_module(py::module& m_primary) {
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
             Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
         )doc");
@@ -482,6 +473,7 @@ void py_module(py::module& m_primary) {
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
             Performs a rmsnorm(a+b)*gamma + beta operation.
         )doc");
@@ -703,6 +695,7 @@ void py_module(py::module& m_primary) {
         &softmax_in_place,
         py::arg("input_tensor").noconvert(),
         py::arg("program_config").noconvert() = transformers::SoftmaxDefaultProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 

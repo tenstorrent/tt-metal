@@ -274,7 +274,8 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         if (src_block_sharded) {
             vector<uint32_t> writer_ct_args = {
-                (uint32_t) out_is_dram
+                (uint32_t) out_is_dram,
+                (uint32_t) (input_cb_data_format == tt::DataFormat::Float32)
             };
             unary_writer_kernel_id = CreateKernel(
                 program,
@@ -690,7 +691,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         vector<uint32_t> writer_ct_args = {
-            (uint32_t) out_is_dram
+            (uint32_t) out_is_dram,
+            (uint32_t) (input_cb_data_format == tt::DataFormat::Float32)
         };
         unary_writer_kernel_id = CreateKernel(
             program,

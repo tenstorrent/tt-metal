@@ -154,10 +154,8 @@ void MAIN {
             bool enable_reload = false;
 
             #ifdef PACK_RELU
-            if constexpr ((tilize_in0 || spill) && !untilize_out) {
-                // for each output block we start we relu disabled so that intermediate results are not relu'd
-                PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
-            }
+            // for each output block we start we relu disabled so that intermediate results are not relu'd
+            PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
             #endif
 
             UNPACK( const uint32_t partials_cb_read_ptr = cb_interface[matmul_partials_cb].fifo_rd_ptr );
@@ -250,20 +248,21 @@ void MAIN {
                         tile_regs_wait();
 
                         #ifdef PACKER_L1_ACC
-                            //Fuse bias always uses intermediate buffer
-                            //l1 accumulation flag needs to remain set to true
-                            #ifdef FUSE_BIAS
+                            // no accumulation for first iteration, last iteration
+                            // accumulation happens with copying tiles to dst
+                            if (in0_block_w_i == 0) {
+                                pack_reconfig_l1_acc(0);
+                            } else if(last_out) {
+                                //Fuse bias always uses intermediate buffer
+                                //no need to spill and reload last iteration
+                                #ifdef FUSE_BIAS
                                 pack_reconfig_l1_acc(1);
-                            #else
-                                // no accumulation for first iteration
-                                // last iteration accumulation happens with copying tiles
-                                // to dst
-                                if (in0_block_w_i == 0 || last_out) {
-                                    pack_reconfig_l1_acc(0);
-                                } else {
-                                    pack_reconfig_l1_acc(1);
-                                }
-                            #endif
+                                #else
+                                pack_reconfig_l1_acc(0);
+                                #endif
+                            } else {
+                                pack_reconfig_l1_acc(1);
+                            }
                         #endif
 
                         uint32_t start_dst_index = 0;
@@ -312,10 +311,11 @@ void MAIN {
             #endif
             #ifdef PACKER_L1_ACC
             pack_reconfig_l1_acc(0);
-            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             #endif
+            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+
             cb_wait_front(bias_cb_id, bias_ntiles_w);
             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -354,7 +354,7 @@ void MAIN {
             } // in0_num_subblocks
             #endif
             if constexpr(untilize_out) {
-                #ifdef PACKER_L1_ACC
+                #if defined PACKER_L1_ACC and not defined FUSE_BIAS
                 pack_reconfig_l1_acc(0);
                 pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
                 #endif

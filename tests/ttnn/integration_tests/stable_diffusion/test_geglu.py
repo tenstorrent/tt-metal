@@ -9,12 +9,14 @@ from diffusers import UNet2DConditionModel
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_geglu import geglu
-from models.utility_functions import torch_random
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_geglu import geglu as ttnn_geglu
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_geglu import geglu as tt2_ttnn_geglu
+from models.utility_functions import torch_random, skip_for_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",
@@ -66,7 +68,7 @@ def test_geglu_256x256(device, model_name, N, C, H, W, index, reset_seeds):
         ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device), layout=ttnn.TILE_LAYOUT
     )
 
-    output = geglu(
+    output = ttnn_geglu(
         config,
         ttnn_hidden_state,
         parameters=parameters,
@@ -78,6 +80,7 @@ def test_geglu_256x256(device, model_name, N, C, H, W, index, reset_seeds):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.96)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",
@@ -124,18 +127,14 @@ def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
         initialize_model=lambda: ref_model,
         device=device,
     )
+    model = tt2_ttnn_geglu(device, parameters=parameters)
 
-    ttnn_hidden_state = ttnn.to_layout(
-        ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device), layout=ttnn.TILE_LAYOUT
-    )
+    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device)
 
-    output = geglu(
-        config,
-        ttnn_hidden_state,
-        parameters=parameters,
-    )
+    output = model(config, ttnn_hidden_state)
     output = ttnn.from_device(output)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.97)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)

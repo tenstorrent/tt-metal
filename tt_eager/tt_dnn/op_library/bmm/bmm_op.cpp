@@ -898,7 +898,7 @@ void Matmul::validate(
                         TT_FATAL(M == per_core_M);
                         TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                         TT_FATAL(K % program_config.in0_block_w == 0);
-                        TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
+                        TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
                         TT_FATAL(div_up(N, per_core_N) == input_tensor_a.shard_spec().value().grid.num_cores());
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -966,7 +966,7 @@ void Matmul::validate(
                     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                     TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
-                    TT_FATAL((shard_shape[1] / TILE_WIDTH) == program_config.in0_block_w);
+                    TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
                     TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == N / program_config.per_core_N);
                 }
                 if (this->output_mem_config.is_sharded()) {

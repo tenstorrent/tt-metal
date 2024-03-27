@@ -301,9 +301,6 @@ def get_model_config(model_config_str, num_devices=8):
         subblock_w=8,
         block_h=1,
         block_w=8,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=ttl.tensor.DataType.BFLOAT16,
-        out_data_format=model_config["LN_F_OUTPUT_DTYPE"],
         inplace=True,
     )
     # LM Head
@@ -352,9 +349,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=8,
             block_h=1,
             block_w=8,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
             inplace=True,
         )
     elif num_devices == 32:
@@ -363,9 +357,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=8,
             block_h=1,
             block_w=8,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_ATTN_OUTPUT_DTYPE"],
             inplace=True,  # TODO: Not Inplace RMSNorm because we need to keep the residual
         )
     model_config["LN_ATTN_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
@@ -388,9 +379,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=8,
             block_h=1,
             block_w=8,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
             inplace=True,
         )
     elif num_devices == 32:
@@ -399,9 +387,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=8,
             block_h=1,
             block_w=8,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
-            out_data_format=model_config["LN_MLP_OUTPUT_DTYPE"],
             inplace=False,  # Not Inplace RMSNorm because we need to keep the residual
         )
     model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
@@ -844,8 +829,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 8:
         model_config[
@@ -855,8 +838,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 32:
         model_config[
@@ -866,8 +847,6 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,

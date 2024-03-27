@@ -79,7 +79,7 @@ def cross_attention_down_block_2d(
                 upcast_attention=upcast_attention,
                 device=device,
                 reader_patterns_cache=reader_patterns_cache,
-        )
+            )
 
         output_states += (hidden_states,)
 

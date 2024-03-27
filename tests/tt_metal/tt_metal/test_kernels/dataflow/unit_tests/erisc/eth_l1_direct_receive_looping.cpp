@@ -48,17 +48,11 @@ void kernel_main() {
     eth_setup_handshake(remote_eth_l1_dst_addr, false);
 
     uint32_t wrap_mask = num_sends_per_loop - 1;
-    kernel_profiler::mark_time(100 + num_sends_per_loop);
     uint32_t j = 0;
-    kernel_profiler::mark_time(12);
     for (uint32_t i = 0; i < num_loops; i += num_sends_per_loop) {
-        kernel_profiler::mark_time(15);
         eth_wait_for_bytes(num_bytes * std::min<uint32_t>(num_loops - i, num_sends_per_loop));
-        kernel_profiler::mark_time(16);
 
         eth_receiver_done();
-
-        kernel_profiler::mark_time(17);
 
         j = (j + 1) & wrap_mask;
     }
@@ -66,8 +60,6 @@ void kernel_main() {
     if (j != 0) {
         eth_receiver_done();
     }
-    kernel_profiler::mark_time(13);
-    kernel_profiler::mark_time(100);
 
     for (int i = 0; i < 3000000; i++);
 }

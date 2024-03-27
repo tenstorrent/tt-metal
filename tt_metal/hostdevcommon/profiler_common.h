@@ -2,35 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
-*
-* Ennums and defines shared between host and device profiler.
-*
-*/
 #pragma once
 
-#define CC_MAIN_START          1U
-#define CC_KERNEL_MAIN_START   2U
-#define CC_KERNEL_MAIN_END     3U
-#define CC_MAIN_END            4U
-
-#define GLOBAL_SUM_MARKER      3000U
-#define GLOBAL_SUM_COUNT       2U
-#define CB_WAIT_FRONT_MARKER   0U
-#define CB_RESERVE_BACK_MARKER 1U
-
 namespace kernel_profiler{
-/**
- * L1 buffer structure for profiler markers
- * _____________________________________________________________________________________________________
- *|                  |                        |              |             |             |              |
- *| Buffer end index | Dropped marker counter | 1st timer_id | 1st timer_L | 1st timer_H | 2nd timer_id | ...
- *|__________________|________________________|______________|_____________|_____________|______________|
- *
- * */
 
-enum BufferIndex {BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START};
+    constexpr static uint32_t PADDING_MARKER = ((1<<16) - 1);
+    constexpr static uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
-enum TimerDataIndex {TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE};
+    static constexpr int SUM_COUNT = 2;
+
+    enum BufferIndex {
+        ID_HH, ID_HL,
+        ID_LH, ID_LL,
+        GUARANTEED_MARKER_1_H, GUARANTEED_MARKER_1_L,
+        GUARANTEED_MARKER_2_H, GUARANTEED_MARKER_2_L,
+        GUARANTEED_MARKER_3_H, GUARANTEED_MARKER_3_L,
+        GUARANTEED_MARKER_4_H, GUARANTEED_MARKER_4_L,
+        CUSTOM_MARKERS};
+
+    enum ControlBuffer
+    {
+        HOST_BUFFER_END_INDEX_BR,
+        HOST_BUFFER_END_INDEX_NC,
+        HOST_BUFFER_END_INDEX_T0,
+        HOST_BUFFER_END_INDEX_T1,
+        HOST_BUFFER_END_INDEX_T2,
+        HOST_BUFFER_END_INDEX_ER,
+        DEVICE_BUFFER_END_INDEX_BR,
+        DEVICE_BUFFER_END_INDEX_NC,
+        DEVICE_BUFFER_END_INDEX_T0,
+        DEVICE_BUFFER_END_INDEX_T1,
+        DEVICE_BUFFER_END_INDEX_T2,
+        DEVICE_BUFFER_END_INDEX_ER,
+        FW_RESET_H,
+        FW_RESET_L,
+        DRAM_PROFILER_ADDRESS,
+        RUN_COUNTER,
+        NOC_X,
+        NOC_Y,
+        FLAT_ID
+    };
+
+
 
 }

@@ -19,9 +19,9 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_max<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_max<APPROXIMATE,4>,
                                 dst_index, VectorMode::RC, param0);
@@ -33,9 +33,9 @@ inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 dst_index, VectorMode::RC, param0);
@@ -44,9 +44,9 @@ inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0
 // RELU
 //RELU - implemented by relu-min
 //relu = relu_min @ threshold = 0
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 dst_index, VectorMode::RC, 0);
@@ -65,9 +65,9 @@ inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, int param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
                                 (ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
 				 ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
 				 dst_index, VectorMode::RC, param0);

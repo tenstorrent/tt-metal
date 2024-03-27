@@ -87,15 +87,7 @@ namespace detail{
         enable_persistent_kernel_cache = false;
     }
 }
-auto Program::semaphores_on_core(const CoreCoord &core) const {
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores;
-    for ( const Semaphore & s : this->semaphores_) {
-        if (s.initialized_on_logical_core(core)) {
-            semaphores.emplace_back(std::cref(s));
-        }
-    }
-    return semaphores;
-}
+
 
 std::atomic<uint64_t> Program::program_counter = 0;
 
@@ -499,10 +491,6 @@ size_t Program::num_semaphores(const CoreCoord &core) const {
 
 size_t Program::num_semaphores() const {
     return semaphores_.size();
-}
-
-uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
-    return semaphores_.at(sem_idx).address();
 }
 
 void Program::init_semaphores( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const{
@@ -1009,6 +997,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
 void Program::compile( Device * device )
 {
+    ZoneScoped;
     bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
     if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
         return;
@@ -1020,8 +1009,6 @@ void Program::compile( Device * device )
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    detail::ProfileTTMetalScope profile_this =
-        detail::ProfileTTMetalScope(std::string("CompileProgram ") + std::to_string(device->id()));
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
@@ -1030,7 +1017,6 @@ void Program::compile( Device * device )
     for (auto &[core_type, kernels] : kernels_) {
        for (auto &[id, kernel]: kernels) {
             events.emplace_back ( detail::async ( [kernel, device, this] {
-                ZoneScoped;
 
                 JitBuildOptions build_options(device->build_env());
                 kernel->set_build_options(build_options);

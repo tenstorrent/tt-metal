@@ -5,9 +5,30 @@
 import ttnn
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention import cross_attention
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import feedforward
+from models.utility_functions import comp_pcc
+import torch
 
 
-class basic_transformer_block():
+def compare(tensor, name, permute=False):
+    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    tensor = ttnn.from_device(tensor)
+    tensor = ttnn.to_torch(tensor)
+
+    golden = torch.load(name)
+    if permute:
+        golden = golden.permute(0, 2, 3, 1)
+        golden = golden.reshape(tensor.shape)
+
+    while len(tensor.shape) > len(golden.shape):
+        golden = golden.unsqueeze(0)
+    while len(golden.shape) > len(tensor.shape):
+        tensor = tensor.unsqueeze(0)
+
+    passed, message = comp_pcc(tensor, golden, 0.95)
+    print(f"Maches on {name}: {passed} with message {message}, tensor shape: {tensor.shape}")
+
+
+class basic_transformer_block:
     def __init__(self, device, parameters):
         self.device = device
         self.parameters = parameters
@@ -43,8 +64,15 @@ class basic_transformer_block():
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        hidden_states = ttnn.to_memory_config(
+            hidden_states, ttnn.L1_MEMORY_CONFIG
+        )  # layernorm doesn't support block_sharding
         norm_hidden_states = ttnn.layer_norm(
-            hidden_states, epsilon=1e-05, weight=self.parameters.norm1.weight, bias=self.parameters.norm1.bias
+            hidden_states,
+            epsilon=1e-05,
+            weight=self.parameters.norm1.weight,
+            bias=self.parameters.norm1.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # 1. Self-Attention
@@ -63,7 +91,7 @@ class basic_transformer_block():
 
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            
+
         hidden_states = ttnn.add(attn_output, hidden_states)
         if cross_attention_dim is not None:
             norm_hidden_states = ttnn.layer_norm(
@@ -90,6 +118,9 @@ class basic_transformer_block():
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
+        norm_hidden_states = ttnn.clone(
+            norm_hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat16
+        )
         ff_output = self.ff(config=config, hidden_states=norm_hidden_states)
 
         hidden_states = ttnn.add(ff_output, hidden_states)

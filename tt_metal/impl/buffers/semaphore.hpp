@@ -38,6 +38,7 @@ class Semaphore {
 
     constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
 
+    uint32_t id() const { return (address_ - SEMAPHORE_BASE) / L1_ALIGNMENT; }
 
     uint32_t address() const { return address_; }
 

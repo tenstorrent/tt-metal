@@ -98,6 +98,7 @@ class JitBuildState {
     void hex8_to_hex32(const string& log_file, const string& out_path) const;
     void weaken(const string& log_file, const string& out_path) const;
     void copy_kernel( const string& kernel_in_path, const string& op_out_path) const;
+    void extract_zone_src_locations(const string& log_file) const;
 
   public:
     JitBuildState(const JitBuildEnv& env, int which, bool is_fw = false);

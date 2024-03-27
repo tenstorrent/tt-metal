@@ -257,9 +257,11 @@ void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout , "Input and output memory layout must match");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED || input_tensor_a.is_sharded(), "Interleaved and sharded supported");
+    if(!input_tensor_a.is_sharded()){
+        TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Interleaved memory layout supported");
+    }
 }
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -270,15 +272,11 @@ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor>
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if(this->output_mem_config.is_sharded()){
-        if(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
             Shape output_shape = compute_output_shapes(input_tensors).at(0);
             return {create_sharded_device_tensor(output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
-        } else{
-            return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
-        }
     }
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
-}
+    }
 
 operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -302,7 +300,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
 UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    if(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED)
+    if(input_tensor.is_sharded())
         return UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE;
     else if (num_tiles > 1) {
         return UnaryOpParallelizationStrategy::MULTI_CORE;

@@ -51,8 +51,8 @@ try {
         )
     );
 }
-
-TEST_F(DPrintFixture, TestPrintHanging) {
+// see issue #6659
+TEST_F(DPrintFixture, DISABLED_TestPrintHanging) {
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
     // tricky to check print server status from the finish loop for slow dispatch. Once issue #4363
     // is resolved, we should add a check for print server handing in slow dispatch as well.

@@ -23,7 +23,6 @@ test-list:
         out-buffer-type: ["DRAM"]
       output-file: unary_pow_bw_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
   - unary-pow-bw:
       shape:
@@ -48,5 +47,4 @@ test-list:
         out-buffer-type: ["DRAM"]
       output-file: unary_pow_bw_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"

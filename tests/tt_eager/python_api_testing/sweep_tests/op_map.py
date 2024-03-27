@@ -450,6 +450,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_lerp_ternary,
         "pytorch_op": pytorch_ops.lerp_ternary,
     },
+    "ttnn-eltwise-lerp_binary": {
+        "tt_lib_op": ttnn_ops.eltwise_lerp_binary,
+        "pytorch_op": pytorch_ops.lerp_binary,
+    },
+    "ttnn-eltwise-lerp_ternary": {
+        "tt_lib_op": ttnn_ops.eltwise_lerp_ternary,
+        "pytorch_op": pytorch_ops.lerp_ternary,
+    },
     "eltwise-leaky_relu": {
         "tt_lib_op": tt_lib_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
@@ -995,6 +1003,10 @@ op_map = {
     "reshape": {
         "tt_lib_op": tt_lib_ops.reshape,
         "pytorch_op": pytorch_ops.reshape,
+    },
+    "ttnn-split": {
+        "tt_lib_op": ttnn_ops.split,
+        "pytorch_op": pytorch_ops.split,
     },
     "split-last-dim-two-chunks-tiled": {
         "tt_lib_op": tt_lib_ops.split_last_dim_two_chunks_tiled,

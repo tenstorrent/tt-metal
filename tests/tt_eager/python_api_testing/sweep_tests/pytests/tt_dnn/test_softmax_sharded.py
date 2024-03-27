@@ -119,8 +119,6 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
         subblock_w=subblock_w,
         block_h=block_h,
         block_w=block_w,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=ttl.tensor.DataType.BFLOAT16,
     )
 
     if scale_mask:

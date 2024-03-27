@@ -14,14 +14,10 @@ from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import reduce_max_w as tt_reduce_max_w
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_reduce_max_w_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
+def run_reduce_max_w_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -45,7 +41,6 @@ def run_reduce_max_w_tests(
     logger.debug(pcc_value)
     logger.debug(success)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -60,7 +55,6 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         10177486,
-        "",
     ),
 ]
 
@@ -74,7 +68,6 @@ def test_reduce_max_w_test(device):
         in_mem_config,
         out_mem_config,
         data_seed,
-        dispatch_mode,
     ) in test_sweep_args:
         run_reduce_max_w_tests(
             input_shape,
@@ -83,6 +76,5 @@ def test_reduce_max_w_test(device):
             in_mem_config,
             out_mem_config,
             data_seed,
-            dispatch_mode,
             device,
         )

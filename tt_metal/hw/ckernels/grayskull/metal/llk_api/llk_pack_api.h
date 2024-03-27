@@ -89,14 +89,14 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr;
+            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
             cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE<true>((std::uint8_t)pack_dst_format[output_id]);
         }
     }
-    return pack_tile_addr - 1;
+    return pack_tile_addr;
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
+template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -104,7 +104,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<out_of_order_output, Dst, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_<out_of_order_output, DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
         tile_index,
         pack_dst_format[output_id],
         pack_tile_addr
@@ -159,19 +159,19 @@ inline void llk_packer_set_math_semaphore() {
     _llk_packer_set_math_semaphore_();  // Indicate that packer is done and header is written into L1
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
-template <DstSync Dst, bool untilize = false>
+template <bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
-    _llk_init_packer_dest_offset_registers_<Dst, DstTileFaceLayout::RowMajor, untilize>();
+    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize>();
 }
 
-template <DstSync Dst, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
+template <bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
-    _llk_pack_dest_init_<Dst, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math=true, bool mail2pack=true>
@@ -231,7 +231,7 @@ inline void llk_pack_reduce_mask_clear() {
     _llk_pack_reduce_mask_clear_();
 }
 
-template <ReduceDim dim, bool at_kernel_start = false, bool revert=false>
+template <ReduceDim dim, bool at_kernel_start = false, bool revert=false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_pack_reduce_config_v2(uint32_t output) {
 
     const bool untilize = false;
@@ -256,44 +256,19 @@ inline void llk_pack_reduce_config_v2(uint32_t output) {
     }
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
-inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
-    std::uint8_t output_id = get_output_id(output);
-    const std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();
-
+template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
+inline void llk_matmul_pack(const std::uint32_t start_tile_index, const std::uint32_t output, const uint32_t ntiles, const std::uint32_t output_tile_index = 0) {
+    const std::uint8_t output_id = get_output_id(output);
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
 
     for (uint32_t tile_index=start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
 
-        std::uint16_t pack_tile_addr;
-        if constexpr (out_of_order_output) {
-            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr +
-                            MUL_TILE_SIZE_AND_INDEX<true>((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], (std::uint16_t)output_tile_index);
-        } else {
-            // in-order pack: 1) start with wr_ptr and then increment fifo_wr_tile_ptr tile by tile
-            // note: packer is programmed to automatically skip the tile header
-            // however, since there is no tile header we need to -1 the pack address (in terms of 16B words) to offset packer's +1
-            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
-            cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE<true>((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
-        }
+        std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        if constexpr (Dst == DstSync::SyncTile16) {
-            // Z-counter points to the next tile in dest
-        } else if constexpr (Dst == DstSync::SyncTile2) {
-            TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, pack_sync_tile_dst_ptr);
-            pack_sync_tile_dst_ptr = pack_sync_tile_dst_ptr + 8;
-        } else {
-            TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, tile_index);
-        }
-
-        // program_packer_untilized_destination(pack_tile_addr, (std::uint32_t)pack_dst_format[OUTPUT_BASE_ID]);
-        program_packer_destination(pack_tile_addr, (std::uint32_t)pack_dst_format[OUTPUT_BASE_ID]);
-
-        mop_run(1, 1);
-
-        if constexpr (untilize) {
-            TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
-            TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
-        }
+        _llk_pack_<out_of_order_output, DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
+            tile_index,
+            pack_dst_format[output_id],
+            pack_tile_addr
+        );
     }
 }

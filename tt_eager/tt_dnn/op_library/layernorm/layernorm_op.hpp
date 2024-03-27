@@ -10,6 +10,8 @@
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
+
 using namespace tt::constants;
 
 namespace tt {
@@ -23,27 +25,11 @@ enum class LayerNormType {
 struct LayerNormDefaultProgramConfig{
     tt::stl::reflection::Attributes attributes() const { return {}; };
 };
-struct LayerNormInterleavedMultiCoreProgramConfig {
-    MathFidelity math_fidelity;
-    DataType im_data_format;
-    DataType out_data_format;
-
-    tt::stl::reflection::Attributes attributes() const {
-        return {
-            {"math_fidelity", math_fidelity},
-            {"im_data_format", im_data_format},
-            {"out_data_format", out_data_format}
-        };
-    };
-};
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
     std::size_t block_h;
     std::size_t block_w;
-    MathFidelity math_fidelity;
-    DataType im_data_format;
-    DataType out_data_format;
     bool inplace;
 
     tt::stl::reflection::Attributes attributes() const {
@@ -52,9 +38,6 @@ struct LayerNormShardedMultiCoreProgramConfig {
             {"subblock_w", subblock_w},
             {"block_h", block_h},
             {"block_w", block_w},
-            {"math_fidelity", math_fidelity},
-            {"im_data_format", im_data_format},
-            {"out_data_format", out_data_format},
             {"inplace", inplace},
         };
     };
@@ -62,7 +45,6 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<
     LayerNormDefaultProgramConfig,
-    LayerNormInterleavedMultiCoreProgramConfig,
     LayerNormShardedMultiCoreProgramConfig
 >;
 
@@ -74,8 +56,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    MathFidelity fidelity = MathFidelity::HiFi4,
-    DataType im_data_format = DataType::BFLOAT16
+    DeviceComputeKernelConfig compute_kernel_config
 );
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
@@ -86,12 +67,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    MathFidelity fidelity,
-    DataType im_data_format,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
-    uint32_t block_wt
+    uint32_t block_wt,
+    DeviceComputeKernelConfig compute_kernel_config
 );
 
 struct LayerNorm {
@@ -99,6 +79,7 @@ struct LayerNorm {
     float eps;
     MemoryConfig output_mem_config;
     LayerNormProgramConfig program_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -114,7 +95,7 @@ struct LayerNorm {
 template <LayerNormType norm_type>
 struct make_layernorm {
     Tensor operator()(
-        const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
         TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
 
         if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
@@ -123,14 +104,17 @@ struct make_layernorm {
         if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
             TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
         }
-        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig()}, {a}, {std::nullopt, gamma, beta}).at(0);
+
+        auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig(), .compute_kernel_config=kernel_config_val}, {a}, {std::nullopt, gamma, beta}).at(0);
     }
 };
 
 template <LayerNormType norm_type>
 struct make_add_layernorm {
     Tensor operator()(
-        const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
         TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
         TT_FATAL(a.get_legacy_shape() == b.get_legacy_shape(), "Input shapes must be equal");
         if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
@@ -139,7 +123,10 @@ struct make_add_layernorm {
         if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
             TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
         }
-        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig()}, {a}, {b, gamma, beta}).at(0);
+
+        auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig(), .compute_kernel_config=kernel_config_val}, {a}, {b, gamma, beta}).at(0);
     }
 };
 
@@ -159,16 +146,22 @@ namespace primary {
 template <LayerNormType layernorm_type>
 struct make_layernorm {
     Tensor operator()(
-        const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}) const {
-        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config}, {a}, {std::nullopt, gamma, beta}).at(0);
+        const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
+
+        auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config, .compute_kernel_config=kernel_config_val}, {a}, {std::nullopt, gamma, beta}).at(0);
     }
 };
 
 template <LayerNormType layernorm_type>
 struct make_add_layernorm {
     Tensor operator()(
-        const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}) const {
-        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config}, {a}, {b, gamma, beta}).at(0);
+        const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
+
+        auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config, .compute_kernel_config=kernel_config_val}, {a}, {b, gamma, beta}).at(0);
     }
 };
 

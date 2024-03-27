@@ -16,17 +16,13 @@ from tt_lib.utils import (
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize(
     "casual_mask",
     [True, False],
     ids=["causal", "no-causal"],
-)
-@pytest.mark.parametrize(
-    "cb_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
-    ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
@@ -37,10 +33,16 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    (ttl.tensor.DataType.BFLOAT8_B,),
-    ids=["BFLOAT8_B"],
+    (
+        ttl.tensor.DataType.FLOAT32,
+        ttl.tensor.DataType.BFLOAT8_B,
+    ),
+    ids=["FLOAT32", "BFLOAT8_B"],
 )
-def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
+def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
+    if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     torch.manual_seed(0)
     sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
 
@@ -63,11 +65,15 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
         # attention_mask = torch.zeros(1, 1, 1, 384 * batch)
         attention_mask = torch.rand(batch, 1, 1, 384)
         attention_mask = (attention_mask > 0.5).float()
-        attention_mask = attention_mask.reshape(batch, 1, -1, 32)
+        attention_mask32 = tilize_to_list(pad_weight(attention_mask))
         attention_mask_t = ttl.tensor.Tensor(
-            attention_mask,
+            attention_mask32,
+            [batch, 1, 32, 384],
             ttl.tensor.DataType.BFLOAT16,
-        ).to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
+            ttl.tensor.Layout.TILE,
+            device,
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        )
     else:
         attention_mask = torch.rand(batch, 1, 384, 384)
         attention_mask = (attention_mask > 0.5).float()
@@ -93,11 +99,9 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
 
     program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        subblock_w=6,
+        subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 6,
         block_h=12 * fuse_head,
         block_w=12,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(
@@ -131,11 +135,6 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
     ids=["causal", "no-causal"],
 )
 @pytest.mark.parametrize(
-    "cb_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
     "in0_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=[
@@ -144,14 +143,17 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    (ttl.tensor.DataType.BFLOAT8_B,),
-    ids=["BFLOAT8_B"],
+    (ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.BFLOAT8_B),
+    ids=["FLOAT32", "BFLOAT8_B"],
 )
-def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
+def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
+    if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     torch.manual_seed(0)
     sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
 
-    fuse_head = 2
+    fuse_head = 1
 
     grid_size = (8, 7)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -174,7 +176,8 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
         attention_mask = attention_mask.reshape(batch, 1, -1, 32)
         attention_mask_t = ttl.tensor.Tensor(
             attention_mask,
-            ttl.tensor.DataType.BFLOAT16,
+            # ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.DataType.FLOAT32 if in_dtype == ttl.tensor.DataType.FLOAT32 else ttl.tensor.DataType.BFLOAT16,
         ).to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     else:
         # attention_mask = torch.zeros(batch, 1, 384, 384)
@@ -184,7 +187,8 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
         attention_mask_t = ttl.tensor.Tensor(
             attention_mask32,
             [batch, 1, 384, 384],
-            ttl.tensor.DataType.BFLOAT16,
+            # ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.DataType.FLOAT32 if in_dtype == ttl.tensor.DataType.FLOAT32 else ttl.tensor.DataType.BFLOAT16,
             ttl.tensor.Layout.TILE,
             device,
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
@@ -202,11 +206,9 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
 
     program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        subblock_w=6,
+        subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 6,
         block_h=12 * fuse_head,
         block_w=12,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(
@@ -240,11 +242,6 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
     ids=["CM", "RM"],
 )
 @pytest.mark.parametrize(
-    "cb_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
     "in0_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=[
@@ -253,10 +250,10 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    (ttl.tensor.DataType.BFLOAT8_B,),
-    ids=["BFLOAT8_B"],
+    (ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.BFLOAT8_B),
+    ids=["FLOAT32", "BFLOAT8_B"],
 )
-def test_softmax_with_sharded_mask(device, in_dtype, cb_dtype, in0_mem_config, shard_orient):
+def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orient):
     torch.manual_seed(0)
     sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
 
@@ -271,7 +268,12 @@ def test_softmax_with_sharded_mask(device, in_dtype, cb_dtype, in0_mem_config, s
     attention_mask = (attention_mask > 0.5).float()
     attention_mask = torch.where(attention_mask == 1, torch.tensor(0.0), torch.tensor(-float("inf")))
     attention_mask_t = torch2tt_tensor(
-        attention_mask, device, tt_memory_config=in0_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+        attention_mask,
+        device,
+        tt_memory_config=in0_mem_config,
+        tt_dtype=ttl.tensor.DataType.FLOAT32
+        if in_dtype == ttl.tensor.DataType.FLOAT32
+        else ttl.tensor.DataType.BFLOAT16,
     )
     attention_mask_t_shard = ttl.tensor.interleaved_to_sharded(
         attention_mask_t,
@@ -293,11 +295,9 @@ def test_softmax_with_sharded_mask(device, in_dtype, cb_dtype, in0_mem_config, s
 
     program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        subblock_w=8,
+        subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 8,
         block_h=1,
         block_w=32,
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(

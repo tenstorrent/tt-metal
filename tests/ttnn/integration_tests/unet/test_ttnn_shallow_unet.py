@@ -203,8 +203,8 @@ def create_custom_preprocessor(device):
             ttnn_module_args.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
             ttnn_module_args.output_layer["math_fidelity"] = ttnn.MathFidelity.LoFi
-            ttnn_module_args.output_layer["dtype"] = ttnn.bfloat8_b
-            ttnn_module_args.output_layer["weights_dtype"] = ttnn.bfloat8_b
+            ttnn_module_args.output_layer["dtype"] = ttnn.ttnn.bfloat16
+            ttnn_module_args.output_layer["weights_dtype"] = ttnn.ttnn.bfloat16
             ttnn_module_args.output_layer["conv_blocking_and_parallelization_config_override"] = None
             ttnn_module_args.output_layer["activation"] = None
             ttnn_module_args.output_layer["deallocate_activation"] = True
@@ -321,87 +321,87 @@ class UNet(nn.Module):
         super(UNet, self).__init__()
         # Contracting Path
         self.c1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
-        self.b1 = nn.BatchNorm2d(16)
+        self.b1 = nn.BatchNorm2d(16, momentum=1)
         self.r1 = nn.ReLU(inplace=True)
         self.c1_2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b1_2 = nn.BatchNorm2d(16)
+        self.b1_2 = nn.BatchNorm2d(16, momentum=1)
         self.r1_2 = nn.ReLU(inplace=True)
         self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.c2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b2 = nn.BatchNorm2d(16)
+        self.b2 = nn.BatchNorm2d(16, momentum=1)
         self.r2 = nn.ReLU(inplace=True)
         self.c2_2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b2_2 = nn.BatchNorm2d(16)
+        self.b2_2 = nn.BatchNorm2d(16, momentum=1)
         self.r2_2 = nn.ReLU(inplace=True)
         self.p2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.c3 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
-        self.b3 = nn.BatchNorm2d(32)
+        self.b3 = nn.BatchNorm2d(32, momentum=1)
         self.r3 = nn.ReLU(inplace=True)
         self.c3_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b3_2 = nn.BatchNorm2d(32)
+        self.b3_2 = nn.BatchNorm2d(32, momentum=1)
         self.r3_2 = nn.ReLU(inplace=True)
         self.p3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.c4 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b4 = nn.BatchNorm2d(32)
+        self.b4 = nn.BatchNorm2d(32, momentum=1)
         self.r4 = nn.ReLU(inplace=True)
         self.c4_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b4_2 = nn.BatchNorm2d(32)
+        self.b4_2 = nn.BatchNorm2d(32, momentum=1)
         self.r4_2 = nn.ReLU(inplace=True)
         self.p4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.bnc = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bnb = nn.BatchNorm2d(64)
+        self.bnb = nn.BatchNorm2d(64, momentum=1)
         self.bnr = nn.ReLU(inplace=True)
         self.bnc_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bnb_2 = nn.BatchNorm2d(64)
+        self.bnb_2 = nn.BatchNorm2d(64, momentum=1)
         self.bnr_2 = nn.ReLU(inplace=True)
 
-        self.u4 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.u4 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
         self.c5 = nn.Conv2d(96, 32, kernel_size=3, padding=1)
-        self.b5 = nn.BatchNorm2d(32)
+        self.b5 = nn.BatchNorm2d(32, momentum=1)
         self.r5 = nn.ReLU(inplace=True)
         self.c5_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b5_2 = nn.BatchNorm2d(32)
+        self.b5_2 = nn.BatchNorm2d(32, momentum=1)
         self.r5_2 = nn.ReLU(inplace=True)
         self.c5_3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b5_3 = nn.BatchNorm2d(32)
+        self.b5_3 = nn.BatchNorm2d(32, momentum=1)
         self.r5_3 = nn.ReLU(inplace=True)
-        self.u3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.u3 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
         self.c6 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.b6 = nn.BatchNorm2d(32)
+        self.b6 = nn.BatchNorm2d(32, momentum=1)
         self.r6 = nn.ReLU(inplace=True)
         self.c6_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b6_2 = nn.BatchNorm2d(32)
+        self.b6_2 = nn.BatchNorm2d(32, momentum=1)
         self.r6_2 = nn.ReLU(inplace=True)
         self.c6_3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b6_3 = nn.BatchNorm2d(32)
+        self.b6_3 = nn.BatchNorm2d(32, momentum=1)
         self.r6_3 = nn.ReLU(inplace=True)
-        self.u2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.u2 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
         self.c7 = nn.Conv2d(48, 16, kernel_size=3, padding=1)
-        self.b7 = nn.BatchNorm2d(16)
+        self.b7 = nn.BatchNorm2d(16, momentum=1)
         self.r7 = nn.ReLU(inplace=True)
         self.c7_2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b7_2 = nn.BatchNorm2d(16)
+        self.b7_2 = nn.BatchNorm2d(16, momentum=1)
         self.r7_2 = nn.ReLU(inplace=True)
         self.c7_3 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b7_3 = nn.BatchNorm2d(16)
+        self.b7_3 = nn.BatchNorm2d(16, momentum=1)
         self.r7_3 = nn.ReLU(inplace=True)
-        self.u1 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.u1 = nn.Upsample(scale_factor=(2, 2), mode="nearest")
 
         self.c8 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
-        self.b8 = nn.BatchNorm2d(16)
+        self.b8 = nn.BatchNorm2d(16, momentum=1)
         self.r8 = nn.ReLU(inplace=True)
         self.c8_2 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b8_2 = nn.BatchNorm2d(16)
+        self.b8_2 = nn.BatchNorm2d(16, momentum=1)
         self.r8_2 = nn.ReLU(inplace=True)
         self.c8_3 = nn.Conv2d(16, 16, kernel_size=3, padding=1)
-        self.b8_3 = nn.BatchNorm2d(16)
+        self.b8_3 = nn.BatchNorm2d(16, momentum=1)
         self.r8_3 = nn.ReLU(inplace=True)
 
         # Output layer
@@ -503,88 +503,85 @@ class UNet(nn.Module):
         output = self.output_layer(r8_3)
 
         return output
-        # return r8_3
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--loop", default=0, type=int)
-    args = ap.parse_args()
+@pytest.mark.parametrize("loop", [0, 1, 5, 10, 50, 100])
+def test_unet(device, loop):
+    with torch.no_grad():
+        torch.manual_seed(0)
+        torch_model = UNet()
+        torch_model.eval()
 
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
+        new_state_dict = {}
+        for name, parameter in torch_model.state_dict().items():
+            if isinstance(parameter, torch.FloatTensor):
+                if "b1" or "b2" or "b3" or "b4" or "bnb" in name:
+                    new_state_dict[name] = parameter
+                else:
+                    new_state_dict[name] = parameter + 1000
 
-    torch.manual_seed(0)
+        torch_model.load_state_dict(new_state_dict)
 
-    torch_model = UNet()
-    for layer in torch_model.children():
-        print(layer)
+        torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
+        torch_output_tensor = torch_model(torch_input_tensor)
 
-    new_state_dict = {}
-    for name, parameter in torch_model.state_dict().items():
-        if isinstance(parameter, torch.FloatTensor):
-            new_state_dict[name] = parameter + 100.0
+        reader_patterns_cache = {}
+        parameters = preprocess_model(
+            initialize_model=lambda: torch_model,
+            run_model=lambda model: model(torch_input_tensor),
+            custom_preprocessor=create_custom_preprocessor(device),
+            reader_patterns_cache=reader_patterns_cache,
+            device=device,
+        )
 
-    torch_model.load_state_dict(new_state_dict)
+        ttnn_model = ttnn_shallow_unet.UNet(parameters)
 
-    torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
-    torch_output_tensor = torch_model(torch_input_tensor)
+        #
+        # Tensor Preprocessing
+        #
+        input_shape = torch_input_tensor.shape
+        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
 
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        custom_preprocessor=create_custom_preprocessor(device),
-        reader_patterns_cache=reader_patterns_cache,
-        device=device,
-    )
+        # Pad to 16 if grayskull run and 32 for wormhole
+        input_tensor = input_tensor.reshape(
+            input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
+        )
+        pad = 32 if device.arch() == ttl.device.Arch.WORMHOLE_B0 else 16
+        input_tensor = torch.nn.functional.pad(input_tensor, (0, pad - input_tensor.shape[-1]))
+        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
 
-    ttnn_model = ttnn_shallow_unet.UNet(parameters)
+        warmup = 1
+        start = None
+        for i in range(loop + warmup):
+            if i == warmup:
+                start = time.perf_counter()
+            profiler.tracy_frame()
+            output_tensor = ttnn_model(device, input_tensor)
+        if start is not None:
+            stop = time.perf_counter()
+            total_time = stop - start
+            batch = input_shape[0]
+            total_frame_count = batch * loop
+            print(f"Elapsed host time (sec): {total_time}")
+            print(f"Frames processed: {total_frame_count}")
+            print(f"Host perf (fps): {total_frame_count / total_time}")
 
-    #
-    # Tensor Preprocessing
-    #
-    input_shape = torch_input_tensor.shape
-    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        #
+        # Tensor Postprocessing
+        #
+        output_tensor = ttnn.to_torch(output_tensor)
+        # unpad to 3
+        output_tensor = output_tensor[:, :, :, :3]
+        output_tensor = output_tensor.reshape(input_shape[0], input_shape[2], input_shape[3], input_shape[1])
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-    # Pad to 16 if grayskull run and 32 for wormhole
-    input_tensor = input_tensor.reshape(
-        input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
-    )
-    pad = 32 if device.arch() == ttl.device.Arch.WORMHOLE_B0 else 16
-    input_tensor = torch.nn.functional.pad(input_tensor, (0, pad - input_tensor.shape[-1]))
-    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+        output_tensor = output_tensor[:, 0, :, :]
+        output_tensor = torch.reshape(
+            output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
+        )
 
-    warmup = 1
-    start = None
-    for i in range(args.loop + warmup):
-        if i == warmup:
-            start = time.perf_counter()
-        profiler.tracy_frame()
-        output_tensor = ttnn_model(device, input_tensor)
-    if start is not None:
-        stop = time.perf_counter()
-        total_time = stop - start
-        batch = input_shape[0]
-        total_frame_count = batch * args.loop
-        print(f"Elapsed host time (sec): {total_time}")
-        print(f"Frames processed: {total_frame_count}")
-        print(f"Host perf (fps): {total_frame_count / total_time}")
-
-    #
-    # Tensor Postprocessing
-    #
-    output_tensor = ttnn.to_torch(output_tensor)
-    # unpad to 3
-    output_tensor = output_tensor[:, :, :, :3]
-    output_tensor = output_tensor.reshape(input_shape[0], input_shape[2], input_shape[3], input_shape[1])
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
-    output_tensor = output_tensor[:, 0, :, :]
-    output_tensor = torch.reshape(
-        output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
-    )
-    # todo: taps - Disable assert with pcc as pcc is really bad
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
-    ttnn.close_device(device)
+        if device.arch() == ttl.device.Arch.WORMHOLE_B0:
+            assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+        else:
+            assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.97)

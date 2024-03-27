@@ -30,7 +30,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
     TT_FATAL(a.get_layout() == Layout::TILE);
-    TT_FATAL(a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
@@ -52,7 +52,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
             TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16);
         }
         if (beta.has_value()) {
             TT_FATAL(gamma.value().get_layout() == beta.value().get_layout(), "Gamma and beta must have the same layout!");
@@ -70,7 +70,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
             TT_FATAL((beta.value().get_legacy_shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16);
         }
     }
     if (a.is_sharded()) {
@@ -85,7 +85,6 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 if (program_config.inplace) {
-                    TT_FATAL(a.get_dtype() == program_config.out_data_format);
                     TT_FATAL(this->output_mem_config.is_sharded());
                 }
                 TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);
@@ -155,11 +154,8 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                 } else {
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = input_tensor.shard_spec().value();
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, Layout::TILE, input_tensor.device(), mem_config)};
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensors.at(0).get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
                 }
-            } else if constexpr(std::is_same_v<ProgramConfigType, LayerNormInterleavedMultiCoreProgramConfig>) {
-                DataType out_data_format = program_config.out_data_format;
-                return operation::generic_create_output_tensors(*this, input_tensors, out_data_format, Layout::TILE, this->output_mem_config);
             } else {
                 return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
             }
@@ -184,27 +180,20 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
             if constexpr (
                 std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
-                MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return layernorm_multi_core_sharded(
                                             a, b, gamma, beta, output_tensor, this->norm_type, this->eps,
-                                            fidelity,
-                                            program_config.im_data_format,
                                             program_config.compute_with_storage_grid_size,
                                             program_config.subblock_w,
                                             program_config.block_h,
-                                            program_config.block_w
+                                            program_config.block_w,
+                                            this->compute_kernel_config
                                             );
-            } else if constexpr (
-                std::is_same_v<ProgramConfigType, LayerNormInterleavedMultiCoreProgramConfig>
-            ) {
-                MathFidelity fidelity = program_config.math_fidelity;
-                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->norm_type, this->eps, fidelity, program_config.im_data_format);
             } else {
-                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->norm_type, this->eps);
+                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
             }
         },
         this->program_config

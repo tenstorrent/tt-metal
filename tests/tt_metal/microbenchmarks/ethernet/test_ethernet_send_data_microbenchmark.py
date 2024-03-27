@@ -18,8 +18,8 @@ def report_results(test_case_name, total_data_transferred):
         "LATENCY": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ERISC", "timerID": 80},
-            "end": {"risc": "ERISC", "timerID": 3},
+            "start": {"risc": "BRISC", "zoneName": "eth_latency"},
+            "end": {"risc": "BRISC", "zoneName": "eth_latency"},
         },
     }
 

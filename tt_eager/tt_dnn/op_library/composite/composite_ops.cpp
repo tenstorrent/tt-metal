@@ -830,31 +830,19 @@ Tensor addcdiv(
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
-    Tensor logit_input = input_a;
     Tensor t_eps = full_like(input_a, eps, output_mem_config);
     Tensor t1m_eps = full_like(input_a, (1 - eps), output_mem_config);
-    Tensor xlt_eps = lt(input_a, t_eps, std::nullopt, output_mem_config);
-    Tensor in_range = logical_and(lte(t_eps, input_a, std::nullopt, output_mem_config),
-                       lte(input_a, t1m_eps, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    logit_input = where(eq_unary(xlt_eps, 1.0, output_mem_config), t_eps,
-                  where(eq_unary(in_range, 1.0, output_mem_config), input_a, t1m_eps, output_mem_config), output_mem_config);
-    xlt_eps.deallocate();
-    in_range.deallocate();
+    Tensor logit_input = where( ltz(t_eps, output_mem_config), input_a,  where( lt(input_a, t_eps, std::nullopt, output_mem_config), t_eps,
+                         where( gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a, output_mem_config), output_mem_config), output_mem_config);
+    t_eps.deallocate();
+    t1m_eps.deallocate();
     Tensor linput_m1 = rsub(logit_input, 1.0, output_mem_config);
-    Tensor partial_output = log(mul(logit_input, recip(linput_m1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor log_input = mul(logit_input, recip(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
-    float t_inf = std::numeric_limits<float>::infinity();
-    float t_nan  = std::nanf("");
-    partial_output = where(eq_unary(input_a, 1.0, output_mem_config), t_inf, partial_output);
-    Tensor final_result(input_a);
-    {
-        Tensor t_one = ones_like(input_a, output_mem_config);
-        Tensor eps_gt_one = gt(t_eps, t_one, std::nullopt, output_mem_config);
-        Tensor eps_eq_one = eq(t_eps, t_one, std::nullopt, output_mem_config);
-        final_result =
-            where(eps_eq_one, t_inf, where(eps_gt_one, t_nan, partial_output, output_mem_config), output_mem_config);
-    }
-    return final_result;
+    Tensor t_inf = mul_unary(sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor logit_result = where(eq_unary(logit_input, 1.0, output_mem_config), t_inf,
+                          where(ltz(log_input, output_mem_config), std::nanf(" "), log(log_input, output_mem_config), output_mem_config), output_mem_config);
+    return logit_result;
 }
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
@@ -898,18 +886,9 @@ Tensor logical_xori(const Tensor& input_a, float value, const MemoryConfig& outp
 
 // xlogy(x,y))=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(std::nanf(""));
-    Tensor t_nan = bcast(ltz(input_b, output_mem_config), t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
-    t_value.deallocate();
-    Tensor t_temp = add(eqz(input_b, output_mem_config), t_nan, std::nullopt, output_mem_config);
-    Tensor t_gtz = mul(gtz(input_b, output_mem_config), input_b, std::nullopt, output_mem_config);
-    t_temp = add(t_gtz, t_temp, std::nullopt, output_mem_config);
-    t_gtz.deallocate();
-    Tensor t_log = log(t_temp, output_mem_config);
-    t_temp.deallocate();
-    Tensor result = mac(input_a, t_log, t_nan, output_mem_config);
-    t_log.deallocate();
-    t_nan.deallocate();
+    Tensor t_nan = full_like(input_b, std::nanf(" "), output_mem_config);
+    Tensor result = mul(input_a, log(input_b, output_mem_config), std::nullopt, output_mem_config);
+    result = where(logical_or(ltz(input_b, output_mem_config), eq(input_b, t_nan, std::nullopt, output_mem_config), std::nullopt, output_mem_config), t_nan, result, output_mem_config);
     return result;
 }
 Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {

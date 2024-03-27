@@ -352,8 +352,6 @@ def test_falcon7b_attnention_sliced(
                 subblock_w=1,
                 block_h=mm_output_height_shard_spec[0] // 32,
                 block_w=mm_output_height_shard_spec[1] // 32,
-                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-                im_data_format=ttl.tensor.DataType.BFLOAT16,
             )
 
             mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)

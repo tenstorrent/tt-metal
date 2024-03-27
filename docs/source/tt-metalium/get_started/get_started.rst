@@ -37,9 +37,11 @@ Navigate to the `Falcon 7B demo folder
 for details.
 
 You can also check our demos for
-`ResNet <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/resnet>`_
+`ResNet <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/resnet>`_,
+`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
+`Mistral 7B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/mistral7b>`_,
 and
-`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_.
+`Llama2-70B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/llama2_70b>`_.
 
 3. ttnn Tutorial: Multi-Head Attention (Simple)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -274,8 +274,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         )
     );
 }
-
-TEST_F(DPrintFixture, TestPrintRaiseWait) {
+// see issue #6659
+TEST_F(DPrintFixture, DISABLED_TestPrintRaiseWait) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

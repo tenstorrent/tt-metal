@@ -41,97 +41,97 @@ void MAIN {
 
     for (uint32_t i = 0; i < block_h; i++) {
         #if FUSED_SCALE_MASK
-        // fused scale
-        unpack_reconfig_data_format(cb_in0, cb_fused_scale);
-        pack_reconfig_data_format(cb_scale_mask);
-        cb_wait_front(cb_fused_scale, 1);
-        // UNPACK(( DPRINT  << TSLICE(cb_fused_scale, 0, SliceRange::h0_w0_32()) << ENDL() ));
-        mul_tiles_bcast_scalar_init_short();
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
-            cb_reserve_back(cb_scale_mask, subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
-                pack_tile(w, cb_scale_mask);
+            // fused scale
+            unpack_reconfig_data_format(cb_in0, cb_fused_scale);
+            pack_reconfig_data_format(cb_scale_mask);
+            cb_wait_front(cb_fused_scale, 1);
+            // UNPACK(( DPRINT  << TSLICE(cb_fused_scale, 0, SliceRange::h0_w0_32()) << ENDL() ));
+            mul_tiles_bcast_scalar_init_short();
+            index_subblock_w_offset = 0;
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                ACQ();
+                cb_reserve_back(cb_scale_mask, subblock_w);
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
+                    pack_tile(w, cb_scale_mask);
+                }
+                cb_push_back(cb_scale_mask, subblock_w);
+                REL();
+                index_subblock_w_offset += subblock_w;
             }
-            cb_push_back(cb_scale_mask, subblock_w);
-            REL();
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_pop_front(cb_in0, block_w);
-        unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
+            cb_pop_front(cb_in0, block_w);
+            unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
-        // fused attn
-        cb_wait_front(cb_scale_mask, block_w);
+            // fused attn
+            cb_wait_front(cb_scale_mask, block_w);
 
-        #ifndef SHARDED_CAUSAL_MASK
-            cb_wait_front(cb_fused_attn, block_w);
-        #endif
-
-        index_subblock_w_offset = 0;
-
-        #ifdef CAUSAL_MASK
-            add_tiles_init();
-        #else
-            add_bcast_rows_init_short();
-        #endif
-
-        exp_tile_init(EXP_APPROX);
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
-            #ifdef CAUSAL_MASK
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    index = w + index_subblock_w_offset;
-                    add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
-                }
-            #else
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
-                }
+            #ifndef SHARDED_CAUSAL_MASK
+                cb_wait_front(cb_fused_attn, block_w);
             #endif
-            cb_reserve_back(cb_exps, subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile(w,EXP_APPROX);
-                pack_tile(w, cb_exps);
-            }
-            cb_push_back(cb_exps, subblock_w);
-            REL();
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_pop_front(cb_scale_mask, block_w);
 
-        #ifdef CAUSAL_MASK
-            cb_pop_front(cb_fused_attn, block_w);
-        #endif
-        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
+            index_subblock_w_offset = 0;
+
+            #ifdef CAUSAL_MASK
+                add_tiles_init();
+            #else
+                add_bcast_rows_init_short();
+            #endif
+
+            exp_tile_init(EXP_APPROX);
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                ACQ();
+                #ifdef CAUSAL_MASK
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        index = w + index_subblock_w_offset;
+                        add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
+                    }
+                #else
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        index = w + index_subblock_w_offset;
+                        add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
+                    }
+                #endif
+                cb_reserve_back(cb_exps, subblock_w);
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    exp_tile(w,EXP_APPROX);
+                    pack_tile(w, cb_exps);
+                }
+                cb_push_back(cb_exps, subblock_w);
+                REL();
+                index_subblock_w_offset += subblock_w;
+            }
+            cb_pop_front(cb_scale_mask, block_w);
+
+            #ifdef CAUSAL_MASK
+                cb_pop_front(cb_fused_attn, block_w);
+            #endif
+            unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
 
         #else
-        unpack_reconfig_data_format(cb_in0, cb_in0);
-        pack_reconfig_data_format(cb_exps);
-        // exp(x)
-        index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short();
-        exp_tile_init(EXP_APPROX);
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                copy_tile(cb_in0, index, w);
+            unpack_reconfig_data_format(cb_in0, cb_in0);
+            pack_reconfig_data_format(cb_exps);
+            // exp(x)
+            index_subblock_w_offset = 0;
+            copy_tile_to_dst_init_short();
+            exp_tile_init(EXP_APPROX);
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                ACQ();
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    copy_tile(cb_in0, index, w);
+                }
+                cb_reserve_back(cb_exps, subblock_w);
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    exp_tile(w, EXP_APPROX);
+                    pack_tile(w, cb_exps);
+                }
+                cb_push_back(cb_exps, subblock_w);
+                REL();
+                index_subblock_w_offset += subblock_w;
             }
-            cb_reserve_back(cb_exps, subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile(w, EXP_APPROX);
-                pack_tile(w, cb_exps);
-            }
-            cb_push_back(cb_exps, subblock_w);
-            REL();
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_pop_front(cb_in0, block_w);
-        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
+            cb_pop_front(cb_in0, block_w);
+            unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #endif // FUSED_SCALE_MASK
 
         // sum(exp(x))
@@ -152,6 +152,7 @@ void MAIN {
         REL();
 
         // exp(x) / (sum(exp(x)))
+        unpack_reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);
         cb_wait_front(cb_recipsumexps, 1);
         mul_bcast_cols_init_short();

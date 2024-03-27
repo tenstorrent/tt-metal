@@ -203,8 +203,7 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
 // this API is used by both the reader and writer side of the CB
 // it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
-// TODO: this can be made constexpr?
-inline std::int32_t get_tile_size(const std::int32_t operand) {
+constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
     // L1 16B words
@@ -214,7 +213,7 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words << 4;
 }
 
-inline DataFormat get_dataformat(const std::int32_t operand) {
+constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
     return static_cast<DataFormat>((uint)unpack_src_format[operand]);
 }
 
@@ -284,7 +283,6 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
  */
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    //kernel_profiler::mark_function_sum_start(CB_RESERVE_BACK_MARKER);
     uint32_t pages_acked_ptr = (uint32_t) get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -308,7 +306,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     DEBUG_STATUS('C', 'R', 'B', 'D');
-    //kernel_profiler::mark_function_sum_end(CB_RESERVE_BACK_MARKER);
 }
 
 /**
@@ -335,7 +332,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
  * */
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
-    //kernel_profiler::mark_function_sum_start(CB_WAIT_FRONT_MARKER);
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uint32_t pages_received_ptr = (uint32_t) get_cb_tiles_received_ptr(operand);
 
@@ -346,7 +342,6 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     DEBUG_STATUS('C', 'W', 'F', 'D');
-    //kernel_profiler::mark_function_sum_end(CB_WAIT_FRONT_MARKER);
 }
 
 // NOC transfers

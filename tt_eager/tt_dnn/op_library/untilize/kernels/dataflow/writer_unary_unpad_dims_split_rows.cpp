@@ -33,12 +33,14 @@ void kernel_main() {
     const uint32_t block_row_leftover_size  = get_arg_val<uint32_t>(15);
 
 
-    const uint32_t num_tiles_block_c = block_row_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
-
     uint32_t stick_id          = 0;
 
     constexpr bool dst_is_dram          = get_compile_time_arg_val(0) == 1;
     #define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
+    constexpr bool FLOAT32_DTYPE          = get_compile_time_arg_val(3) == 1;
+
+    const uint32_t num_tiles_block_c = FLOAT32_DTYPE ? block_row_size / 128 : block_row_size / 64; // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
+
     #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
     const InterleavedPow2AddrGen<dst_is_dram> s = {
