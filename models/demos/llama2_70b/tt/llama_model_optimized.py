@@ -322,9 +322,10 @@ class TtLlamaModel_optimized(nn.Module):
         rot_mats: list,
         start_pos: int,
         attn_masks: list,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         else:
@@ -471,6 +472,7 @@ class TtLlamaModel_optimized(nn.Module):
         rot_mats: list,
         start_pos: int,
         attn_masks: list,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         ### Run all layers
         for i in range(self.num_layer_groups):
@@ -481,7 +483,7 @@ class TtLlamaModel_optimized(nn.Module):
             self.load_layers(start_layer, end_layer)
 
             for layer in self.layers[start_layer:end_layer]:
-                xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
+                xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
 
             # Epilogue: Save KV cache to disk and free weights
             self.free_layers(start_layer, end_layer)

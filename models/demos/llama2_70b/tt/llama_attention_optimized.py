@@ -812,7 +812,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         xs: tt_lib.tensor.Tensor,
         rot_mats: tt_lib.tensor.Tensor,
         attn_masks: tt_lib.tensor.Tensor,
-        user_id: int,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
         attn_outputs = self.prefill_attn_mqa(query_layer, key_layer, value_layer, attn_masks, user_id)
@@ -825,7 +825,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
     ) -> tt_lib.tensor.Tensor:
         assert xs[0].shape[0] == 1, "batch must be 1"
         assert xs[0].shape[2] % 128 == 0 and xs[0].shape[2] > 0, "Seqlen must be divisible by 128"
-        seq_len = xs[0].shape[2]
 
         # Fused QKV
         fused_query_key_value = []
@@ -904,7 +903,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         key_layer: tt_lib.tensor.Tensor,
         value_layer: tt_lib.tensor.Tensor,
         attn_masks: tt_lib.tensor.Tensor,
-        user_id: int,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         seq_len = query_layer[0].shape[2]
         slice_size = 128
