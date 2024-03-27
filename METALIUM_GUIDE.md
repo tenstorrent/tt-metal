@@ -10,7 +10,7 @@
     - Compute Kernels 
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
-* [Native Support to Tiled Compute and Data](#native-support-for-tiled-compute-and-data)
+* [Native Support for Tiled Compute and Data](#native-support-for-tiled-compute-and-data)
 * [Interleaved and Sharded Buffers](#interleaved-and-sharded-buffers)
 * [Eltwise Binary Kernel](#eltwise-binary-kernel)
 
@@ -42,6 +42,7 @@ Scalable at the chip level and multi-chip level
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
 
+### Native Support for Tiled Compute and Data
 
 ### Interleaved and Sharded Buffers
 
