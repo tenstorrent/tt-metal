@@ -17,6 +17,9 @@
 
 Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Engine, a Vector engine, and 1 MB scratch pad SRAM.   
 
+<img width="1167" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
+
+
 ### Scalable Architecture
 
 Scalable at the chip level and multi-chip level
