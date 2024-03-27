@@ -6,8 +6,9 @@ from typing import List
 import sys
 import ttnn
 import torch
-import model_config
+from models.experimental.mamba.tt_opt import model_config
 from transformers import AutoTokenizer
+import pytest
 
 
 from models.experimental.mamba.reference.decode_model import MambaPretrainedModelName
@@ -59,14 +60,17 @@ def run_demo(num_users, hidden_size, profile):
     return out_data
 
 
-def main():
-    num_users = int(sys.argv[1])
-    hidden_size = int(sys.argv[2])
-    profile = int(sys.argv[3])
+def main_func(num_users, hidden_size, profile):
     assert num_users == 32
     assert (hidden_size // 8) % 32 == 0
     return run_demo(num_users, hidden_size, profile)
 
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("hidden_size", [2560])
+@pytest.mark.parametrize("profile", [0, 1])
+def test_mamba(
+    num_users, hidden_size, profile
+):
+    main_func(num_users, hidden_size, profile)
 
-if __name__ == "__main__":
-    main()
+

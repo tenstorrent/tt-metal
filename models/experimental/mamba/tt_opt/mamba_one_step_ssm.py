@@ -12,18 +12,16 @@ from models.utility_functions import torch2tt_tensor
 from models.helper_funcs import Linear
 from models.experimental.mamba.reference.args import ModelArgs
 
-def run(f, x0=None, x1=None):
+def run(f, x0, x1=None):
     x0_old = None
     x1_old = None
-    if x0:
-        x0_old = x0
-        if x1:
-            x1_old = x1
+    x0_old = x0
+    if x1:
+        x1_old = x1
     x = f
-    if x0_old:
-        ttnn.deallocate(x0_old)
-        if x1_old:
-            ttnn.deallocate(x1_old)
+    ttnn.deallocate(x0_old)
+    if x1_old:
+        ttnn.deallocate(x1_old)
     return x
 
 
@@ -114,45 +112,33 @@ class TtMambaSSM(torch.nn.Module):
     def forward(self, x):
         print("**********ssm block", x.shape)
         # delta
-        delta_t = run(ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG))
+        delta_t = ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
         delta_t = run(ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col)), delta_t)
         delta_t = run(ttnn.softplus(delta_t, parameter1=1.0, parameter2=20.0, memory_config=ttnn.L1_MEMORY_CONFIG), delta_t)
         delta_t = run(ttnn.repeat_interleave(delta_t, self.n, dim=3), delta_t)
         
         # shard delta and A
         delta_t = run(ttnn.to_memory_config(delta_t, memory_config=self.configs["sharded_dn"]), delta_t)
-        A = run(ttnn.to_memory_config(self.A, memory_config=self.configs["sharded_dn"]))
+        A = ttnn.to_memory_config(self.A, memory_config=self.configs["sharded_dn"])
         
-        abar = run(ttnn.mul(delta_t, A, memory_config=self.configs['sharded_dn']), A, delta_t)
+        abar = run(ttnn.mul(delta_t, A, memory_config=self.configs['sharded_dn']), A)
         abar = run(ttnn.exp(abar, memory_config=self.configs['sharded_dn']), abar)
         
-        return x
-
         # multiply abar and hidden_state
-        #hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=self.configs["sharded_large"])
-        amulh0 = ttnn.mul(abar4, self.tt_hidden_state, memory_config=self.configs["sharded_large"])
-
-        # deallocate abar and hidden_state
-        ttnn.deallocate(abar4)
-        #ttnn.deallocate(hidden_state0)
+        hidden_state = ttnn.to_memory_config(self.tt_hidden_state, memory_config=self.configs["sharded_dn"])
+        amulh = run(ttnn.mul(abar, hidden_state, memory_config=self.configs["sharded_dn"]), abar, hidden_state)
 
         # B
-        #B_proj_weights = ttnn.to_memory_config(self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        B0 = ttnn.linear(x, self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        #ttnn.deallocate(B_proj_weights)
-        B1 = ttnn.repeat(B0, ttnn.Shape([1, 1, 1, self.hidden_size], [1, 1, 32, self.hidden_size]))
-        ttnn.deallocate(B0)
-        B2 = B1 #ttnn.to_memory_config(B1, memory_config=self.configs["sharded_large"])
-        #ttnn.deallocate(B1)
-
+        B = ttnn.linear(x, self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
+        B = run(ttnn.repeat(B, ttnn.Shape([1, 1, 1, self.hidden_size], [1, 1, 32, self.hidden_size])), B)
+        
+        # shard B
+        B = run(ttnn.to_memory_config(B, memory_config=self.configs['sharded_dn']), B)
+        
         # bbar
-        #delta_t3 = ttnn.repeat_interleave(delta_t2, self.n, dim=3)
-        ttnn.deallocate(delta_t2)
-        #delta_t4 = ttnn.to_memory_config(delta_t3, memory_config=self.configs["sharded_large"])
-        #ttnn.deallocate(delta_t3)
-        bbar0 = ttnn.mul(delta_t4, B2, memory_config=self.configs["sharded_large"])
-        ttnn.deallocate(delta_t4)
-        ttnn.deallocate(B2)
+        bbar = run(ttnn.mul(delta_t, B, memory_config=self.configs["sharded_dn"]), delta_t, B)
+        return x
+
 
         # multiply bbar and x
         x0 = ttnn.repeat_interleave(x, self.n, dim=3)
