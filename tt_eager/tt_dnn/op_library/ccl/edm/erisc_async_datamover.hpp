@@ -103,16 +103,11 @@ class ChannelBuffer final {
 
     // Increment the semaphore in the remote L1s of every worker associated with this ChannelBuffer
     FORCE_INLINE void increment_worker_semaphores() {
-        // We have to be careful that the worker x/y matches for the `noc_index`
-        // active on the erisc
         for (std::size_t i = 0; i < this->num_workers; i++) {
             ccl::WorkerXY worker_xy = this->worker_coords[i];
             uint64_t worker_semaphore_address =
                 get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
 
-            // TODO: Check for (!noc_cmd_buf_ready(noc, cmd_buf)) and exit early if not ready. Try to do other processing if
-            //       possible and come back to this at the next opportunity
-            //       So far no solid use case as it's always single worker per channel
             noc_semaphore_inc(worker_semaphore_address, 1);
         }
     }
@@ -125,7 +120,7 @@ class ChannelBuffer final {
         return this->num_messages_moved < this->total_num_messages_to_move;
     }
 
-    [[nodiscard]] STATE get_state() const { return this->state; }
+    [[nodiscard]] FORCE_INLINE STATE get_state() const { return this->state; }
 
     FORCE_INLINE void goto_state(STATE s) { this->state = s; }
     [[nodiscard]] FORCE_INLINE bool is_waiting_for_workers_core() const {
@@ -167,8 +162,8 @@ class ChannelBuffer final {
     FORCE_INLINE bool eth_is_receiver_channel_send_done() const { return *this->channel_bytes_sent_address == 0;}
     FORCE_INLINE bool eth_bytes_are_available_on_channel() const { return *this->channel_bytes_sent_address != 0;}
     FORCE_INLINE bool eth_is_receiver_channel_send_acked() const { return *this->channel_bytes_acked_address != 0;}
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_address; }
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_address; }
+    FORCE_INLINE volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_address; }
+    FORCE_INLINE volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_address; }
 
     FORCE_INLINE void send_eth_receiver_channel_ack() {
         *this->channel_bytes_acked_address = 1;
@@ -300,11 +295,10 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
-FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_channel) {
-    bool did_something = false;
-    if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
+FORCE_INLINE void sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_channel) {
+    if (!eth_txq_is_busy() && sender_buffer_channel.eth_is_receiver_channel_send_done()) {
         bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
-        if (!sender_buffer_channel.is_send_completion_pending() && !eth_txq_is_busy()) {
+        if (!sender_buffer_channel.is_send_completion_pending()) {
             static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
             eth_send_bytes_over_channel_payload_only(
                 sender_buffer_channel.get_buffer_address(),
@@ -315,39 +309,33 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_cha
                 sender_buffer_channel.get_current_payload_size() >> ETH_BYTES_TO_WORDS_SHIFT);
 
             sender_buffer_channel.set_send_completion_pending(true);
-            need_to_send_completion = true;
-            did_something = true;
         }
 
-        if (need_to_send_completion && !eth_txq_is_busy()) {
+        if (sender_buffer_channel.is_send_completion_pending() && !eth_txq_is_busy()) {
             sender_buffer_channel.eth_send_payload_complete_signal_over_channel();
             sender_buffer_channel.set_send_completion_pending(false);
             sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_ETH);
-            did_something = true;
         }
     }
-
-    return did_something;
 }
 
-FORCE_INLINE bool __attribute__((section(".erisc_iram")))  sender_notify_workers_if_buffer_available_sequence(
+
+FORCE_INLINE void sender_notify_workers_if_buffer_available_sequence(
     ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
 
-    sender_buffer_channel.increment_worker_semaphores();
+    if (noc_cmd_buf_ready(noc_index, NCRISC_AT_CMD_BUF)) {
+        sender_buffer_channel.increment_worker_semaphores();
 
-    if (!sender_buffer_channel.all_messages_moved()) {
-        sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_WORKER);
-    } else {
-        sender_buffer_channel.goto_state(ChannelBuffer::DONE);
-        num_senders_complete++;
+        if (!sender_buffer_channel.all_messages_moved()) {
+            sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_WORKER);
+        } else {
+            sender_buffer_channel.goto_state(ChannelBuffer::DONE);
+            num_senders_complete++;
+        }
     }
-
-    return true;
 }
 
-FORCE_INLINE bool __attribute__((section(".erisc_iram"))) sender_eth_check_receiver_ack_sequence(ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
-    bool did_something = false;
-
+FORCE_INLINE void sender_eth_check_receiver_ack_sequence(ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
     bool transimission_acked_by_receiver =
         sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
         sender_buffer_channel.eth_is_receiver_channel_send_done();
@@ -356,29 +344,21 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram"))) sender_eth_check_recei
         sender_buffer_channel.increment_messages_moved();
         sender_buffer_channel.goto_state(ChannelBuffer::SIGNALING_WORKER);
         sender_notify_workers_if_buffer_available_sequence(sender_buffer_channel, num_senders_complete);
-        did_something = true;
     }
-
-    return did_something;
 }
 
 /*
  *
  */
-FORCE_INLINE bool __attribute__((section(".erisc_iram")))  sender_noc_receive_payload_ack_check_sequence(ChannelBuffer &sender_channel_buffer) {
-    bool did_something = false;
-
+FORCE_INLINE void sender_noc_receive_payload_ack_check_sequence(ChannelBuffer &sender_channel_buffer) {
     bool read_finished = sender_channel_buffer.is_local_semaphore_full();
     if (read_finished) {
         // We can clear the semaphore, and wait for space on receiver
         sender_channel_buffer.clear_local_semaphore();
         sender_channel_buffer.goto_state(ChannelBuffer::READY_FOR_ETH_TRANSFER);
-        did_something = true;
 
         erisc::datamover::sender_eth_send_data_sequence(sender_channel_buffer);
     }
-
-    return did_something;
 }
 
 /////////////////////////////////////////////
@@ -389,11 +369,11 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram")))  sender_noc_receive_pa
 /*
  *
  */
-FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer &buffer_channel) {
-    buffer_channel.increment_worker_semaphores();
-    buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_WORKER);
-
-    return true;
+FORCE_INLINE void receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer &buffer_channel) {
+    if (noc_cmd_buf_ready(noc_index, NCRISC_AT_CMD_BUF)) {
+        buffer_channel.increment_worker_semaphores();
+        buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_WORKER);
+    }
 }
 
 
@@ -402,14 +382,11 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_notify_wo
  * If payload received, notify (send ack to) sender so sender knows it can free up its local buffer
  *
  */
-FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_accept_payload_sequence(ChannelBuffer &buffer_channel) {
-    bool did_something = false;
-
-    if (buffer_channel.eth_bytes_are_available_on_channel()) {
-        if (!eth_txq_is_busy()) {
+FORCE_INLINE void receiver_eth_accept_payload_sequence(ChannelBuffer &buffer_channel) {
+    if (!eth_txq_is_busy()) {
+        if (buffer_channel.eth_bytes_are_available_on_channel()) {
             buffer_channel.send_eth_receiver_channel_ack();
             buffer_channel.goto_state(ChannelBuffer::SIGNALING_WORKER);
-            did_something = true;
 
             // FIXME: Decouple these so we can still signal workers even if eth command queue is busy
             //        Prefer sending eth ack first, but notify workers even if we have to come back to
@@ -417,8 +394,6 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_accept_pa
             receiver_eth_notify_workers_payload_available_sequence(buffer_channel);
         }
     }
-
-    return did_something;
 }
 
 /*
@@ -427,15 +402,12 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_accept_pa
  * - notifies sender it is safe to send next payload
  * - clear local semaphore
  */
-FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_noc_read_worker_completion_check_sequence(
+FORCE_INLINE void receiver_noc_read_worker_completion_check_sequence(
     ChannelBuffer &buffer_channel, uint32_t &num_receivers_complete) {
-    bool did_something = false;
-
+    if (!eth_txq_is_busy()) {
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
-    bool can_notify_sender_of_buffer_available = workers_are_finished_reading;
-    if (can_notify_sender_of_buffer_available) {
+        if (workers_are_finished_reading) {
 
-        if (!eth_txq_is_busy()) {
             buffer_channel.eth_receiver_channel_done();
             buffer_channel.increment_messages_moved();
             buffer_channel.clear_local_semaphore();
@@ -446,13 +418,8 @@ FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_noc_read_work
                 buffer_channel.goto_state(ChannelBuffer::DONE);
                 num_receivers_complete++;
             }
-
-            did_something = true;
         }
-
     }
-
-    return did_something;
 }
 
 ////////////////////////////

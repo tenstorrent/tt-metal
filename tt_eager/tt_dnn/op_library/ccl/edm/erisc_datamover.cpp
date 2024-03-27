@@ -206,37 +206,36 @@ void kernel_main() {
         bool did_something_sender = false;
         bool did_something_receiver = false;
 
-        uint32_t num_receivers_complete_old = num_receivers_complete;
-        uint32_t num_senders_complete_old = num_senders_complete;
         //////////////////////////////////////
         // SENDER
         if constexpr (enable_sender_side) {
             erisc::datamover::ChannelBuffer &current_sender = buffer_channels[send_recv_index.real_index.sender];
+            erisc::datamover::ChannelBuffer::STATE old_state = current_sender.get_state();
             switch (current_sender.get_state()) {
                 case erisc::datamover::ChannelBuffer::STATE::WAITING_FOR_WORKER:
-                did_something_sender =
-                    erisc::datamover::sender_noc_receive_payload_ack_check_sequence(current_sender);
+                erisc::datamover::sender_noc_receive_payload_ack_check_sequence(current_sender);
                 break;
 
                 case erisc::datamover::ChannelBuffer::STATE::READY_FOR_ETH_TRANSFER:
-                did_something_sender = erisc::datamover::sender_eth_send_data_sequence(current_sender);
-                    break;
+                if (!eth_txq_is_busy())
+                    erisc::datamover::sender_eth_send_data_sequence(current_sender);
+                break;
 
                 case erisc::datamover::ChannelBuffer::STATE::SIGNALING_WORKER:
-                did_something_sender = erisc::datamover::sender_notify_workers_if_buffer_available_sequence(
+                erisc::datamover::sender_notify_workers_if_buffer_available_sequence(
                                     current_sender, num_senders_complete);
                 senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
                 break;
 
                 case erisc::datamover::ChannelBuffer::STATE::WAITING_FOR_ETH:
-
-                did_something_sender =
-                    erisc::datamover::sender_eth_check_receiver_ack_sequence(current_sender, num_senders_complete);
+                erisc::datamover::sender_eth_check_receiver_ack_sequence(current_sender, num_senders_complete);
                 senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
+                break;
 
                 default:
                 break;
             };
+            did_something_sender = old_state != current_sender.get_state();
         }
 
         //////////////////////////////////////
@@ -244,38 +243,35 @@ void kernel_main() {
         if constexpr (enable_receiver_side) {
             erisc::datamover::ChannelBuffer &current_receiver = buffer_channels[send_recv_index.real_index.receiver];
 
+            erisc::datamover::ChannelBuffer::STATE old_state = current_receiver.get_state();
             switch (current_receiver.get_state()) {
                 case erisc::datamover::ChannelBuffer::STATE::WAITING_FOR_ETH:
-                did_something_receiver = erisc::datamover::receiver_eth_accept_payload_sequence(current_receiver);
+                erisc::datamover::receiver_eth_accept_payload_sequence(current_receiver);
                 break;
 
                 case erisc::datamover::ChannelBuffer::STATE::SIGNALING_WORKER:
-                did_something_receiver =
-                    erisc::datamover::receiver_eth_notify_workers_payload_available_sequence(current_receiver);
+                erisc::datamover::receiver_eth_notify_workers_payload_available_sequence(current_receiver);
                 break;
 
                 case erisc::datamover::ChannelBuffer::STATE::WAITING_FOR_WORKER:
-                did_something_receiver = erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
-                                    current_receiver, num_receivers_complete);
+                erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
+                                current_receiver, num_receivers_complete);
                 receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
                 break;
 
                 default:
                 break;
             };
+            did_something_receiver = old_state != current_receiver.get_state();
         }
         send_recv_index.increment();
         //////////////////////////////////////
 
-        // Enabling this block as is (with all the "did_something"s, seems to cause a loss of about
-        // 0.5 GBps in throughput)
         if (did_something_sender || did_something_receiver) {
             did_nothing_count = 0;
-        } else {
-            if (did_nothing_count++ > SWITCH_INTERVAL) {
-                did_nothing_count = 0;
-                run_routing();
-            }
+        } else if (did_nothing_count++ > SWITCH_INTERVAL) {
+            did_nothing_count = 0;
+            run_routing();
         }
     }
 
