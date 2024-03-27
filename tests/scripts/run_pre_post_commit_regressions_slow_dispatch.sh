@@ -20,6 +20,9 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
+# New FD2 cpp tests.
+./tests/scripts/run_cpp_fd2_tests.sh
+
 ./tests/scripts/run_cpp_unit_tests.sh
 
 echo "Checking docs build..."
