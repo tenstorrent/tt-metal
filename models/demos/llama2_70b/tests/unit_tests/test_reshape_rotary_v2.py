@@ -113,7 +113,7 @@ def get_rot_transformation_mat(dhead):
     return rot_emb_matrix
 
 
-def gather_cos_sin(dhead, end, position_ids):
+def compute_gather_cos_sin(dhead, end, position_ids):
     cos, sin = precompute_freqs(dhead, end)
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
@@ -205,7 +205,7 @@ def run_test_LlamaReshape(
             model_config,
         )
 
-        cos, sin = gather_cos_sin(
+        cos, sin = compute_gather_cos_sin(
             dhead=head_dim, end=configuration.max_seq_len * 2, position_ids=torch.arange(start_pos, start_pos + seq_len)
         )
         tt_inp = [inp[0], inp[1], cos, sin]
@@ -215,7 +215,7 @@ def run_test_LlamaReshape(
         tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
     elif implementation == "pytorch":
         tt_model = PytorchLlamaRotaryMultiplyAddModel(hugging_face_reference_model, layer_num)
-        cos, sin = gather_cos_sin(
+        cos, sin = compute_gather_cos_sin(
             dhead=head_dim, end=configuration.max_seq_len * 2, position_ids=torch.arange(start_pos, start_pos + seq_len)
         )
         tt_out = tt_model(inp[0], inp[1], cos, sin)

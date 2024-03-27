@@ -14,7 +14,9 @@ from models.demos.llama2_70b.tt.llama_common import (
     generate_rot_emb,
     get_weight_cache_path,
     get_rotation_mat,
-    get_rotation_mat_prefill,
+    get_rot_transformation_mat,
+    gather_cos_sin,
+    precompute_freqs,
 )
 
 
@@ -68,6 +70,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
         self.llm_mode = model_config["LLM_MODE"]
+
+        self.transformation_mats = [
+            torch2tt_tensor(get_rot_transformation_mat(self.head_dim), device) for device in devices
+        ]
 
         if load_weights:
             self.load_weights()
@@ -280,15 +286,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-
         if self.llm_mode == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
-            rot_mat = get_rotation_mat_prefill(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
+            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
+            cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
@@ -304,21 +309,39 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             # expected shapes:
             # x: [batch, 1, seq_len, hidden_dim]
             # start_pos: int
-            # rot_mat: [batch, seq_len, head_dim, head_dim]
+            # cos_gathered: [1, 1, seq_len, head_dim]
+            # sin_gathered: [1, 1, seq_len, head_dim]
             # attn_mask: [batch, self.n_heads, seq_len, seq_len]
             assert x.size() == (batch, 1, seq_len, self.hidden_size)
-            assert rot_mat.size() == (batch, seq_len, self.head_dim, self.head_dim)
+            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
+            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
-            xs, rot_mats, attn_masks = [], [], []
+            xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
             for i in range(self.num_devices):
                 xs.append(
                     ttnn.as_tensor(x.clone(), dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
                 )
-                rot_mats.append(as_tensor(rot_mat.clone(), f"rot_mat_prefill_{seq_len}", i))
+                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
+                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
+            rot_mats = [cos_gathereds, sin_gathereds]
+
+            if self.emulated:
+                # save l1 space by sharing the same input across "devices"
+                for i in range(1, self.num_devices):
+                    # x_multichip[i].deallocate(True)
+                    rot_mats[0][i].deallocate(True)
+                    rot_mats[1][i].deallocate(True)
+                    attn_masks[i].deallocate(True)
+                    # x_multichip[i] = x_multichip[0]
+                    rot_mats[0][i] = rot_mats[0][0]
+                    rot_mats[1][i] = rot_mats[1][0]
+                    attn_masks[i] = attn_masks[0]
+
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+            rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             rot_mat = get_rotation_mat(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
             rot_mat = rot_mat[:, :1]
 
@@ -379,15 +402,17 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
                     attn_masks[i], sharded_mem_config=attention_mask_memconfig
                 )
-        if self.emulated:
-            # save l1 space by sharing the same input across "devices"
-            for i in range(1, self.num_devices):
-                # x_multichip[i].deallocate(True)
-                rot_mats[i].deallocate(True)
-                attn_masks[i].deallocate(True)
-                # x_multichip[i] = x_multichip[0]
-                rot_mats[i] = rot_mats[0]
-                attn_masks[i] = attn_masks[0]
+
+            if self.emulated:
+                # save l1 space by sharing the same input across "devices"
+                for i in range(1, self.num_devices):
+                    # x_multichip[i].deallocate(True)
+                    rot_mats[i].deallocate(True)
+                    attn_masks[i].deallocate(True)
+                    # x_multichip[i] = x_multichip[0]
+                    rot_mats[i] = rot_mats[0]
+                    attn_masks[i] = attn_masks[0]
+
         return (
             xs,
             start_pos,
@@ -842,30 +867,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         query_layer_ret = []
         for i in range(len(query_layer)):
             # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
-            query_layer[i] = tt_lib.tensor.pad(
-                query_layer[i], [1, self.padded_local_heads, seq_len, self.head_dim], [0, 0, 0, 0], 0.0
-            )
-            query_layer[i] = tt_lib.tensor.transpose(query_layer[i], 1, 2)
-            # query_layer: ttnn.Shape([1, seq_len, 32, 128]) -> [bsz, seq_len, padded_heads, head_dim]
-            # rot_mats: ttnn.Shape([1, seq_len, 128, 128]) -> [bsz, seq_len, head_dim, head_dim]
-            query_layer[i] = tt_lib.operations.primary.matmul(
-                query_layer[i],
-                rot_mats[i],
-                # program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-            )
-            # query_layer: [bsz, n_heads, seq_len, head_dim]
-            query_layer[i] = tt_lib.tensor.transpose(
-                query_layer[i], 1, 2, output_mem_config=self.model_config["L1_MEMCFG"]
-            )
+
             query_layer_ret.append(
-                tt_lib.tensor.unpad(
-                    query_layer[i],
-                    [0, 0, 0, 0],
-                    [1 - 1, self.n_local_heads - 1, seq_len - 1, self.head_dim - 1],
-                    output_mem_config=self.model_config["DRAM_MEMCFG"],
-                )
+                self.apply_rotary_prefill(query_layer[i], rot_mats[0][i], rot_mats[1][i], self.transformation_mats[i])
             )
             query_layer[i].deallocate(True)
 
@@ -873,31 +877,24 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         key_layer_ret = []
         for i in range(len(key_layer)):
             # key_layer: ttnn.Shape([1, 1, seq_len, 128])
-            key_layer[i] = tt_lib.tensor.pad(
-                key_layer[i], [1, self.padded_local_heads, seq_len, self.head_dim], [0, 0, 0, 0], 0.0
-            )
-            key_layer[i] = tt_lib.tensor.transpose(key_layer[i], 1, 2)
-            # key_layer: ttnn.Shape([1, seq_len, 32, 128])
-            # rot_mats: ttnn.Shape([1, seq_len, 128, 128])
-            key_layer[i] = tt_lib.operations.primary.matmul(
-                key_layer[i],
-                rot_mats[i],
-                # program_config=self.model_config["ROT_MAT_K_MM_PROGCFG"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
-                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-            )
-            key_layer[i] = tt_lib.tensor.transpose(key_layer[i], 1, 2, output_mem_config=self.model_config["L1_MEMCFG"])
             key_layer_ret.append(
-                tt_lib.tensor.unpad(
-                    key_layer[i],
-                    [0, 0, 0, 0],
-                    [1 - 1, self.n_local_kv_heads - 1, seq_len - 1, self.head_dim - 1],
-                    output_mem_config=self.model_config["DRAM_MEMCFG"],
-                )
+                self.apply_rotary_prefill(key_layer[i], rot_mats[0][i], rot_mats[1][i], self.transformation_mats[i])
             )
             key_layer[i].deallocate(True)
 
         return query_layer_ret, key_layer_ret, value_layer
+
+    def apply_rotary_prefill(self, x, cos, sin, transform_mat):
+        batch, n_heads, _, _ = x.shape
+
+        cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
+        sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
+
+        x_transformed = ttnn.matmul(x, transform_mat)
+
+        x_cos = ttnn.mul(cos, x)
+        x_sin = ttnn.mul(sin, x_transformed)
+        return ttnn.add(x_cos, x_sin)
 
     def prefill_attn_mqa(
         self,
