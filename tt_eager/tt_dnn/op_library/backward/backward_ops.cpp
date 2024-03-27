@@ -209,8 +209,18 @@ std::vector<Tensor> div_bw(const Tensor& grad, const Tensor& input, const Tensor
 
 std::vector<Tensor> _rdiv_bw(const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    float t_nan  = std::nanf("");
+    float t_inf = std::numeric_limits<float>::infinity();
     if (round_mode=="None"){
-        Tensor result = mul(neg(grad, output_mem_config) , (mul_unary(recip(square(input, output_mem_config)), scalar, output_mem_config)), std::nullopt, output_mem_config);
+        Tensor result = where(nez(input), mul(neg(grad, output_mem_config) , (mul_unary(recip(square(input, output_mem_config)), scalar, output_mem_config)), std::nullopt, output_mem_config), t_nan, output_mem_config);
+        if (scalar>0){
+            result = where(logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config), t_inf, result, output_mem_config);
+            result = where(logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
+        }
+        else if (scalar<0){
+            result = where(logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
+            result = where(logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config), t_inf, result, output_mem_config);
+        }
         grad_tensor.emplace_back(result);
     }
     else{
@@ -1388,9 +1398,11 @@ std::vector<Tensor> relu6_bw(const Tensor& grad, const Tensor& input, const Memo
 
 std::vector<Tensor> _rpow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    float t_nan  = std::nanf("");
     Tensor grad_result = zeros_like(input, output_mem_config);
     if (exponent != 0.0){
         grad_result = mul(grad, mul_unary(pow(input, exponent - 1, output_mem_config), exponent, output_mem_config), std::nullopt, output_mem_config);
+        grad_result = where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
