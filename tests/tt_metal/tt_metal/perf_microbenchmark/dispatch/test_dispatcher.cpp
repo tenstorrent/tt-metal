@@ -336,6 +336,7 @@ void initialize_dram_banks(Device *device)
 }
 
 int main(int argc, char **argv) {
+    log_info(tt::LogTest, "test_dispatcher.cpp - Test Start");
     init(argc, argv);
     std::srand(std::time(nullptr)); // Seed the RNG
 
@@ -569,10 +570,10 @@ int main(int argc, char **argv) {
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        log_info(LogTest, "test_dispatcher.cpp - Test Passed");
         return 0;
     } else {
-        log_fatal(LogTest, "Test Failed\n");
+        log_fatal(LogTest, "test_dispatcher.cpp - Test Failed\n");
         return 1;
     }
 }
