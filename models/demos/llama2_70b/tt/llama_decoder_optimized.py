@@ -49,7 +49,6 @@ class TtLlamaDecoder_optimized:
         self.emulated = emulated
         self.batched_attn = self.num_devices == 8
         self.padded_local_heads = 32
-        self.llm_mode = model_config["LLM_MODE"]
 
         self.layer_name = f"{base_url}.{layer_num}"
 
@@ -83,6 +82,11 @@ class TtLlamaDecoder_optimized:
 
         if load_weights:
             self.load_weights()
+
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+        self.attention.set_model_config(model_config)
+        self.mlp.set_model_config(model_config)
 
     def load_weights(self):
         """
@@ -168,7 +172,7 @@ class TtLlamaDecoder_optimized:
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        if self.llm_mode == "prefill":
+        if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
@@ -222,7 +226,7 @@ class TtLlamaDecoder_optimized:
                     rot_mats[1][i] = rot_mats[1][0]
                     attn_masks[i] = attn_masks[0]
 
-        elif self.llm_mode == "decode":
+        elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
@@ -315,12 +319,12 @@ class TtLlamaDecoder_optimized:
         start_pos: int,
         attn_masks: list,
     ) -> tt_lib.tensor.Tensor:
-        if self.llm_mode == "prefill":
+        if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks)
-        elif self.llm_mode == "decode":
+        elif self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.llm_mode}")
+            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
     def decode_forward(
         self,

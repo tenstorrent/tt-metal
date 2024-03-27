@@ -69,7 +69,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.kv_cache_dir = kv_cache_dir
         self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
-        self.llm_mode = model_config["LLM_MODE"]
 
         self.transformation_mats = [
             torch2tt_tensor(get_rot_transformation_mat(self.head_dim), device) for device in devices
@@ -78,6 +77,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         if load_weights:
             self.load_weights()
             self.init_kv_cache()
+
+    def set_model_config(self, model_config):
+        self.model_config = model_config
 
     def init_kv_cache(self):
         """
@@ -286,7 +288,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        if self.llm_mode == "prefill":
+        if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
@@ -338,7 +340,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     rot_mats[1][i] = rot_mats[1][0]
                     attn_masks[i] = attn_masks[0]
 
-        elif self.llm_mode == "decode":
+        elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
             rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
@@ -430,12 +432,12 @@ class TtLlamaAttention_optimized(torch.nn.Module):
     ) -> tt_lib.tensor.Tensor:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
-        if self.llm_mode == "decode":
+        if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif self.llm_mode == "prefill":
+        elif self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
-            raise ValueError(f"Invalid mode: {self.llm_mode}")
+            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
     def decode_forward(
         self,
