@@ -181,7 +181,7 @@ def generate_report(outFolder, nameAppend):
 def main():
     from optparse import OptionParser
 
-    usage = "tracy_python.py [-m module | scriptfile] [arg] ..."
+    usage = "python -m tracy.py [-m module | scriptfile] [arg] ..."
     parser = OptionParser(usage=usage)
     parser.allow_interspersed_args = False
     parser.add_option("-m", dest="module", action="store_true", help="Profile a library module.", default=False)
@@ -268,6 +268,7 @@ def main():
                 envVars["TRACY_PORT"] = options.port
 
             testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
+            logger.info(f"Test process started")
 
             def signal_handler(sig, frame):
                 os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)

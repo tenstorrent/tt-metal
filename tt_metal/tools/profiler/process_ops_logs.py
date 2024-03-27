@@ -141,8 +141,9 @@ def append_device_data(ops, deviceLogFolder):
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
-                    if core not in cores:
-                        cores.add(core)
+                    if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                        if core not in cores:
+                            cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
                 deviceOp["device_time"] = {
                     analysis: data["series"] for analysis, data in deviceOpTime["analysis"].items()

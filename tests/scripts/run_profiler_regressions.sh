@@ -10,7 +10,7 @@ run_profiling_test(){
       exit 1
     fi
 
-    echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
+    echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
 
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
@@ -23,7 +23,9 @@ run_profiling_test(){
 
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
 
-    ls $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
+    CORE_COUNT=7
+    res=$(verify_perf_column "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$CORE_COUNT" "1" "1")
+    echo $res
 
     remove_default_log_locations
 }
@@ -39,8 +41,6 @@ cd $TT_METAL_HOME
 
 if [[ $1 == "PROFILER" ]]; then
     run_profiling_test
-elif [[ $1 == "TRACY" ]]; then
-    run_tracy_test
 elif [[ $1 == "POST_PROC" ]]; then
     run_post_proc_test
 else
