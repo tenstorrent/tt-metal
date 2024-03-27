@@ -37,10 +37,10 @@ void write_l1_buffers(std::ostream &os) {
             if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                 uint32_t bank_index = 0;
                 for (int page_index = 0; page_index < num_pages; page_index++) {
-                    auto address = buffer->page_address(bank_index, page_index);
+                    auto page_address = buffer->page_address(bank_index, page_index);
                     auto core = buffer->logical_core_from_bank_id(bank_index);
                     bank_index = (bank_index + 1) % num_banks;
-                    core_to_page_map[core][address] =
+                    core_to_page_map[core][page_address] =
                         fmt::format("\tBuffer {:3}\tPage {:4}\tPage Size {:9}", buffer_index, page_index, page_size);
                 }
             } else {
@@ -48,8 +48,8 @@ void write_l1_buffers(std::ostream &os) {
                     auto dev_page_index = buffer->get_host_to_dev_mapped_page_id(page_index);
                     auto core = buffer->get_core_from_dev_page_id(dev_page_index);
                     auto bank_index = device->bank_ids_from_logical_core(core)[0];
-                    auto address = buffer->sharded_page_address(bank_index, dev_page_index);
-                    core_to_page_map[core][address] =
+                    auto page_address = buffer->sharded_page_address(bank_index, dev_page_index);
+                    core_to_page_map[core][page_address] =
                         fmt::format("\tBuffer {:3}\tPage {:4}\tPage Size {:9}", buffer_index, page_index, page_size);
                 }
             }
@@ -76,8 +76,76 @@ void print_l1_buffers(const std::optional<std::string> &file_name = std::nullopt
         write_l1_buffers(std::cout);
     }
 }
+
+struct BufferPage {
+    uint32_t address;
+    uint32_t device_id;
+    uint32_t core_y;
+    uint32_t core_x;
+    uint32_t page_index;
+    uint32_t page_address;
+    uint32_t page_size;
+    BufferType buffer_type;
+};
+
+std::vector<BufferPage> get_buffer_pages() {
+    std::vector<BufferPage> pages;
+    for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP) {
+        if (buffer->buffer_type() != BufferType::L1) {
+            continue;
+        }
+
+        auto [device_id, address] = key;
+        auto device = buffer->device();
+
+        uint32_t page_size = buffer->page_size();
+        auto num_pages = buffer->num_pages();
+        auto num_banks = device->num_banks(buffer->buffer_type());
+
+        if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+            uint32_t bank_index = 0;
+            for (int page_index = 0; page_index < num_pages; page_index++) {
+                auto page_address = buffer->page_address(bank_index, page_index);
+                auto core = buffer->logical_core_from_bank_id(bank_index);
+                bank_index = (bank_index + 1) % num_banks;
+
+                BufferPage buffer_page = {};
+                buffer_page.address = address;
+                buffer_page.device_id = device_id;
+                buffer_page.core_y = core.y;
+                buffer_page.core_x = core.x;
+                buffer_page.page_index = page_index;
+                buffer_page.page_address = page_address;
+                buffer_page.page_size = page_size;
+                buffer_page.buffer_type = buffer->buffer_type();
+                pages.push_back(buffer_page);
+            }
+        } else {
+            for (int page_index = 0; page_index < num_pages; page_index++) {
+                auto dev_page_index = buffer->get_host_to_dev_mapped_page_id(page_index);
+                auto core = buffer->get_core_from_dev_page_id(dev_page_index);
+                auto bank_index = device->bank_ids_from_logical_core(core)[0];
+                auto page_address = buffer->sharded_page_address(bank_index, dev_page_index);
+
+                BufferPage buffer_page = {};
+                buffer_page.address = address;
+                buffer_page.device_id = device_id;
+                buffer_page.core_y = core.y;
+                buffer_page.core_x = core.x;
+                buffer_page.page_index = page_index;
+                buffer_page.page_address = page_address;
+                buffer_page.page_size = page_size;
+                buffer_page.buffer_type = buffer->buffer_type();
+                pages.push_back(buffer_page);
+            }
+        }
+    }
+    return pages;
+}
+
 }  // namespace reports
 
+using reports::get_buffer_pages;
 using reports::print_l1_buffers;
 
 }  // namespace ttnn

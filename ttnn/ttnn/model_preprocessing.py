@@ -550,17 +550,17 @@ def preprocess_model(
     if reader_patterns_cache is None:
         reader_patterns_cache = {}
 
-    if model_name is None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
+    if model_name is None and not ttnn.ENABLE_MODEL_CACHE:
         logger.warning(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
         )
 
-    elif model_name is None and ttnn.TTNN_ENABLE_MODEL_CACHE:
+    elif model_name is None and ttnn.ENABLE_MODEL_CACHE:
         logger.warning(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
         )
 
-    elif model_name is not None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
+    elif model_name is not None and not ttnn.ENABLE_MODEL_CACHE:
         logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
 
     if convert_to_ttnn is None:
@@ -568,7 +568,7 @@ def preprocess_model(
         def convert_to_ttnn(model, full_name):
             return True
 
-    if model_name is None or not ttnn.TTNN_ENABLE_MODEL_CACHE:
+    if model_name is None or not ttnn.ENABLE_MODEL_CACHE:
         model = _initialize_model_and_preprocess_parameters(
             initialize_model=initialize_model,
             run_model=run_model,
