@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -89,7 +88,8 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             output_dram_noc_xy.y = 16;
             break;
         case SanitizeAlignment:
-            l1_buffer_addr += 1;
+            l1_buffer_addr += 16; // This is illegal because reading DRAM->L1 needs DRAM alignment
+                                  // requirements (32 byte aligned).
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
