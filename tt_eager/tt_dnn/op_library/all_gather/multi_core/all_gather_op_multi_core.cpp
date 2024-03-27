@@ -298,7 +298,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         eth_sem_addrs.push_back(eth_sem_addr);
         eth_sem_addr += all_gather_config.get_semaphore_size();
         eth_buffer_addrs.push_back(eth_buffer_addr);
-        eth_buffer_addr += all_gather_config.get_eth_buffer_size();
+        eth_buffer_addr += (all_gather_config.get_eth_buffer_size() + 16);
+        TT_ASSERT((eth_buffer_addr - 16) % 16 == 0);
     }
 
     for (uint32_t i = 0; i < num_links; ++i) {
@@ -405,7 +406,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 (num_full_chunks_per_worker.at(b) + (rem_pages_per_worker.at(b) > 0 ? 1 : 0)) *
                 num_transfers);
             edm_semaphores_base_address.push_back(all_gather_config.get_eth_sems_l1_base_byte_address() + b * all_gather_config.get_semaphore_size());
-            link_buffer_sender_addresses.push_back(all_gather_config.get_eth_buffers_l1_base_byte_address() + b * all_gather_config.get_eth_buffer_size());
+            link_buffer_sender_addresses.push_back(all_gather_config.get_eth_buffers_l1_base_byte_address() + b * (all_gather_config.get_eth_buffer_size() + 16));
+            TT_ASSERT((link_buffer_sender_addresses.back() + all_gather_config.get_eth_buffer_size()) % 16 == 0);
         }
         for(uint32_t b = 0; b < all_gather_config.get_num_buffers_per_link(); ++b) {
             log_trace(tt::LogOp, "rem_pages_per_worker[{}]: {}", b, rem_pages_per_worker.at(b));
@@ -424,7 +426,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 (num_full_chunks_per_worker.at(b) + (rem_pages_per_worker.at(b) > 0 ? 1 : 0)) *
                 num_transfers);
             receiver_semaphores_base_address.push_back(all_gather_config.get_eth_sems_l1_base_byte_address() + b * all_gather_config.get_semaphore_size());
-            link_buffer_receiver_addresses.push_back(all_gather_config.get_eth_buffers_l1_base_byte_address() + b * all_gather_config.get_eth_buffer_size());
+            link_buffer_receiver_addresses.push_back(all_gather_config.get_eth_buffers_l1_base_byte_address() + b * (all_gather_config.get_eth_buffer_size() + 16));
+            TT_ASSERT((link_buffer_sender_addresses.back() + all_gather_config.get_eth_buffer_size()) % 16 == 0);
         }
 
 

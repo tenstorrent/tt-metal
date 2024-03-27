@@ -37,9 +37,10 @@ class AllGatherConfig {
         this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16;
         this->semaphore_offset = this->semaphore_size * this->num_buffers; // TODO: Remove this once dedicated semaphore space for user kernels are added
         this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
+        this->eth_channel_headers_size = this->num_buffers * 16;
 
         uint32_t const page_size = input_tensor.buffer()->page_size();
-        this->eth_buffer_size = round_down((total_l1_buffer_space - this->semaphore_offset) / this->num_buffers, page_size);
+        this->eth_buffer_size = round_down((total_l1_buffer_space - this->semaphore_offset - this->eth_channel_headers_size) / this->num_buffers, page_size);
 
         TT_FATAL(eth_buffer_size == 0 or num_buffers <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
         TT_FATAL(this->eth_buffer_size * this->num_buffers + this->semaphore_offset <= total_l1_buffer_space);
@@ -118,6 +119,7 @@ class AllGatherConfig {
     uint32_t semaphore_offset;
     uint32_t eth_buffers_l1_base_byte_address;
     uint32_t eth_sems_l1_base_byte_address;
+    uint32_t eth_channel_headers_size;
     bool is_sharded;
     const bool enable_bidirectional;
     const bool input_is_dram;

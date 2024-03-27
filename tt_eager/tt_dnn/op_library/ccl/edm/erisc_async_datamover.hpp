@@ -80,11 +80,14 @@ class ChannelBuffer final {
         worker_semaphore_l1_address(worker_semaphore_l1_address),
         num_workers(num_workers),
         num_messages_moved(0),
-        channel_bytes_sent_address(&erisc_info->channels[eth_transaction_channel].bytes_sent),
-        channel_bytes_acked_address(&erisc_info->channels[eth_transaction_channel].receiver_ack),
+        channel_bytes_sent_address(reinterpret_cast<volatile uint32_t*>(address + size_in_bytes + offsetof(eth_channel_sync_t, bytes_sent))),
+        channel_bytes_acked_address(reinterpret_cast<volatile uint32_t*>(address + size_in_bytes + offsetof(eth_channel_sync_t, receiver_ack))),
         total_num_messages_to_move(total_num_messages_to_move),
         state(is_sender_side ? STATE::WAITING_FOR_WORKER : STATE::WAITING_FOR_ETH),
         is_sender_completion_pending(false) {
+
+        *(this->channel_bytes_sent_address) = 0;
+        *(this->channel_bytes_acked_address) = 0;
 
         clear_local_semaphore();
 
@@ -298,24 +301,20 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 FORCE_INLINE void sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_channel) {
     if (!eth_txq_is_busy() && sender_buffer_channel.eth_is_receiver_channel_send_done()) {
         bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
-        if (!sender_buffer_channel.is_send_completion_pending()) {
-            static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
-            eth_send_bytes_over_channel_payload_only(
-                sender_buffer_channel.get_buffer_address(),
-                sender_buffer_channel.get_remote_eth_buffer_address(),
-                sender_buffer_channel.get_current_payload_size(),
-                sender_buffer_channel.get_eth_transaction_channel(),
-                sender_buffer_channel.get_current_payload_size(),
-                sender_buffer_channel.get_current_payload_size() >> ETH_BYTES_TO_WORDS_SHIFT);
+        static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 
-            sender_buffer_channel.set_send_completion_pending(true);
-        }
+        *(sender_buffer_channel.get_channel_bytes_sent_address()) = sender_buffer_channel.get_current_payload_size();
+        *(sender_buffer_channel.get_channel_bytes_acked_address()) = 0;
 
-        if (sender_buffer_channel.is_send_completion_pending() && !eth_txq_is_busy()) {
-            sender_buffer_channel.eth_send_payload_complete_signal_over_channel();
-            sender_buffer_channel.set_send_completion_pending(false);
-            sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_ETH);
-        }
+        eth_send_bytes_over_channel_payload_only(
+            sender_buffer_channel.get_buffer_address(),
+            sender_buffer_channel.get_remote_eth_buffer_address(),
+            sender_buffer_channel.get_current_payload_size() + 16,
+            sender_buffer_channel.get_eth_transaction_channel(),
+            sender_buffer_channel.get_current_payload_size() + 16,
+            (sender_buffer_channel.get_current_payload_size() + 16) >> ETH_BYTES_TO_WORDS_SHIFT);
+
+        sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_ETH);
     }
 }
 
