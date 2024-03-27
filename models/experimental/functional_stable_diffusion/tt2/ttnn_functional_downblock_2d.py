@@ -79,6 +79,7 @@ class downblock2d:
                 dtype=dtype,
             )
 
+            hidden_states = ttnn.reallocate(hidden_states)
             output_states += (hidden_states,)
 
         if add_downsample:

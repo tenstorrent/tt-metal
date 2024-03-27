@@ -80,6 +80,7 @@ class cross_attention_upblock2d:
         cross_attention_dim=1280,
         attn_num_head_channels=1,
         only_cross_attention: bool = False,
+        index=-1,
     ):
         for i, (resnet, attention) in enumerate(zip(self.resnets, self.attentions)):
             ttnn.dump_device_memory_state(self.device, prefix="in_uplock_")
@@ -117,9 +118,7 @@ class cross_attention_upblock2d:
                 )
             hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
             # breakpoint()
-            ttnn.dump_device_memory_state(self.device, prefix="before_deallocate_")
             ttnn.deallocate(on_dev_res_hidden_states)
-            ttnn.dump_device_memory_state(self.device, prefix="after_deallocate_")
             # breakpoint()
             # hidden_states = ttnn.reallocate(hidden_states)
             # ttnn.dump_device_memory_state(self.device, prefix="after_reallocate_before_resnet")
@@ -136,6 +135,7 @@ class cross_attention_upblock2d:
                 eps=resnet_eps,
                 pre_norm=resnet_pre_norm,
                 non_linearity=resnet_act_fn,
+                index=index,
             )
             if not dual_cross_attention:
                 hidden_states = attention(

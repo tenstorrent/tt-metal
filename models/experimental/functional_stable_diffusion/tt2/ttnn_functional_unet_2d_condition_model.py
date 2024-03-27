@@ -238,15 +238,6 @@ class UNet2DConditionModel:
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         self.norm_num_groups = 32
-        if not self.fallback_on_groupnorm:
-            print("!!!!!!!!!!!!! GN !!!!!!!!!!!!!!!!!!!")
-
-            # parameters.conv_norm_out.weight = pad_group_norm_weight(
-            #     parameters.conv_norm_out.weight, self.norm_num_groups, self.conv_out.in_channels
-            # )
-            # parameters.conv_norm_out.bias = pad_group_norm_weight(
-            #     parameters.conv_norm_out.bias, self.norm_num_groups, self.conv_out.in_channels
-            # )
         (
             self.gn_expected_input_sharded_memory_config,
             self.group_norm_core_grid,
@@ -258,44 +249,50 @@ class UNet2DConditionModel:
             is_height_sharded=False,
         )
 
-        if self.gn_expected_input_sharded_memory_config.memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
-            num_cores_across_channel = self.group_norm_core_grid.y
-        elif self.gn_expected_input_sharded_memory_config.memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
-            num_cores_across_channel = 1
-        else:
-            num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
+        if not self.fallback_on_groupnorm:
+            if (
+                self.gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                num_cores_across_channel = self.group_norm_core_grid.y
+            elif (
+                self.gn_expected_input_sharded_memory_config.memory_layout
+                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+            ):
+                num_cores_across_channel = 1
+            else:
+                num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
 
-        self.parameters.conv_norm_out.weight = ttnn.create_group_norm_weight_bias_rm(
-            ttnn.to_torch(self.parameters.conv_norm_out.weight), self.conv_out.in_channels, num_cores_across_channel
-        )
-        self.parameters.conv_norm_out.bias = ttnn.create_group_norm_weight_bias_rm(
-            ttnn.to_torch(self.parameters.conv_norm_out.bias), self.conv_out.in_channels, num_cores_across_channel
-        )
-        self.parameters.conv_norm_out.weight = ttnn.from_torch(
-            self.parameters.conv_norm_out.weight,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.parameters.conv_norm_out.bias = ttnn.from_torch(
-            self.parameters.conv_norm_out.bias,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        self.norm_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
-            self.conv_out.in_channels, self.norm_num_groups, num_cores_across_channel
-        )
-        self.norm_input_mask = ttnn.from_torch(
-            self.norm_input_mask_torch_tensor,
-            dtype=ttnn.DataType.BFLOAT8_B,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            self.parameters.conv_norm_out.weight = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.conv_norm_out.weight), self.conv_out.in_channels, num_cores_across_channel
+            )
+            self.parameters.conv_norm_out.bias = ttnn.create_group_norm_weight_bias_rm(
+                ttnn.to_torch(self.parameters.conv_norm_out.bias), self.conv_out.in_channels, num_cores_across_channel
+            )
+            self.parameters.conv_norm_out.weight = ttnn.from_torch(
+                self.parameters.conv_norm_out.weight,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.parameters.conv_norm_out.bias = ttnn.from_torch(
+                self.parameters.conv_norm_out.bias,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.norm_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
+                self.conv_out.in_channels, self.norm_num_groups, num_cores_across_channel
+            )
+            self.norm_input_mask = ttnn.from_torch(
+                self.norm_input_mask_torch_tensor,
+                dtype=ttnn.DataType.BFLOAT8_B,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # breakpoint()
         # self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, self.norm_num_groups, in_channels)
@@ -523,10 +520,7 @@ class UNet2DConditionModel:
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if up_block_type == "CrossAttnUpBlock2D":
-                # breakpoint()
-                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_sample_reallocate_")
                 # sample = ttnn.reallocate(sample)
-                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_")
                 sample = up_block(
                     hidden_states=sample,
                     temb=emb,
@@ -552,6 +546,7 @@ class UNet2DConditionModel:
                     only_cross_attention=only_cross_attention[i],
                     upcast_attention=upcast_attention,
                     resnet_time_scale_shift=resnet_time_scale_shift,
+                    index=i,
                 )
             elif up_block_type == "UpBlock2D":
                 sample = up_block(

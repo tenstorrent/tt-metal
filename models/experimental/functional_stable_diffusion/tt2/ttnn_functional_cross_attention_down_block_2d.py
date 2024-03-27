@@ -103,5 +103,6 @@ class cross_attention_down_block_2d:
                 padding=downsample_padding,
                 use_conv=True,
             )
+            hidden_states = ttnn.reallocate(hidden_states)
             output_states += (hidden_states,)
         return hidden_states, output_states
