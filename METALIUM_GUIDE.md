@@ -1,6 +1,6 @@
 ## TT Architecture and Metalium Overview
 
-* [Near Memory Compute](#near-memory-compute)
+* [Near Memory Compute in a Mesh](#near-memory-compute-in-a-mesh)
 * [Scalable Architecture](#scalable-architecture)
 * [MIMD and Control of Both Compute and Data](#mimd-and-control-of-both-compute-and-data)
 * [Everything is a RISCV kernel](#everything-is-a-riscv-kernel)
@@ -10,10 +10,11 @@
     - Compute Kernels 
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
+* [Native Support to Tiled Compute and Data](#native-support-for-tiled-compute-and-data)
 * [Interleaved and Sharded Buffers](#interleaved-and-sharded-buffers)
 * [Eltwise Binary Kernel](#eltwise-binary-kernel)
 
-### Near Memory Compute
+### Near Memory Compute in a Mesh
 
 Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Engine, a Vector engine, and 1 MB scratch pad SRAM.   
 
@@ -23,6 +24,8 @@ Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Eng
 ### Scalable Architecture
 
 Scalable at the chip level and multi-chip level
+<img width="2141" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+
 
 ### MIMD and Control of Both Compute and Data
 
