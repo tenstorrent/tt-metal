@@ -539,16 +539,22 @@ static void dump_core(
     validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
 
     if (watcher::enabled) {
+        auto &disabled_features_set = tt::llrt::OptionsG.get_watcher_disabled_features();
         // Dump state only gathered if device is compiled w/ watcher
-        dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
+        if (disabled_features_set.find("STATUS") == disabled_features_set.end())
+            dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core)
             dump_l1_status(f, device, core,  &mbox_data->launch);
-        dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
-        dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
-        dump_pause_status(core, &mbox_data->pause_status, paused_cores);
-        dump_ring_buffer(f, device, core);
+        if (disabled_features_set.find("NOC_SANITIZE") == disabled_features_set.end())
+            dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
+        if (disabled_features_set.find("ASSERT") == disabled_features_set.end())
+            dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
+        if (disabled_features_set.find("PAUSE") == disabled_features_set.end())
+            dump_pause_status(core, &mbox_data->pause_status, paused_cores);
+        if (disabled_features_set.find("RING_BUFFER") == disabled_features_set.end())
+            dump_ring_buffer(f, device, core);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -649,7 +655,18 @@ static void watcher_loop(int sleep_usecs) {
     watcher::server_running = true;
     int count = 0;
 
-    log_info(LogLLRuntime, "Watcher thread watching...");
+    // Print to the user which features are disabled via env vars.
+    string disabled_features = "";
+    auto &disabled_features_set = tt::llrt::OptionsG.get_watcher_disabled_features();
+    if (!disabled_features_set.empty()) {
+        for (auto &feature : disabled_features_set) {
+            disabled_features += feature + ",";
+        }
+        disabled_features.pop_back();
+    } else {
+        disabled_features = "None";
+    }
+    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     double last_elapsed_time = watcher::get_elapsed_secs();
     while (true) {

@@ -82,6 +82,15 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;
+
+    // Any watcher features to disabled based on env var.
+    for (std::string feature: {"ASSERT", "PAUSE", "RING_BUFFER", "NOC_SANITIZE", "STATUS"}) {
+        std::string env_var("TT_METAL_WATCHER_DISABLE_");
+        env_var += feature;
+        if (getenv(env_var.c_str()) != nullptr) {
+            watcher_disabled_features.insert(feature);
+        }
+    }
 }
 
 void RunTimeOptions::ParseDPrintEnv() {
