@@ -83,6 +83,8 @@ print(output)
 
 
 <h3>
+
+[TT-Metalium Programming Guide](./METALIUM_GUIDE.md)
    
 [TT-Metalium API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
 
