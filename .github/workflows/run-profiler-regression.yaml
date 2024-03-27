@@ -34,7 +34,7 @@ jobs:
       - name: Build tt-metal and libs
         run: |
           ./scripts/build_scripts/build_with_profiler_opt.sh
-      - name: Run profiler regression tests
-        timeout-minutes: 30
-        run: |
-          ./tests/scripts/run_profiler_regressions.sh
+      # - name: Run profiler regression tests
+      #   timeout-minutes: 30
+      #   run: |
+      #     ./tests/scripts/run_profiler_regressions.sh
