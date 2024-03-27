@@ -91,6 +91,7 @@ def test_sharded_tile(
         ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), 98),
         ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), 98),
         ([1, 1, 32, 40], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (32, 40), 1),
+        ([2, 64, 64, 320], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 40), 64),
     ],
 )
 @pytest.mark.parametrize(
@@ -116,7 +117,7 @@ def test_sharded_rm(
         device,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_type=ttl.tensor.BufferType.DRAM,
         ),
     )
 
