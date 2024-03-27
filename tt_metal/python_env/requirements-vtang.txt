@@ -1,0 +1,66 @@
+# As this is a development environment, some build backend dependencies may
+# not be available during environment installation. We recommend setuptools
+# and wheel before installing this requirements.txt file.
+
+# During dep resolution, black may install platformdirs >=4.0.0, which is
+# a breaking dependency for virtualenv installed by pre-commit. virtualenv
+# requires <4.0.0 platformdirs, so we're pinning platformdirs here
+platformdirs<4.0.0
+pre-commit==3.0.4
+black==23.10.1
+build==0.10.0
+twine==4.0.2
+yamllint==1.32.0
+mypy==1.9.0
+
+# For docs
+-r ../../docs/requirements-docs.txt
+
+# testing
+pytest==7.2.2
+pytest-timeout==2.2.0
+pytest-split==0.8.2
+jsbeautifier==1.14.7
+datasets==2.9.0
+torch==2.2.1.0+cpu
+networkx==3.1
+torchvision==0.17.1+cpu
+torchmetrics==1.3.1
+torch-fidelity==0.3.0
+transformers==4.37.2
+xlsxwriter==3.0.8
+tiktoken==0.3.3
+tqdm==4.65.0
+sentencepiece==0.1.97
+numba==0.58.1
+librosa==0.10.0
+timm==0.6.13
+opencv-python-headless==4.8.0.74
+diffusers==0.12.1
+accelerate==0.27.2
+ftfy==6.1.1
+gitpython==3.1.32
+einops==0.6.1
+# Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
+# transitive dep, which uses dill >=0.3.7, however many packages require
+# dill < 0.3.7
+multiprocess==0.70.14
+evaluate==0.4.0
+bert-score==0.3.12
+fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent-metal/tt-metal/issues/3314
+
+# eager packages
+numpy==1.24.4
+matplotlib==3.7.1
+curtsies==0.4.1
+dash==2.8.1
+debugpy>=1.6.5
+Flask>=1.0.4
+ipywidgets==8.1.1
+jupyterlab==4.0.7
+loguru==0.6.0
+plotly==5.13.0
+pyelftools==0.29
+seaborn==0.12.2
+toolz==0.12.0
+torchtrail==0.0.15

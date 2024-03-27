@@ -9,7 +9,7 @@ add_custom_target(python_env
     COMMENT "Creating Python virtual environment: ${PYTHON_ENV_DIR}"
     VERBATIM
 )
-
+# !! MAKE SURE TO GET RID OF REQUIREMENTS-VTANG.TXT !!
 add_custom_target(pip_deps
     COMMAND bash -c "source ${PYTHON_ENV_DIR}/bin/activate && python3 -m pip install -r ${CMAKE_SOURCE_DIR}/tt_metal/python_env/requirements-vtang.txt"
     # WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

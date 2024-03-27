@@ -14,7 +14,7 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0
+# from models.utility_functions import is_wormhole_b0
 
 
 class TestSuiteType(Enum):
@@ -30,7 +30,8 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 
 def void_for_whb0(x):
-    return (not is_wormhole_b0()) and x or None
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return (not ARCH_NAME == "wormhole_b0") and x or None
 
 
 def filter_empty(fn):
@@ -89,7 +90,7 @@ def get_env_dict_for_fw_tests(tt_arch):
 
 
 def default_build_full_path_to_test(namespace, executable_name, extra_params):
-    return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/{executable_name}")
+    return pathlib.Path(f"{get_git_home_dir_str()}/build/tests/{namespace}/{executable_name}")
 
 
 def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, tt_arch, build_full_path_to_test):

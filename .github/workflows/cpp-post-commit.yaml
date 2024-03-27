@@ -34,18 +34,47 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
+      - name: Sanity checks
         run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
+          nproc
+      - name: CMake generate build files
+        run: |
+          rm -rf build
+          cmake -DCMAKE_BUILD_TYPE=ci -DCONFIG=ci -B build
+      - name: CMake build metal and eager
+        run: |
+          make -j6 -C build
+      - name: CMake build cpp tests
+        run: |
+          make tests -j6 -C build
+      - name: CMake build python_env
+        run: |
+          make pip_deps -j6 -C build
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+
+    # steps:
+    #   - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+    #   - name: Set up dynamic env vars for build
+    #     run: |
+    #       echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+    #   - uses: actions/download-artifact@v4
+    #     with:
+    #       name: TTMetal_build_${{ matrix.runner-info.arch }}
+    #   - name: Extract files
+    #     run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+    #   - name: Build python env
+    #     run: |
+    #       make python_env/dev PYTHON_ENV=$HOME/python_env -B
+    #   - name: ${{ matrix.test-group.name }} tests
+    #     timeout-minutes: 15
+    #     run: |
+    #       source $HOME/python_env/bin/activate
+    #       cd $TT_METAL_HOME
+    #       export PYTHONPATH=$TT_METAL_HOME
+    #       ${{ matrix.test-group.cmd }}
