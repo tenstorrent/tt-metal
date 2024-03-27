@@ -1,3 +1,32 @@
+## TT Architecture Overview
+
+- [Near Memory Compute](#near-memory-compute)
+- [Scalable Architecture](#scalable-architecture)
+- [MIMD and Control of Both Compute and Data](#MIMD-and-control-both-compute-and-data)
+- [Everything is a RISCV kernel](#everything-is-a-riscv)
+- [Interleaved and Sharded Buffers](#interleaved-and-sharded-buffers)
+- [Eltwise Binary Kernel](#eltwise-binary-kernel)
+
+### Near Memory Compute
+
+Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), Matrix Engine, vector engine, scratch pad SRAM.   
+
+### Scalable Architecture
+
+Scalable at the chip level and multi-chip level
+
+
+### MIMD and Control Both Compute and Data
+
+- "Program cores not threads" , In TT Architecture the program specifies a kernel 
+
+### Interleaved and Sharded Buffers
+
+- Interleaved Buffers
+- Sharded Buffers
+
+### Eltwise Binary Kernel
+
 ```
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
