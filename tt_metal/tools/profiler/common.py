@@ -20,7 +20,7 @@ PROFILER_HOST_SIDE_LOG = "profile_log_host.csv"
 PROFILER_SCRIPTS_ROOT = TT_METAL_HOME / "tt_metal/tools/profiler"
 PROFILER_ARTIFACTS_DIR = TT_METAL_HOME / "generated/profiler"
 
-PROFILER_BIN_DIR = PROFILER_ARTIFACTS_DIR / "bin"
+PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
 PROFILER_LOGS_DIR = PROFILER_ARTIFACTS_DIR / ".logs"
 PROFILER_OUTPUT_DIR = PROFILER_ARTIFACTS_DIR / "reports"
 PROFILER_OPS_LOGS_DIR = PROFILER_LOGS_DIR / "ops"
@@ -31,8 +31,8 @@ TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
 TRACY_MODULE_PATH = TT_METAL_HOME / "tt_metal/third_party/tracy"
 TRACY_FILE_NAME = "tracy_profile_log_host.tracy"
 
-TRACY_CAPTURE_TOOL = "capture"
-TRACY_CSVEXPROT_TOOL = "csvexport"
+TRACY_CAPTURE_TOOL = "capture-release"
+TRACY_CSVEXPROT_TOOL = "csvexport-release"
 
 
 def rm(path):

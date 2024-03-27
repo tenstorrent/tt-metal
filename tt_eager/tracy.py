@@ -9,6 +9,7 @@ import os
 import io
 import subprocess
 import time
+import socket
 
 from loguru import logger
 
@@ -67,53 +68,12 @@ def runctx(cmd, globals, locals, partialProfile):
         finish_all_zones()
 
 
-def confirmTracyToolInstall(tool):
-    ret = True
-    if not os.path.exists(PROFILER_BIN_DIR / tool):
-        toolTracyPath = TRACY_MODULE_PATH / tool / "build/unix"
-        try:
-            logger.info(f"Building tracy profiling tool: {tool}")
-            subprocess.run(
-                f"mkdir -p {PROFILER_BIN_DIR}",
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            try:
-                subprocess.run(
-                    f"cd {toolTracyPath}; make",
-                    shell=True,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except subprocess.CalledProcessError as e:
-                subprocess.run(
-                    f"cd {toolTracyPath}; make clean; make",
-                    shell=True,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            subprocess.run(
-                f"cp {toolTracyPath}/{tool}-release {PROFILER_BIN_DIR / tool}",
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except subprocess.CalledProcessError as e:
-            ret = False
-    return ret
-
-
 def run_report_setup(verbose, port):
     toolsReady = True
 
     logger.info("Verifying tracy profiling tools")
-    toolsReady &= confirmTracyToolInstall(TRACY_CAPTURE_TOOL)
-    toolsReady &= confirmTracyToolInstall(TRACY_CSVEXPROT_TOOL)
+    toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL)
+    toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL)
 
     captureProcess = None
     if toolsReady:
@@ -139,20 +99,29 @@ def run_report_setup(verbose, port):
                 captureCommand, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
     else:
-        logger.warning(
-            "Perf report generation is skipped!! Tracy tools can't be installed,  make sure tt_metal dev packages are installed"
+        logger.error(
+            f"Tracy tools were not found. Please make sure you are on the correct build. Use scripts/build_scripts/build_with_profiler_opt.sh to build if you are not sure."
         )
+        sys.exit(1)
 
     return toolsReady, captureProcess
 
 
 def generate_report(outFolder, nameAppend):
     tracyOutFile = PROFILER_LOGS_DIR / TRACY_FILE_NAME
-    if not os.path.exists(tracyOutFile):
+    timeOut = 15
+    timeCount = 0
+    while not os.path.exists(tracyOutFile):
         logger.warning(
-            f"tracy capture output file {tracyOutFile} was not generated. Run in verbose (-v) mode to see tracy capture info"
+            f"tracy capture out not found, will try again in 1 second. Run in verbose (-v) mode to see tracy capture info"
         )
-        return
+        if timeCount > timeOut:
+            logger.error(
+                f"tracy capture output file {tracyOutFile} was not generated. Run in verbose (-v) mode to see tracy capture info"
+            )
+            sys.exit(1)
+        timeCount += 1
+        time.sleep(1)
     with open(PROFILER_LOGS_DIR / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
         subprocess.run(
             f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -f TT_DNN {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
@@ -178,6 +147,21 @@ def generate_report(outFolder, nameAppend):
     process_ops(outFolder, nameAppend, True)
 
 
+def get_available_port():
+    ip = socket.gethostbyname(socket.gethostname())
+
+    for port in range(8086, 8500):
+        try:
+            serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            serv.bind((ip, port))
+            return str(port)
+        except PermissionError as e:
+            pass
+        except OSError as e:
+            pass
+    return None
+
+
 def main():
     from optparse import OptionParser
 
@@ -189,7 +173,9 @@ def main():
     parser.add_option("-l", dest="lines", action="store_true", help="Profile every line of python code", default=False)
     parser.add_option("-r", dest="report", action="store_true", help="Generate ops report", default=False)
     parser.add_option("-v", dest="verbose", action="store_true", help="More info is printed to stdout", default=False)
-    parser.add_option("-d", dest="no_device", action="store_false", help="Do not include device data", default=True)
+    parser.add_option(
+        "--no-device", dest="device", action="store_false", help="Do not include device data", default=True
+    )
     parser.add_option(
         "-o", "--output-folder", action="store", help="Artifact output folder", type="string", dest="output_folder"
     )
@@ -214,10 +200,19 @@ def main():
     (options, args) = parser.parse_args()
     sys.argv[:] = args
 
+    if options.port:
+        port = options.port
+    else:
+        port = get_available_port()
+
     if len(args) > 0:
         doReport = False
         if options.report:
-            doReport, captureProcess = run_report_setup(options.verbose, options.port)
+            if not port:
+                logger.error("No available port found")
+                sys.exit(1)
+            logger.info(f"Using port {port}")
+            doReport, captureProcess = run_report_setup(options.verbose, port)
 
         if not doReport:
             if options.module:
@@ -261,11 +256,14 @@ def main():
             testCommand = f"python -m tracy {osCmd}"
 
             envVars = dict(os.environ)
-            if options.no_device:
+            if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
+            else:
+                if "TT_METAL_DEVICE_PROFILER" in envVars.keys():
+                    del envVars["TT_METAL_DEVICE_PROFILER"]
 
-            if options.port:
-                envVars["TRACY_PORT"] = options.port
+            if port:
+                envVars["TRACY_PORT"] = port
 
             testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
             logger.info(f"Test process started")
@@ -277,12 +275,20 @@ def main():
                 sys.exit(3)
 
             signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
 
             testProcess.communicate()
-            logger.info(f"Test fully finished. Waiting for tracy capture tool to finish ...")
-            captureProcess.communicate()
 
-            generate_report(options.output_folder, options.name_append)
+            try:
+                captureProcess.communicate(timeout=15)
+                generate_report(options.output_folder, options.name_append)
+            except subprocess.TimeoutExpired as e:
+                captureProcess.terminate()
+                captureProcess.communicate()
+                logger.error(
+                    f"No profiling data could be captured. Please make sure you are on the correct build. Use scripts/build_scripts/build_with_profiler_opt.sh to build if you are not sure."
+                )
+                sys.exit(1)
 
     else:
         parser.print_usage()
