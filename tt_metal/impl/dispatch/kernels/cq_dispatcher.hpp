@@ -14,8 +14,7 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
     std::uint32_t num_dests) {
 
     DEBUG_STATUS('N', 'W', 'P', 'W');
-    DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
-    DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr_multicast, size);
+    DEBUG_SANITIZE_NOC_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr,size);
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF));
     DEBUG_STATUS('N', 'W', 'P', 'D');
 
