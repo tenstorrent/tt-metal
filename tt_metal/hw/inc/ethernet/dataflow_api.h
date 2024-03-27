@@ -204,6 +204,22 @@ void eth_send_bytes_over_channel(
 
 
 /**
+ * Initiates an asynchronous write from the local ethernet core to a register of the connected
+ * remote ethernet core.
+ *
+ * Return value: None
+ *
+ * | Argument          | Description                                             | Type     | Valid Range | Required |
+ * |-------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | reg_addr          | Destination address in remote eth core reg space        | uint32_t | 0xFF000000+ | True     |
+ * | value             | Value to be written                                     | uint32_t | Any value   | True     |
+ */
+FORCE_INLINE
+void eth_write_remote_reg(uint32_t reg_addr, uint32_t value) {
+    internal_::eth_write_remote_reg(0, reg_addr, value);
+}
+
+/**
  * A blocking call that waits for receiver to acknowledge that all data sent with eth_send_bytes since the last
  * reset_erisc_info call is no longer being used. Also, see \a eth_receiver_done().
  *
