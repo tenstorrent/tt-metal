@@ -95,6 +95,7 @@ void kernel_main() {
             noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
             db_buf_switch = not db_buf_switch;
             noc_async_write_barrier(); // Barrier for now
+            noc_async_atomic_barrier();
         }
     }
 }

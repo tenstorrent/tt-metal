@@ -49,6 +49,7 @@ void kernel_main() {
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_cb_base), dispatch_cb_page_size);
     downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(1);
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 #else
 void kernel_main() {
@@ -78,5 +79,6 @@ void kernel_main() {
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
     downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(1);
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 #endif
