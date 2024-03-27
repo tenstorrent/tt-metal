@@ -318,9 +318,10 @@ class TtLlamaDecoder_optimized:
         rot_mats: list,
         start_pos: int,
         attn_masks: list,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         else:
@@ -509,6 +510,7 @@ class TtLlamaDecoder_optimized:
         rot_mats: list,
         start_pos: int,
         attn_masks: list,
+        user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         ### xs (residual stream) is fractured on all chips
         xs_replicated = []
@@ -532,7 +534,7 @@ class TtLlamaDecoder_optimized:
             xs_replicated[i].deallocate(True)
 
         # attn_outs is fractured
-        attn_outs = self.attention(attn_norm_interleaved, rot_mats, start_pos, attn_masks)
+        attn_outs = self.attention(attn_norm_interleaved, rot_mats, start_pos, attn_masks, user_id)
         # breakpoint()
 
         ### Fractured residual add
