@@ -36,12 +36,12 @@ add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o
 
 target_link_libraries(unit_tests PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
 target_include_directories(unit_tests PRIVATE
-                                        ${UMD_HOME}
-                                        ${CMAKE_SOURCE_DIR}
-                                        ${CMAKE_SOURCE_DIR}/tt_metal
-                                        ${CMAKE_SOURCE_DIR}/tests
-                                        ${CMAKE_CURRENT_SOURCE_DIR}
-                                        ${CMAKE_CURRENT_SOURCE_DIR}/common
-                                        ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer
+    ${UMD_HOME}
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/tt_metal
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer
 )
 set_target_properties(unit_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)

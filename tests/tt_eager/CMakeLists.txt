@@ -7,8 +7,6 @@ set(TT_EAGER_TESTS_DTX
     dtx/test_dtx
     dtx/unit_tests
 )
-# test_dtx                           # <- SD only
-# test_dtx_tilized_row_to_col_major  # <- SD only
 # tensor_evaluate                    # <- not called in run_tt_eager.py
 
 set(TT_EAGER_TESTS_OPS
@@ -33,7 +31,7 @@ set(TT_EAGER_TESTS_OPS
     ops/test_tilize_zero_padding
     ops/test_tilize_op_channels_last
     ops/test_tilize_zero_padding_channels_last
-    ops/test_sfpu                           # <- SD only, no WH
+    ops/test_sfpu
     ops/test_fold_op
 )
 
@@ -56,7 +54,7 @@ function(CREATE_EXEC TESTLIST)
         get_filename_component(TEST_NAME ${TEST_SRC} NAME)
         get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
         set(TEST_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
-        # bc unit_tests and tensor are already taken as target names/executables
+        # unit_tests and tensor are already taken as target names/executables
         if(${TEST_NAME} STREQUAL "unit_tests")
             set(TEST_TARGET "test_unit_tests")
         elseif(${TEST_NAME} STREQUAL "tensor")
@@ -66,8 +64,7 @@ function(CREATE_EXEC TESTLIST)
         endif()
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
 
-        target_link_libraries(${TEST_TARGET} PUBLIC tt_dnn tensor queue)
-        target_link_libraries(${TEST_TARGET} PUBLIC stdc++fs yaml-cpp gtest gtest_main m)
+        target_link_libraries(${TEST_TARGET} PUBLIC tt_dnn tensor queue stdc++fs yaml-cpp gtest gtest_main m)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}
             ${CMAKE_SOURCE_DIR}
@@ -79,7 +76,7 @@ function(CREATE_EXEC TESTLIST)
         set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_eager/${TEST_DIR})
         list(APPEND EAGER_TEST_TARGETS ${TEST_TARGET})
     endforeach()
-    set(EAGER_TEST_TARGETS "${EAGER_TEST_TARGETS}" PARENT_SCOPE)   # set parent scope so variable is available outside of function
+    set(EAGER_TEST_TARGETS "${EAGER_TEST_TARGETS}" PARENT_SCOPE)
 endfunction()
 
 CREATE_EXEC("${TT_EAGER_TESTS_DTX}")

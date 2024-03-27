@@ -6,9 +6,8 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")   # idk if this is the right way to add a custom build type but it works.. also removed --verbose linker option
 
-# Set default values for variables
+# Set default values for variables/options
 set(CONFIG "assert" CACHE STRING "Default configuration")
-set(OUT "$ENV{TT_METAL_HOME}/build" CACHE STRING "Build directory")
 set(UMD_HOME "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd")
 
 option(ENABLE_PROFILER "Enable profiler" OFF)
@@ -22,6 +21,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ############################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
+#   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
+#   in order to propogate to the rest of tt_metal, tt_eager and cpp tests.
 ############################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE dl z boost_thread boost_filesystem boost_system boost_regex pthread atomic hwloc stdc++)
@@ -51,7 +52,7 @@ endif()
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
-if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")   # kinda annoying arch name is not the same as the folder name :/
+if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
         tt_metal/hw/inc/wormhole/wormhole_b0_defines
         ${UMD_HOME}/device/wormhole
@@ -69,7 +70,7 @@ endif()
 # Build subdirectories
 ############################################
 # Build umd_device
-include(CMakeLisTs.txt)
+include(CMakeLists-umd.txt)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/hw)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)

@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Set default values for variables
+### All variables/compiler flags declared in this file are passed to umd/device .mk file to build device ###
+set(OUT "$ENV{TT_METAL_HOME}/build" CACHE STRING "Build directory")
 set(WARNINGS "-Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter" CACHE STRING "Warnings to enable")
 set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -DFMT_HEADER_ONLY -Werror -Wno-int-to-pointer-cast -I$(TT_METAL_HOME)/tt_metal/third_party/fmt")
-# Modify compiler flags based on configuration -- CHANGE THIS TO USE CMAKE_BUILD_TYPE INSTEAD
+
 if(${CONFIG} STREQUAL "release")
     set(CONFIG_CFLAGS "${CONFIG_CFLAGS} -O3")
 elseif(${CONFIG} STREQUAL "ci")
@@ -40,14 +41,12 @@ if(ENABLE_TRACY)
     set(CONFIG_LDFLAGS "${CONFIG_LDFLAGS} -ltracy -rdynamic")
 endif()
 
-### !!! SET LDFLAGS, SHARED_LINKER_FLAGS AND STATIC_LIBRARY_FLAGS !!! ###
 set(LDFLAGS_ "${CONFIG_LDFLAGS} -L${OUT}/lib -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
 set(SHARED_LIB_FLAGS_ "-shared -fPIC")
 set(STATIC_LIB_FLAGS_ "-fPIC")
 
 set (CMAKE_CXX_FLAGS_ "${CMAKE_CXX_FLAGS} --std=c++17 -fvisibility-inlines-hidden -Werror")
 
-# whhat is even happening here
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     set(WARNINGS "${WARNINGS} -Wno-c++11-narrowing -Wno-c++2a-extensions")
 else()
@@ -56,6 +55,7 @@ endif()
 
 set(CFLAGS_ "${WARNINGS} -MMD -I. ${CONFIG_CFLAGS} -mavx2 -mavx2 -DBUILD_DIR=\"$(OUT)\"")
 
+# This will build the shared library libdevice.so in build/lib where tt_metal can then find and link it
 include(ExternalProject)
 ExternalProject_Add(
     umd_device
@@ -84,19 +84,3 @@ ExternalProject_Add(
         CXXFLAGS=${CMAKE_CXX_FLAGS_}
         CFLAGS=${CFLAGS_}
 )
-
-# add_library(umd_lib SHARED IMPORTED)
-# set_target_properties(umd_lib PROPERTIES IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/build/lib/libdevice.so)
-
-# set(UMD_OBJS
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/grayskull/impl_device.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/cpuset_lib.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_cluster_descriptor.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_device.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_emulation_stub.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver_common.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_soc_descriptor.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/tt_versim_stub.o
-#     ${CMAKE_BINARY_DIR}/obj/umd/device/util.o
-# )

@@ -25,7 +25,5 @@ endif()
 
 target_link_libraries(tt_metal_libs PUBLIC compiler_flags metal_header_directories metal_common_libs device yaml-cpp)
 target_link_directories(tt_metal_libs PUBLIC ${CMAKE_BINARY_DIR}/lib)
-
 target_include_directories(tt_metal_libs PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt)
-
 target_compile_options(tt_metal_libs PUBLIC -Wno-int-to-pointer-cast)
