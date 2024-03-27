@@ -33,12 +33,14 @@ class TtLlamaMLP_optimized(nn.Module):
         self.model_config = model_config
         self.emulated = emulated
         self.cache_path = cache_path
-        self.llm_mode = model_config["LLM_MODE"]
 
         self.layer_name = f"{base_url}.{layer_num}"
 
         if load_weights:
             self.load_weights()
+
+    def set_model_config(self, model_config):
+        self.model_config = model_config
 
     def free_weights(self):
         # Free weights
@@ -141,7 +143,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
 
     def prepare_inputs(self, x):
-        if self.llm_mode == "decode":
+        if self.model_config["LLM_MODE"] == "decode":
             batch, seq_len = 32, 1
             assert x.size() == (seq_len, 1, batch, self.hidden_size)
             x_multichip = []
@@ -159,7 +161,7 @@ class TtLlamaMLP_optimized(nn.Module):
                     x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
                 )
             return x_multichip
-        elif self.llm_mode == "prefill":
+        elif self.model_config["LLM_MODE"] == "prefill":
             x_multichip = []
             for i in range(self.num_devices):
                 x_multichip.append(
@@ -174,12 +176,12 @@ class TtLlamaMLP_optimized(nn.Module):
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
-        if self.llm_mode == "decode":
+        if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
-        elif self.llm_mode == "prefill":
+        elif self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(x)
         else:
-            raise ValueError(f"Invalid mode: {self.llm_mode}")
+            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
     def prefill_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = []
