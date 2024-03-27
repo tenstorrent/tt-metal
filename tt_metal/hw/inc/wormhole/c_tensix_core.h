@@ -12,6 +12,7 @@
 #include "tensix.h"
 #include "tensix_functions.h"
 #include "noc_overlay_parameters.h"
+#include "ckernel_structs.h"
 
 class c_tensix_core {
 
