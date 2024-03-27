@@ -126,7 +126,7 @@ inline std::set<CoreRange> num_cores_to_corerange_set(const CoreCoord start_core
         // Partial Cols
         total_available_cores += num_cores_y - start_core.y;
     }
-	TT_FATAL(target_num_cores <= total_available_cores, "Target number of cores is greater than total number of available cores");
+	TT_FATAL(target_num_cores <= total_available_cores, "Target number of cores {} is greater than total number of available cores {}", target_num_cores, total_available_cores);
 	std::set<CoreRange> all_cores_set;
     uint32_t leftover_size = target_num_cores;
     CoreCoord s_core = start_core;
