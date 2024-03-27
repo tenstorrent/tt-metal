@@ -33,10 +33,10 @@ jobs:
           cache-dependency-path: |
             tt_metal/python_env/requirements-dev.txt
             pyproject.toml
-      - name: Install python deps for packaging
-        run: |
-          pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-          pip install -r tt_metal/python_env/requirements-dev.txt
+      # - name: Install python deps for packaging
+      #   run: |
+      #     pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+      #     pip install -r tt_metal/python_env/requirements-dev.txt
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
