@@ -149,7 +149,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             model_config[key] = BFLOAT16_DTYPE
 
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
-    # model_config["KV_CACHE_DTYPE"] = BFLOAT16_DTYPE # HACK:! JUST FOR UPDATE_CACHE TESTING
 
     hidden_size = model_config_entries["hidden_size"]
     head_dim = model_config_entries["head_dim"]
@@ -176,14 +175,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ttl.tensor.CoreRange(
                 ttl.tensor.CoreCoord(0, 0),
                 ttl.tensor.CoreCoord(7, 3),
-            ),
-        }
-    )
-    shard_spec_32_cores_grid_transposed = ttl.tensor.CoreRangeSet(
-        {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(3, 7),
             ),
         }
     )
@@ -488,30 +479,21 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             False,
         ),
     )
-    if num_devices == 8:
-        if llm_mode == "decode":
-            model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[8, 4],
-                subblock_w=8,
-                block_h=shard_height // 32,
-                block_w=8,
-                inplace=True,
-            )
-        else:
-            model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
-                subblock_w=8,
-                block_h=num_tiles_per_core_h,
-                block_w=num_tiles_per_core_w,
-                inplace=True,
-            )
-    elif num_devices == 32:
+    if llm_mode == "decode":
         model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             subblock_w=8,
-            block_h=1,
+            block_h=shard_height // 32,
             block_w=8,
-            inplace=False,  # Not Inplace RMSNorm because we need to keep the residual
+            inplace=True if num_devices == 8 else False,  # Galaxy we need to keep the residual
+        )
+    else:
+        model_config["LN_MLP_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+            subblock_w=8,
+            block_h=num_tiles_per_core_h,
+            block_w=num_tiles_per_core_w,
+            inplace=True,
         )
     model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
     model_config["MLP_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -528,33 +510,49 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         ),
     )
     # LLama2 Attention Module
-    if num_devices == 8 or num_devices == 32:
-        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_8_cores_grid,
-                [
-                    shard_height,
-                    shard_width_hidden_dim_across_8_cores,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
+    model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_8_cores_grid,
+            [
+                shard_height,
+                shard_width_hidden_dim_across_8_cores,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_8_cores_grid,
+            [
+                shard_height,
+                shard_width_qkv_heads_per_device_across_8_cores,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    if llm_mode == "prefill":
+        # Llama 2 Attention Module Prefill 2D Matmul
+        # Input shape is [1,1,seq_len,8192]
+        # qkv_list shape is [8192,1280]
+        per_core_M = seq_len // 32 // 4
+        in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=in0_block_w,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=per_core_M,  # M / TILE_HEIGHT / Grid_Size
+            per_core_N=5,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
         )
-        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_8_cores_grid,
-                [
-                    shard_height,
-                    shard_width_qkv_heads_per_device_across_8_cores,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+    else:
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,
@@ -566,38 +564,20 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fused_activation=None,
             mcast_in0=True,
         )
-        if llm_mode == "prefill":
-            # Llama 2 Attention Module Prefill
-            # Input shape is [1,1,seq_len,8192]
-            # qkv_list shape is [8192,1280]
-            # 2D
-            per_core_M = seq_len // 32 // 4
-            in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1
-            model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=in0_block_w,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=per_core_M,  # M / TILE_HEIGHT / Grid_Size
-                per_core_N=5,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
-                fused_activation=None,
-            )
 
-    if num_devices == 8 or num_devices == 32:
-        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_1_cores_grid,
-                [
-                    shard_height,
-                    total_width_per_group_of_qkv_heads,  # Must always be minimum a full group
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+    model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_1_cores_grid,
+            [
+                shard_height,
+                total_width_per_group_of_qkv_heads,  # Must always be minimum a full group
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
     model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
@@ -605,97 +585,81 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         packer_l1_acc=True,
     )
     # TODO: Remove once confirm we don't need this, using only fallback ops
-    if num_devices == 8 or num_devices == 32:
-        if llm_mode == "decode":
-            model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 1),
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=4,
-                per_core_M=1,
-                per_core_N=4,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
-            )
-        else:
-            # ttnn.Shape([1, 8, 128, 128])
-            # ttnn.Shape([8, 128, 128, 128])
-            model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=[8, 1],
-                in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=shard_height // 32,
-                per_core_N=head_dim // 32,
-            )
-            # ttnn.Shape([1, 1, 128, 128])
-            # ttnn.Shape([1, 128, 128, 128])
-            model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=4,
-                per_core_M=1,
-                per_core_N=4,
-                fuse_batch=False,
-                fused_activation=None,
-                mcast_in0=False,
-            )
-        model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_8_cores_grid,
-                [
-                    shard_height,
-                    head_dim,  # head dim
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
+    if llm_mode == "decode":
+        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
         )
-        model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_1_cores_grid,
-                [
-                    shard_height,  # Each core has 32 users
-                    head_dim,  # head dim
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
+    else:
+        # ttnn.Shape([1, 8, 128, 128])
+        # ttnn.Shape([8, 128, 128, 128])
+        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 1],
+            in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=shard_height // 32,
+            per_core_N=head_dim // 32,
         )
-    if num_devices == 8:
-        model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_32_cores_grid,
-                [
-                    1,  # Dynamic
-                    head_dim,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
+        # ttnn.Shape([1, 1, 128, 128])
+        # ttnn.Shape([1, 128, 128, 128])
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=False,
         )
-    elif num_devices == 32:
-        model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                shard_spec_8_cores_grid,
-                [
-                    1,  # Dynamic
-                    head_dim,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+    model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_8_cores_grid,
+            [
+                shard_height,
+                head_dim,  # head dim
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_1_cores_grid,
+            [
+                shard_height,  # Each core has 32 users
+                head_dim,  # head dim
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            shard_spec_32_cores_grid if num_devices == 8 else shard_spec_8_cores_grid,
+            [
+                1,  # Dynamic
+                head_dim,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
     if num_devices == 8:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -703,7 +667,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ttl.tensor.ShardSpec(
                 shard_spec_32_cores_grid,  # Sharded on batch dim
                 [
-                    shard_height,  # Each core has 32 padded heads
+                    32,  # Each core has 32 padded heads
                     head_dim,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -713,13 +677,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         if llm_mode == "decode":
             model_config[
                 "ATTN_BATCHED_MM_PROGCFG_LAMBDA"
-            ] = lambda n: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=[8, 4],
                 in0_block_w=head_dim // 32,  # HEAD_DIM // TILE_SIZE
                 out_subblock_h=1,  # TODO: Maximize
                 out_subblock_w=1,  # TODO: Maximize
-                per_core_M=shard_height // 32,  # N_HEADS_PADDED // TILE_SIZE,
-                per_core_N=n,  # SEQ_LEN // TILE_SIZE (dynamic)
+                per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
+                per_core_N=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
             )
             model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -736,12 +700,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             )
             model_config[
                 "SCORES_BATCHED_MM_PROGCFG_LAMBDA"
-            ] = lambda in0_block_w: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=[8, 4],
-                in0_block_w=in0_block_w,  # SEQ_LEN // TILE_SIZE (dynamic)
+                in0_block_w=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
                 out_subblock_h=1,  # TODO: Maximize
                 out_subblock_w=1,  # TODO: Maximize
-                per_core_M=shard_height // 32,  # N_HEADS_PADDED // TILE_SIZE,
+                per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
                 per_core_N=head_dim // 32,  # HEAD_DIM // TILE_SIZE
             )
             model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -771,10 +735,8 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 ),
             )
         else:
-            # (Pdb) query_layer[0].shape
-            # ttnn.Shape([1, 8, 128, 128])
-            # (Pdb) key_layer_transposed[0].shape
-            # ttnn.Shape([1, 1, 128, 128])
+            # (Pdb) query_layer[0].shape: ttnn.Shape([1, 8, 128, 128])
+            # (Pdb) key_layer_transposed[0].shape: ttnn.Shape([1, 1, 128, 128])
             model_config[
                 "ATTN_BATCHED_MM_PROGCFG"
             ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -782,25 +744,11 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 in0_block_w=head_dim // 32,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=32 // 32,
+                per_core_M=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
                 per_core_N=seq_len // 32,
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=False,
-            )
-
-            model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.BufferType.L1,
-                ttl.tensor.ShardSpec(
-                    shard_spec_8_cores_grid,
-                    [
-                        shard_height,  # Each core has 32 users
-                        128,  # Dynamic (padded seqlen)
-                    ],
-                    ttl.tensor.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
             )
             model_config[
                 "SCORES_BATCHED_MM_PROGCFG"
@@ -809,37 +757,11 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 in0_block_w=seq_len // 32,
                 out_subblock_h=1,
                 out_subblock_w=1,
-                per_core_M=32 // 32,
+                per_core_M=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
                 per_core_N=head_dim // 32,
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=False,
-            )
-            model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.BufferType.L1,
-                ttl.tensor.ShardSpec(
-                    shard_spec_8_cores_grid,
-                    [
-                        shard_height,  # Each core has 32 users
-                        head_dim,  # head dim
-                    ],
-                    ttl.tensor.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            )
-            model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.BufferType.L1,
-                ttl.tensor.ShardSpec(
-                    shard_spec_8_cores_grid,  # Volume must match # of attn heads
-                    [
-                        shard_height,  # Each core has 32 users
-                        head_dim,  # head dim
-                    ],
-                    ttl.tensor.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
             )
     elif num_devices == 32:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -858,13 +780,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
 
         model_config[
             "ATTN_BATCHED_MM_PROGCFG_LAMBDA"
-        ] = lambda n: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 1],
-            in0_block_w=128 // 32,  # HEAD_DIM // TILE_DIM
+            in0_block_w=head_dim // 32,  # HEAD_DIM // TILE_DIM
             out_subblock_h=1,  # TODO: Maximize
             out_subblock_w=1,  # TODO: Maximize
             per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
-            per_core_N=n,  # SEQ_LEN // TILE_SIZE (dynamic)
+            per_core_N=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
         )
 
         model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -873,7 +795,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ttl.tensor.ShardSpec(
                 shard_spec_16_cores_grid,
                 [
-                    32,  # Each core has 32 users
+                    shard_height,  # Each core has 32 users
                     1,  # Dynamic (padded seqlen)
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -883,13 +805,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
 
         model_config[
             "SCORES_BATCHED_MM_PROGCFG_LAMBDA"
-        ] = lambda in0_block_w: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 1],
-            in0_block_w=in0_block_w,  # SEQ_LEN // TILE_DIM (dynamic)
+            in0_block_w=seq_tiles,  # SEQ_LEN // TILE_DIM (dynamic)
             out_subblock_h=1,  # TODO: Maximize
             out_subblock_w=1,  # TODO: Maximize
             per_core_M=32 // 32,  # N_HEADS_PADDED // TILE_SIZE,
-            per_core_N=128 // 32,  # HEAD_DIM // TILE_SIZE (dynamic)
+            per_core_N=head_dim // 32,  # HEAD_DIM // TILE_SIZE
         )
 
         model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -898,7 +820,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ttl.tensor.ShardSpec(
                 shard_spec_8_cores_grid,
                 [
-                    32,  # Each core has 32 users
+                    shard_height,  # Each core has 32 users
                     head_dim,  # head dim
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -912,7 +834,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ttl.tensor.ShardSpec(
                 shard_spec_8_cores_grid,
                 [
-                    32,  # Each core has 32 users
+                    shard_height,  # Each core has 32 users
                     head_dim,  # head dim
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -935,7 +857,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 subblock_w=1,
-                block_h=32 // 32,
+                block_h=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
                 block_w=1,  # Dynamic
             )
     elif num_devices == 32:
@@ -960,33 +882,31 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             False,
         ),
     )
-    if num_devices == 8 or num_devices == 32:
-        if llm_mode == "decode":
-            model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
-                out_subblock_h=1,
-                out_subblock_w=1,  # TODO: Maximize
-                per_core_M=shard_height // 32,
-                per_core_N=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-        else:
-            model_config[
-                "SELFOUT_MM_PROGCFG_LAMBDA"
-            ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
-                in0_block_w=8,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=4,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
-                fused_activation=None,
-            )
-
+    if llm_mode == "decode":
+        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
+            out_subblock_h=1,
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=shard_height // 32,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        model_config[
+            "SELFOUT_MM_PROGCFG_LAMBDA"
+        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=4,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+        )
     # Example code of using 2d multicast for MLP matmul
     """
         model_config["MLP_BLOCK_SHARDED"] = ttl.tensor.MemoryConfig(
