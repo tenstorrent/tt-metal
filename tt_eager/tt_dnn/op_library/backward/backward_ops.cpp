@@ -492,7 +492,16 @@ std::vector<Tensor> ne_bw(const Tensor& grad, const MemoryConfig& output_mem_con
 }
 
 std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return {mul(grad,recip(input,output_mem_config),std::nullopt,output_mem_config)};
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, recip(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
+    grad_tensor.emplace_back( where(eqz(input, output_mem_config),
+                                    where(eqz(grad, output_mem_config),
+                                        t_nan,
+                                        mul(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config), output_mem_config),
+                                    grad_a, output_mem_config));
+    return grad_tensor;
 }
 std::vector<Tensor> log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
@@ -948,8 +957,6 @@ std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const 
 }
 
 // Softplus
-// (threshold >= 0) grad_self = grad * torch.exp(beta * self) / (1 + torch.exp(beta * self))
-// (threshold < 0) grad_self = grad * torch.exp(beta * self) / (torch.exp(beta * self) + torch.exp(threshold))
 std::vector<Tensor> _softplus_bw(const Tensor& grad, const Tensor& input, float beta, float threshold, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor mul_input_beta = mul_unary(input, beta, output_mem_config);
