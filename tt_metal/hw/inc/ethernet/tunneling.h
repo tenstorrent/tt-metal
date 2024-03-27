@@ -253,6 +253,7 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
         ((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr),
         -1);  // Two's complement addition
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     for (uint32_t i = 0; i < num_buffer_transfers; i++) {
         const uint32_t num_pages = command_ptr[2];
@@ -283,6 +284,7 @@ FORCE_INLINE void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_confi
 
     noc_semaphore_inc(((uint64_t)relay_noc_encoding << 32) | get_semaphore(0), 1);
     noc_async_write_barrier();  // Barrier for now
+    noc_async_atomic_barrier();
 }
 
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
