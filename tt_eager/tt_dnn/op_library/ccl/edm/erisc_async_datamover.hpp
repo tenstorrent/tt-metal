@@ -170,6 +170,41 @@ class ChannelBuffer final {
     volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_address; }
     volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_address; }
 
+    FORCE_INLINE void send_eth_receiver_channel_ack() {
+        *this->channel_bytes_acked_address = 1;
+        internal_::eth_send_packet(
+        0,
+        ((uint32_t)this->channel_bytes_acked_address) >> 4,
+        ((uint32_t)this->channel_bytes_acked_address) >> 4,
+        1);
+
+    }
+
+    FORCE_INLINE void eth_clear_sender_channel_ack() {
+        *this->channel_bytes_acked_address = 0;
+    }
+
+    FORCE_INLINE void eth_send_payload_complete_signal_over_channel() {
+        *this->channel_bytes_sent_address = this->get_current_payload_size();
+        *this->channel_bytes_acked_address = 0;
+        uint32_t addr = ((uint32_t)this->channel_bytes_sent_address) >> 4;
+        internal_::eth_send_packet(
+            0,
+            addr,
+            addr,
+        1);
+    }
+
+    FORCE_INLINE void eth_receiver_channel_done() {
+        *this->channel_bytes_sent_address = 0;
+        *this->channel_bytes_acked_address = 0;
+        internal_::eth_send_packet(
+            0,
+            ((uint32_t)this->channel_bytes_sent_address) >> 4,
+            ((uint32_t)this->channel_bytes_sent_address) >> 4,
+            1);
+    }
+
    public:
     uint32_t eth_transaction_channel;  //
     volatile tt_l1_ptr uint32_t *const local_semaphore_address;
@@ -285,7 +320,7 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_cha
         }
 
         if (need_to_send_completion && !eth_txq_is_busy()) {
-            eth_send_payload_complete_signal_over_channel(sender_buffer_channel.get_eth_transaction_channel(), sender_buffer_channel.get_current_payload_size());
+            sender_buffer_channel.eth_send_payload_complete_signal_over_channel();
             sender_buffer_channel.set_send_completion_pending(false);
             sender_buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_ETH);
             did_something = true;
@@ -295,7 +330,7 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer &sender_buffer_cha
     return did_something;
 }
 
-FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
+FORCE_INLINE bool __attribute__((section(".erisc_iram")))  sender_notify_workers_if_buffer_available_sequence(
     ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
 
     sender_buffer_channel.increment_worker_semaphores();
@@ -310,14 +345,14 @@ FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
     return true;
 }
 
-FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
+FORCE_INLINE bool __attribute__((section(".erisc_iram"))) sender_eth_check_receiver_ack_sequence(ChannelBuffer &sender_buffer_channel, uint32_t &num_senders_complete) {
     bool did_something = false;
 
     bool transimission_acked_by_receiver =
         sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
         sender_buffer_channel.eth_is_receiver_channel_send_done();
     if (transimission_acked_by_receiver) {
-        eth_clear_sender_channel_ack(sender_buffer_channel.get_eth_transaction_channel());
+        sender_buffer_channel.eth_clear_sender_channel_ack();
         sender_buffer_channel.increment_messages_moved();
         sender_buffer_channel.goto_state(ChannelBuffer::SIGNALING_WORKER);
         sender_notify_workers_if_buffer_available_sequence(sender_buffer_channel, num_senders_complete);
@@ -330,7 +365,7 @@ FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(ChannelBuffer &sender_b
 /*
  *
  */
-FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(ChannelBuffer &sender_channel_buffer) {
+FORCE_INLINE bool __attribute__((section(".erisc_iram")))  sender_noc_receive_payload_ack_check_sequence(ChannelBuffer &sender_channel_buffer) {
     bool did_something = false;
 
     bool read_finished = sender_channel_buffer.is_local_semaphore_full();
@@ -354,7 +389,7 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(ChannelBuffer &s
 /*
  *
  */
-FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer &buffer_channel) {
+FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer &buffer_channel) {
     buffer_channel.increment_worker_semaphores();
     buffer_channel.goto_state(ChannelBuffer::WAITING_FOR_WORKER);
 
@@ -367,12 +402,12 @@ FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(Channel
  * If payload received, notify (send ack to) sender so sender knows it can free up its local buffer
  *
  */
-FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer &buffer_channel) {
+FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_eth_accept_payload_sequence(ChannelBuffer &buffer_channel) {
     bool did_something = false;
 
     if (buffer_channel.eth_bytes_are_available_on_channel()) {
         if (!eth_txq_is_busy()) {
-            eth_receiver_channel_ack(buffer_channel.get_eth_transaction_channel());
+            buffer_channel.send_eth_receiver_channel_ack();
             buffer_channel.goto_state(ChannelBuffer::SIGNALING_WORKER);
             did_something = true;
 
@@ -392,7 +427,7 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer &buffer_cha
  * - notifies sender it is safe to send next payload
  * - clear local semaphore
  */
-FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
+FORCE_INLINE bool __attribute__((section(".erisc_iram"))) receiver_noc_read_worker_completion_check_sequence(
     ChannelBuffer &buffer_channel, uint32_t &num_receivers_complete) {
     bool did_something = false;
 
@@ -401,7 +436,7 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
     if (can_notify_sender_of_buffer_available) {
 
         if (!eth_txq_is_busy()) {
-            eth_receiver_channel_done(buffer_channel.get_eth_transaction_channel());
+            buffer_channel.eth_receiver_channel_done();
             buffer_channel.increment_messages_moved();
             buffer_channel.clear_local_semaphore();
 
