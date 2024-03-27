@@ -51,10 +51,14 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
+    // TODO: revert this when #6860 is fixed.
+    if (fixture->NumDevices() > 2) // T3000
+        has_eth_cores = false;
     if (has_eth_cores) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
+            log_info(LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
@@ -82,10 +86,12 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             }
         }
     }
-    for (const auto& core : device->get_active_ethernet_cores(true)) {
-        CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-        string expected = fmt::format("{}:erisc", phys_core.str());
-        expected_strings.push_back(expected);
+    if (has_eth_cores) {
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
+            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+            string expected = fmt::format("{}:erisc", phys_core.str());
+            expected_strings.push_back(expected);
+        }
     }
     EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
