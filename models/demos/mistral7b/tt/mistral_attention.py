@@ -286,8 +286,9 @@ class TtMistralAttention(nn.Module):
                 output_dtype=ttnn.bfloat16,  # Force bfloat16 for higher accuracy
             )  # seqlen, n_heads, batch, cache_len + seqlen
 
-            attn = ttnn.transformer.attention_softmax(attn, head_size=self.head_dim, attention_mask=attn_mask)
-
+            layer_slice = min((self.start_pos + 1), self.sliding_window)
+            attn = attn[:, :, :, :layer_slice]
+            attn = ttnn.softmax(attn * (self.head_dim**-0.5), dim=-1)
             """
             attn = ttnn.to_memory_config(attn, memory_config=ttnn.create_sharded_memory_config(
                 (32, padded_layer_past_len),
