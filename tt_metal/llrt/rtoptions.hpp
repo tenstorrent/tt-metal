@@ -29,6 +29,7 @@ class RunTimeOptions {
     bool watcher_dump_all = false;
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
+    std::set<std::string> watcher_disabled_features;
 
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
     std::map<CoreType, bool> dprint_all_cores;
@@ -65,6 +66,7 @@ class RunTimeOptions {
     inline void set_watcher_append(bool append)       { watcher_append = append; }
     inline int get_watcher_auto_unpause()             { return watcher_auto_unpause; }
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
+    inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.

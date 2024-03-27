@@ -15,7 +15,7 @@
 
 #include "dev_msgs.h"
 
-#if defined (WATCHER_ENABLED)
+#if defined (WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STATUS)
 
 inline uint32_t get_debug_status()
 {

@@ -96,6 +96,9 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }
+    for (auto &feature : tt::llrt::OptionsG.get_watcher_disabled_features()) {
+        this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
+    }
 
     if (tt::llrt::OptionsG.get_dprint_enabled()) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";

@@ -33,6 +33,16 @@ needed and use a time interval large enough to ensure the kernel is stopped when
 After starting the program, the log messages will indicate when the watcher attaches/detaches from a device and where
 the log file is stored as well as a message each time the watcher checks the device.
 
+Watcher features can be disabled individually using the following environment variables:
+
+.. code-block::
+
+   export TT_METAL_WATCHER_DISABLE_ASSERT=1
+   export TT_METAL_WATCHER_DISABLE_PAUSE=1
+   export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
+   export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+   export TT_METAL_WATCHER_DISABLE_STATUS=1
+
 Details
 -------
 
