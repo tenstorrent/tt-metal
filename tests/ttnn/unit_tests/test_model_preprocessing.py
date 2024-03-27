@@ -26,9 +26,9 @@ from models.utility_functions import skip_for_wormhole_b0
 
 @contextlib.contextmanager
 def use_ttnn_model_cache():
-    ttnn.TTNN_ENABLE_MODEL_CACHE = True
+    ttnn.ENABLE_MODEL_CACHE = True
     yield
-    ttnn.TTNN_ENABLE_MODEL_CACHE = False
+    ttnn.ENABLE_MODEL_CACHE = False
 
 
 @skip_for_wormhole_b0()

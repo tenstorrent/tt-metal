@@ -9,10 +9,10 @@ import torch
 import ttnn
 
 
-@pytest.mark.skip(reason="This test is not yet implemented")
 @pytest.mark.parametrize("height", [64])
 @pytest.mark.parametrize("width", [64])
 def test_print_l1_buffers_of_add_operation(tmp_path, height, width):
+    ttnn.ENABLE_LOGGING = True
     torch.manual_seed(0)
 
     device = ttnn.open_device(device_id=0)
@@ -57,3 +57,30 @@ Core: (x=10,y=9)
 
 """
     # assert l1_buffer_report == GOLDEN_L1_BUFFER_REPORT
+    ttnn.ENABLE_LOGGING = False
+
+
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [64])
+def test_enable_l1_buffers_logging(tmp_path, height, width):
+    ttnn.ENABLE_LOGGING = True
+
+    torch.manual_seed(0)
+
+    device = ttnn.open_device(device_id=0)
+
+    torch_input_tensor = torch.rand(
+        (height, width),
+        dtype=torch.bfloat16,
+    )
+
+    with ttnn.manage_sqlite_db():
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        output_tensor = ttnn.add(input_tensor, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.to_torch(output_tensor)
+
+    device = ttnn.close_device(device)
+
+    ttnn.ENABLE_LOGGING = False

@@ -333,18 +333,27 @@ class Operation:
                                 f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                             )
 
-                if is_top_level_operation and ttnn.TTNN_ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.ENABLE_LOGGING:
                     start = time.time()
                     logger.info(f"Started {self.name:50}")
 
                 output = decorated_function(*function_args, **function_kwargs)
 
-                if is_top_level_operation and ttnn.TTNN_ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.ENABLE_LOGGING:
                     for device in get_devices((function_args, function_kwargs)):
                         ttnn.synchronize_device(device)
                     end = time.time()
                     duration = end - start
                     logger.info(f"Finished {self.name:50} in {duration:30} seconds")
+
+                    if ttnn.SQLITE_CONNECTION is not None:
+                        cursor = ttnn.SQLITE_CONNECTION.cursor()
+                        cursor.execute(f"INSERT INTO operations VALUES ({OPERATION_ID}, '{self.name}')")
+                        for buffer_page in ttnn.get_buffer_pages():
+                            cursor.execute(
+                                f"INSERT INTO buffers VALUES ({OPERATION_ID}, {buffer_page.address}, {buffer_page.device_id}, {buffer_page.core_y}, {buffer_page.core_x}, {buffer_page.page_index}, {buffer_page.page_address}, {buffer_page.page_size}, {buffer_page.buffer_type.value})"
+                            )
+                        ttnn.SQLITE_CONNECTION.commit()
 
                 if is_top_level_operation:
                     for hook in POST_OPERATION_HOOKS:
@@ -358,7 +367,7 @@ class Operation:
 
             return call_wrapper
 
-        if not ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
+        if not ttnn.ENABLE_FAST_RUNTIME_MODE:
             function = runtime_decorator(function)
 
         self.decorated_function = function
