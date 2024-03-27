@@ -16,3 +16,25 @@ remove_default_log_locations(){
     rm -rf $PROFILER_ARTIFACTS_DIR
     echo "Removed all profiler artifacts"
 }
+
+verify_perf_column(){
+    csvLog=$1
+    column=$2
+    LOWER_BOUND=$3
+    UPPER_BOUND=$4
+
+    header=$(cat $csvLog |awk -v column="$column"  -F, 'NR == 1 { print $column }')
+    res=$(cat $csvLog |awk -v column="$column"  -F, 'NR == 2 { print $column }')
+
+    if [[ ! $res =~ ^[0-9]+$ ]]; then
+        echo "Value for $header was $res, not a number !" 1>&2
+        exit 1
+    fi
+
+    if (( res > UPPER_BOUND )) || (( res < LOWER_BOUND )); then
+        echo "Value for $header was $res, not between $UPPER_BOUND, $LOWER_BOUND" 1>&2
+        exit 1
+    fi
+
+    echo "Value for $header was within range" 1>&2
+}
