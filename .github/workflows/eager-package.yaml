@@ -23,16 +23,16 @@ jobs:
       CONFIG: release
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ inputs.os }}
-      - uses: ./.github/actions/install-metal-dev-deps
-        with:
-          os: ${{ inputs.os }}
-      - name: Clean up dirty files
-        run: git clean -f -d
+        # with:
+        #   fetch-depth: 0
+      # - uses: ./.github/actions/install-metal-deps
+      #   with:
+      #     os: ${{ inputs.os }}
+      # - uses: ./.github/actions/install-metal-dev-deps
+      #   with:
+      #     os: ${{ inputs.os }}
+      # - name: Clean up dirty files
+      #   run: git clean -f -d
       - uses: actions/setup-python@v5.0.0
         with:
           cache: 'pip'
