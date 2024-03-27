@@ -24,6 +24,11 @@ inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode
 }
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_identity_uint32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    // Empty for GS, no uint32 formats for uint32
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_identity_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
