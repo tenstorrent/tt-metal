@@ -12,8 +12,10 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 class Emb(torch.nn.Module):
     def __init__(self):
         super().__init__()
