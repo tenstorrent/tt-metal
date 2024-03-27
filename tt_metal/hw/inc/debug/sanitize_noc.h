@@ -26,17 +26,25 @@ extern uint8_t noc_index;
 #include "noc_parameters.h"
 #include "noc_overlay_parameters.h"
 
-#define DEBUG_VALID_L1_ADDR(a, l) ((a >= MEM_L1_BASE) && \
-                                   (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && \
-                                   ((a) + (l) > (a)) && \
-                                   ((a % NOC_L1_ALIGNMENT_BYTES) == 0))
+#define DEBUG_VALID_L1_ADDR(a, l, extra_alignment_bytes) \
+    ( \
+        (a >= MEM_L1_BASE) && \
+        (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && \
+        ((a) + (l) > (a)) && \
+        ((a % NOC_L1_ALIGNMENT_BYTES) == 0) && \
+        ((a % extra_alignment_bytes) == 0) \
+    )
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
 #define DEBUG_VALID_REG_ADDR(a)                                                        \
     ((((a) >= NOC_OVERLAY_START_ADDR) &&                                               \
       ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
      ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
-#define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
+#define DEBUG_VALID_WORKER_ADDR(a, l, extra_alignment_bytes) \
+    ( \
+        DEBUG_VALID_L1_ADDR(a, l, extra_alignment_bytes) || \
+        (DEBUG_VALID_REG_ADDR(a) && (l) == 4) \
+    )
 #define DEBUG_VALID_PCIE_ADDR(a, l) (((a) >= NOC_PCIE_ADDR_BASE) && \
                                      ((a) + (l) <= NOC_PCIE_ADDR_END) && \
                                      ((a) + (l) > (a)) && \
@@ -78,72 +86,95 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
     }
 }
 
-inline void debug_sanitize_worker_addr(uint32_t a, uint32_t l)
-{
-    if (!DEBUG_VALID_WORKER_ADDR(a, l)) {
-        debug_sanitize_post_noc_addr_and_hang(a, l, DebugSanitizeNocInvalidL1);
+// Return value is the alignment requirement (in bytes) for the type of core the noc address points
+// to. Need to do this because L1 alignment needs to match the noc address alignment requirements,
+// even if it's different than the inherent L1 alignment requirements.
+uint32_t debug_sanitize_noc_addr(uint64_t noc_addr, uint32_t noc_len, bool multicast) {
+    // Different encoding of noc addr depending on multicast vs unitcast
+    uint32_t x, y;
+    if (multicast) {
+        x = NOC_MCAST_ADDR_START_X(noc_addr);
+        y = NOC_MCAST_ADDR_START_Y(noc_addr);
+    } else {
+        x = NOC_UNICAST_ADDR_X(noc_addr);
+        y = NOC_UNICAST_ADDR_Y(noc_addr);
     }
-}
+    uint64_t noc_local_addr = NOC_LOCAL_ADDR_OFFSET(noc_addr);
 
-inline void debug_sanitize_noc_addr(uint32_t x, uint32_t y, uint64_t la, uint64_t a, uint32_t l, uint32_t invalid)
-{
+    // Extra check for multicast
+    if (multicast) {
+        uint32_t x_end = NOC_MCAST_ADDR_END_X(noc_addr);
+        uint32_t y_end = NOC_MCAST_ADDR_END_Y(noc_addr);
+
+        if (!NOC_WORKER_XY_P(x, y) ||
+            !NOC_WORKER_XY_P(x_end, y_end) ||
+            (x > x_end || y > y_end)) {
+            debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, DebugSanitizeNocInvalidMulticast);
+        }
+    }
+
+    // Check noc addr, we save the alignment requirement from the noc src/dst because the L1 address
+    // needs to match alignment (even if it's different than the L1 alignment requirements).
+    uint32_t extra_alignment_req = NOC_L1_ALIGNMENT_BYTES;
+    uint32_t invalid = multicast? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
     if (NOC_PCIE_XY_P(x, y)) {
-        if (!DEBUG_VALID_PCIE_ADDR(la, l)) {
-            debug_sanitize_post_noc_addr_and_hang(a, l, invalid);
+        extra_alignment_req = NOC_PCIE_ALIGNMENT_BYTES;
+        if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
+            debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
     } else if (NOC_DRAM_XY_P(x, y)) {
-        if (!DEBUG_VALID_DRAM_ADDR(la, l)) {
-            debug_sanitize_post_noc_addr_and_hang(a, l, invalid);
+        extra_alignment_req = NOC_DRAM_ALIGNMENT_BYTES;
+        if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
+            debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
     } else if (NOC_ETH_XY_P(x, y)) {
-        if (!DEBUG_VALID_ETH_ADDR(la, l)) {
-            debug_sanitize_post_noc_addr_and_hang(a, l, invalid);
+        if (!DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
+            debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
     } else if (NOC_WORKER_XY_P(x, y)) {
-        if (!DEBUG_VALID_WORKER_ADDR(la, l)) {
-            debug_sanitize_post_noc_addr_and_hang(a, l, invalid);
+        if (!DEBUG_VALID_WORKER_ADDR(noc_local_addr, noc_len, NOC_L1_ALIGNMENT_BYTES)) {
+            debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
     } else {
         // Bad XY
-        debug_sanitize_post_noc_addr_and_hang(a, l, invalid);
+        debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
+    }
+
+    return extra_alignment_req;
+}
+
+void debug_sanitize_worker_addr(uint32_t addr, uint32_t len, uint32_t extra_alignment_req) {
+    if (!DEBUG_VALID_WORKER_ADDR(addr, len, extra_alignment_req)) {
+        debug_sanitize_post_noc_addr_and_hang(addr, len, DebugSanitizeNocInvalidL1);
     }
 }
 
-void debug_sanitize_noc_uni_addr(uint64_t a, uint32_t l)
-{
-    uint32_t x = NOC_UNICAST_ADDR_X(a);
-    uint32_t y = NOC_UNICAST_ADDR_Y(a);
-    uint64_t la = NOC_LOCAL_ADDR_OFFSET(a);
-    debug_sanitize_noc_addr(x, y, la, a, l, DebugSanitizeNocInvalidUnicast);
+void debug_sanitize_noc_and_worker_addr(uint64_t noc_addr, uint32_t worker_addr, uint32_t len, bool multicast) {
+    // Check noc addr, get any extra alignment req for worker.
+    uint32_t extra_alignment_req = debug_sanitize_noc_addr(noc_addr, len, multicast);
+
+    // Check worker addr
+    debug_sanitize_worker_addr(worker_addr, len, extra_alignment_req);
 }
 
-void debug_sanitize_noc_multi_addr(uint64_t a, uint32_t l)
-{
-    uint32_t xs = NOC_MCAST_ADDR_START_X(a);
-    uint32_t ys = NOC_MCAST_ADDR_START_Y(a);
-    uint32_t xe = NOC_MCAST_ADDR_END_X(a);
-    uint32_t ye = NOC_MCAST_ADDR_END_Y(a);
-
-    if (!NOC_WORKER_XY_P(xs, ys) ||
-        !NOC_WORKER_XY_P(xe, ye) ||
-        (xs > xe || ys > ye)) {
-        debug_sanitize_post_noc_addr_and_hang(a, l, DebugSanitizeNocInvalidMulticast);
-    }
-    // Use one XY to determine the type for validating the address
-    uint64_t la = NOC_LOCAL_ADDR_OFFSET(a);
-    debug_sanitize_noc_addr(xs, ys, la, a, l, DebugSanitizeNocInvalidMulticast);
-}
-
-#define DEBUG_SANITIZE_WORKER_ADDR(a, l) debug_sanitize_worker_addr(a, l)
-#define DEBUG_SANITIZE_NOC_ADDR(a, l) debug_sanitize_noc_uni_addr(a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) debug_sanitize_noc_multi_addr(a, l)
+#define DEBUG_SANITIZE_WORKER_ADDR(a, l) \
+    debug_sanitize_worker_addr(a, l, NOC_L1_ALIGNMENT_BYTES)
+#define DEBUG_SANITIZE_NOC_ADDR(a, l) \
+    debug_sanitize_noc_addr(a, l, false)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) \
+    debug_sanitize_noc_addr(a, l, true)
+#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, false)
+#define DEBUG_SANITIZE_NOC_MULTI_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, true)
 
 #else // !WATCHER_ENABLED
 
 #define DEBUG_SANITIZE_WORKER_ADDR(a, l)
 #define DEBUG_SANITIZE_NOC_ADDR(a, l)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_LOOPBACK_ADDR(a, l)
+#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_MULTI_TRANSACTION(noc_a, worker_a, l)
 
 #endif // WATCHER_ENABLED
 
