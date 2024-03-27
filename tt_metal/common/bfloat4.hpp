@@ -24,14 +24,20 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(const std::vector<float
     return pack_fp32_vec_as_bfp_tiles<tt::DataFormat::Bfp4_b>(fp32_vec, row_major_input, is_exp_a);
 }
 
+constexpr int log2(int n) {
+    int log = 0;
+    while (n >>= 1) ++log;
+    return log;
+}
+
 inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uint32_t> &bfp_tiles, bool row_major_output, bool is_exp_a) {
     ZoneScoped;
 
     constexpr int num_elements_in_dword = 8;
     constexpr int data_dwords_per_exp = 16 / num_elements_in_dword;
     constexpr int num_exps_in_dword = 4;
-    constexpr int data_dwords_per_exp_dword_log2 = std::log2(data_dwords_per_exp * num_exps_in_dword);
-    constexpr int data_dwords_per_exp_log2 = std::log2(data_dwords_per_exp);
+    constexpr int data_dwords_per_exp_dword_log2 = log2(data_dwords_per_exp * num_exps_in_dword);
+    constexpr int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
     uint32_t single_bfp_tile_size = tile_size(tt::DataFormat::Bfp4_b);
