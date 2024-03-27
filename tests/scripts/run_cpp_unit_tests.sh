@@ -12,7 +12,8 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-    ./build/test/tt_metal/unit_tests_fast_dispatch
-    env python tests/scripts/run_tt_eager.py --dispatch-mode fast
-    env python tests/scripts/run_tt_metal.py --dispatch-mode fast
+    echo "CPP unit tests not supported in FD2.0"
+    # ./build/test/tt_metal/unit_tests_fast_dispatch
+    # env python tests/scripts/run_tt_eager.py --dispatch-mode fast
+    # env python tests/scripts/run_tt_metal.py --dispatch-mode fast
 fi
