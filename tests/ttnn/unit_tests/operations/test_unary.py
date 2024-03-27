@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, skip_for_grayskull
 
 
 def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
@@ -53,6 +53,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+@skip_for_grayskull("Grayskull doesn't support uint32 / fp32 formats and fp32 dest")
 def test_fp32_uint32(device, h, w):
     run_identity_test(device, h, w, ttnn.float32, pcc=0.9998)
 
