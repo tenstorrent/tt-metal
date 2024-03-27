@@ -1019,6 +1019,7 @@ std::chrono::duration<double> run_test(uint32_t iterations,
 }
 
 int main(int argc, char **argv) {
+    log_info(tt::LogTest, "test_prefetcher.cpp - Test Start");
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
@@ -1323,10 +1324,10 @@ int main(int argc, char **argv) {
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        log_info(LogTest, "test_prefetcher.cpp - Test Passed");
         return 0;
     } else {
-        log_fatal(LogTest, "Test Failed\n");
+        log_fatal(LogTest, "test_prefetcher.cpp - Test Failed\n");
         return 1;
     }
 }
