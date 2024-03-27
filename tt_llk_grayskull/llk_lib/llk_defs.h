@@ -98,6 +98,10 @@ enum struct StochRndType {
     All     = 0xf,
 };
 
+/* Only used for WHB0*/
+constexpr bool UnpackToDestEn = true;
+constexpr bool UnpackToDestDis = false;
+
 template <bool headerless = false>
 constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
     switch (format&0x1F) {
