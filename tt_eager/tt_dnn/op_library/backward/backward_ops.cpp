@@ -1051,6 +1051,8 @@ std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _asinh_bw)(grad, input, output_mem_config);
 }
 
+// name: cosh(Tensor self) -> Tensor
+// self: grad * self.sinh()
 std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = mul(grad, sinh(input, output_mem_config), std::nullopt, output_mem_config);
@@ -1062,6 +1064,8 @@ std::vector<Tensor> cosh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _cosh_bw)(grad, input, output_mem_config);
 }
 
+// name: cos(Tensor self) -> Tensor
+// self: grad * -self.sin()
 std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = mul(grad, (neg(sin(input_tensor, output_mem_config), output_mem_config)), std::nullopt, output_mem_config);
@@ -1172,6 +1176,8 @@ std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _angle_bw)(grad, input, output_mem_config);
 }
 
+// name: sin(Tensor self) -> Tensor
+// self: grad * self.cos()
 std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_input = mul(grad, cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
@@ -1183,6 +1189,8 @@ std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _sin_bw)(grad, input, output_mem_config);
 }
 
+// name: sinh(Tensor self) -> Tensor
+// self: grad * self.cosh()
 std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = mul(grad, cosh(input, output_mem_config), std::nullopt, output_mem_config);
@@ -1224,11 +1232,20 @@ std::vector<Tensor> binary_lt_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _binary_lt_bw)(grad, input, output_mem_config);
 }
 
-//erfinv
-//self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
+// erfinv
+// self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
+// for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
 std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul_unary(0.5, mul(sqrt(full_like(input, M_PI , output_mem_config), output_mem_config), mul( exp( square(erfinv(input, output_mem_config), output_mem_config), output_mem_config), grad, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor result = mul_unary(0.5, mul(sqrt(full_like(input, M_PI , output_mem_config), output_mem_config), mul(exp(square(erfinv(input, output_mem_config), output_mem_config), output_mem_config), grad, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor neg_one = full_like(input, -1.0, output_mem_config);
+    Tensor pos_one = full_like(input, 1.0, output_mem_config);
+    Tensor t_inf = mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+    result = where(logical_or(lt(input, neg_one, std::nullopt, output_mem_config),
+             gt(input, pos_one, std::nullopt, output_mem_config), std::nullopt, output_mem_config), std::nanf(" "), result, output_mem_config);
+    result = where(eq(input, neg_one, std::nullopt, output_mem_config), t_inf,
+                   where(eq(input, pos_one, std::nullopt, output_mem_config), t_inf,
+                   result, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }

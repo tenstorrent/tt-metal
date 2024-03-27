@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 from math import pi
 
 
@@ -18,13 +18,9 @@ from math import pi
     ),
 )
 def test_bw_sin(input_shapes, device):
-    in_data = torch.rand(input_shapes) * (2 * torch.tensor([pi]))
-    in_data.requires_grad = True
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 2 * pi, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, False)
 
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
     tt_output_tensor_on_device = tt_lib.tensor.sin_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
@@ -35,5 +31,5 @@ def test_bw_sin(input_shapes, device):
 
     golden_tensor = [in_data.grad]
 
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
