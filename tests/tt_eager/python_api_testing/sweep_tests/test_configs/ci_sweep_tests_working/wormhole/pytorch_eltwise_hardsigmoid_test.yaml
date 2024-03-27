@@ -17,13 +17,11 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_hardsigmoid_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - eltwise-hardsigmoid:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -41,10 +39,8 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_hardsigmoid_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
