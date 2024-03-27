@@ -67,7 +67,7 @@ function(CREATE_EXEC TESTLIST)
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
 
         target_link_libraries(${TEST_TARGET} PUBLIC tt_dnn tensor queue)
-        target_link_libraries(${TEST_TARGET} PUBLIC ${COMMON_LIBS} stdc++fs yaml-cpp gtest gtest_main m)
+        target_link_libraries(${TEST_TARGET} PUBLIC stdc++fs yaml-cpp gtest gtest_main m)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}
             ${CMAKE_SOURCE_DIR}

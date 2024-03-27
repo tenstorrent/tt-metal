@@ -5,7 +5,7 @@ set(UNIT_TESTS_FREQUENT_SRCS
 
 add_executable(unit_tests_frequent ${UNIT_TESTS_FREQUENT_SRCS})
 
-target_link_libraries(unit_tests_frequent PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
+target_link_libraries(unit_tests_frequent PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
 target_include_directories(unit_tests_frequent PRIVATE
                                         ${UMD_HOME}
                                         ${CMAKE_SOURCE_DIR}

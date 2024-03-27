@@ -14,7 +14,7 @@ foreach (TEST ${PROGRAMMING_EXAMPLES_SRCS})
     get_filename_component(TEST_TARGET ${TEST} NAME)
 
     add_executable(${TEST_TARGET} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST})
-    target_link_libraries(${TEST_TARGET} PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp m)   # these should prob be converted to gtests
+    target_link_libraries(${TEST_TARGET} PUBLIC tt_metal_libs stdc++fs yaml-cpp m)   # these should prob be converted to gtests
     target_include_directories(${TEST_TARGET} PRIVATE
         ${UMD_HOME}
         ${CMAKE_SOURCE_DIR}

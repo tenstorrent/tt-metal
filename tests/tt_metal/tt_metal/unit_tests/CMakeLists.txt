@@ -34,7 +34,7 @@ set(UNIT_TESTS_SRC
 
 add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
 
-target_link_libraries(unit_tests PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
+target_link_libraries(unit_tests PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
 target_include_directories(unit_tests PRIVATE
                                         ${UMD_HOME}
                                         ${CMAKE_SOURCE_DIR}

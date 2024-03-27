@@ -14,7 +14,7 @@ set(UNIT_TESTS_FD_SRC
 
 add_executable(unit_tests_fast_dispatch ${UNIT_TESTS_FD_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
 
-target_link_libraries(unit_tests_fast_dispatch PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
+target_link_libraries(unit_tests_fast_dispatch PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
 target_include_directories(unit_tests_fast_dispatch PRIVATE
                                         ${UMD_HOME}
                                         ${CMAKE_SOURCE_DIR}

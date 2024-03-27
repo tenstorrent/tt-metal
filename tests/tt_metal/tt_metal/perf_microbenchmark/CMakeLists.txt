@@ -32,7 +32,7 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
     endif()
 
     add_executable(${TEST_TARGET} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST})
-    target_link_libraries(${TEST_TARGET} PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
+    target_link_libraries(${TEST_TARGET} PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
     target_include_directories(${TEST_TARGET} PRIVATE
         ${UMD_HOME}
         ${CMAKE_SOURCE_DIR}

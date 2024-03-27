@@ -39,7 +39,7 @@ set (TT_METAL_TESTS
 
 foreach (TEST ${TT_METAL_TESTS})
     add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST})
-    target_link_libraries(${TEST} PUBLIC ${COMMON_LIBS} tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
+    target_link_libraries(${TEST} PUBLIC tt_metal_libs stdc++fs yaml-cpp gtest gtest_main m)
     target_include_directories(${TEST} PRIVATE
         ${UMD_HOME}
         ${CMAKE_SOURCE_DIR}

@@ -4,7 +4,7 @@ project(tt-metal)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")   # idk if this is the right way to add a custom build type, also removed --verbose linker option
+set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")   # idk if this is the right way to add a custom build type but it works.. also removed --verbose linker option
 
 # Set default values for variables
 set(CONFIG "assert" CACHE STRING "Default configuration")
@@ -20,10 +20,13 @@ option(TT_METAL_CREATE_STATIC_LIB "Create static library" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(COMMON_LIBS dl z boost_thread boost_filesystem boost_system boost_regex pthread atomic hwloc stdc++)
+############################################
+# Constructing interface libs for common compiler flags, header directories, and libraries
+############################################
+add_library(metal_common_libs INTERFACE)
+target_link_libraries(metal_common_libs INTERFACE dl z boost_thread boost_filesystem boost_system boost_regex pthread atomic hwloc stdc++)
 
 # note on flags:
-#   -fvisibility-inlines-hidden <- cannot include this for tests or else it'll complain about hidden symbols... not true anymore?
 #   DFMT_HEADER_ONLY must be for every target or else they won't interact with the header only fmt as intended
 add_library(compiler_warnings INTERFACE)
 target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
@@ -43,21 +46,30 @@ if(ENABLE_PROFILER)
 endif()
 if(ENABLE_TRACY)
     target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
-    set(COMMON_LIBS "${COMMON_LIBS} tracy")
+    target_link_libraries(metal_common_libs INTERFACE tracy)
 endif()
 
+add_library(metal_header_directories INTERFACE)
+target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
+if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")   # kinda annoying arch name is not the same as the folder name :/
+    target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
+        tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${UMD_HOME}/device/wormhole
+        ${UMD_HOME}/src/firmware/riscv/wormhole
+    )
+else()
+    target_include_directories(metal_header_directories INTERFACE
+        tt_metal/hw/inc/$ENV{ARCH_NAME}
+        ${UMD_HOME}/device/$ENV{ARCH_NAME}
+        ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
+    )
+endif()
+
+############################################
+# Build subdirectories
+############################################
 # Build umd_device
 include(CMakeLisTs.txt)
-
-include_directories(tt_metal/hw/inc)
-if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    include_directories(tt_metal/hw/inc/wormhole
-                        tt_metal/hw/inc/wormhole/wormhole_b0_defines
-                        ${UMD_HOME}/src/firmware/riscv/wormhole)
-else()
-    include_directories(tt_metal/hw/inc/$ENV{ARCH_NAME}
-                        ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME})
-endif()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/hw)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
