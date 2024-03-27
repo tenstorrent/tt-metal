@@ -23,5 +23,4 @@ target_include_directories(unit_tests_fast_dispatch PRIVATE
                                         ${CMAKE_CURRENT_SOURCE_DIR}
                                         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_compile_options(unit_tests_fast_dispatch PUBLIC ${COMPILE_OPTIONS})
 set_target_properties(unit_tests_fast_dispatch PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)

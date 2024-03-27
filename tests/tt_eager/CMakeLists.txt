@@ -76,7 +76,6 @@ function(CREATE_EXEC TESTLIST)
             ${CMAKE_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
         )
-        target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
         set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_eager/${TEST_DIR})
         list(APPEND EAGER_TEST_TARGETS ${TEST_TARGET})
     endforeach()

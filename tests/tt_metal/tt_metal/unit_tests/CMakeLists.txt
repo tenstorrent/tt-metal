@@ -44,5 +44,4 @@ target_include_directories(unit_tests PRIVATE
                                         ${CMAKE_CURRENT_SOURCE_DIR}/common
                                         ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer
 )
-target_compile_options(unit_tests PUBLIC ${COMPILE_OPTIONS})
 set_target_properties(unit_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)

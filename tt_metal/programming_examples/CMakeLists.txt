@@ -23,7 +23,6 @@ foreach (TEST ${PROGRAMMING_EXAMPLES_SRCS})
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/programming_examples)
-    target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PROGRAMMING_EXAMPLES_TEST_TARGETS ${TEST_TARGET})
 endforeach()
 

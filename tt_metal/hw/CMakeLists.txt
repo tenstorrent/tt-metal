@@ -30,7 +30,7 @@ foreach(CORE IN LISTS CORES)
         VERBATIM
     )
 
-    # Add the output file to the custom target
+    # add output file to the custom target
     list(APPEND PREPROCESSED_LD_FILES ${OUTPUT_FILE})
 endforeach()
 

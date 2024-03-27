@@ -42,8 +42,8 @@ endif()
 
 ### !!! SET LDFLAGS, SHARED_LINKER_FLAGS AND STATIC_LIBRARY_FLAGS !!! ###
 set(LDFLAGS_ "${CONFIG_LDFLAGS} -L${OUT}/lib -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
-set(SHARED_LIB_FLAGS "-shared -fPIC")
-set(STATIC_LIB_FLAGS "-fPIC")
+set(SHARED_LIB_FLAGS_ "-shared -fPIC")
+set(STATIC_LIB_FLAGS_ "-fPIC")
 
 set (CMAKE_CXX_FLAGS_ "${CMAKE_CXX_FLAGS} --std=c++17 -fvisibility-inlines-hidden -Werror")
 
@@ -78,8 +78,8 @@ ExternalProject_Add(
         UMD_VERSIM_HEADERS=${TT_METAL_VERSIM_ROOT}/versim/
         UMD_USER_ROOT=$ENV{TT_METAL_HOME}
         WARNINGS=${WARNINGS}
-        SHARED_LIB_FLAGS=${SHARED_LIB_FLAGS}
-        STATIC_LIB_FLAGS=${STATIC_LIB_FLAGS}
+        SHARED_LIB_FLAGS=${SHARED_LIB_FLAGS_}
+        STATIC_LIB_FLAGS=${STATIC_LIB_FLAGS_}
         LDFLAGS=${LDFLAGS_}
         CXXFLAGS=${CMAKE_CXX_FLAGS_}
         CFLAGS=${CFLAGS_}

@@ -12,4 +12,5 @@ target_include_directories(queue PUBLIC
                             ${CMAKE_SOURCE_DIR}/tt_eager
                             ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_compile_options(queue PUBLIC ${METAL_COMPILE_OPTIONS} -Wno-int-to-pointer-cast)
+# target_compile_options(queue PUBLIC ${METAL_COMPILE_OPTIONS} -Wno-int-to-pointer-cast)
+# target_compile_options(queue PUBLIC -Wno-int-to-pointer-cast)

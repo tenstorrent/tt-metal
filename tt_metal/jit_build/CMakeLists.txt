@@ -8,4 +8,3 @@ set(JIT_BUILD_SRCS
 
 add_library(jit_build OBJECT ${JIT_BUILD_SRCS})
 target_link_libraries(jit_build PUBLIC common)
-target_compile_options(jit_build PUBLIC ${METAL_COMPILE_OPTIONS})

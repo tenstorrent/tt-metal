@@ -49,7 +49,7 @@ foreach (TEST ${TT_METAL_TESTS})
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)
-    target_compile_options(${TEST} PUBLIC ${COMPILE_OPTIONS})
+    # target_compile_options(${TEST} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 

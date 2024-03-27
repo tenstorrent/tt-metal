@@ -25,5 +25,4 @@ target_link_libraries(impl PUBLIC common)
 target_include_directories(impl PRIVATE ${CMAKE_SOURCE_DIR}/tt_metal)
 target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_compile_options(impl PUBLIC ${METAL_COMPILE_OPTIONS})
-target_compile_options(impl PRIVATE -Wno-int-to-pointer-cast)
+target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
