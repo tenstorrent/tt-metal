@@ -15,7 +15,8 @@ from models.demos.llama2_70b.tt.llama_common import (
     generate_rot_emb,
     get_weight_cache_path,
     get_rotation_mat,
-    get_rotation_mat_prefill,
+    precompute_freqs,
+    gather_cos_sin,
 )
 
 
@@ -90,7 +91,9 @@ class TtLlamaModel_optimized(nn.Module):
 
         print("Done creating layers", flush=True)
 
-        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+        # Rotary Embedding
+        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
+        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
 
         emb_str = "tok_embeddings.weight"
         self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, self.hidden_size)
@@ -173,8 +176,10 @@ class TtLlamaModel_optimized(nn.Module):
         returns
         xs: [(seq, batch, hidden_dim)] * num_devices
         start_pos: int
-        rot_mats: [(1, batch, head_dim, head_dim)] * num_devices
-        attn_masks: [(seq, n_local_heads, batch, max_seq_len)] * num_devices
+        rot_mats: [(1, batch, head_dim, head_dim)] * num_devices  for decode
+                  [(1, 1, seq, head_dim), (1, 1, seq, head_dim)] * num_devices  for prefill
+        attn_masks: [(seq, n_local_heads, batch, max_seq_len)] * num_devices  for decode
+                    [(1, n_local_heads, seq, seq)] * num_devices  for prefill
         """
         x = self.tok_embeddings(inp_ids)  # [batch, seq, hidden]
         assert x.size(2) == self.hidden_size
@@ -189,7 +194,9 @@ class TtLlamaModel_optimized(nn.Module):
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
-            rot_mat = get_rotation_mat_prefill(rot_mat=self.rot_emb, start_pos=start_pos, seqlen=seq_len, batch=batch)
+            cos_gathered, sin_gathered = gather_cos_sin(
+                torch.arange(start_pos, start_pos + seq_len), self.cos, self.sin
+            )
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
@@ -205,20 +212,25 @@ class TtLlamaModel_optimized(nn.Module):
             # expected shapes:
             # x: [batch, 1, seq_len, hidden_dim]
             # start_pos: int
-            # rot_mat: [batch, seq_len, head_dim, head_dim]
+            # cos_gathered: [1, 1, seq_len, head_dim]
+            # sin_gathered: [1, 1, seq_len, head_dim]
             # attn_mask: [batch, self.n_heads, seq_len, seq_len]
             assert x.size() == (batch, 1, seq_len, self.hidden_size)
-            assert rot_mat.size() == (batch, seq_len, self.head_dim, self.head_dim)
+            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
+            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
 
             x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            xs, rot_mats, attn_masks = [], [], []
+            xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
             for i in range(self.num_devices):
                 xs.append(
                     ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
                 )
-                rot_mats.append(as_tensor(rot_mat.clone(), f"rot_mat_prefill_{seq_len}", i))
+                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
+                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
+            rot_mats = [cos_gathereds, sin_gathereds]
+
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]

@@ -15,7 +15,8 @@ from models.demos.llama2_70b.tt.llama_common import (
     generate_rot_emb,
     get_weight_cache_path,
     get_rotation_mat,
-    get_rotation_mat_prefill,
+    precompute_freqs,
+    gather_cos_sin,
 )
 
 
@@ -167,15 +168,14 @@ class TtLlamaDecoder_optimized:
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-
         if self.llm_mode == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
-            rot_mat = get_rotation_mat_prefill(rot_mat=rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
+            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
+            cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
@@ -191,24 +191,42 @@ class TtLlamaDecoder_optimized:
             # expected shapes:
             # x: [batch, 1, seq_len, hidden_dim]
             # start_pos: int
-            # rot_mat: [batch, seq_len, head_dim, head_dim]
+            # cos_gathered: [1, 1, seq_len, head_dim]
+            # sin_gathered: [1, 1, seq_len, head_dim]
             # attn_mask: [batch, self.n_heads, seq_len, seq_len]
             assert x.size() == (batch, 1, seq_len, self.hidden_size)
-            assert rot_mat.size() == (batch, seq_len, self.head_dim, self.head_dim)
+            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
+            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
 
             x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            xs, rot_mats, attn_masks = [], [], []
+            xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
             for i in range(self.num_devices):
                 xs.append(
                     ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
                 )
-                rot_mats.append(as_tensor(rot_mat.clone(), f"rot_mat_prefill_{seq_len}", i))
+                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
+                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
+            rot_mats = [cos_gathereds, sin_gathereds]
+
+            if self.emulated:
+                # save l1 space by sharing the same input across "devices"
+                for i in range(1, self.num_devices):
+                    # x_multichip[i].deallocate(True)
+                    rot_mats[0][i].deallocate(True)
+                    rot_mats[1][i].deallocate(True)
+                    attn_masks[i].deallocate(True)
+                    # x_multichip[i] = x_multichip[0]
+                    rot_mats[0][i] = rot_mats[0][0]
+                    rot_mats[1][i] = rot_mats[1][0]
+                    attn_masks[i] = attn_masks[0]
+
         elif self.llm_mode == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
+            rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             rot_mat = get_rotation_mat(
                 rot_mat=rot_mat,
                 start_pos=start_pos,
@@ -273,15 +291,15 @@ class TtLlamaDecoder_optimized:
                     attn_masks[i], sharded_mem_config=attention_mask_memconfig
                 )
 
-        if self.emulated:
-            # save l1 space by sharing the same input across "devices"
-            for i in range(1, self.num_devices):
-                # x_multichip[i].deallocate(True)
-                rot_mats[i].deallocate(True)
-                attn_masks[i].deallocate(True)
-                # x_multichip[i] = x_multichip[0]
-                rot_mats[i] = rot_mats[0]
-                attn_masks[i] = attn_masks[0]
+            if self.emulated:
+                # save l1 space by sharing the same input across "devices"
+                for i in range(1, self.num_devices):
+                    # x_multichip[i].deallocate(True)
+                    rot_mats[i].deallocate(True)
+                    attn_masks[i].deallocate(True)
+                    # x_multichip[i] = x_multichip[0]
+                    rot_mats[i] = rot_mats[0]
+                    attn_masks[i] = attn_masks[0]
 
         return (
             xs,
