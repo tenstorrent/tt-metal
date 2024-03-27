@@ -68,6 +68,7 @@ void update_producer_consumer_sync_semaphores(
     // Notify the consumer
     noc_semaphore_inc(consumer_noc_encoding | consumer_db_semaphore, 1);
     noc_async_write_barrier();  // Barrier for now
+    noc_async_atomic_barrier();
 }
 
 FORCE_INLINE

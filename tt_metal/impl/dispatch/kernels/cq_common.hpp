@@ -20,6 +20,7 @@ void downstream_cb_acquire_pages(uint32_t n) {
 
     // Ensure last sem_inc has landed
     noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
+    noc_async_atomic_barrier();
 
     while (*sem_addr < n);
     DEBUG_STATUS('A', 'P', 'D');
@@ -48,6 +49,7 @@ uint32_t upstream_cb_acquire_pages(uint32_t cb_fence,
     if (available == 0) {
         // Ensure last sem_inc has landed
         noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
+        noc_async_atomic_barrier();
 
         DEBUG_STATUS('A', 'P', 'W');
         while ((available = *sem_addr) == 0);

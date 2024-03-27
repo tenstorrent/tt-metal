@@ -53,6 +53,7 @@ void kernel_main() {
         // notify producer that it has completed a command
         noc_semaphore_inc(producer_noc_encoding | get_semaphore(2), 1);
         noc_async_write_barrier(); // Barrier for now
+        noc_async_atomic_barrier();
 
         db_buf_switch = not db_buf_switch;
     }
