@@ -25,6 +25,10 @@ uint8_t noc_index = NOC_INDEX;
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
+uint32_t noc_posted_writes_num_issued[NUM_NOCS];
+uint32_t atomic_ret_val __attribute__ ((section ("l1_data")));
+
 
 void kernel_launch() {
 

@@ -42,6 +42,7 @@ void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
     };
     noc_semaphore_inc(noc_encoding | uint32_t(semaphore), -1); // Two's complement addition
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 
 // Local refers to the core that is calling this function
