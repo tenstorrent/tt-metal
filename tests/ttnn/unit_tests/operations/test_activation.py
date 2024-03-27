@@ -28,6 +28,21 @@ def run_activation_unary_test(device, h, w, ttnn_function, torch_function, pcc=0
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_activation_unary_test_nchw(device, n, c, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_hardtanh(device, h, w):
@@ -62,6 +77,27 @@ def test_mish(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_relu6(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.relu6, F.relu6)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 32, 240, 320),
+        (1, 96, 240, 320),
+        (1, 96, 120, 160),
+        (1, 144, 120, 160),
+        (1, 144, 60, 80),
+        (1, 192, 60, 80),
+        (1, 192, 30, 40),
+        (1, 384, 30, 40),
+        (1, 576, 30, 40),
+        (1, 576, 15, 20),
+        (1, 960, 15, 20),
+        (1, 1280, 15, 20),
+    ),
+)
+def test_mobilenetv2_relu6(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.relu6, F.relu6)
 
 
 @pytest.mark.parametrize("h", [64])
