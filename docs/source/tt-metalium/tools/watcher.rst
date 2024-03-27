@@ -191,9 +191,10 @@ watcher log:
 .. code-block::
 
     # The ring buffer has a size of 31 elements, therefore writing 40 entries into the buffer will
-    # result a wraparound, with the latest written entry being in index 8.
-    Core (x=1,y=1):    R,R,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:1|0|0 debug_ring_buffer(latest_written_idx=8)=
-        [0x00000021,0x00000021,0x00000022,0x00000023,0x00000024,0x00000025,0x00000026,0x00000027,
-         0x00000028,0x0000000a,0x0000000b,0x0000000c,0x0000000d,0x0000000e,0x0000000f,0x00000010,
-         0x00000011,0x00000012,0x00000013,0x00000014,0x00000015,0x00000016,0x00000017,0x00000018,
-         0x00000019,0x0000001a,0x0000001b,0x0000001c,0x0000001d,0x0000001e,0x0000001f]
+    # result in the oldest 9 entries being dropped. Entries are printed starting with the most recent.
+    Core (x=1,y=1):    R,R,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:1|0|0
+        debug_ring_buffer(latest_written_idx=8)=
+        [0x00000028,0x00000027,0x00000026,0x00000025,0x00000024,0x00000023,0x00000022,0x00000021,
+         0x00000020,0x0000001f,0x0000001e,0x0000001d,0x0000001c,0x0000001b,0x0000001a,0x00000019,
+         0x00000018,0x00000017,0x00000016,0x00000015,0x00000014,0x00000013,0x00000012,0x00000011,
+         0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a]
