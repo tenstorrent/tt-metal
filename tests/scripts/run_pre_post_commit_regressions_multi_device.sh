@@ -22,6 +22,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="D
 
 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueMultiDeviceFixture.*"
+./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="WatcherFixture.*"
 pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k post_commit
 
 # Falcon40B 4 chip tests
