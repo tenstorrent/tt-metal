@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if defined(WATCHER_ENABLED)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER)
 
 #include "hostdevcommon/debug_ring_buffer_common.h"
 

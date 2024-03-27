@@ -6,7 +6,7 @@
 
 #include "watcher_common.h"
 
-#if defined(WATCHER_ENABLED)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE)
 
 void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.
