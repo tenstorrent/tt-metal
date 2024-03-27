@@ -814,7 +814,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = writer_noc, .compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
     );
     KernelHandle writer_mcast_receiver_kernels_id = -1;
-    if (num_none_all_to_all_workers > 1) {
+    if (num_none_all_to_all_workers > 0) {
         writer_mcast_receiver_kernels_id = CreateKernel(
             program,
             writer_kernel,

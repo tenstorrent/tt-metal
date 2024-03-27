@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import tt_lib as ttl
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention import cross_attention
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import feedforward
 from models.utility_functions import comp_pcc
@@ -63,17 +64,26 @@ class basic_transformer_block:
         elif use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        hidden_states = ttnn.to_memory_config(
-            hidden_states, ttnn.L1_MEMORY_CONFIG
-        )  # layernorm doesn't support block_sharding
+        sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
+        program_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            subblock_w=1,
+            block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,
+            block_w=sharded_mem_cfg.shard_spec.shape[1] // 32,
+            inplace=False,
+        )
+
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
             weight=self.parameters.norm1.weight,
             bias=self.parameters.norm1.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=sharded_mem_cfg,
+            program_config=program_config,
         )
+
+        # NOTE: unshard the LN output to avoid error raised by matmul in cross-attention
+        norm_hidden_states = ttnn.to_memory_config(norm_hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         # 1. Self-Attention
         cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
@@ -92,6 +102,7 @@ class basic_transformer_block:
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.add(attn_output, hidden_states)
         if cross_attention_dim is not None:
             norm_hidden_states = ttnn.layer_norm(
