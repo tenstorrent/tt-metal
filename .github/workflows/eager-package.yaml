@@ -6,16 +6,16 @@ on:
       environment:
         required: True
         type: string
-      os:
-        required: True
-        type: string
+      # os:
+      #   required: True
+      #   type: string
       arch:
         required: True
         type: string
 
 jobs:
   build-eager-package:
-    runs-on: ${{ inputs.os }}
+    runs-on: build
     environment: ${{ inputs.environment }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -25,12 +25,6 @@ jobs:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ inputs.os }}
-      - uses: ./.github/actions/install-metal-dev-deps
-        with:
-          os: ${{ inputs.os }}
       - name: Clean up dirty files
         run: git clean -f -d
       - uses: actions/setup-python@v5.0.0
@@ -46,14 +40,14 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Use g++ as umd compiler for ubuntu 22.04
-        if: ${{ inputs.os == 'ubuntu-22.04' }}
-        run: |
-          echo "DEVICE_CXX=g++" >> $GITHUB_ENV
+      # - name: Use g++ as umd compiler for ubuntu 22.04
+      #   if: ${{ inputs.os == 'ubuntu-22.04' }}
+      #   run: |
+      #     echo "DEVICE_CXX=g++" >> $GITHUB_ENV
       - name: Build Python package distribution
         run: python -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ inputs.arch }}
           path: dist/

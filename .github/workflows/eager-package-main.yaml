@@ -11,18 +11,19 @@ jobs:
   build-eager-package:
     strategy:
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
+        # os: [ubuntu-20.04, ubuntu-22.04]
         arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/eager-package.yaml
     with:
       environment: dev
-      os: ${{ matrix.os }}
+      # os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
   test-eager-package-host:
     needs: build-eager-package
     strategy:
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
+        # os: [ubuntu-20.04, ubuntu-22.04]
+        os: [ubuntu-20.04]
         arch: [grayskull, wormhole_b0]
     runs-on: ${{ matrix.os }}
     environment: production
