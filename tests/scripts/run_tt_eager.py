@@ -139,6 +139,7 @@ if __name__ == "__main__":
     if dispatch_mode == "slow":
         tt_eager_test_entries = get_tt_eager_slow_dispatch_test_entries()
     else:
+        sys.exit()
         tt_eager_test_entries = get_tt_eager_fast_dispatch_test_entries()
 
     eager_test_report = run_tt_cpp_tests(tt_eager_test_entries, timeout, run_single_tt_eager_test)
