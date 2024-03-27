@@ -173,6 +173,7 @@ void kernel_main() {
                 }
                 noc_semaphore_inc(my_noc_encoding | uint32_t(pull_semaphore_addr), -1); // Two's complement addition
                 noc_async_write_barrier();
+                noc_async_atomic_barrier();
                 src_noc_addr = pull_noc_encoding |  issue_cmd_eth_dst_base;
             } else if constexpr (pull_and_push_config == tt::PullAndPushConfig::PULL_FROM_REMOTE) {
                 db_acquire(pull_semaphore_addr, my_noc_encoding); // dst routers increments this semaphore when cmd is available in the dst router
@@ -421,6 +422,7 @@ void kernel_main() {
             // Signal to DST router that command has been read in
             noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(1), 1);
             noc_async_write_barrier(); // Barrier for now
+            noc_async_atomic_barrier();
 
             header->fwd_path = 0;
             if (stall) {
@@ -593,6 +595,7 @@ void kernel_main() {
             // Signal to DST router that command has been read in
             noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(1), 1);
             noc_async_write_barrier(); // Barrier for now
+            noc_async_atomic_barrier();
 
             // Read data from DST router. No special handling for programs because programs will never send data back
             if (num_buffer_transfers == 1) {
