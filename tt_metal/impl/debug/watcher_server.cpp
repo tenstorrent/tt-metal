@@ -358,16 +358,25 @@ static void dump_ring_buffer(FILE *f, Device *device, CoreCoord core) {
         return;
 
     // Latest written idx is one less than the index read out of L1.
-    string out = fmt::format(" debug_ring_buffer(latest_written_idx={})=[", ring_buf_data->current_ptr);
-    for (int idx = 0; idx < RING_BUFFER_ELEMENTS; idx++) {
-        out += fmt::format("0x{:08x},", ring_buf_data->data[idx]);
-        if (idx % 8 == 7) {
+    string out = "\n\tdebug_ring_buffer=\n\t[";
+    int curr_idx = ring_buf_data->current_ptr;
+    for (int count = 1; count <= RING_BUFFER_ELEMENTS; count++) {
+        out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
+        if (count % 8 == 0) {
             out += "\n\t ";
+        }
+        if (curr_idx == 0) {
+            if (ring_buf_data->wrapped == 0)
+                break; // No wrapping, so no extra data available
+            else
+                curr_idx = RING_BUFFER_ELEMENTS-1; // Loop
+        } else {
+            curr_idx--;
         }
     }
     // Remove the last comma
     out.pop_back();
-    out += "] ";
+    out += "]";
     fprintf(f, "%s", out.c_str());
 }
 
@@ -538,8 +547,8 @@ static void dump_core(
     // Validate these first since they are used in diagnostic messages below.
     validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
 
+    auto &disabled_features_set = tt::llrt::OptionsG.get_watcher_disabled_features();
     if (watcher::enabled) {
-        auto &disabled_features_set = tt::llrt::OptionsG.get_watcher_disabled_features();
         // Dump state only gathered if device is compiled w/ watcher
         if (disabled_features_set.find("STATUS") == disabled_features_set.end())
             dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
@@ -553,8 +562,6 @@ static void dump_core(
             dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
         if (disabled_features_set.find("PAUSE") == disabled_features_set.end())
             dump_pause_status(core, &mbox_data->pause_status, paused_cores);
-        if (disabled_features_set.find("RING_BUFFER") == disabled_features_set.end())
-            dump_ring_buffer(f, device, core);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -576,6 +583,12 @@ static void dump_core(
             mbox_data->launch.brisc_watcher_kernel_id,
             mbox_data->launch.ncrisc_watcher_kernel_id,
             mbox_data->launch.triscs_watcher_kernel_id);
+    }
+
+    // Ring buffer at the end because it can print a bunch of data
+    if (watcher::enabled) {
+        if (disabled_features_set.find("RING_BUFFER") == disabled_features_set.end())
+            dump_ring_buffer(f, device, core);
     }
 
     fprintf(f, "\n");
@@ -759,6 +772,7 @@ void watcher_init(Device *device) {
     std::vector<uint32_t> debug_ring_buf_init_val(RING_BUFFER_SIZE / sizeof(uint32_t), 0);
     DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(debug_ring_buf_init_val[0]));
     ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+    ring_buf_data->wrapped = 0;
 
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
