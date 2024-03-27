@@ -28,6 +28,21 @@ def run_activation_unary_test(device, h, w, ttnn_function, torch_function, pcc=0
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_activation_unary_test_nchw(device, n, c, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_hardtanh(device, h, w):
@@ -326,3 +341,24 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold, F.threshold)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 64, 112, 112),
+        (1, 64, 56, 56),
+        (1, 256, 56, 56),
+        (1, 128, 56, 56),
+        (1, 128, 28, 28),
+        (1, 512, 28, 28),
+        (1, 256, 28, 28),
+        (1, 256, 14, 14),
+        (1, 1024, 14, 14),
+        (1, 512, 14, 14),
+        (1, 512, 7, 7),
+        (1, 2048, 7, 7),
+    ),
+)
+def test_relu_resnet50(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.relu, F.relu)
