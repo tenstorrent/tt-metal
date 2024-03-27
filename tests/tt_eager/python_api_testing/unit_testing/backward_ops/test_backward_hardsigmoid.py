@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_pcc, data_gen_with_range
 
 
 @pytest.mark.parametrize(
@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_hardsigmoid(input_shapes, device):
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     in_data = torch.Tensor(size=input_shapes).uniform_()
     in_data.requires_grad = True
     input_tensor = (
@@ -33,5 +33,5 @@ def test_bw_hardsigmoid(input_shapes, device):
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
