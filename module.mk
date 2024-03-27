@@ -122,6 +122,8 @@ endif
 ifeq ($(ENABLE_TRACY), 1)
 CFLAGS += -DTRACY_ENABLE -fno-omit-frame-pointer -fPIC
 LDFLAGS += -ltracy -rdynamic
+TOOLS_TO_BUILD += \
+	tracy_tools
 endif
 
 LIBS_TO_BUILD =
@@ -137,7 +139,6 @@ LIBS_TO_BUILD += \
 	umd_device \
 	tools \
 	tt_metal \
-	tracy \
 	tt_eager \
 	ttnn
 
@@ -155,7 +156,7 @@ ifdef TT_METAL_ENV_IS_DEV
 include $(TT_METAL_HOME)/infra/git_hooks/module.mk
 endif
 
-build: $(LIBS_TO_BUILD)
+build: $(LIBS_TO_BUILD) $(TOOLS_TO_BUILD)
 
 clean: set_up_kernels/clean eager_package/clean
 	test -d build && find build  -mindepth 1 -maxdepth 1 ! -path "build/python_env" -exec rm -rf {} + || true
