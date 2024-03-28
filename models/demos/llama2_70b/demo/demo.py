@@ -59,7 +59,6 @@ def build_generator(args):
             reference_model=generator.model,
             devices=args.devices,
             n_devices=args.n_devices,
-            model_config=args.model_config,
             n_layers=args.num_layers,
             batch=args.max_batch_size,
             emulated=args.emulated,
@@ -120,6 +119,7 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     max_gen_len = args.num_tokens
     args.greedy = args.top_k == 1  # greedy decoding is top-k with k=1
     max_prompt_len = max(len(t) for t in prompt_tokens)
+    min_prompt_len = min(len(t) for t in prompt_tokens)
     assert max_prompt_len <= model_args.max_seq_len
     assert (
         max_gen_len >= max_prompt_len
@@ -134,9 +134,10 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     latencies = []
     full_logits = []
 
-    for cur_pos in range(1, total_len):
+    for cur_pos in range(min_prompt_len, total_len):
         start = time()
-        logits = model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+        input_tokens = tokens[:, prev_pos:cur_pos]
+        logits = model.forward(input_tokens, prev_pos)
         # expects logits to be of shape (bsz, 1, vocab_size)
 
         # sample next token
@@ -154,10 +155,13 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
             break
 
         # Decode the entire sequence generated so far and log it
-        text = tokenizer.decode(
-            tokens[0, : cur_pos + 1].tolist()
-        )  # text = tokenizer.decode(tokens[0, prev_pos].tolist())
-        logger.info(f"Loop {cur_pos-1} user 0: {text}\n")
+        for k in range(bsz):
+            text = tokenizer.decode(tokens[k, : cur_pos + 1].tolist())
+            logger.info(f"Loop {cur_pos-1} user {k}: {text}\n")
+        # text = tokenizer.decode(
+        #     tokens[0, : cur_pos + 1].tolist()
+        # )  # text = tokenizer.decode(tokens[0, prev_pos].tolist())
+        # logger.info(f"Loop {cur_pos-1} user 0: {text}\n")
 
         # profiling
         latencies.append(time() - start)
@@ -254,7 +258,6 @@ class Args:
         devices=None,
         n_devices=8,
         emulated=False,
-        model_config=None,
         cache_path=None,
     ):
         self.implementation = implementation
@@ -273,7 +276,6 @@ class Args:
         self.devices = devices
         self.n_devices = n_devices
         self.emulated = emulated
-        self.model_config = model_config
         self.cache_path = cache_path
 
 
@@ -296,10 +298,16 @@ def construct_arg(**kwargs):
             "meta",
             False,
             8,
+            True,
+        ),
+        (
+            "tt",
             False,
+            8,
+            True,
         ),
     ],
-    ids=["tt-70b-T3000", "meta-70b"],
+    ids=["tt-70b-T3000", "meta-70b", "tt-70b-emulated"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_seq_len",
@@ -314,10 +322,8 @@ def construct_arg(**kwargs):
     ],
     ids=["greedy", "sampling"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_demo(
     # model args
-    model_config_str,
     implementation,
     skip_model_load,
     max_batch_size,
@@ -336,16 +342,19 @@ def test_LlamaModel_demo(
     emulated,
 ):
     ## Get model config
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
-    devices = get_devices_for_t3000(all_devices, n_devices)
+    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
+    model_config_default = get_model_config("BFLOAT16-DRAM", num_devices=n_devices)
 
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and emulated == False:
         pytest.skip(f"Requires at {n_devices} devices to run")
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+    if (
+        compute_grid_size.x < model_config_default["MAX_GRID_SIZE"][0]
+        or compute_grid_size.y < model_config_default["MAX_GRID_SIZE"][1]
+    ):
+        pytest.skip(f"Requires grid size of at least {model_config_default['MAX_GRID_SIZE']} to run")
 
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config_default, n_devices, emulated)
 
     args = construct_arg(
         implementation=implementation,
@@ -364,7 +373,6 @@ def test_LlamaModel_demo(
         devices=devices,
         n_devices=n_devices,
         emulated=emulated,
-        model_config=model_config,
         cache_path=cache_path,
     )
     main(args)
