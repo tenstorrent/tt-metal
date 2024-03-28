@@ -163,8 +163,13 @@ std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float
     std::vector<Tensor> grad_tensor;
     float inv_scalar = 1.0f/scalar;
     if (round_mode=="None"){
-        Tensor result = mul_unary(grad, inv_scalar, output_mem_config);
-        grad_tensor.emplace_back(result);
+        Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+        if(scalar == 0.0){
+            float t_nan  = std::nanf("");
+            grad_tensor.emplace_back( where(eqz(grad, output_mem_config), t_nan, mul( sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config), output_mem_config) );
+        }else{
+            grad_tensor.emplace_back( mul_unary(grad, inv_scalar, output_mem_config) );
+        }
     }
     else{
         Tensor result = zeros_like(grad, output_mem_config);
