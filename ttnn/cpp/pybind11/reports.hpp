@@ -27,6 +27,27 @@ void py_module(py::module& module) {
         .def_property_readonly("buffer_type", [](const ttnn::reports::BufferPage& self) { return self.buffer_type; });
 
     module.def("get_buffer_pages", &get_buffer_pages);
+
+    py::class_<ttnn::reports::DeviceInfo>(module, "DeviceInfo")
+        .def_property_readonly("l1_num_banks", [](const ttnn::reports::DeviceInfo& self) { return self.l1_num_banks; })
+        .def_property_readonly("l1_bank_size", [](const ttnn::reports::DeviceInfo& self) { return self.l1_bank_size; })
+        .def_property_readonly("address_at_first_l1_bank", [](const ttnn::reports::DeviceInfo& self) { return self.address_at_first_l1_bank; })
+        .def_property_readonly("address_at_first_l1_cb_buffer", [](const ttnn::reports::DeviceInfo& self) { return self.address_at_first_l1_cb_buffer; })
+        .def_property_readonly("num_banks_per_storage_core", [](const ttnn::reports::DeviceInfo& self) { return self.num_banks_per_storage_core; })
+        .def_property_readonly("num_compute_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_compute_cores; })
+        .def_property_readonly("num_storage_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_storage_cores; })
+        .def_property_readonly("total_l1_memory", [](const ttnn::reports::DeviceInfo& self) { return self.total_l1_memory; })
+        .def_property_readonly("total_l1_for_interleaved_buffers", [](const ttnn::reports::DeviceInfo& self) { return self.total_l1_for_interleaved_buffers; })
+        .def_property_readonly("total_l1_for_sharded_buffers", [](const ttnn::reports::DeviceInfo& self) { return self.total_l1_for_sharded_buffers; })
+        .def_property_readonly("cb_limit", [](const ttnn::reports::DeviceInfo& self) { return self.cb_limit; });
+
+    module.def("get_device_info", [](const Device& device) -> ttnn::reports::DeviceInfo {
+            return ttnn::reports::get_device_info(device);
+        },
+        py::arg("device")
+        );
+
+
 }
 
 }  // namespace reports
