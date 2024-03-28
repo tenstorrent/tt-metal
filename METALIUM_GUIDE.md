@@ -1,11 +1,18 @@
 ## TT Architecture and Metalium Overview
 
+Tenstorrent has built the future of AI architecture and programming. 
+It achieves high performance on current models but is flexible and programmable to enable invention of future models without the constraints of current architectures.
+It is designed for both inference and training, and is from ground up designed for scale-out of AI workloads.
+This document desribes how we did it. 
+
+
 * [Near Memory Compute in a Mesh](#near-memory-compute-in-a-mesh)
 * [Scalable Architecture](#scalable-architecture)
+  - Two levels of memory  
 * [MIMD and Control of Both Compute and Data](#mimd-and-control-of-both-compute-and-data)
 * [Everything is a RISCV kernel](#everything-is-a-riscv-kernel)
   - Bare Metal C/C++ kernels on RISCV 
-  - User Kernels
+  - User Kernels: Decoupled Data Movement and Compute
     - Data Movement Kernels
     - Compute Kernels 
     - Ethernet Data Movement Kernels
@@ -23,9 +30,17 @@ Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Eng
 
 ### Scalable Architecture
 
-Scalable at the chip level and multi-chip level
-<img width="2141" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+AI workloads operate on tensors (N-dimensional data) and exhibit a high degree of locality and regularity in key compute operations: elementwise, matrix multiplications, reduction and convolutions.
+Elementwise operations are entirely local on each element in the tensor, and can be achieved without any data movement. 
+Matrix multiplication operation have regular communication across the rows and columns of the matrix. 
+Reductions can be decomposed across dimensions: columns, rows and then nearest neighbours. 
+Similarly window based (stencil) operations exchage data with their neigbours. 
 
+These data movement patterns (local, row/column regular, nearest neighbour) are most efficiently implemented via regular and scalable mesh architecture.
+Mesh has very high local SRAM BW -- at the speed of silicon.  
+Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level. 
+
+<img width="2141" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
 
 ### MIMD and Control of Both Compute and Data
 
