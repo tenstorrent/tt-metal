@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import os
+from functools import partial
 from loguru import logger
 from pathlib import Path
 import torch
@@ -11,11 +13,16 @@ import tt_lib
 import ttnn
 
 from models.demos.llama2_70b.reference.llama.llama import Llama
+from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-
+from models.demos.llama2_70b.tt.llama_common import (
+    get_llama_path,
+    MAX_SEQ_LEN,
+    BASE_URL,
+    UNIT_TEST_GENERATION_LENGTH,
+)
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -28,33 +35,60 @@ from models.utility_functions import (
     get_devices_for_t3000,
 )
 from models.perf.perf_utils import prep_perf_report
+from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
-class PytorchLlamaModel(torch.nn.Module):
-    def __init__(self, hf_reference_model):
-        super().__init__()
-        self.model = hf_reference_model
+def load_prompts_file(tokenizer, prefill_length=128):
+    # Load prompts
+    prompts = open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
+    tokenized = tokenizer.encode(prompts, bos=True, eos=False)
 
-        # Disable dropout
-        self.model.eval()
-
-        configuration = hf_reference_model.params
-        self.n_heads = configuration.n_heads
-        hidden_dim = configuration.dim
-        self.head_dim = hidden_dim // self.n_heads
-        self.max_seq_len = configuration.max_seq_len
-
-    def forward(self, x, start_pos):
-        """
-        x: (batch, seq)
-        start_pos: int
-
-        return: (batch, seq, hidden_dim)
-        """
-        return self.model(x, start_pos)
+    token_ids = []
+    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length):
+        window = tokenized[i : i + prefill_length]
+        if len(token_ids) == 32:
+            return token_ids, tokenizer.decode(token_ids)
+        token_ids.append(window)
 
 
-# TODO: Replace this with actual Llama application-level tests
+def post_process(logits, index):
+    next_token_logits = logits[:, index, :]
+    next_tokens = torch.argmax(next_token_logits, dim=-1)
+    ids = next_tokens.reshape(-1)
+    return ids
+
+
+def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
+    # pad the model to maximum length
+    pad_id = tokenizer.pad_id
+    tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
+    for k, t in enumerate(prompt_tokens):
+        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu")
+
+    input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
+    return tokens, input_text_mask
+
+
+def print_output_prompts(generated_ids, tokenizer, num_users_to_display=6):
+    output_prompts = tokenizer.decode(generated_ids.tolist())
+    for user_id, output_prompt in enumerate(output_prompts[:num_users_to_display]):
+        logger.info(f"Output for user {user_id}:\n{output_prompt}")
+
+
+def print_output_prompts(
+    generated_ids, tokenizer, num_users_to_display=6, output_file="models/demos/llama2_70b/demo/data/output_prompts.txt"
+):
+    output_prompts = tokenizer.decode(generated_ids.tolist())
+
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        for user_id, output_prompt in enumerate(output_prompts):
+            if user_id < num_users_to_display:
+                logger.info(f"Output for user {user_id}:\n{output_prompt}")
+            f.write(f"Output for user {user_id}:\n{output_prompt}\n")
+
+
 def run_test_LlamaModel_end_to_end(
     devices,
     batch,
@@ -62,78 +96,49 @@ def run_test_LlamaModel_end_to_end(
     model_config,
     n_layers,
     n_devices,
+    prefill_length,
+    generation_length,
     expected_compile_time,
     expected_inference_time,
-    inference_iterations,
-    emulated=False,
+    emulated,
+    num_users,
 ):
-    if emulated:
-        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
-        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
-        device = devices[0]
-        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-        cache_path = model_config["DEFAULT_CACHE_PATH"]
+    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    logger.info(f"Running num_layer: {n_layers}")
 
-    print(f"Running emulated: {emulated}")
-    print(f"Running on {n_devices} devices")
-    print(f"Running with {n_layers} layers")
+    # TODO: Disable for now since program cache is broken
+    # for device in devices:
+    #     device.enable_program_cache()
 
-    max_seq_len = 4096
-    # Clear global profiler state before starting measurements
-    profiler.clear()
-
-    profiler.start("llama_reference_model_setup")
-
-    hugging_face_reference_model = Llama.build(
+    generator = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=max_seq_len,
-        max_batch_size=batch,
+        max_seq_len=MAX_SEQ_LEN,
+        max_batch_size=num_users,
         n_layers=1,
         skip_model_load=False,
-    ).model
+    )
+    hugging_face_reference_model, tokenizer = generator.model, generator.tokenizer
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
-    profiler.end("llama_reference_model_setup")
 
     # Prepare input ------------------------------------------------------------------------
     torch.manual_seed(0)
-    base_url = "layers"
     configuration = hugging_face_reference_model.params
-    n_heads = configuration.n_heads
-    n_kv_heads = configuration.n_kv_heads
-    hidden_dim = configuration.dim
-    head_dim = hidden_dim // n_heads
 
-    pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
-    start_pos = 0
-    tt_inp_ids = pt_inp_ids.clone()
+    prefill_ids, prefill_texts = load_prompts_file(tokenizer, prefill_length)
+    prefill_ids, _ = intialize_inputs(tokenizer, prefill_ids, num_users, prefill_length)
 
-    for device in devices:
-        tt_lib.device.Synchronize(device)
+    # Clear global profiler state before starting measurements
+    profiler.clear()
 
-    # Prepare output -----------------------------------------------------------------------
-    profiler.start("llama_reference_model_run")
-    pytorch_out = pytorch_model(
-        pt_inp_ids,
-        start_pos,
-    )
-    profiler.end("llama_reference_model_run")
-    del pytorch_out
-    del pytorch_model
-
-    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
-    # since we don't yet have embedding support on device
+    # Set up model -----------------------------------------------------------------------
+    logger.info("Moving weights to devices; might take some time...")
     profiler.start("TT_llama_model_setup")
     tt_model = TtLlamaModel_optimized(
         devices,
         state_dict,
-        base_url,
+        BASE_URL,
         n_layers,
         model_config,
         configuration,
@@ -147,105 +152,129 @@ def run_test_LlamaModel_end_to_end(
 
     del state_dict
 
-    start_pos = 0
-    enable_persistent_kernel_cache()
-    profiler.start("warmup_processing_of_input")
-    tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
-    profiler.end("warmup_processing_of_input")
+    logger.info("Running 1st run prefill stage with compile...")
+    output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
+    post_processor = partial(post_process)
 
-    profiler.start("processing_of_input")
-    tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs_profile(tt_inp_ids, start_pos)
-    profiler.end("processing_of_input")
+    for user_id in range(num_users):
+        logger.info(f"Filling kv cache for user {user_id + 1}")
+        if user_id == 0 or user_id == 25:
+            profiler.start(f"processing_of_prefill_input_{user_id}")
 
-    # First run to fill compile cache ----------------------------------------------------
-    logger.info(f"Running Llama model once to fill caches -> disable profiler")
-    profiler.disable()
+        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(
+            prefill_ids[user_id : user_id + 1], start_pos=0
+        )
+        if user_id == 0 or user_id == 25:
+            profiler.end(f"processing_of_prefill_input_{user_id}")
+            profiler.start(f"model_run_for_prefill_{user_id}")
 
-    # Use force enable to only record this profiler call while others are disabled
-    profiler.start("first_model_run_with_compile", force_enable=True)
-    # tt_embeddings = [
-    #         tt_embeddings_host[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-    #         for i in range(len(devices))
-    #     ]
-    tt_out = tt_model(
-        tt_inp_emb,
-        rot_mat,
-        start_pos,
-        attn_mask,
-    )
-    tt_out = [tt_o.cpu() for tt_o in tt_out]
-    profiler.end("first_model_run_with_compile", force_enable=True)
+        tt_logits = tt_model(
+            tt_inp_emb,
+            rot_mat,
+            start_pos,
+            attn_mask,
+            user_id=user_id,
+        )
+        if user_id == 0 or user_id == 25:
+            profiler.end(f"model_run_for_prefill_{user_id}")
+
+        del tt_inp_emb
+        del rot_mat
+        del attn_mask
+
+        logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+        logits = logits[..., : configuration.vocab_size].float()
+        del tt_logits
+
+        user_output_ids = post_processor(logits=logits, index=prefill_length - 1)
+        output_ids[user_id] = user_output_ids
+
+    generated_ids = torch.concat((prefill_ids[..., :prefill_length], output_ids), dim=1)
+
     for device in devices:
         tt_lib.device.Synchronize(device)
-    logger.info(f"Finished first Llama model with compile")
+    logger.info("Finished 1st run prefill stage with compile!")
 
-    del tt_out
-    del rot_mat
-    del attn_mask
+    batch, seq_len = 32, 1
+    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    tt_model.set_model_config(model_config)
 
-    # Second run for perf ----------------------------------------------------------------
-    logger.info(f"Enable profiler and enable binary and compile cache")
-    profiler.enable()
-    # enable_persistent_kernel_cache()
+    logger.info("Running 1st run decode stage with compile...")
+    decode_ids = torch.zeros(batch, 1, dtype=torch.int64)
 
-    def run_inference():
-        inference_start_pos = 1
-        for i in range(inference_iterations - 1):
-            start_pos = inference_start_pos + i
-            tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
+    for user_id, output_id in enumerate(output_ids):
+        decode_ids[user_id] = output_id
 
-            tt_out = tt_model(
-                tt_inp_emb,
-                rot_mat,
-                start_pos,
-                attn_mask,
-            )
+    for cur_pos in range(generation_length):
+        start_pos = prefill_length + cur_pos
+        logger.info(f"Generating token: {start_pos + 1}")
 
-            tt_out = [tt_o.cpu() for tt_o in tt_out]
+        if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
+            profiler.start(f"processing_of_decode_input_{cur_pos}")
 
-    profiler.start(f"model_warmup_run_for_inference")
-    run_inference()
-    profiler.end(f"model_warmup_run_for_inference")
-    for device in devices:
-        tt_lib.device.Synchronize(device)
+        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(decode_ids, start_pos)
 
-    logger.info(f"Finished Llama model warm up run for inference")
+        if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
+            profiler.end(f"processing_of_decode_input_{cur_pos}")
+            profiler.start(f"model_run_for_inference_{cur_pos}")
 
-    profiler.start(f"model_run_for_inference")
-    run_inference()
-    profiler.end(f"model_run_for_inference")
-    for device in devices:
-        tt_lib.device.Synchronize(device)
+        tt_logits = tt_model(
+            tt_inp_emb,
+            rot_mat,
+            start_pos,
+            attn_mask,
+        )
 
-    logger.info(f"Finished Llama model run for inference")
+        if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
+            profiler.end(f"model_run_for_inference_{cur_pos}")
 
+        del tt_inp_emb
+        del rot_mat
+        del attn_mask
+
+        for device in devices:
+            tt_lib.device.Synchronize(device)
+
+        logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+        logits = logits[..., : configuration.vocab_size].float()
+        del tt_logits
+
+        decode_ids = post_processor(logits=logits, index=...).reshape(batch, 1)
+
+        generated_ids = torch.concat((generated_ids, decode_ids[:num_users]), dim=1)
+
+        # TODO: Remove if we don't want to print per generated token
+        print_output_prompts(generated_ids, tokenizer)
+
+    logger.info("Finished 1st run decode stage with compile!")
     profiler.print()
+
+    print_output_prompts(generated_ids, tokenizer)
 
     comment = f"num_layers={n_layers}_n_devices={n_devices}_emulated={emulated}"
     cpu_time = profiler.get("hugging_face_reference_model")
-    first_iter_time = profiler.get("first_model_run_with_compile")
-    prepare_inputs_time = profiler.get("processing_of_input")
-    second_iter_time = profiler.get("model_run_for_inference") / inference_iterations
+
+    prefill_compile_time = profiler.get(f"model_run_for_prefill_{0}")
+    prefill_time = profiler.get(f"model_run_for_prefill_{25}")
+    decode_compile_time = profiler.get(f"model_run_for_inference_{0}")
+    decode_time = profiler.get(f"model_run_for_inference_{35}")
+
     prep_perf_report(
         model_name=f"Llama_{comment}",
         batch_size=batch,
-        inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
+        inference_and_compile_time=decode_compile_time,
+        inference_time=decode_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comment,
         inference_time_cpu=cpu_time,
     )
 
-    compile_time = first_iter_time - second_iter_time
-    logger.info(f"llama {comment} inference time: {second_iter_time}")
-    logger.info(f"llama {comment} compile time: {compile_time}")
-
-    tokens_per_s_per_user = 1 / second_iter_time
+    logger.info(f"llama {comment} inference time: {decode_time}")
+    tokens_per_s_per_user = 1 / decode_time
     tokens_per_s_overall = tokens_per_s_per_user * batch * seq_len
-    logger.info(f"{inference_iterations} Iterations inference time: {profiler.get('model_run_for_inference')}")
-    logger.info(f"Time per iteration: {second_iter_time}")
 
+    logger.info(f"Time per iteration: {decode_time}")
     logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
     logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
 
@@ -257,45 +286,32 @@ def run_test_LlamaModel_end_to_end(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "n_layers",
-    (1, 2, 4, 8),
-)
-@pytest.mark.parametrize("emulated", (False, True))
-@pytest.mark.parametrize("n_devices", (4, 8))
-@pytest.mark.parametrize(
-    "batch, seq_len, expected_compile_time, expected_inference_time, inference_iterations",
+    "prefill_length, generation_length, expected_compile_time, expected_inference_time",
     (
-        (32, 1, 60, 0.22, 10),
-        # ("decode", 32, 1, 1024, 0.35, 10),
-        # ("decode", 32, 1, 2047, 0.48, 10),
+        (128, 128, 60, 0.22),
+        (128, 2048, 60, 0.22),
+        (2048, 128, 60, 0.22),
     ),
-    ids=[
-        "decode_batch32",
-        # "decode_batch32_1024",
-        # "decode_batch32_2047",
-    ],
+    ids=["short-short", "short-long", "long-short"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
-def test_perf_bare_metal(
-    batch,
-    seq_len,
-    model_config_str,
-    n_layers,
-    n_devices,
+def test_llama_perf_host(
+    prefill_length,
+    generation_length,
     expected_compile_time,
     expected_inference_time,
-    inference_iterations,
-    request,
     all_devices,
-    emulated,
+    n_layers=80,
+    n_devices=8,
+    emulated=False,
+    num_users=32,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    batch, seq_len = 1, prefill_length
+    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
@@ -305,8 +321,50 @@ def test_perf_bare_metal(
         model_config,
         n_layers,
         n_devices,
+        prefill_length,
+        generation_length,
         expected_compile_time,
         expected_inference_time,
-        inference_iterations,
         emulated,
+        num_users,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "batch, seq_len, expected_perf",
+    ((32, 1, 300000), (1, 128, 300000), (1, 2048, 300000)),
+    ids=("decode", "prefill_128", "prefill_2k"),
+)
+def test_llama_perf_device(batch, seq_len, expected_perf):
+    subdir = "llama2_70b"
+    margin = 0.03  # 0.5
+
+    dir_path = "generated/profiler/reports/" + subdir
+    os.makedirs(dir_path, exist_ok=True)
+    print(f"Checking existence of directory: {dir_path}")
+    if not os.path.exists(dir_path):
+        print("Directory does not exist. Attempting to create.")
+        os.makedirs(dir_path, exist_ok=True)
+    else:
+        print("Directory exists.")
+
+    seq_len_str = "2k" if seq_len == 2048 else str(seq_len)
+    llm_mode = "decode" if seq_len == 1 else f"prefill_{seq_len_str}"
+    command = f"pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[{llm_mode}-8chip-T3000-2L]"
+
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_perf}
+
+    post_processed_results = run_device_perf(command, subdir, UNIT_TEST_GENERATION_LENGTH, cols, batch)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    prep_device_perf_report(
+        model_name=f"llama_70b_{batch}batch_{seq_len}seq_len",
+        batch_size=batch,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        # comments=test.replace("/", "_"),
     )
