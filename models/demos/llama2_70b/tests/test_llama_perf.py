@@ -69,12 +69,6 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
     return tokens, input_text_mask
 
 
-def print_output_prompts(generated_ids, tokenizer, num_users_to_display=6):
-    output_prompts = tokenizer.decode(generated_ids.tolist())
-    for user_id, output_prompt in enumerate(output_prompts[:num_users_to_display]):
-        logger.info(f"Output for user {user_id}:\n{output_prompt}")
-
-
 def print_output_prompts(
     generated_ids, tokenizer, num_users_to_display=6, output_file="models/demos/llama2_70b/demo/data/output_prompts.txt"
 ):
