@@ -29,6 +29,62 @@ def test_concat(device, height, width, dim):
 
 
 @pytest.mark.parametrize(
+    "n,c,h,w",
+    [
+        [1, 768, 40, 40],
+        [1, 512, 80, 80],
+        [1, 256, 160, 160],
+        [1, 256, 80, 80],
+        [1, 512, 40, 40],
+        [1, 768, 20, 20],
+        [2, 768, 40, 40],
+        [2, 512, 80, 80],
+        [2, 256, 160, 160],
+        [2, 256, 80, 80],
+        [2, 512, 40, 40],
+        [2, 768, 20, 20],
+        [4, 768, 40, 40],
+        [4, 512, 80, 80],
+        [4, 256, 160, 160],
+        [4, 256, 80, 80],
+        [4, 512, 40, 40],
+        [4, 768, 20, 20],
+        [8, 768, 40, 40],
+        [8, 512, 80, 80],
+        [8, 256, 160, 160],
+        [8, 256, 80, 80],
+        [8, 512, 40, 40],
+        [8, 768, 20, 20],
+        [16, 768, 40, 40],
+        [16, 512, 80, 80],
+        [16, 256, 160, 160],
+        [16, 256, 80, 80],
+        [16, 512, 40, 40],
+        [16, 768, 20, 20],
+        [32, 768, 40, 40],
+        [32, 512, 80, 80],
+        [32, 256, 160, 160],
+        [32, 256, 80, 80],
+        [32, 512, 40, 40],
+        [32, 768, 20, 20],
+    ],
+)
+@pytest.mark.parametrize("dim", [0, 1])
+def test_concat_nchw(device, n, c, h, w, dim):
+    torch_input_tensor_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.concat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize(
     "input_shape_a, shard_shape_a, input_shape_b, shard_shape_b, output_shard_shape, shard_grid",
     (
         (
