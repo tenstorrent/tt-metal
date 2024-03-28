@@ -66,7 +66,7 @@ input_queue_rnd_state_t input_queue_rnd_state;
 
 
 // generates packets with ranom size and payload on the input side
-FORCE_INLINE bool input_queue_handler() {
+inline bool input_queue_handler() {
 
     if (input_queue_rnd_state.all_packets_done()) {
         return true;
