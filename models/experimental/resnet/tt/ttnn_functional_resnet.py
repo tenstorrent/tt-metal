@@ -14,11 +14,9 @@ import torch
 
 from ttnn.model_preprocessing import (
     preprocess_model,
-    preprocess_model_parameters,
     preprocess_conv2d,
     fold_batch_norm2d_into_conv2d,
     fold_conv7s2_into_conv4s1,
-    preprocess_remaining_children_and_parameters,
     convert_torch_model_to_ttnn_model,
 )
 from models.utility_functions import (
@@ -113,6 +111,8 @@ def do_reshard(output_tensor, input_mem_config):
 
 
 def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None):
+    # breakpoint()
+
     conv1 = parameters.conv1(x)
     conv1 = do_reshard(conv1, parameters.conv2.conv.input_sharded_memory_config)
 
@@ -134,7 +134,7 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
         if layer is not None and layer == 2:
             if x.is_allocated() and x is not identity:
                 ttnn.deallocate(x)
-            if module >= 2:
+            if module >= 2 or (is_wormhole_b0() and module == 1):
                 identity = ttnn.experimental.tensor.move_sharded(identity)
         identity = parameters.downsample(identity)
 
@@ -332,9 +332,9 @@ class ResNet50:
             ttnn_module_args.conv2["compute_kernel_config"] = self.compute_kernel_config
             ttnn_module_args.conv3["compute_kernel_config"] = self.compute_kernel_config
 
-            if self.batch_size == 20 and ttnn_module_args.conv3.input_height == 56:
+            if self.batch_size == 20 and ttnn_module_args.conv3.input_height == 56 and is_grayskull():
                 ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 320}
-            if self.batch_size == 20 and ttnn_module_args.conv3.input_height == 28:
+            if self.batch_size == 20 and ttnn_module_args.conv3.input_height == 28 and is_grayskull():
                 ttnn_module_args.conv2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 160}
 
             if ttnn_module_args.conv1.input_height <= 14 and ttnn_module_args.conv1.input_width <= 14:
@@ -415,7 +415,7 @@ class ResNet50:
             ttnn_module_args.conv1["padded_input_channels"] = 16
             ttnn_module_args.conv1["math_fidelity"] = self.math_fidelity
             ttnn_module_args.conv1["weights_dtype"] = self.weight_dtype
-            if self.batch_size == 20:
+            if self.batch_size == 20 and is_grayskull():
                 ttnn_module_args.conv1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 1280}
             ttnn_module_args.conv1["dtype"] = self.act_dtype
             ttnn_module_args.conv1["compute_kernel_config"] = self.compute_kernel_config
@@ -492,6 +492,8 @@ class ResNet50:
         return input_tensor
 
     def __call__(self, input_tensor):
+        # breakpoint()
+
         output_tensor = self.impl.conv1(input_tensor)
         if self.batch_size == 20:
             output_tensor = ttnn.experimental.tensor.move_sharded(output_tensor)
