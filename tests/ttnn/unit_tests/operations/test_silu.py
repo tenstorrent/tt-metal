@@ -35,6 +35,7 @@ def run_elt_silu_relu(
     shard_strategy,
     shard_orientation,
     op,
+    dtype=ttnn.bfloat16,
 ):
     ## input shape is N C H W
     input_shape = [batch_size, input_channels, input_height, input_width]
@@ -133,6 +134,7 @@ def run_elt_silu_relu(
     ),
 )
 @pytest.mark.parametrize("op", ["silu", "relu"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_gs_silu_relu(
     device,
     batch_size,
@@ -144,6 +146,7 @@ def test_gs_silu_relu(
     shard_strategy,
     shard_orientation,
     op,
+    dtype,
 ):
     run_elt_silu_relu(
         device,
@@ -156,6 +159,7 @@ def test_gs_silu_relu(
         shard_strategy,
         shard_orientation,
         op,
+        dtype,
     )
 
 
