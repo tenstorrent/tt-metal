@@ -296,12 +296,12 @@ public:
     }
 
     void dprint_object() {
-        DPRINT << "  id: " << DEC() << this->queue_id << ENDL();
-        DPRINT << "  start_addr: 0x" << HEX() << (this->queue_start_addr_words*PACKET_WORD_SIZE_BYTES) << ENDL();
-        DPRINT << "  size_bytes: 0x" << HEX() << (this->queue_size_words*PACKET_WORD_SIZE_BYTES) << ENDL();
-        DPRINT << "  remote_x: " << DEC() << this->remote_x << ENDL();
-        DPRINT << "  remote_y: " << DEC() << this->remote_y << ENDL();
-        DPRINT << "  remote_queue_id: " << DEC() << this->remote_queue_id << ENDL();
+        DPRINT << "  id: " << DEC() << static_cast<uint32_t>(this->queue_id) << ENDL();
+        DPRINT << "  start_addr: 0x" << HEX() << static_cast<uint32_t>(this->queue_start_addr_words*PACKET_WORD_SIZE_BYTES) << ENDL();
+        DPRINT << "  size_bytes: 0x" << HEX() << static_cast<uint32_t>(this->queue_size_words*PACKET_WORD_SIZE_BYTES) << ENDL();
+        DPRINT << "  remote_x: " << DEC() << static_cast<uint32_t>(this->remote_x) << ENDL();
+        DPRINT << "  remote_y: " << DEC() << static_cast<uint32_t>(this->remote_y) << ENDL();
+        DPRINT << "  remote_queue_id: " << DEC() << static_cast<uint32_t>(this->remote_queue_id) << ENDL();
         DPRINT << "  remote_update_network_type: " << DEC() << static_cast<uint32_t>(this->remote_update_network_type) << ENDL();
         DPRINT << "  ready_status: 0x" << HEX() << this->get_remote_ready_status() << ENDL();
         DPRINT << "  local_wptr: 0x" << HEX() << this->get_queue_local_wptr() << ENDL();
@@ -473,13 +473,13 @@ public:
     void dprint_object() {
         DPRINT << "Input queue:" << ENDL();
         packet_queue_state_t::dprint_object();
-        DPRINT << "  packet_valid: " << DEC() << this->curr_packet_valid << ENDL();
-        DPRINT << "  packet_tag: 0x" << HEX() << this->curr_packet_tag << ENDL();
-        DPRINT << "  packet_src: 0x" << HEX() << this->curr_packet_src << ENDL();
-        DPRINT << "  packet_dest: 0x" << HEX() << this->curr_packet_dest << ENDL();
-        DPRINT << "  packet_flags: 0x" << HEX() << this->curr_packet_flags << ENDL();
-        DPRINT << "  packet_size_words: " << DEC() << this->curr_packet_size_words << ENDL();
-        DPRINT << "  packet_words_sent: " << DEC() << this->curr_packet_words_sent << ENDL();
+        DPRINT << "  packet_valid: " << DEC() << static_cast<uint32_t>(this->curr_packet_valid) << ENDL();
+        DPRINT << "  packet_tag: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_tag) << ENDL();
+        DPRINT << "  packet_src: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_src) << ENDL();
+        DPRINT << "  packet_dest: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_dest) << ENDL();
+        DPRINT << "  packet_flags: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_flags) << ENDL();
+        DPRINT << "  packet_size_words: " << DEC() << static_cast<uint32_t>(this->curr_packet_size_words) << ENDL();
+        DPRINT << "  packet_words_sent: " << DEC() << static_cast<uint32_t>(this->curr_packet_words_sent) << ENDL();
     }
 
 };
