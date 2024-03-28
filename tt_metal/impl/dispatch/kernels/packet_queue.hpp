@@ -22,13 +22,13 @@ constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2*1024;
 constexpr uint32_t NUM_PTR_REGS_PER_QUEUE = 3;
 
 
-FORCE_INLINE uint64_t get_timestamp() {
+inline uint64_t get_timestamp() {
     uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
     return (((uint64_t)timestamp_high) << 32) | timestamp_low;
 }
 
-FORCE_INLINE uint64_t get_timestamp_32b() {
+inline uint64_t get_timestamp_32b() {
     return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
@@ -138,103 +138,103 @@ public:
             STREAM_REG_ADDR(queue_id, STREAM_REMOTE_SRC_REG_INDEX));
     }
 
-    FORCE_INLINE uint8_t get_queue_id() const {
+    inline uint8_t get_queue_id() const {
         return this->queue_id;
     }
 
-    FORCE_INLINE uint32_t get_queue_local_wptr() const {
+    inline uint32_t get_queue_local_wptr() const {
         return *this->local_wptr_val;
     }
 
-    FORCE_INLINE void reset_queue_local_wptr() {
+    inline void reset_queue_local_wptr() {
         *this->local_wptr_reset = 0;
     }
 
-    FORCE_INLINE void advance_queue_local_wptr(uint32_t num_words) {
+    inline void advance_queue_local_wptr(uint32_t num_words) {
         *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
-    FORCE_INLINE uint32_t get_queue_local_rptr_sent() const {
+    inline uint32_t get_queue_local_rptr_sent() const {
         return *this->local_rptr_sent_val;
     }
 
-    FORCE_INLINE uint32_t get_queue_local_rptr_cleared() const {
+    inline uint32_t get_queue_local_rptr_cleared() const {
         return *this->local_rptr_cleared_val;
     }
 
-    FORCE_INLINE void reset_queue_local_rptr_sent()  {
+    inline void reset_queue_local_rptr_sent()  {
         *this->local_rptr_sent_reset = 0;
     }
 
-    FORCE_INLINE void reset_queue_local_rptr_cleared()  {
+    inline void reset_queue_local_rptr_cleared()  {
         *this->local_rptr_cleared_reset = 0;
     }
 
-    FORCE_INLINE void advance_queue_local_rptr_sent(uint32_t num_words)  {
+    inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
         *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
-    FORCE_INLINE void advance_queue_local_rptr_cleared(uint32_t num_words)  {
+    inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
         *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
-    FORCE_INLINE uint32_t get_queue_data_num_words_available_to_send() const {
+    inline uint32_t get_queue_data_num_words_available_to_send() const {
         return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_data_num_words_occupied() const {
+    inline uint32_t get_queue_data_num_words_occupied() const {
         return (this->get_queue_local_wptr() - this->get_queue_local_rptr_cleared()) & this->queue_size_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_data_num_words_free() const {
+    inline uint32_t get_queue_data_num_words_free() const {
         return this->queue_size_words - this->get_queue_data_num_words_occupied();
     }
 
-    FORCE_INLINE uint32_t get_num_words_sent_not_cleared() const {
+    inline uint32_t get_num_words_sent_not_cleared() const {
         return (this->get_queue_local_rptr_sent() - this->get_queue_local_rptr_cleared()) & this->queue_size_mask;
     }
 
-    FORCE_INLINE uint32_t get_num_words_written_not_sent() const {
+    inline uint32_t get_num_words_written_not_sent() const {
         return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_wptr_offset_words() const {
+    inline uint32_t get_queue_wptr_offset_words() const {
         return this->get_queue_local_wptr() & this->ptr_offset_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_rptr_sent_offset_words() const {
+    inline uint32_t get_queue_rptr_sent_offset_words() const {
         return this->get_queue_local_rptr_sent() & this->ptr_offset_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_rptr_cleared_offset_words() const {
+    inline uint32_t get_queue_rptr_cleared_offset_words() const {
         return this->get_queue_local_rptr_cleared() & this->ptr_offset_mask;
     }
 
-    FORCE_INLINE uint32_t get_queue_rptr_sent_addr_bytes() const {
+    inline uint32_t get_queue_rptr_sent_addr_bytes() const {
         return (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES;
     }
 
-    FORCE_INLINE uint32_t get_queue_rptr_cleared_addr_bytes() const {
+    inline uint32_t get_queue_rptr_cleared_addr_bytes() const {
         return (this->queue_start_addr_words + this->get_queue_rptr_cleared_offset_words())*PACKET_WORD_SIZE_BYTES;
     }
 
-    FORCE_INLINE uint32_t get_queue_wptr_addr_bytes() const {
+    inline uint32_t get_queue_wptr_addr_bytes() const {
         return (this->queue_start_addr_words + this->get_queue_wptr_offset_words())*PACKET_WORD_SIZE_BYTES;
     }
 
-    FORCE_INLINE uint32_t get_queue_words_before_rptr_sent_wrap() const {
+    inline uint32_t get_queue_words_before_rptr_sent_wrap() const {
         return queue_size_words - this->get_queue_rptr_sent_offset_words();
     }
 
-    FORCE_INLINE uint32_t get_queue_words_before_rptr_cleared_wrap() const {
+    inline uint32_t get_queue_words_before_rptr_cleared_wrap() const {
         return queue_size_words - this->get_queue_rptr_cleared_offset_words();
     }
 
-    FORCE_INLINE uint32_t get_queue_words_before_wptr_wrap() const {
+    inline uint32_t get_queue_words_before_wptr_wrap() const {
         return queue_size_words - this->get_queue_wptr_offset_words();
     }
 
-    FORCE_INLINE void remote_reg_update(uint32_t reg_addr, uint32_t val) {
+    inline void remote_reg_update(uint32_t reg_addr, uint32_t val) {
 
         if (this->remote_update_network_type == DispatchRemoteNetworkType::NONE) {
             return;
@@ -247,47 +247,47 @@ public:
         }
     }
 
-    FORCE_INLINE void advance_queue_remote_wptr(uint32_t num_words) {
+    inline void advance_queue_remote_wptr(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_wptr_update_addr;
         this->remote_reg_update(reg_addr, val);
     }
 
-    FORCE_INLINE void advance_queue_remote_rptr_sent(uint32_t num_words) {
+    inline void advance_queue_remote_rptr_sent(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_rptr_sent_update_addr;
         this->remote_reg_update(reg_addr, val);
     }
 
-    FORCE_INLINE void advance_queue_remote_rptr_cleared(uint32_t num_words) {
+    inline void advance_queue_remote_rptr_cleared(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_rptr_cleared_update_addr;
         this->remote_reg_update(reg_addr, val);
     }
 
-    FORCE_INLINE void reset_ready_flag() {
+    inline void reset_ready_flag() {
         *this->local_ready_status_ptr = 0;
     }
 
-    FORCE_INLINE void send_remote_ready_notification() {
+    inline void send_remote_ready_notification() {
         this->remote_reg_update(this->remote_ready_status_addr,
                                 PACKET_QUEUE_REMOTE_READY_FLAG);
     }
 
-    FORCE_INLINE void send_remote_finished_notification() {
+    inline void send_remote_finished_notification() {
         this->remote_reg_update(this->remote_ready_status_addr,
                                 PACKET_QUEUE_REMOTE_FINISHED_FLAG);
     }
 
-    FORCE_INLINE bool is_remote_ready() const {
+    inline bool is_remote_ready() const {
         return *this->local_ready_status_ptr == PACKET_QUEUE_REMOTE_READY_FLAG;
     }
 
-    FORCE_INLINE uint32_t get_remote_ready_status() const {
+    inline uint32_t get_remote_ready_status() const {
         return *this->local_ready_status_ptr;
     }
 
-    FORCE_INLINE bool is_remote_finished() const {
+    inline bool is_remote_finished() const {
         return *this->local_ready_status_ptr == PACKET_QUEUE_REMOTE_FINISHED_FLAG;
     }
 
@@ -324,7 +324,7 @@ protected:
     uint32_t curr_packet_tag;
     uint16_t curr_packet_flags;
 
-    FORCE_INLINE void advance_next_packet() {
+    inline void advance_next_packet() {
         if(this->get_queue_data_num_words_available_to_send() > 0) {
             tt_l1_ptr dispatch_packet_header_t* next_packet_header_ptr =
                 reinterpret_cast<tt_l1_ptr dispatch_packet_header_t*>(
@@ -368,68 +368,68 @@ public:
     }
 
 
-    FORCE_INLINE bool get_curr_packet_valid() {
+    inline bool get_curr_packet_valid() {
         if (!this->curr_packet_valid && (this->get_queue_data_num_words_available_to_send() > 0)){
             this->advance_next_packet();
         }
         return this->curr_packet_valid;
     }
 
-    FORCE_INLINE tt_l1_ptr dispatch_packet_header_t* get_curr_packet_header_ptr() {
+    inline tt_l1_ptr dispatch_packet_header_t* get_curr_packet_header_ptr() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_header_ptr;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_dest() {
+    inline uint32_t get_curr_packet_dest() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_dest;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_src() {
+    inline uint32_t get_curr_packet_src() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_src;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_size_words() {
+    inline uint32_t get_curr_packet_size_words() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_size_words;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_words_remaining() {
+    inline uint32_t get_curr_packet_words_remaining() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_size_words - this->curr_packet_words_sent;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_tag() {
+    inline uint32_t get_curr_packet_tag() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_tag;
     }
 
-    FORCE_INLINE uint32_t get_curr_packet_flags() {
+    inline uint32_t get_curr_packet_flags() {
         if (!this->curr_packet_valid) {
             this->advance_next_packet();
         }
         return this->curr_packet_flags;
     }
 
-    FORCE_INLINE bool partial_packet_sent() const {
+    inline bool partial_packet_sent() const {
         return this->curr_packet_valid && (this->curr_packet_words_sent > 0);
     }
 
 
-    FORCE_INLINE bool input_queue_full_packet_available_to_send(uint32_t& num_words_available_to_send) {
+    inline bool input_queue_full_packet_available_to_send(uint32_t& num_words_available_to_send) {
         num_words_available_to_send = this->get_queue_data_num_words_available_to_send();
         if (num_words_available_to_send == 0) {
             return false;
@@ -437,7 +437,7 @@ public:
         return num_words_available_to_send >= this->get_curr_packet_words_remaining();
     }
 
-    FORCE_INLINE uint32_t input_queue_curr_packet_num_words_available_to_send() {
+    inline uint32_t input_queue_curr_packet_num_words_available_to_send() {
         uint32_t num_words = this->get_queue_data_num_words_available_to_send();
         if (num_words == 0) {
             return 0;
@@ -446,7 +446,7 @@ public:
         return num_words;
     }
 
-    FORCE_INLINE void input_queue_advance_words_sent(uint32_t num_words) {
+    inline void input_queue_advance_words_sent(uint32_t num_words) {
         if (num_words > 0) {
             this->advance_queue_local_rptr_sent(num_words);
             this->advance_queue_remote_rptr_sent(num_words);
@@ -459,14 +459,14 @@ public:
         }
     }
 
-    FORCE_INLINE void input_queue_advance_words_cleared(uint32_t num_words) {
+    inline void input_queue_advance_words_cleared(uint32_t num_words) {
         if (num_words > 0) {
             this->advance_queue_local_rptr_cleared(num_words);
             this->advance_queue_remote_rptr_cleared(num_words);
         }
     }
 
-    FORCE_INLINE void input_queue_clear_all_words_sent() {
+    inline void input_queue_clear_all_words_sent() {
         this->input_queue_advance_words_cleared(this->get_num_words_sent_not_cleared());
     }
 
@@ -515,15 +515,15 @@ class packet_output_queue_state_t : public packet_queue_state_t {
             }
         }
 
-        FORCE_INLINE uint32_t get_curr_total_words_in_flight() const {
+        inline uint32_t get_curr_total_words_in_flight() const {
             return this->curr_total_words_in_flight;
         }
 
-        FORCE_INLINE uint32_t get_prev_total_words_in_flight() const {
+        inline uint32_t get_prev_total_words_in_flight() const {
             return this->prev_total_words_in_flight;
         }
 
-        FORCE_INLINE uint32_t prev_words_in_flight_flush() {
+        inline uint32_t prev_words_in_flight_flush() {
 
             uint32_t words_flushed = this->prev_total_words_in_flight;
             if (words_flushed > 0) {
@@ -542,7 +542,7 @@ class packet_output_queue_state_t : public packet_queue_state_t {
             return words_flushed;
         }
 
-        FORCE_INLINE void register_words_in_flight(uint32_t input_queue_id, uint32_t num_words) {
+        inline void register_words_in_flight(uint32_t input_queue_id, uint32_t num_words) {
             this->curr_input_queue_words_in_flight[input_queue_id] += num_words;
             this->curr_total_words_in_flight += num_words;
             this->input_queue_array[input_queue_id].input_queue_advance_words_sent(num_words);
@@ -593,20 +593,20 @@ public:
         this->reset_ready_flag();
     }
 
-    FORCE_INLINE void set_max_noc_send_words(uint32_t max_noc_send_words) {
+    inline void set_max_noc_send_words(uint32_t max_noc_send_words) {
         this->max_noc_send_words = max_noc_send_words;
     }
 
-    FORCE_INLINE void set_max_eth_send_words(uint32_t max_eth_send_words) {
+    inline void set_max_eth_send_words(uint32_t max_eth_send_words) {
         this->max_eth_send_words = max_eth_send_words;
     }
 
-    FORCE_INLINE uint32_t output_max_num_words_to_forward() const {
+    inline uint32_t output_max_num_words_to_forward() const {
         return (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) ?
             this->max_eth_send_words : this->max_noc_send_words;
     }
 
-    FORCE_INLINE void send_data_to_remote(uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
+    inline void send_data_to_remote(uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
         if ((this->remote_update_network_type == DispatchRemoteNetworkType::NONE) ||
             (num_words == 0)) {
             return;
@@ -618,11 +618,11 @@ public:
         }
     }
 
-    FORCE_INLINE void remote_wptr_update(uint32_t num_words) {
+    inline void remote_wptr_update(uint32_t num_words) {
         this->advance_queue_remote_wptr(num_words);
     }
 
-    FORCE_INLINE uint32_t prev_words_in_flight_check_flush() {
+    inline uint32_t prev_words_in_flight_check_flush() {
         if (this->get_num_words_written_not_sent() <= this->input_queue_status.get_curr_total_words_in_flight()) {
             return this->input_queue_status.prev_words_in_flight_flush();
         } else {
@@ -649,7 +649,7 @@ public:
         return true;
     }
 
-    FORCE_INLINE uint32_t get_num_words_to_send(uint32_t input_queue_index) {
+    inline uint32_t get_num_words_to_send(uint32_t input_queue_index) {
 
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
 
@@ -670,7 +670,7 @@ public:
         return num_words_to_forward;
     }
 
-    FORCE_INLINE uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent) {
+    inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent) {
 
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
         uint32_t num_words_to_forward = this->get_num_words_to_send(input_queue_index);
