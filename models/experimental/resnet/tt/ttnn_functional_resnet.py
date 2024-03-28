@@ -547,8 +547,10 @@ class ResNet50:
         # """
         # the last layers of the resnet
         # """
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.to_layout(
+            output_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+        )
         output_tensor = ttnn.reshape(output_tensor, (self.batch_size, 1, 49, 2048))
 
         sharded_mem_config = ttnn.L1_MEMORY_CONFIG
@@ -573,24 +575,6 @@ class ResNet50:
         output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT, memory_config=output_tensor.memory_config())
         output_tensor = ttnn.global_avg_pool2d(output_tensor, memory_config=output_tensor.memory_config())
 
-        # output_tensor = output_tensor @ parameters.fc.weight
-        # output_tensor = ttnn.add(output_tensor, parameters.fc.bias)
-        # output_tensor = ttnn.linear(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
-        # output_tensor = ttnn.experimental.tensor.resnet_matmul(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
-
-        ## resnet linear
-        # if is_grayskull():
-        #     compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
-        #         math_fidelity=self.math_fidelity,
-        #         math_approx_mode=True,
-        #     )
-        # else:
-        #     compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        #         math_fidelity=self.math_fidelity,
-        #         math_approx_mode=True,
-        #         fp32_dest_acc_en=False,
-        #         packer_l1_acc=False,
-        #     )
         matmul_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=2,
@@ -647,9 +631,5 @@ class ResNet50:
         output_tensor = ttnn.experimental.tensor.untilize_with_unpadding(
             output_tensor, (0, 0, 0, 0), (out_shape[0] - 1, out_shape[1] - 1, out_shape[2] - 1, out_shape[3] - 1)
         )
-
-        # output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-        # output_tensor = ttnn.global_avg_pool2d(output_tensor)
-        # output_tensor = output_tensor @ self.impl.fc.weight + self.impl.fc.bias
 
         return output_tensor
