@@ -6,7 +6,7 @@
 
 #include "debug/dprint.h"
 
-FORCE_INLINE uint32_t prng_next(uint32_t n) {
+inline uint32_t prng_next(uint32_t n) {
     uint32_t x = n;
     x ^= x << 13;
     x ^= x >> 17;
@@ -14,7 +14,7 @@ FORCE_INLINE uint32_t prng_next(uint32_t n) {
     return x;
 }
 
-FORCE_INLINE uint32_t packet_rnd_seed_to_size(uint32_t rnd_seed, uint32_t max_packet_size_words) {
+inline uint32_t packet_rnd_seed_to_size(uint32_t rnd_seed, uint32_t max_packet_size_words) {
     uint32_t packet_size = (rnd_seed & (max_packet_size_words-1)) + 1;
     if (packet_size < 2) {
         packet_size = 2;
@@ -48,7 +48,7 @@ typedef struct {
         this->num_dests_sent_last_packet = 0;
     }
 
-    FORCE_INLINE void rnd_packet_update(uint32_t num_dest_endpoints,
+    inline void rnd_packet_update(uint32_t num_dest_endpoints,
                                   uint32_t dest_endpoint_start_id,
                                   uint32_t max_packet_size_words,
                                   uint64_t total_data_words) {
@@ -61,7 +61,7 @@ typedef struct {
         this->num_packets++;
     }
 
-    FORCE_INLINE void next_packet_rnd(uint32_t num_dest_endpoints,
+    inline void next_packet_rnd(uint32_t num_dest_endpoints,
                                 uint32_t dest_endpoint_start_id,
                                 uint32_t max_packet_size_words,
                                 uint64_t total_data_words) {
@@ -84,7 +84,7 @@ typedef struct {
         }
     }
 
-    FORCE_INLINE void next_packet_rnd_to_dest(uint32_t num_dest_endpoints,
+    inline void next_packet_rnd_to_dest(uint32_t num_dest_endpoints,
                                         uint32_t dest_endpoint_id,
                                         uint32_t dest_endpoint_start_id,
                                         uint32_t max_packet_size_words,
@@ -100,23 +100,23 @@ typedef struct {
                                 max_packet_size_words, total_data_words);
     }
 
-    FORCE_INLINE bool start_of_packet() {
+    inline bool start_of_packet() {
         return this->curr_packet_words_remaining == this->curr_packet_size_words;
     }
 
-    FORCE_INLINE bool packet_active() {
+    inline bool packet_active() {
         return this->curr_packet_words_remaining != 0;
     }
 
-    FORCE_INLINE bool all_packets_done() {
+    inline bool all_packets_done() {
         return this->data_and_last_packets_done && !this->packet_active();
     }
 
-    FORCE_INLINE uint64_t get_data_words_input() {
+    inline uint64_t get_data_words_input() {
         return this->data_words_input;
     }
 
-    FORCE_INLINE uint64_t get_num_packets() {
+    inline uint64_t get_num_packets() {
         return this->num_packets;
     }
 
@@ -136,7 +136,7 @@ typedef struct {
 } input_queue_rnd_state_t;
 
 
-FORCE_INLINE void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val) {
+inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val) {
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
         *addr = start_val++;
@@ -145,7 +145,7 @@ FORCE_INLINE void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_
 }
 
 
-FORCE_INLINE bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
+inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
                               uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
