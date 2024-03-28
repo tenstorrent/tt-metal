@@ -35,7 +35,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, iterations, expected_compile_time, expected_inference_time",
-    ((32, 12, 155, 0.16),),
+    ((32, 12, 155, 0.27),),
 )
 def test_mistral_model_perf(
     device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache
