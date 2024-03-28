@@ -618,7 +618,7 @@ void EnqueueProgramCommand::process() {
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
     this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
-    bool tracing = this->trace.has_value() and not this->trace->get().trace_complete;
+    bool tracing = this->trace.has_value();
     vector<uint32_t> trace_host_data;
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
@@ -1459,6 +1459,7 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
 
 void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking) {
     detail::DispatchStateCheck(true);
+    TT_THROW("EnqueueProgram currently unsupported in FD2.0");
     if (cq.get_mode() != CommandQueue::CommandQueueMode::TRACE) {
         TT_FATAL(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
     }
@@ -1475,10 +1476,7 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
         Device * device = cq.device();
-        std::optional<std::reference_wrapper<Trace>> trace;
-        if (cq.trace()) {
-            trace = std::optional<std::reference_wrapper<Trace>>(*cq.trace());
-        }
+        std::optional<std::reference_wrapper<Trace>> trace;  // TODO TMZ: remove trace from enqueue_program interface
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
@@ -1574,30 +1572,25 @@ void FinishImpl(CommandQueue& cq) {
 }
 
 CommandQueue& BeginTrace(Trace& trace) {
-    TT_ASSERT(not trace.trace_complete, "Already completed this trace");
-    TT_ASSERT(trace.queue().empty(), "Cannot begin trace on one that already captured commands");
+    log_debug(LogMetalTrace, "Begin trace capture");
+    trace.begin_capture();
     return trace.queue();
 }
 
 void EndTrace(Trace& trace) {
-    TT_ASSERT(not trace.trace_complete, "Already completed this trace");
-    trace.trace_complete = true;
-    trace.validate();
+    trace.end_capture();
+    log_debug(LogMetalTrace, "End trace capture");
 }
 
 uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT(cq.trace() == nullptr, "Multiple traces on a CQ is not supported yet");
     uint32_t trace_id = trace.instantiate(cq);
     return trace_id;
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT(cq.trace(), "A trace has not been instantiated on this command queue yet!");
-    if (cq.trace()->trace_instances.count(trace_id) == 0) {
-        TT_THROW("Trace instance " + std::to_string(trace_id) + " does not exist");
-    }
+    TT_FATAL(Trace::has_instance(trace_id), "Trace instance " + std::to_string(trace_id) + " must exist on device");
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_TRACE,
         .blocking = blocking
@@ -1606,15 +1599,15 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
 
 void EnqueueTraceImpl(CommandQueue& cq) {
     // STUB: Run the trace in eager mode for now
-    auto& tq = cq.trace()->queue();
-    for (const auto& cmd : tq.worker_queue) {
-        cq.run_command_impl(cmd);
-    }
+    // auto& tq = cq.trace()->queue();
+    // for (const auto& cmd : tq.worker_queue) {
+    //     cq.run_command_impl(cmd);
+    // }
+    TT_THROW("EnqueueTrace is not yet implemented!");
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
     device_ptr(device),
-    trace_ptr(nullptr),
     cq_id(id),
     mode(mode),
     worker_state(CommandQueueState::IDLE) {
@@ -1628,24 +1621,20 @@ CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
     }
 }
 
-CommandQueue::CommandQueue(Trace* trace) :
+CommandQueue::CommandQueue(Trace& trace) :
     device_ptr(nullptr),
     parent_thread_id(0),
-    trace_ptr(trace),
     cq_id(-1),
     mode(CommandQueueMode::TRACE),
     worker_state(CommandQueueState::IDLE) {
-    TT_ASSERT(this->trace_ptr, "A valid trace must be provided for a trace mode queue");
 }
 
 CommandQueue::~CommandQueue() {
     if (this->async_mode()) {
         this->stop_worker();
     }
-    if (this->trace_mode()) {
-        TT_ASSERT(this->trace()->trace_complete, "Trace capture must be complete before desctruction");
-    } else {
-        TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
+    if (not this->trace_mode()) {
+        TT_FATAL(this->worker_queue.empty(), "{} worker queue must be empty on destruction", this->name());
     }
 }
 
@@ -1653,8 +1642,24 @@ HWCommandQueue& CommandQueue::hw_command_queue() {
     return this->device()->hw_command_queue(this->cq_id);
 }
 
+void CommandQueue::dump() {
+    int cid = 0;
+    log_info(LogMetalTrace, "Dumping {}, mode={}", this->name());
+    for (const auto& cmd : this->worker_queue) {
+        log_info(LogMetalTrace, "[{}]: {}", cid, cmd.type);
+        cid++;
+    }
+}
+
+std::string CommandQueue::name() {
+    if (this->mode == CommandQueueMode::TRACE) {
+        return "TraceQueue";
+    }
+    return "CQ" + std::to_string(this->cq_id);
+}
+
 void CommandQueue::wait_until_empty() {
-    log_trace(LogDispatch, "CQ{} WFI start", this->cq_id);
+    log_trace(LogDispatch, "{} WFI start", this->name());
     if (this->async_mode()) {
         // Insert a flush token to push all prior commands to completion
         // Necessary to avoid implementing a peek and pop on the lock-free queue
@@ -1666,7 +1671,7 @@ void CommandQueue::wait_until_empty() {
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
-    log_trace(LogDispatch, "CQ{} WFI complete", this->cq_id);
+    log_trace(LogDispatch, "{} WFI complete", this->name());
 }
 
 void CommandQueue::set_mode(const CommandQueueMode& mode) {
@@ -1697,7 +1702,7 @@ void CommandQueue::start_worker() {
     }
     this->worker_state = CommandQueueState::RUNNING;
     this->worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
-    tt::log_debug(tt::LogDispatch, "CQ{} started worker thread", this->cq_id);
+    tt::log_debug(tt::LogDispatch, "{} started worker thread", this->name());
 }
 
 void CommandQueue::stop_worker() {
@@ -1707,7 +1712,7 @@ void CommandQueue::stop_worker() {
     this->worker_state = CommandQueueState::TERMINATE;
     this->worker_thread->join();
     this->worker_state = CommandQueueState::IDLE;
-    tt::log_debug(tt::LogDispatch, "CQ{} stopped worker thread", this->cq_id);
+    tt::log_debug(tt::LogDispatch, "{} stopped worker thread", this->name());
 }
 
 void CommandQueue::run_worker() {
@@ -1729,7 +1734,7 @@ void CommandQueue::run_worker() {
 }
 
 void CommandQueue::run_command(const CommandInterface& command) {
-    log_trace(LogDispatch, "CQ{} received {} in {} mode", this->cq_id, command.type, this->mode);
+    log_trace(LogDispatch, "{} received {} in {} mode", this->name(), command.type, this->mode);
     if (not this->passthrough_mode()) {
         if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == parent_thread_id or this->trace_mode()) {
             // Push to worker queue for trace or async mode. In trace mode, store the execution in the queue.
@@ -1751,7 +1756,7 @@ void CommandQueue::run_command(const CommandInterface& command) {
 }
 
 void CommandQueue::run_command_impl(const CommandInterface& command) {
-    log_trace(LogDispatch, "CQ{} running {}", this->cq_id, command.type);
+    log_trace(LogDispatch, "{} running {}", this->name(), command.type);
     switch (command.type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
@@ -1816,7 +1821,7 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         default:
             TT_THROW("Invalid command type");
     }
-    log_trace(LogDispatch, "CQ{} running {} complete", this->cq_id, command.type);
+    log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
 }
 
 }  // namespace tt::tt_metal
