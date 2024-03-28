@@ -84,7 +84,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     std::uint16_t pack_tile_addr;
     if constexpr (out_of_order_output) {
         pack_tile_addr = cb_interface[output_id].fifo_wr_ptr +
-                         MUL_TILE_SIZE_AND_INDEX<true>((std::uint8_t)pack_dst_format[output_id], (std::uint16_t)output_tile_index);
+                         MUL_TILE_SIZE_AND_INDEX<true>((std::uint8_t)pack_dst_format[output_id], (std::uint16_t)output_tile_index) - 1;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
