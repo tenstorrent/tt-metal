@@ -61,11 +61,17 @@ class LockFreeQueue {
         bool empty() const {
             return head.load() == tail.load();
         }
-        class Iterator : public std::iterator<std::forward_iterator_tag, T> {
+        class Iterator{
            private:
             Node* current;
 
            public:
+            using value_type = T;
+            using difference_type = std::ptrdiff_t;
+            using pointer = T*;
+            using reference = T&;
+            using iterator_category = std::forward_iterator_tag;
+
             Iterator(Node* start) : current(start) {}
 
             Iterator& operator++() {
