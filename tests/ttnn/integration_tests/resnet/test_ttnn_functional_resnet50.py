@@ -26,6 +26,7 @@ from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
     is_wormhole_b0,
     is_grayskull,
+    _nearest_32,
 )
 
 from models.experimental.functional_resnet.tt.ttnn_functional_resnet import resnet_basic_block, resnet_bottleneck_block
@@ -550,10 +551,77 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     output_tensor = ttnn.to_memory_config(output_tensor, sharded_mem_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT, out_memory_config=output_tensor.memory_config())
     output_tensor = ttnn.global_avg_pool2d(output_tensor, out_memory_config=output_tensor.memory_config())
+
     # output_tensor = output_tensor @ parameters.fc.weight
     # output_tensor = ttnn.add(output_tensor, parameters.fc.bias)
-    output_tensor = ttnn.linear(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
+    # output_tensor = ttnn.linear(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
     # output_tensor = ttnn.experimental.tensor.resnet_matmul(output_tensor, parameters.fc.weight, bias=parameters.fc.bias)
+
+    ## resnet linear
+    if is_grayskull():
+        compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+    matmul_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    out_shape = output_tensor.shape
+    unpadded_shape_end = [
+        out_shape[0] - 1,
+        out_shape[1] - 1,
+        0,
+        out_shape[3] - 1,
+    ]
+    output_tensor = ttnn.experimental.tensor.untilize_with_unpadding(
+        output_tensor, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=sharded_mem_config
+    )
+    out_shape = output_tensor.shape
+    output_tensor = output_tensor.reshape(1, out_shape[1], batch_size * out_shape[2], out_shape[3])
+    out_shape = output_tensor.shape
+    padded_shape = [
+        out_shape[0],
+        out_shape[1],
+        _nearest_32(out_shape[2]),
+        _nearest_32(out_shape[3]),
+    ]
+    output_tensor = ttnn.experimental.tensor.tilize_with_val_padding(
+        output_tensor, padded_shape, [0, 0, 0, 0], 0, output_mem_config=sharded_mem_config, output_dtype=act_dtype
+    )
+    breakpoint()
+    weight_shape = parameters.fc.weight.get_legacy_shape()
+    weight = parameters.fc.weight.reshape(1, 1, weight_shape[-2], weight_shape[-1])
+    bias_shape = parameters.fc.bias.get_legacy_shape()
+    bias = parameters.fc.bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
+    output_tensor = ttnn.experimental.operations.primary.matmul_1d(
+        output_tensor,
+        weight,
+        bias=bias,
+        program_config=matmul_config,
+        output_mem_config=sharded_mem_config,
+        output_dtype=act_dtype,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_shape = list(output_tensor.shape_without_padding())
+    out_shape[-1] = 1000
+    output_tensor = ttnn.experimental.tensor.untilize_with_unpadding(
+        output_tensor, (0, 0, 0, 0), (out_shape[0] - 1, out_shape[1] - 1, out_shape[2] - 1, out_shape[3] - 1)
+    )
 
     """
     output verify
