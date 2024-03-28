@@ -29,6 +29,8 @@ void py_module(py::module& module) {
     module.def("get_buffer_pages", &get_buffer_pages);
 
     py::class_<ttnn::reports::DeviceInfo>(module, "DeviceInfo")
+        .def_property_readonly("num_x_compute_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_x_compute_cores; })
+        .def_property_readonly("num_y_compute_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_y_compute_cores; })
         .def_property_readonly("l1_num_banks", [](const ttnn::reports::DeviceInfo& self) { return self.l1_num_banks; })
         .def_property_readonly("l1_bank_size", [](const ttnn::reports::DeviceInfo& self) { return self.l1_bank_size; })
         .def_property_readonly("address_at_first_l1_bank", [](const ttnn::reports::DeviceInfo& self) { return self.address_at_first_l1_bank; })

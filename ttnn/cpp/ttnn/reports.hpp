@@ -15,6 +15,8 @@ namespace reports {
 struct DeviceInfo{
     size_t l1_num_banks;
     size_t l1_bank_size;
+    size_t num_x_compute_cores;
+    size_t num_y_compute_cores;
     uint64_t address_at_first_l1_bank;
     uint64_t address_at_first_l1_cb_buffer;
     size_t num_banks_per_storage_core;
@@ -30,7 +32,8 @@ struct DeviceInfo{
 DeviceInfo get_device_info(const Device &device) {
     DeviceInfo info{};
     const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs());
-
+    info.num_x_compute_cores = descriptor.compute_grid_size.x;
+    info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.l1_num_banks = device.num_banks(BufferType::L1);
     info.l1_bank_size = device.bank_size(BufferType::L1);
     info.address_at_first_l1_bank = device.allocator_->l1_manager.bank_offset(0);
