@@ -7,6 +7,8 @@ test-list:
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 64
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
@@ -16,8 +18,6 @@ test-list:
       comparison:
         function: comp_equal
       output-file: permute_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -26,10 +26,12 @@ test-list:
   - permute:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [3, 6, 128, 128]
+        end-shape: [6, 12, 128, 128]
         interval: [1, 1, 2, 2]
         num-shapes: 1
         num-samples: 64
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
@@ -39,10 +41,8 @@ test-list:
       comparison:
         function: comp_equal
       output-file: permute_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
