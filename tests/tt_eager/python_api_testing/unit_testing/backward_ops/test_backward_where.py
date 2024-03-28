@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -17,15 +17,16 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_where(input_shapes, device):
-    condition_data = torch.randn(input_shapes).bool()
+    condition_data = torch.zeros(input_shapes, dtype=torch.bool)
+    condition_data.view(-1)[::2] = True
 
     condition_tensor = (
         tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )
 
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    other_data, other_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -4, 4, device)
 
     tt_output_tensor_on_device = tt_lib.tensor.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
 
@@ -38,5 +39,5 @@ def test_bw_where(input_shapes, device):
 
     golden_tensor = [in_data.grad, other_data.grad]
 
-    status = compare_results(tt_output_tensor_on_device, golden_tensor)
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
