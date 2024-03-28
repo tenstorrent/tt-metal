@@ -283,7 +283,7 @@ class UNet2DConditionModel:
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.norm_input_mask_torch_tensor = ttnn.create_groupnorm_input_mask(
+            self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
                 self.conv_out.in_channels, self.norm_num_groups, num_cores_across_channel
             )
             self.norm_input_mask = ttnn.from_torch(
