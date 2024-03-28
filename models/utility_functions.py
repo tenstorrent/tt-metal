@@ -31,6 +31,10 @@ def _nearest_y(x, y):
     return math.ceil(x / y) * y
 
 
+def nearest_y(x, y):
+    return _nearest_y(x, y)
+
+
 def divup(a, b):
     return (a + b - 1) // b
 
