@@ -524,30 +524,33 @@ struct CommandInterface {
     std::optional<HostDataType> src;
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
+    std::optional<std::reference_wrapper<Trace>> trace;
 };
 
 class CommandQueue {
    friend class Device;
+   friend class Trace;
+
    public:
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
         ASYNC = 1,
         TRACE = 2,
     };
+    enum class CommandQueueState {
+        IDLE = 0,
+        RUNNING = 1,
+        TERMINATE = 2,
+    };
+
     CommandQueue() = delete;
     ~CommandQueue();
 
-    // Command queue constructor
-    private:
-    CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
-
     // Trace queue constructor
-    public:
-    CommandQueue(Trace* trace);
+    CommandQueue(Trace& trace);
 
     // Getters for private members
     Device* device() const { return this->device_ptr; }
-    Trace* trace() const { return this->trace_ptr; }
     uint32_t id() const { return this->cq_id; }
 
     // Blocking method to wait for all commands to drain from the queue
@@ -568,6 +571,10 @@ class CommandQueue {
     // The empty state of the worker queue
     bool empty() const { return this->worker_queue.empty(); }
 
+    // Dump methods for name and pending commands in the queue
+    void dump();
+    std::string name();
+
     static CommandQueueMode default_mode() {
         // Envvar is used for bringup and debug only. Will be removed in the future and should not be relied on in production.
         static int value = parse_env<int>("TT_METAL_CQ_ASYNC_MODE", static_cast<int>(CommandQueueMode::PASSTHROUGH));
@@ -575,16 +582,10 @@ class CommandQueue {
     }
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
-   private:
-    enum class CommandQueueState {
-        IDLE = 0,
-        RUNNING = 1,
-        TERMINATE = 2,
-    };
 
-    friend class Trace;
-    friend void EnqueueTraceImpl(CommandQueue& cq);
-    friend uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq);
+   private:
+    // Command queue constructor
+    CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
 
     // Initialize Command Queue Mode based on the env-var. This will be default, unless the user excplictly sets the mode using set_mode.
     CommandQueueMode mode;
@@ -593,7 +594,6 @@ class CommandQueue {
     WorkerQueue worker_queue;
     uint32_t cq_id;
     Device* device_ptr;
-    Trace* trace_ptr;
 
     void start_worker();
     void stop_worker();
