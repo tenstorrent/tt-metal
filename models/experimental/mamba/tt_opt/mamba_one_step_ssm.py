@@ -137,14 +137,16 @@ class TtMambaSSM(torch.nn.Module):
         
         # bbar
         bbar = run(ttnn.mul(delta_t, B, memory_config=self.configs["sharded_dn"]), delta_t, B)
-        return x
-
+        
+        # bcast and sha
 
         # multiply bbar and x
         x0 = ttnn.repeat_interleave(x, self.n, dim=3)
         x1 = x0 #ttnn.to_memory_config(x0, memory_config=self.configs["sharded_large"])
         #ttnn.deallocate(x0)
-        bmulx0 = ttnn.mul(bbar0, x1, memory_config=self.configs["sharded_large"])
+        #bmulx0 = ttnn.mul(bbar0, x1, memory_config=self.configs["sharded_large"])
+        
+        return x
 
         # deallocate bbar
         ttnn.deallocate(bbar0)
