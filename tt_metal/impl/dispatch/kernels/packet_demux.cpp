@@ -140,7 +140,7 @@ tt_l1_ptr uint32_t* const test_results =
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(24);
 
-FORCE_INLINE uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
+inline uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
     uint32_t dest_endpoint_index = dest_endpoint_id - endpoint_id_start_index;
     return dest_output_queue_id_map[dest_endpoint_index];
 }
