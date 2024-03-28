@@ -59,7 +59,10 @@ inline uint32_t get_cq_data_buffer_size(bool use_eth_l1, bool use_idle_eth) {
 inline uint32_t get_consumer_data_buffer_size() {
     uint32_t num_consumer_cmd_slots = 2;
     uint32_t producer_data_buffer_size = get_cq_data_buffer_size(false, false);
-    return (producer_data_buffer_size - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND) / num_consumer_cmd_slots;
+    uint32_t consumer_data_buffer_size = (producer_data_buffer_size - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND) / num_consumer_cmd_slots;
+    // The data buffer size needs to maintain DRAM/PCIe alignment
+    consumer_data_buffer_size -= consumer_data_buffer_size % DRAM_ALIGNMENT;
+    return consumer_data_buffer_size;
 }
 
 /// @brief Get offset of the command queue relative to its channel
