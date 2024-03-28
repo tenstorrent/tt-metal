@@ -251,7 +251,6 @@ void kernel_main() {
         test_results[PQ_TEST_MISC_INDEX+12] = mismatch_addr;
         test_results[PQ_TEST_MISC_INDEX+12] = mismatch_val;
         test_results[PQ_TEST_MISC_INDEX+12] = expected_val;
-        src_endpoint_rnd_state->dprint_object();
         input_queue->dprint_object();
     } else {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;

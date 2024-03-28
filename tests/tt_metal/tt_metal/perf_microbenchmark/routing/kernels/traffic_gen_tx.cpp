@@ -210,8 +210,9 @@ void kernel_main() {
     } else {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         set_64b_result(test_results, words_flushed, PQ_TEST_MISC_INDEX+10);
-        input_queue_ptr->dprint_object();
-        output_queue_ptr->dprint_object();
+        // these calls lead to code size issues?
+        // input_queue_ptr->dprint_object();
+        // output_queue_ptr->dprint_object();
     }
 
 }
