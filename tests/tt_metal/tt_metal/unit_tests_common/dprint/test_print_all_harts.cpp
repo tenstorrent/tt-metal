@@ -176,8 +176,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         )
     );
 }
-// see issue #6659
-TEST_F(DPrintFixture, DISABLED_TestPrintFromAllHarts) {
+
+TEST_F(DPrintFixture, TestPrintFromAllHarts) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }
