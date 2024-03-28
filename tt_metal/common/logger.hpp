@@ -41,7 +41,8 @@ namespace tt {
     X(GraphCompiler)   \
     X(Dispatch)        \
     X(DTX)             \
-    X(Metal)
+    X(Metal)           \
+    X(MetalTrace)
 
 enum LogType : uint32_t {
 // clang-format off
