@@ -84,3 +84,35 @@ def test_getitem_scalar_output():
     with pytest.raises(RuntimeError) as e:
         input_tensor[0, 0]
     assert "ttnn.Tensor.__getitem__: returned a scalar!" in str(e.value)
+
+
+@pytest.mark.parametrize("batch_sizes", [(), (1, 1)])
+@pytest.mark.parametrize("height", [32, 64])
+@pytest.mark.parametrize("width", [32, 96])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_layout):
+    torch_input_tensor = torch.rand((*batch_sizes, height, width), dtype=torch.bfloat16)
+
+    if len(torch_input_tensor.shape) == 4:
+        torch_output_tensor = torch_input_tensor[:, :, :, :1]
+    elif len(torch_input_tensor.shape) == 2:
+        torch_output_tensor = torch_input_tensor[:, :1]
+    else:
+        raise RuntimeError("Invalid batch size")
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=input_layout, device=device)
+
+    if len(torch_input_tensor.shape) == 4:
+        output_tensor = input_tensor[:, :, :, :1]
+    elif len(torch_input_tensor.shape) == 2:
+        output_tensor = input_tensor[:, :1]
+    else:
+        raise RuntimeError("Invalid batch size")
+    assert output_tensor.layout == input_layout
+    assert output_tensor.shape[-1] == 1
+    assert output_tensor.shape.with_tile_padding()[-1] == 32
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.allclose(torch_output_tensor, output_tensor)
