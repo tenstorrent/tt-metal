@@ -19,7 +19,8 @@ from models.utility_functions import skip_for_wormhole_b0
     [
         (1, 320, 1, 8192, 32),
         (1, 960, 1, 1024, 32),
-        (1, 960, 1, 4096, 32),
+        # not fit in L1 for GS
+        # (1, 960, 1, 4096, 32),
     ],
 )
 def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups):
@@ -121,7 +122,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         (1, 1920, 1, 512, 32),
         (1, 1920, 1, 2048, 32),
         (1, 2560, 1, 512, 32),
-        # # not fit in L1 for GS
+        # not fit in L1 for GS
         # (2, 960, 64, 64, 32),
         # (1, 640, 1, 8192, 32),
     ],
