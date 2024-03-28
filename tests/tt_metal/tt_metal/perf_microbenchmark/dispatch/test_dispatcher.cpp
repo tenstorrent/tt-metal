@@ -56,7 +56,6 @@ uint32_t min_paged_write_base_addr_g = MIN_PAGED_WRITE_ADDR;
 uint32_t num_pages_g = DEFAULT_PAGED_WRITE_PAGES;
 
 bool debug_g;
-bool lazy_g;
 bool fire_once_g;
 bool use_coherent_data_g;
 bool send_to_all_g;
@@ -89,7 +88,6 @@ void init(int argc, char **argv) {
         log_info(LogTest, "    -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default disabled)");
         log_info(LogTest, "    -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
         log_info(LogTest, "    -c: use coherent data as payload (default false)");
-        log_info(LogTest, "    -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, "   -np: paged-write number of pages (default {})", num_pages_g);
 
         log_info(LogTest, "Random Test args:");
@@ -140,7 +138,6 @@ void init(int argc, char **argv) {
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
 
     debug_g = test_args::has_command_option(input_args, "-d");
-    lazy_g = test_args::has_command_option(input_args, "-z");
     num_pages_g = test_args::get_command_option_uint32(input_args, "-np", num_pages_g);
 
     perf_test_g = (send_to_all_g && iterations_g == 1); // XXXX find a better way?
@@ -333,6 +330,9 @@ int main(int argc, char **argv) {
     init(argc, argv);
     std::srand(std::time(nullptr)); // Seed the RNG
 
+    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+
     uint32_t dispatch_buffer_pages = dispatch_buffer_size_g / dispatch_buffer_page_size_g;
     bool paged_test = is_paged_test();
 
@@ -500,22 +500,14 @@ int main(int argc, char **argv) {
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
-            EnqueueProgram(cq, program, false);
-        }
-        Finish(cq);
-
-        if (lazy_g) {
-            tt_metal::detail::SetLazyCommandQueueMode(true);
+            tt_metal::detail::LaunchProgram(device, program);
         }
 
         auto start = std::chrono::system_clock::now();
         for (int i = 0; i < iterations_g; i++) {
-            EnqueueProgram(cq, program, false);
+            tt_metal::detail::LaunchProgram(device, program);
         }
-        if (lazy_g) {
-            start = std::chrono::system_clock::now();
-        }
-        Finish(cq);
+
         auto end = std::chrono::system_clock::now();
 
         if (paged_test) {
