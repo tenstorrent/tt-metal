@@ -30,6 +30,38 @@ struct one_worker_data_t {
 
 typedef unordered_map<CoreCoord, unordered_map<uint32_t, one_worker_data_t>> worker_data_t;
 
+template<bool is_dram_variant,
+         bool is_host_variant>
+void configure_dispatch_kernel_variant(Program& program,
+    std::vector<uint32_t> compile_args, // yes, copy
+    CoreCoord dispatch_core,
+    CoreCoord phys_dispatch_core,
+    CoreCoord phys_upstream_core,
+    CoreCoord phys_downstream_core) {
+
+    std::map<string, string> defines = {
+        {"UPSTREAM_NOC_X", std::to_string(phys_upstream_core.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(phys_upstream_core.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(phys_downstream_core.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(phys_downstream_core.y)},
+        {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
+        {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
+    };
+    compile_args.push_back(is_dram_variant);
+    compile_args.push_back(is_host_variant);
+    tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+        {dispatch_core},
+        tt::tt_metal::DataMovementConfig {
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = compile_args,
+            .defines = defines
+        }
+    );
+}
+
 inline void reset_worker_data(worker_data_t& awd) {
     for (auto& it : awd) {
         for (auto &wd : it.second) {

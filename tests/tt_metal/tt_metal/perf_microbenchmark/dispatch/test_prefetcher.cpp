@@ -1172,23 +1172,14 @@ int main(int argc, char **argv) {
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
 
         constexpr uint32_t dispatch_sync_sem = 0;
-        tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-
         constexpr uint32_t dispatch_cb_sem = 1;
+        constexpr uint32_t dispatch_downstream_cb_sem = 2;
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
 
-        std::vector<uint32_t> dispatch_compile_args = {
-             dispatch_buffer_base,
-             DISPATCH_BUFFER_LOG_PAGE_SIZE,
-             DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
-             dispatch_cb_sem,
-             split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
-             DISPATCH_BUFFER_SIZE_BLOCKS,
-             prefetch_sync_sem,
-             // Hugepage compile args aren't used in this test since WriteHost is not tested here
-             0,
-             0,
-        };
+        constexpr uint32_t dispatch_h_cb_sem = 0;
+        tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
 
         if (split_prefetcher_g) {
             configure_host_connected_prefetcher<false>(
@@ -1272,28 +1263,52 @@ int main(int argc, char **argv) {
                 prefetch_sync_sem);
         }
 
-        if (split_dispatcher_g) {
-            TT_FATAL("split dispatcher not implemented");
-        } else {
-            CoreCoord phys_upstream_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
-            std::map<string, string> defines = {
-                {"PREFETCH_NOC_X", std::to_string(phys_upstream_core.x)},
-                {"PREFETCH_NOC_Y", std::to_string(phys_upstream_core.y)},
-                {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
-                {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
-            };
+        std::vector<uint32_t> dispatch_compile_args = {
+             dispatch_buffer_base,
+             DISPATCH_BUFFER_LOG_PAGE_SIZE,
+             DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
+             dispatch_cb_sem, // overridden below for h
+             split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
+             DISPATCH_BUFFER_SIZE_BLOCKS,
+             prefetch_sync_sem,
+             // Hugepage compile args aren't used in this test since WriteHost is not tested here
+             0,
+             0,
+             dispatch_buffer_base,
+             DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+             0, // unused on hd, filled in below for h and d
+             0, // unused on hd, filled in below for h and d
+        };
 
-            tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                {dispatch_core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = dispatch_compile_args,
-                    .defines = defines
-                }
-            );
+        CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
+        if (split_dispatcher_g) {
+            // dispatch_hd and dispatch_d
+            dispatch_compile_args[11] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[12] = dispatch_h_cb_sem;
+            configure_dispatch_kernel_variant<true, false>(program,
+                dispatch_compile_args,
+                dispatch_core,
+                phys_dispatch_core,
+                phys_upstream_from_dispatch_core,
+                phys_dispatch_h_core);
+
+            // dispatch_h
+            dispatch_compile_args[3] = dispatch_h_cb_sem;
+            dispatch_compile_args[11] = dispatch_h_cb_sem;
+            dispatch_compile_args[12] = dispatch_downstream_cb_sem;
+            configure_dispatch_kernel_variant<false, true>(program,
+                dispatch_compile_args,
+                dispatch_h_core,
+                phys_dispatch_h_core,
+                phys_dispatch_core,
+                {0,0});
+        } else {
+            configure_dispatch_kernel_variant<true, true>(program,
+                dispatch_compile_args,
+                dispatch_core,
+                phys_dispatch_core,
+                phys_upstream_from_dispatch_core,
+                {0,0});
         }
 
         log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_buffer_size_g));

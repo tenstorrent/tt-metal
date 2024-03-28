@@ -437,8 +437,14 @@ int main(int argc, char **argv) {
              dispatch_buffer_size_blocks_g,
              prefetch_sync_sem,
              // Hugepage compile args aren't used in this test since WriteHost is not tested here
-             0,
-             0,
+             0,    // unused completion q
+             0,    // unused completion q
+             0,    // unused downstream_cb_base
+             0,    // unused downstream_cb_size
+             0,    // unused my_downstream_cb_sem_id
+             0,    // unused downstream_cb_sem_id
+             true, // is_dram_variant
+             true, // is_host_variant
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,
@@ -476,24 +482,12 @@ int main(int argc, char **argv) {
         args.push_back(prefetcher_iterations_g);
         tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
-        std::map<string, string> dispatch_defines = {
-            {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
-            {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
-            {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
-            {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
-        };
-
-        auto d1 = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {dispatch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = dispatch_compile_args,
-                .defines = dispatch_defines
-            }
-        );
+        configure_dispatch_kernel_variant<true, true>(program,
+            dispatch_compile_args,
+            dispatch_core,
+            phys_dispatch_core,
+            phys_spoof_prefetch_core,
+            {0, 0});
 
         log_info(LogTest, "Worker grid {}", all_workers_g.str());
         log_info(LogTest, "Dispatch buffer size blocks {}", std::to_string(dispatch_buffer_size_blocks_g));
@@ -532,7 +526,7 @@ int main(int argc, char **argv) {
         if (iterations_g > 0) {
             float total_words = 0;
             if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
-                log_fatal("Set max/min xfer size to match for reliable perf data");
+                log_warning("Set max/min xfer size to match for reliable perf data");
             }
             switch (test_type_g) {
             case 0:
