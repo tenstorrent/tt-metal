@@ -120,19 +120,6 @@ typedef struct {
         return this->num_packets;
     }
 
-    void dprint_object() {
-        DPRINT << "input_queue_rnd_state_t: " << ENDL();
-        DPRINT << "  data_words_input: " << DEC() << this->data_words_input << ENDL();
-        DPRINT << "  num_packets: " << DEC() << this->num_packets << ENDL();
-        DPRINT << "  packet_rnd_seed: 0x" << HEX() << this->packet_rnd_seed << ENDL();
-        DPRINT << "  curr_packet_size_words: " << DEC() << this->curr_packet_size_words << ENDL();
-        DPRINT << "  curr_packet_dest: 0x" << HEX() << this->curr_packet_dest << ENDL();
-        DPRINT << "  curr_packet_flags: 0x" << HEX() << this->curr_packet_flags << ENDL();
-        DPRINT << "  curr_packet_words_remaining: " << DEC() << this->curr_packet_words_remaining << ENDL();
-        DPRINT << "  data_and_last_packets_done: " << DEC() << this->data_and_last_packets_done << ENDL();
-        DPRINT << "  data_packets_done: " << DEC() << this->data_packets_done << ENDL();
-    }
-
 } input_queue_rnd_state_t;
 
 
