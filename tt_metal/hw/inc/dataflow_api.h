@@ -1388,10 +1388,10 @@ void noc_async_writes_flushed() {
  */
 FORCE_INLINE
 void noc_async_atomic_barrier() {
-    DEBUG_STATUS('N', 'W', 'B', 'W');
+    DEBUG_STATUS('N', 'A', 'B', 'W');
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index))
         ;
-    DEBUG_STATUS('N', 'W', 'B', 'D');
+    DEBUG_STATUS('N', 'A', 'B', 'D');
 }
 
 /**
@@ -1479,7 +1479,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 FORCE_INLINE
 void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF) {
 
-    DEBUG_STATUS('N', 'S', 'I', 'W');
+    DEBUG_STATUS('N', 'W', 'I', 'W');
     DEBUG_SANITIZE_NOC_ADDR(addr, 4);
     noc_fast_write_dw_inline(
                 noc_index,
@@ -1491,7 +1491,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF) {
                 false, // mcast
                 false // posted
             );
-    DEBUG_STATUS('N', 'S', 'I', 'D');
+    DEBUG_STATUS('N', 'W', 'I', 'D');
 }
 
 
