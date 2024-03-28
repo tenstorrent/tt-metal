@@ -8,8 +8,6 @@ test-list:
         num-shapes: 1
         num-samples: 128
         args-sampling-strategy: "all"
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
@@ -19,8 +17,10 @@ test-list:
         function: comp_equal
       args-gen: gen_tilize_with_val_padding_args
       output-file: tilize_with_val_padding_sweep.csv
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
