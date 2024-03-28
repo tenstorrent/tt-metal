@@ -192,6 +192,7 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
+        tt_lib.device.Synchronize(device)
         time_prefill_compile_end = time.time()
         time_prefill_compile += time_prefill_compile_end - time_prefill_compile_start
 
@@ -239,6 +240,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
+        tt_lib.device.Synchronize(device)
         time_decode_compile_end = time.time()
         time_decode_compile += time_decode_compile_end - time_decode_compile_start
 
@@ -308,6 +310,7 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
+        tt_lib.device.Synchronize(device)
         time_prefill_inference_end = time.time()
         time_prefill_inference += time_prefill_inference_end - time_prefill_inference_start
 
@@ -354,6 +357,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
+        tt_lib.device.Synchronize(device)
         time_decode_inference_end = time.time()
         time_decode_inference += time_decode_inference_end - time_decode_inference_start
 
@@ -383,7 +387,8 @@ def run_falcon_demo_kv(
         print_output_prompts(generated_ids, tokenizer)
 
     logger.info("Finished inference decode stage!")
-    logger.info(f"Total number of tokens generated in decode: {batch_size*(kv_cache_len)}")
+    num_tokens_generated_decode = batch_size * (output_token_index + 1)
+    logger.info(f"Total number of tokens generated in decode: {num_tokens_generated_decode}")
 
     print_output_prompts(generated_ids, tokenizer)
 
@@ -396,14 +401,14 @@ def run_falcon_demo_kv(
         "loading_weights": profiler.get("loading_weights"),
         "moving_to_device": profiler.get("moving_to_device"),
         "initializing_KV_cache": profiler.get("initializing_KV_cache"),
-        "compile_prefill": time_prefill_compile - time_prefill_inference,
-        "compile_decode": time_decode_compile - time_decode_inference,
-        "compile_total": time_prefill_compile - time_prefill_inference + time_decode_compile - time_decode_inference,
+        "compile_prefill": time_prefill_compile,
+        "compile_decode": time_decode_compile,
+        "compile_total": time_prefill_compile + time_decode_compile,
         "inference_prefill": time_prefill_inference,
         "inference_decode": time_decode_inference,
         "inference_total": time_prefill_inference + time_decode_inference,
         "inference_throughput_prefill": num_users / time_prefill_inference,
-        "inference_throughput_decode": batch_size / time_decode_inference,
+        "inference_throughput_decode": num_tokens_generated_decode / time_decode_inference,
     }
 
     logger.info(f"pre processing: {round(measurements['preprocessing'], 5)} s")
