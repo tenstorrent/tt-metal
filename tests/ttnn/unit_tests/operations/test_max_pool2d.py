@@ -53,6 +53,13 @@ import ttnn
             # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
             # [256, 16, 528, 80], ## oom
+            # yolov4-hd shapes
+            [1, 512, 20, 20],
+            [2, 512, 20, 20],
+            [4, 512, 20, 20],
+            [8, 512, 20, 20],
+            [16, 512, 20, 20],
+            [32, 512, 20, 20],
         )
     ),
 )
@@ -61,6 +68,9 @@ import ttnn
     (
         (2, 2),
         (3, 3),
+        (5, 5),
+        (9, 9),
+        (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -68,11 +78,17 @@ import ttnn
     (
         (0, 0),
         (1, 1),
+        (2, 2),
+        (4, 4),
+        (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
-    ((2, 2),),
+    (
+        (2, 2),
+        (1, 1),
+    ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize(
