@@ -2,11 +2,11 @@
 
 Tenstorrent has built the future of AI architecture and programming. 
 It achieves high performance on current models but is flexible and programmable to enable invention of future models without the constraints of current architectures.
-It is designed for both inference and training, and is from ground up designed for scale-out of AI workloads.
+It is designed for both inference and training, and is from ground up designed for scale-out of AI workloads, while allowing to be scaled down to a couple of cores.
+Additionally, it is built using cost-effective components: simple packages, GDDR memory and Ethernet.
 This document desribes how we did it. 
 
-
-* [Near Memory Compute in a Mesh](#near-memory-compute-in-a-mesh)
+* [All you need is a Tensix core and a mesh](#all-you-need-is-a-tensix-core-and-a-mesh)
 * [Scalable Architecture](#scalable-architecture)
   - Two levels of memory  
 * [MIMD and Control of Both Compute and Data](#mimd-and-control-of-both-compute-and-data)
@@ -21,9 +21,9 @@ This document desribes how we did it.
 * [Interleaved and Sharded Buffers](#interleaved-and-sharded-buffers)
 * [Eltwise Binary Kernel](#eltwise-binary-kernel)
 
-### Near Memory Compute in a Mesh
-
-Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Engine, a Vector engine, and 1 MB scratch pad SRAM.   
+### All you need is a Tensix core and a mesh 
+ - Tensix Core includes 5 small RISC-V processors (aka "Baby RISCVs"), a Matrix Engine, a Vector engine, and 1 MB scratch pad SRAM.   
+ - Near Memory Compute in a Mesh
 
 <img width="1167" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
 
