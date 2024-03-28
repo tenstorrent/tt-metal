@@ -26,95 +26,13 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-@ttnn.register_operation(
-    name="ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors, is_method=True
-)
-# TODO(arakhmati): add proper fallback
-def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
-    input_rank = len(input_tensor.shape)
+def _getitem_fallback(input_tensor: ttnn.Tensor, slices):
     input_dtype = input_tensor.dtype
     input_layout = input_tensor.layout
     if ttnn.is_tensor_storage_on_device(input_tensor):
         input_device = input_tensor.device()
     else:
         input_device = None
-
-    if isinstance(slices, slice):
-        slices = (slices,)
-
-    if isinstance(slices, tuple):
-        if len(slices) > input_rank:
-            raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
-
-    def are_valid_device_slices(slices):
-        if not isinstance(slices, tuple):
-            return False
-
-        if len(slices) != input_rank:
-            return False
-
-        def is_valid_slice(_slice, multiple_of=1):
-            if not isinstance(_slice, slice):
-                return False
-            if _slice.start is not None and _slice.start % multiple_of != 0:
-                return False
-            if _slice.stop is not None and _slice.stop % multiple_of != 0:
-                return False
-            if _slice.step is not None and _slice.stop != 1:
-                return False
-            if _slice.start is not None and _slice.stop is not None:
-                if (_slice.stop - _slice.start) % multiple_of != 0:
-                    return False
-            return True
-
-        if len(slices) < 2:
-            return False
-
-        *batch_slices, height_slice, width_slice = slices
-
-        for batch_slice in batch_slices:
-            if not is_valid_slice(batch_slice):
-                return False
-
-        if not is_valid_slice(height_slice, ttnn.TILE_SIZE):
-            return False
-        if not is_valid_slice(width_slice, ttnn.TILE_SIZE):
-            return False
-
-        return True
-
-    # TODO(arakhmati): add support for running ROW_MAJOR_LAYOUT slicing on device. The underlying op already supports it.
-    if (
-        ttnn.is_tensor_storage_on_device(input_tensor)
-        and input_layout == ttnn.TILE_LAYOUT
-        and input_rank <= 4
-        and are_valid_device_slices(slices)
-    ):
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        while len(slices) != 4:
-            slices = (slice(None, None, None),) + slices
-        slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
-        slice_end = [
-            (_slice.stop if _slice.stop is not None else input_tensor.shape[index]) - 1
-            for index, _slice in enumerate(slices)
-        ]
-        output = ttl.tensor.unpad(input_tensor, slice_start, slice_end)
-
-        output_shape = tuple(output.shape)[-input_rank:]
-        return ttnn.reshape(output, shape=output_shape)
-    """
-    elif not ttnn.is_tensor_storage_on_device(input_tensor):
-        logger.debug(
-            "ttnn.Tensor.__getitem__: using torch because the tensor is on device and the slicing using unpad is not supported!"
-        )
-    elif input_layout != ttnn.TILE_LAYOUT:
-        logger.debug(f"ttnn.Tensor.__getitem__: using torch because input layout {input_layout} is not TILE_LAYOUT!")
-    elif input_rank > 4:
-        logger.debug(f"ttnn.Tensor.__getitem__: using torch because input rank {input_rank} is greater than 4!")
-    elif not are_valid_device_slices(slices):
-        logger.debug(f"ttnn.Tensor.__getitem__: using torch because slices {slices} are not valid device slices!")
-    """
 
     def torch_getitem(tensor, slices):
         return tensor[slices]
@@ -128,6 +46,72 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         raise RuntimeError("ttnn.Tensor.__getitem__: returned a scalar!")
     output_tensor = ttnn.from_torch(output_tensor, dtype=input_dtype, layout=input_layout, device=input_device)
     return output_tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.Tensor.__getitem__",
+    validate_input_tensors=_getitem_validate_input_tensors,
+    is_method=True,
+    fallback=_getitem_fallback,
+)
+def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
+    input_rank = len(input_tensor.shape)
+    input_layout = input_tensor.layout
+
+    if isinstance(slices, int):
+        slices = (slice(None, slices, None),)
+    elif isinstance(slices, slice):
+        slices = (slices,)
+    elif isinstance(slices, type(...)):
+        raise RuntimeError("Ellipsis is not supported!")
+
+    normalized_slices = []
+    for s in slices:
+        if isinstance(s, int):
+            normalized_slices.append(slice(None, s, None))
+        elif isinstance(s, slice):
+            normalized_slices.append(s)
+        else:
+            raise RuntimeError("Invalid slice type!")
+    slices = tuple(normalized_slices)
+
+    while len(slices) != input_rank:
+        slices = slices + (slice(None, None, None),)
+
+    if isinstance(slices, tuple):
+        if len(slices) > input_rank:
+            raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
+
+    if ttnn.is_tensor_storage_on_device(input_tensor) and input_rank <= 4:
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+
+        while len(slices) != 4:
+            slices = (slice(None, None, None),) + slices
+        slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
+        slice_end = [
+            (_slice.stop if _slice.stop is not None else input_tensor.shape[index])
+            for index, _slice in enumerate(slices)
+        ]
+        for start in slice_start:
+            if start != 0:
+                raise RuntimeError("ttnn.Tensor.__getitem__: cannot slice the given tensor on the device!")
+
+        padded_slice_end = list(slice_end)
+        if input_layout == ttnn.TILE_LAYOUT:
+            padded_slice_end[-1] = int(math.ceil((slice_end[-1]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
+            padded_slice_end[-2] = int(math.ceil((slice_end[-2]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
+
+        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()):
+            output = input_tensor
+        else:
+            padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
+            output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
+
+        output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
+        padded_output_shape = list(output.shape)[-input_rank:]
+        return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
+
+    raise RuntimeError(f"ttnn.Tensor.__getitem__: cannot slice the given tensor on the device!")
 
 
 ttnn.Tensor.__getitem__ = __getitem__
