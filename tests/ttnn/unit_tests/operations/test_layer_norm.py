@@ -118,3 +118,31 @@ def test_layer_norm_with_tile_layout(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 56, 56, 96),
+        (1, 1, 3136, 96),
+        (1, 28, 28, 192),
+        (1, 1, 784, 192),
+        (1, 14, 14, 384),
+        (1, 1, 196, 384),
+        (1, 7, 7, 768),
+        (1, 1, 49, 768),
+    ),
+)
+def test_layer_norm_swintransformer_v2(device, n, c, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.layer_norm(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
