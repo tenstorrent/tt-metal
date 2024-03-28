@@ -347,7 +347,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
 
     epsf = 1e-2
 
-    in0_shape = torch.Size([1, 1, 32, 8192])
+    in0_shape = torch.Size([1, 1, 64, 8192])
     M = in0_shape.numel() // in0_shape[3]
     K = in0_shape[3]
 

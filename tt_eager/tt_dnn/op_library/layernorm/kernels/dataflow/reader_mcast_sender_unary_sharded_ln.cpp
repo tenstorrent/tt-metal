@@ -51,21 +51,21 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_blocks; ++i) {
         remote_noc_addrs[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
         if constexpr(row_major) {
-            ++y;
-            if (y == num_y) {
-                y = 0;
-                ++x;
-                if (x == num_x) {
-                    x = 0;
-                }
-            }
-        } else {
             ++x;
             if (x == num_x) {
                 x = 0;
                 ++y;
                 if (y == num_y) {
                     y = 0;
+                }
+            }
+        } else {
+            ++y;
+            if (y == num_y) {
+                y = 0;
+                ++x;
+                if (x == num_x) {
+                    x = 0;
                 }
             }
         }
