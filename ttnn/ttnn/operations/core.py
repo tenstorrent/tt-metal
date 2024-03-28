@@ -26,7 +26,7 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _getitem_fallback(input_tensor: ttnn.Tensor, slices):
+def _fallback_getitem(input_tensor: ttnn.Tensor, slices):
     input_dtype = input_tensor.dtype
     input_layout = input_tensor.layout
     if ttnn.is_tensor_storage_on_device(input_tensor):
@@ -39,9 +39,7 @@ def _getitem_fallback(input_tensor: ttnn.Tensor, slices):
 
     output_tensor = input_tensor
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
-        output_tensor, slices
-    )
+    output_tensor = output_tensor[slices]
     if output_tensor.ndim == 0:
         raise RuntimeError("ttnn.Tensor.__getitem__: returned a scalar!")
     output_tensor = ttnn.from_torch(output_tensor, dtype=input_dtype, layout=input_layout, device=input_device)
@@ -52,7 +50,7 @@ def _getitem_fallback(input_tensor: ttnn.Tensor, slices):
     name="ttnn.Tensor.__getitem__",
     validate_input_tensors=_getitem_validate_input_tensors,
     is_method=True,
-    fallback=_getitem_fallback,
+    fallback=_fallback_getitem,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
@@ -111,7 +109,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         padded_output_shape = list(output.shape)[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 
-    raise RuntimeError(f"ttnn.Tensor.__getitem__: cannot slice the given tensor on the device!")
+    raise NotImplementedError
 
 
 ttnn.Tensor.__getitem__ = __getitem__
@@ -140,7 +138,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _reshape_fallback(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
+def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
     if isinstance(shape, tuple):
         if not (0 <= shape.count(-1) <= 1):
             raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
@@ -187,7 +185,7 @@ def _reshape_fallback(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
     name="ttnn.reshape",
     torch_function=_torch_reshape,
     is_cpp_function=True,
-    fallback=_reshape_fallback,
+    fallback=_fallback_reshape,
     validate_input_tensors=_reshape_validate_input_tensors,
 )
 def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
