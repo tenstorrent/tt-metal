@@ -25,6 +25,10 @@ Device &open_device(int device_id) {
     return *device_pool::devices[device_id];
 }
 
+bool is_device_open(int device_id){
+    return device_id < device_pool::devices.size() && device_pool::devices[device_id] != nullptr;
+}
+
 void enable_program_cache(Device &device) {
     TT_ASSERT(device.id() < device_pool::devices.size());
     TT_ASSERT(device_pool::devices[device.id()] != nullptr);
