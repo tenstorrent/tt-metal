@@ -40,7 +40,8 @@ namespace tt {
     X(Reportify)       \
     X(GraphCompiler)   \
     X(Dispatch)        \
-    X(Metal)
+    X(Metal)           \
+    X(MetalTrace)
 
 enum LogType : uint32_t {
 // clang-format off
