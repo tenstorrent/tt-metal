@@ -12,6 +12,40 @@ namespace ttnn {
 
 namespace reports {
 
+struct DeviceInfo{
+    size_t l1_num_banks;
+    size_t l1_bank_size;
+    uint64_t address_at_first_l1_bank;
+    uint64_t address_at_first_l1_cb_buffer;
+    size_t num_banks_per_storage_core;
+    size_t num_compute_cores;
+    size_t num_storage_cores;
+    size_t total_l1_memory;
+    size_t total_l1_for_tensors;
+    size_t total_l1_for_interleaved_buffers;
+    size_t total_l1_for_sharded_buffers;
+    size_t cb_limit;
+};
+
+DeviceInfo get_device_info(const Device &device) {
+    DeviceInfo info{};
+    const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs());
+
+    info.l1_num_banks = device.num_banks(BufferType::L1);
+    info.l1_bank_size = device.bank_size(BufferType::L1);
+    info.address_at_first_l1_bank = device.allocator_->l1_manager.bank_offset(0);
+    info.address_at_first_l1_cb_buffer = L1_UNRESERVED_BASE;
+    info.num_banks_per_storage_core = device.allocator_->config.worker_l1_size / info.l1_bank_size;
+    info.num_storage_cores = descriptor.relative_storage_cores.size();
+    info.num_compute_cores = descriptor.relative_compute_cores.size();
+    info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device.allocator_->config.worker_l1_size;
+    info.total_l1_for_interleaved_buffers = (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) * info.l1_bank_size;
+    info.total_l1_for_sharded_buffers = info.num_compute_cores * info.l1_bank_size;
+    info.cb_limit = device.allocator_->config.worker_l1_size - L1_UNRESERVED_BASE;
+    return info;
+}
+
+
 void write_l1_buffers(std::ostream &os) {
     std::map<uint32_t, std::map<uint32_t, Buffer *>> buffer_map_per_device;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP) {
