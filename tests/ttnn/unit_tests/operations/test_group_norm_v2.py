@@ -14,6 +14,27 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
+# for debug purpose
+def manual_group_norm(input_tensor, num_groups, eps=1e-2):
+    N, C, H, W = input_tensor.shape
+    assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
+
+    # Reshape into groups
+    group_channels = C // num_groups
+    input_tensor = input_tensor.view(N, num_groups, group_channels, H, W)
+
+    # Calculate mean and variance
+    mean = input_tensor.mean(dim=(2, 3, 4), keepdim=True)
+    var = input_tensor.var(dim=(2, 3, 4), keepdim=True)
+
+    # Normalize
+    input_tensor = (input_tensor - mean) / torch.sqrt(var + eps)
+
+    # Reshape back to original dimensions
+    input_tensor = input_tensor.view(N, C, H, W)
+    return input_tensor
+
+
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
     [
@@ -48,7 +69,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_groupnorm_input_mask(C, num_groups, grid_size.y)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
         dtype=ttnn.DataType.BFLOAT8_B,
@@ -152,7 +173,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_groupnorm_input_mask(C, num_groups, grid_size.y)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
         dtype=ttnn.DataType.BFLOAT8_B,

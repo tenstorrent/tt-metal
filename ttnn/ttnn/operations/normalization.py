@@ -251,29 +251,6 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
-# for debug purpose
-def manual_group_norm(input_tensor, num_groups, eps=1e-2):
-    import torch
-
-    N, C, H, W = input_tensor.shape
-    assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
-
-    # Reshape into groups
-    group_channels = C // num_groups
-    input_tensor = input_tensor.view(N, num_groups, group_channels, H, W)
-
-    # Calculate mean and variance
-    mean = input_tensor.mean(dim=(2, 3, 4), keepdim=True)
-    var = input_tensor.var(dim=(2, 3, 4), keepdim=True)
-
-    # Normalize
-    input_tensor = (input_tensor - mean) / torch.sqrt(var + eps)
-
-    # Reshape back to original dimensions
-    input_tensor = input_tensor.view(N, C, H, W)
-    return input_tensor
-
-
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
     import torch
 
@@ -303,7 +280,7 @@ def find_max_tile_span(W, group_size, tile_width):
     return max_tile_span
 
 
-def create_groupnorm_input_mask(num_channel, num_groups, num_cores_across_channel):
+def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):
     import torch
 
     block_wt = find_max_tile_span(num_channel, num_channel // num_groups, 32)
