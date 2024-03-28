@@ -603,7 +603,6 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     output_tensor = ttnn.experimental.tensor.tilize_with_val_padding(
         output_tensor, padded_shape, [0, 0, 0, 0], 0, output_mem_config=sharded_mem_config, output_dtype=act_dtype
     )
-    breakpoint()
     weight_shape = parameters.fc.weight.get_legacy_shape()
     weight = parameters.fc.weight.reshape(1, 1, weight_shape[-2], weight_shape[-1])
     bias_shape = parameters.fc.bias.get_legacy_shape()
