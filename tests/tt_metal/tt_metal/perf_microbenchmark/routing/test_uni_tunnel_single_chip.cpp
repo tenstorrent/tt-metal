@@ -136,8 +136,6 @@ int main(int argc, char **argv) {
         std::cout<<"Left Tunneler = "<<tunneler_logical_core.str()<<std::endl;
         std::cout<<"Right Tunneler = "<<r_tunneler_logical_core.str()<<std::endl;
 
-        CommandQueue& cq = device->command_queue();
-
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord mux_core = {mux_x, mux_y};
@@ -408,9 +406,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
-        EnqueueProgram(cq, program, false);
-
-        Finish(cq);
+        tt_metal::detail::LaunchProgram(device, program);
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
