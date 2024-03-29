@@ -194,6 +194,8 @@ def get_devices(arg):
     if isinstance(arg, ttnn.Tensor):
         if ttnn.is_tensor_storage_on_device(arg) and arg.is_allocated():
             devices.add(arg.device())
+    elif isinstance(arg, ttnn.Device):
+        devices.add(arg)
     elif isinstance(arg, (list, tuple)):
         for element in arg:
             devices |= get_devices(element)
@@ -322,7 +324,7 @@ class Operation:
                 if ENABLE_DEBUG_DECORATOR:
                     decorated_function = debug_decorator(decorated_function)
 
-                if is_top_level_operation and ttnn.tracer.ENABLE_TRACER:
+                if is_top_level_operation and (ttnn.tracer.ENABLE_TRACER or ttnn.ENABLE_LOGGING):
                     decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
 
                 if is_top_level_operation:
@@ -337,23 +339,27 @@ class Operation:
                     start = time.time()
                     logger.info(f"Started {self.name:50}")
 
-                output = decorated_function(*function_args, **function_kwargs)
+                try:
+                    output = decorated_function(*function_args, **function_kwargs)
+                finally:
+                    if is_top_level_operation and ttnn.ENABLE_LOGGING:
+                        devices = get_devices((function_args, function_kwargs))
+                        for device in devices:
+                            ttnn.synchronize_device(device)
+                        end = time.time()
+                        duration = end - start
+                        logger.info(f"Finished {self.name:50} in {duration:30} seconds")
+                        ttnn.database.log(self, OPERATION_ID, devices)
 
-                if is_top_level_operation and ttnn.ENABLE_LOGGING:
-                    for device in get_devices((function_args, function_kwargs)):
-                        ttnn.synchronize_device(device)
-                    end = time.time()
-                    duration = end - start
-                    logger.info(f"Finished {self.name:50} in {duration:30} seconds")
-
-                    if ttnn.SQLITE_CONNECTION is not None:
-                        cursor = ttnn.SQLITE_CONNECTION.cursor()
-                        cursor.execute(f"INSERT INTO operations VALUES ({OPERATION_ID}, '{self.name}')")
-                        for buffer_page in ttnn.get_buffer_pages():
-                            cursor.execute(
-                                f"INSERT INTO buffers VALUES ({OPERATION_ID}, {buffer_page.address}, {buffer_page.device_id}, {buffer_page.core_y}, {buffer_page.core_x}, {buffer_page.page_index}, {buffer_page.page_address}, {buffer_page.page_size}, {buffer_page.buffer_type.value})"
+                        if ttnn.ENABLE_GRAPH_REPORT and output is not None:
+                            ttnn.tracer.visualize(
+                                output, file_name=ttnn.REPORTS_PATH / "graphs" / f"{OPERATION_ID}.svg"
                             )
-                        ttnn.SQLITE_CONNECTION.commit()
+
+                        #    codegen_reports = ttnn.REPORTS_PATH / "codegen"
+                        #    codegen_reports.mkdir(parents=True, exist_ok=True)
+                        #    with open(ttnn.REPORTS_PATH / "codegen" / f"{OPERATION_ID}.py", "w") as f:
+                        #        f.write(ttnn.tracer.codegen(output))
 
                 if is_top_level_operation:
                     for hook in POST_OPERATION_HOOKS:

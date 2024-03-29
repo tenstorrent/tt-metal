@@ -260,10 +260,6 @@ The following environment variable can be set in order to completely disable the
 12. Print L1 Buffers
 --------------------
 
-ttnn has a python decorator that optionally enables features during run-time. The features are related to validation and debugging of the operations.
-
-The following environment variable can be set in order to completely disable these features.
-
 .. code-block:: python
 
     import torch
@@ -282,7 +278,38 @@ The following environment variable can be set in order to completely disable the
 
 
 
-13. Register pre- and/or post-operation hooks
+13. Visualize using Web Browser
+-------------------------------
+
+.. code-block:: bash
+
+    export TTNN_ENABLE_LOGGING=True # Synchronize main thread after every operation and log the operation start, end and duration
+
+    # Following flags enable optional reports if logging is already enabled
+    export TTNN_ENABLE_GRAPH_REPORT=True # Dump graph after every operation
+    export TTNN_ENABLE_BUFFER_REPORT=True # Dump buffers after every operation
+
+.. code-block:: python
+
+    import torch
+    import ttnn
+
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+
+    torch_input_tensor = torch.rand(2048, 2048, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.exp(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output_tensor = ttnn.to_torch(output_tensor)
+
+    ttnn.close_device(device)
+
+.. code-block:: bash
+    flask --app ttnn/visualizer run
+
+
+
+14. Register pre- and/or post-operation hooks
 ---------------------------------------------
 
 .. code-block:: python
@@ -309,7 +336,7 @@ The following environment variable can be set in order to completely disable the
 
 
 
-14. Query all operations
+15. Query all operations
 ------------------------
 
 .. code-block:: python
