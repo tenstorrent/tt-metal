@@ -19,6 +19,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParams,
     get_hash_from_sliding_window_op_params,
     calculate_shard_grid,
+    calculate_memory_config,
 )
 
 from typing import Union
@@ -41,6 +42,7 @@ class TTPyMaxPool(TTPyOp):
         output_mem_config=None,
         deallocate_activation=True,
         act_dtype=None,
+        channels=None,
     ):
         if parallel_config_override is None:
             parallel_config_override = {}
@@ -115,6 +117,18 @@ class TTPyMaxPool(TTPyOp):
         )
 
         self.deallocate_activation = deallocate_activation
+        self.input_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            True,
+            0 if channels is None else channels,
+            calc_input=True,
+        )
+        self.output_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            True,
+            0 if channels is None else channels,
+            calc_input=False,
+        )
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(self, sliding_window_op_params_hash, reader_patterns_cache):

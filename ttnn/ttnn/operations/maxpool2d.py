@@ -43,6 +43,7 @@ class MaxPool2d:
         reader_patterns_cache: Dict,
         parallel_config_override: Dict = None,
         deallocate_activation: bool = False,
+        channels: int = None,
     ):
         if isinstance(kernel_size, int):
             window_h = kernel_size
@@ -89,6 +90,7 @@ class MaxPool2d:
             parallel_config_override=parallel_config_override,
             deallocate_activation=deallocate_activation,
             act_dtype=dtype,
+            channels=channels,
         )
 
     @ttnn.register_operation(
@@ -143,12 +145,15 @@ def _global_avg_pool2d_validate_input_tensors(operation_name, input_tensor, *arg
     validate_input_tensors=_global_avg_pool2d_validate_input_tensors,
     golden_function=_torch_global_avg_pool2d,
 )
-def global_avg_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+def global_avg_pool2d(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig = None) -> ttnn.Tensor:
     r"""
     Applies a 2D adaptive average pooling over an input signal composed of several input planes.
 
     Arguments:
         * :attr: input_tensor: the input tensor
     """
-    output = ttl.tensor.average_pool_2d(input_tensor)
+    if memory_config is None:
+        output = ttl.tensor.average_pool_2d(input_tensor)
+    else:
+        output = ttl.tensor.average_pool_2d(input_tensor, memory_config)
     return output

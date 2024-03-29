@@ -18,6 +18,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
     calculate_shard_grid,
+    calculate_memory_config,
 )
 from tt_lib.utils import (
     _nearest_32,
@@ -182,10 +183,10 @@ def determine_parallel_config(
     logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[0]
     logical_grid_y = 1 if is_1d_systolic else grid_size[1]
     per_core_out_matrix_height_ntiles = calculate_per_core_out_matrix_height_ntiles(
-        logical_grid_x, config_override.get("per_core_out_matrix_height_ntiles", None)
+        logical_grid_x, config_override.get("per_core_out_matrix_height", None)
     )
     per_core_out_matrix_width_ntiles = calculate_per_core_out_matrix_width_ntiles(
-        logical_grid_y, config_override.get("per_core_out_matrix_width_ntiles", None)
+        logical_grid_y, config_override.get("per_core_out_matrix_width", None)
     )
 
     # logger.debug(
@@ -547,101 +548,20 @@ class TTPyCompositeConv(TTPyOp):
             self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
                 device, self.sliding_window_op_params, reader_patterns_cache["halo"]
             )
-        self.set_input_sharded_memory_config()
-        self.set_output_sharded_memory_config()
-
-    def set_input_sharded_memory_config(self):
-        needs_reshard = self.sliding_window_op_params.act_reshard_num_cores_nhw > 0
-        if needs_reshard:
-            num_cores_nhw = self.sliding_window_op_params.act_reshard_num_cores_nhw
-            if self.is_1d_systolic:
-                num_cores_w = min(self.sliding_window_op_params.num_cores_w, num_cores_nhw)
-                num_cores_h = (num_cores_nhw + num_cores_w - 1) // num_cores_w
-            else:
-                num_cores_w = num_cores_nhw
-                num_cores_h = self.sliding_window_op_params.num_cores_h
-        else:
-            num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-            num_cores_w = self.sliding_window_op_params.num_cores_w
-            num_cores_h = self.sliding_window_op_params.num_cores_h
-
-        input_channels = self.input_tensor_shape[3]
-        padded_input_channels = (
-            _nearest_y(input_channels, 16) if self.use_shallow_conv_variant else _nearest_32(input_channels)
+        self.grid_size = (self.sliding_window_op_params.num_cores_w, self.sliding_window_op_params.num_cores_h)
+        self.input_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            self.is_1d_systolic,
+            self.padded_input_channels,
+            calc_input=True,
+            tile_size=32,
         )
-        assert padded_input_channels >= input_channels
-        act_c_num_blocks = (
-            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
-        )  ###will fix it at the time of merging
-        grid_size = (num_cores_w, num_cores_h)
-
-        input_size_to_shard_evenly = _nearest_y(
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
-        )
-        untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
-
-        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
-        self.input_shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
-        )
-        shard_halo = False
-        shard_shape = [
-            untilize_with_halo_input_shard_height,
-            padded_input_channels if self.is_1d_systolic else (int)(padded_input_channels / act_c_num_blocks),
-        ]
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.input_shard_orientation, shard_halo)
-        self.input_shard_scheme = (
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-        )
-        self.input_sharded_memory_config = ttl.tensor.MemoryConfig(
-            self.input_shard_scheme,
-            ttl.tensor.BufferType.L1,
-            shard_spec,
-        )
-        self.grid_size = (num_cores_w, num_cores_h)
-
-    def set_output_sharded_memory_config(self):
-        num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-        num_cores_w = self.sliding_window_op_params.num_cores_w
-        num_cores_h = self.sliding_window_op_params.num_cores_h
-
-        output_channels = self.conv_output_shape[3]
-        padded_output_channels = _nearest_32(output_channels)
-        assert padded_output_channels >= output_channels
-        act_c_num_blocks = (
-            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
-        )  ###will fix it at the time of merging
-
-        output_size_to_shard_evenly = _nearest_y(
-            self.conv_output_shape[0] * self.conv_output_shape[1] * self.conv_output_shape[2], num_cores_nhw * 32
-        )
-        output_shard_height = (int)(output_size_to_shard_evenly / num_cores_nhw)
-
-        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
-        self.output_shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
-        )
-        shard_halo = False
-        shard_shape = [
-            output_shard_height,
-            padded_output_channels if self.is_1d_systolic else (int)(padded_output_channels / act_c_num_blocks),
-        ]
-        assert shard_shape[0] == self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
-        if shard_shape[1] != self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32:
-            breakpoint()
-        assert shard_shape[1] == self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.output_shard_orientation, shard_halo)
-        self.output_shard_scheme = (
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-        )
-        self.output_sharded_memory_config = ttl.tensor.MemoryConfig(
-            self.output_shard_scheme,
-            ttl.tensor.BufferType.L1,
-            shard_spec,
+        self.output_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            self.is_1d_systolic,
+            _nearest_32(output_channels),
+            calc_input=False,
+            tile_size=32,
         )
 
     # override abstract methods from base class TTPyOp
