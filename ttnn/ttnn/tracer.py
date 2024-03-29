@@ -423,7 +423,7 @@ def module_to_source_code(module_operation, prefix=""):
         output_variables_as_string = ", ".join(output_variables)
         string_io.write(f"    return {output_variables_as_string}\n")
 
-    print(string_io.getvalue())
+    return string_io.getvalue()
 
 
 def codegen_submodules(graph):
@@ -432,7 +432,7 @@ def codegen_submodules(graph):
         if isinstance(operation, ttnn.tracer.TorchModule):
             module = operation.module
             codegen_submodules(operation.graph)
-            module_to_source_code(operation, module.torchtrail_name)
+            yield module_to_source_code(operation, module.torchtrail_name)
 
 
 def codegen_top_level_module(graph):
@@ -453,11 +453,15 @@ def codegen_top_level_module(graph):
         index += 1
         node_to_variable[node] = variable
         node_to_statement(string_io, graph, node, variable, input_variables, prefix="")
-    print(string_io.getvalue())
+    return string_io.getvalue()
 
 
 def codegen(output):
     logger.warning("Codegen is an experimental feature and may not work as expected.")
     graph = get_graph(output)
-    codegen_submodules(graph)
-    codegen_top_level_module(graph)
+
+    output = ""
+    for module_code in codegen_submodules(graph):
+        output += module_code + "\n\n"
+    output += codegen_top_level_module(graph)
+    return output
