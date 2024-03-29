@@ -717,7 +717,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 }
 
 void kernel_main() {
-    DPRINT << "dispatch start: " << is_d_variant << is_h_variant << ENDL();
+    DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": start" << ENDL();
 
     for (uint32_t i = 0; i < dispatch_cb_blocks; i++) {
         uint32_t next_block = i + 1;
@@ -774,5 +774,5 @@ void kernel_main() {
                                                         wr_block_idx);
     noc_async_write_barrier();
 
-    DPRINT << "dispatch end: " << is_d_variant << is_h_variant << ENDL();
+    DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": out" << ENDL();
 }
