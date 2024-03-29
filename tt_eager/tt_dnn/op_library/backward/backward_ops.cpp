@@ -99,8 +99,12 @@ std::vector<Tensor> mul_bw(const Tensor& grad, const Tensor& input_a, const Tens
 
 std::vector<Tensor> _exp_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = exp(input, output_mem_config);
     Tensor result = mul(grad, exp_result, std::nullopt, output_mem_config);
+    result = where(gte_unary(result, 1e+38, output_mem_config), t_inf, result, output_mem_config);
+    result = where(lte_unary(result, -1e+38, output_mem_config), -t_inf, result, output_mem_config);
+    result = where(logical_and(gte_unary(abs(exp_result, output_mem_config), 1e+38, output_mem_config),ltz(grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -522,6 +526,7 @@ std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const Mem
     result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
     float t_nan  = std::nanf("");
     result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
+    result = where(logical_and(eqz(input, output_mem_config), eqz(grad, output_mem_config), std::nullopt, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -879,14 +884,6 @@ std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, con
 std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
-}
-
-float factorial(int n) {
-    if (n == 0 || n == 1) {
-        return 1;
-    } else {
-        return n * factorial(n - 1);
-    }
 }
 
 std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
