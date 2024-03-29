@@ -140,10 +140,7 @@ void process_write_host() {
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
                 }
-                move_rd_to_next_block<dispatch_cb_base,
-                                      dispatch_cb_blocks>(cmd_ptr,
-                                                          cb_fence,
-                                                          block_noc_writes_to_clear,
+                move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear,
                                                           rd_block_idx);
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -231,10 +228,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
                     dst = get_noc_addr_helper(dst_noc, dst_addr);
                 }
 
-                move_rd_to_next_block<dispatch_cb_base,
-                                      dispatch_cb_blocks>(cmd_ptr,
-                                                          cb_fence,
-                                                          block_noc_writes_to_clear,
+                move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear,
                                                           rd_block_idx);
             }
 
@@ -322,10 +316,7 @@ void process_write_paged() {
                     data_ptr = dispatch_cb_base;
                     dst = addr_gen.get_noc_addr(page_id, dst_addr_offset);
                 }
-                move_rd_to_next_block<dispatch_cb_base,
-                                      dispatch_cb_blocks>(cmd_ptr,
-                                                          cb_fence,
-                                                          block_noc_writes_to_clear,
+                move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear,
                                                           rd_block_idx);
             }
 
@@ -428,10 +419,7 @@ void process_write_packed() {
                     data_ptr = dispatch_cb_base;
                 }
 
-                move_rd_to_next_block<dispatch_cb_base,
-                                      dispatch_cb_blocks>(cmd_ptr,
-                                                          cb_fence,
-                                                          block_noc_writes_to_clear,
+                move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear,
                                                           rd_block_idx);
             }
 
