@@ -159,9 +159,8 @@ def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
         device = input_tensor.device()
 
     tensor = input_tensor
-    tensor = ttnn.from_device(input_tensor)
-    # Using `to` method instead of `ttnn.to_layout` because we don't want to remove the padding
-    tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
+    # Reshape to full shape before reshaping to avoid padding issues
+    tensor = tensor.reshape(tensor.shape.with_tile_padding())
     tensor = ttnn.to_torch(tensor)
     tensor = tensor.reshape(tuple(shape.with_tile_padding())).contiguous().clone()
     tensor = ttnn.from_torch(tensor, dtype=input_tensor.dtype, layout=layout, device=device)
@@ -433,7 +432,8 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
         return tensor.to(device, memory_config)
 
     original_rank = len(tensor.shape)
-    tensor = ttnn.unsqueeze_to_4D(tensor)
+    if len(tensor.shape) < 4:
+        tensor = ttnn.unsqueeze_to_4D(tensor)
 
     tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
         tensor, device, memory_config=memory_config
