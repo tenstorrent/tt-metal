@@ -377,7 +377,7 @@ void process_write_packed() {
     uint32_t xfer_size = cmd->write_packed.size;
     uint32_t dst_addr = cmd->write_packed.addr;
 
-    ASSERT(xfer_size < dispatch_cb_page_size);
+    ASSERT(xfer_size <= dispatch_cb_page_size);
 
     volatile WritePackedSubCmd tt_l1_ptr *sub_cmd_ptr =
         (volatile WritePackedSubCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd));
