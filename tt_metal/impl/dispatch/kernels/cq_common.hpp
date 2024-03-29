@@ -94,12 +94,9 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
     }
 }
 
-template<uint32_t cb_base,
-         uint32_t cb_blocks>
+template<uint32_t cb_blocks>
 FORCE_INLINE
-void move_rd_to_next_block(uint32_t& cmd_ptr,
-                           uint32_t& cb_fence,
-                           uint32_t block_noc_writes_to_clear[],
+void move_rd_to_next_block(uint32_t block_noc_writes_to_clear[],
                            uint32_t& rd_block_idx) {
 
     // This is subtle: in the free-running case, we don't want to clear the current block
@@ -108,12 +105,9 @@ void move_rd_to_next_block(uint32_t& cmd_ptr,
     uint32_t write_count = block_noc_writes_to_clear[rd_block_idx];
     block_noc_writes_to_clear[rd_block_idx] = write_count - 1;
 
+    static_assert((cb_blocks & (cb_blocks - 1)) == 0);
     rd_block_idx++;
-    if (rd_block_idx == cb_blocks) {
-        rd_block_idx = 0;
-        cb_fence = cb_base;
-        cmd_ptr = cb_base;
-    }
+    rd_block_idx &= cb_blocks - 1;
 
     block_noc_writes_to_clear[rd_block_idx] = write_count; // this is plus 1
 }
@@ -132,10 +126,11 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
 
     // Strided past the data that has arrived, get the next page
     if (cb_fence == block_next_start_addr[rd_block_idx]) {
-        move_rd_to_next_block<cb_base,
-                              cb_blocks>(cmd_ptr,
-                                         cb_fence,
-                                         block_noc_writes_to_clear,
+        if (rd_block_idx == cb_blocks - 1) {
+            cmd_ptr = cb_base;
+            cb_fence = cb_base;
+        }
+        move_rd_to_next_block<cb_blocks>(block_noc_writes_to_clear,
                                          rd_block_idx);
     }
 
