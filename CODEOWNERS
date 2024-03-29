@@ -51,10 +51,13 @@ tt_metal/impl/buffers/ @tarafdarTT @kmabeeTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/ @pgkeller @tt-asaigal
+tt_metal/impl/dispatch/kernels/packet_* @ubcheema
+tt_metal/impl/dispatch/kernels/eth_* @ubcheema
 tt_metal/impl/dispatch/**/module.mk @tt-rkim @pgkeller
 tt_metal/kernels/dataflow/dispatch/ @tarafdarTT @pgkeller
 docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
+tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
 
 # metal - fw, llks, risc-v
 # tt_metal/hw/ckernels/ @davorchap
