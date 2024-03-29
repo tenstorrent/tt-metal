@@ -1018,65 +1018,6 @@ std::chrono::duration<double> run_test(uint32_t iterations,
     return end-start;
 }
 
-template<bool is_hd>
-void configure_host_connected_prefetcher(
-    Program& program,
-    string path,
-    CoreCoord my_core,
-    CoreCoord phys_my_core,
-    CoreCoord phys_downstream_core,
-    uint32_t downstream_buffer_base,
-    uint32_t downstream_buffer_log_page_size,
-    uint32_t downstream_buffer_pages,
-    uint32_t prefetch_local_downstream_cb_sem, // sem instanced local to prefetcher for downstream
-    uint32_t downstream_cb_sem,                // sem instanced downstream
-    uint32_t prefetch_q_base,
-    uint32_t prefetch_q_rd_ptr_addr,
-    uint32_t cmddat_q_base,
-    uint32_t scratch_db_base,
-    uint32_t prefetch_sync_sem) {
-
-    std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(phys_my_core.x)},
-        {"MY_NOC_Y", std::to_string(phys_my_core.y)},
-        {"DOWNSTREAM_NOC_X", std::to_string(phys_downstream_core.x)},
-        {"DOWNSTREAM_NOC_Y", std::to_string(phys_downstream_core.y)},
-    };
-
-    std::vector<uint32_t> compile_args = {
-         downstream_buffer_base,
-         downstream_buffer_log_page_size,
-         downstream_buffer_pages,
-         prefetch_local_downstream_cb_sem,
-         downstream_cb_sem,
-         dev_hugepage_base_g,
-         hugepage_buffer_size_g,
-         prefetch_q_base,
-         prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
-         prefetch_q_rd_ptr_addr,
-         cmddat_q_base,
-         cmddat_q_size_g,
-    };
-
-    if (is_hd) {
-        compile_args.push_back(scratch_db_base);
-        compile_args.push_back(scratch_db_size_g);
-        compile_args.push_back(prefetch_sync_sem);
-    }
-
-    tt_metal::CreateKernel(
-        program,
-        path,
-        {my_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_args,
-            .defines = defines
-        }
-    );
-}
-
 int main(int argc, char **argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -1181,86 +1122,79 @@ int main(int argc, char **argv) {
         constexpr uint32_t dispatch_h_cb_sem = 0;
         tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
 
+        std::vector<uint32_t> prefetch_compile_args = {
+            dispatch_buffer_base, // overridden below for prefetch_h
+            DISPATCH_BUFFER_LOG_PAGE_SIZE, // overridden below for prefetch_h
+            dispatch_buffer_pages, // overridden below for prefetch_h
+            prefetch_downstream_cb_sem, // overridden below for prefetch_d
+            dispatch_cb_sem, // overridden below for prefetch_h
+            dev_hugepage_base_g,
+            hugepage_buffer_size_g,
+            prefetch_q_base,
+            prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
+            prefetch_q_rd_ptr_addr,
+            cmddat_q_base, // overridden for split below
+            cmddat_q_size_g, // overridden for split below
+            0, // scratch_db_base filled in below if used
+            scratch_db_size_g,
+            prefetch_sync_sem,
+            prefetch_d_buffer_pages, // prefetch_d only
+            prefetch_d_upstream_cb_sem, // prefetch_d only
+            prefetch_downstream_cb_sem, // prefetch_d only
+            PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+        };
+
         if (split_prefetcher_g) {
-            configure_host_connected_prefetcher<false>(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch_h.cpp",
-                prefetch_core,
-                phys_prefetch_core,
-                phys_prefetch_d_core,
-                prefetch_d_buffer_base,
-                PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-                prefetch_d_buffer_pages,
-                prefetch_downstream_cb_sem,
-                prefetch_d_upstream_cb_sem,
-                prefetch_q_base,
-                prefetch_q_rd_ptr_addr,
-                cmddat_q_base,
-                0,
-                0);
 
-            std::map<string, string> prefetch_d_defines = {
-                {"UPSTREAM_NOC_X", std::to_string(phys_prefetch_core.x)},
-                {"UPSTREAM_NOC_Y", std::to_string(phys_prefetch_core.y)},
-                {"MY_NOC_X", std::to_string(phys_prefetch_d_core.x)},
-                {"MY_NOC_Y", std::to_string(phys_prefetch_d_core.y)},
-                {"DOWNSTREAM_NOC_X", std::to_string(phys_dispatch_core.x)},
-                {"DOWNSTREAM_NOC_Y", std::to_string(phys_dispatch_core.y)},
-            };
-
-            uint32_t scratch_db_base = prefetch_d_buffer_base + (((prefetch_d_buffer_pages << PREFETCH_D_BUFFER_LOG_PAGE_SIZE) + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+            // prefetch_d
+            uint32_t scratch_db_base = prefetch_d_buffer_base + (((prefetch_d_buffer_pages << PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
+                                                                  noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
             TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
-            std::vector<uint32_t> prefetch_d_compile_args = {
-                dispatch_buffer_base,
-                DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                dispatch_buffer_pages,
-                prefetch_d_downstream_cb_sem,
-                dispatch_cb_sem,
+            prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
+            prefetch_compile_args[10] = prefetch_d_buffer_base;
+            prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+            prefetch_compile_args[12] = scratch_db_base;
 
-                prefetch_d_buffer_base,
-                PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-                prefetch_d_buffer_pages,
-                prefetch_d_upstream_cb_sem,
-                prefetch_downstream_cb_sem,
-                PREFETCH_D_BUFFER_BLOCKS,
+            configure_kernel_variant<true, false>(program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                prefetch_compile_args,
+                prefetch_d_core,
+                phys_prefetch_d_core,
+                phys_prefetch_core,
+                phys_dispatch_core);
 
-                scratch_db_base,
-                scratch_db_size_g,
-                prefetch_sync_sem,
-            };
+            // prefetch_h
+            prefetch_compile_args[0] = prefetch_d_buffer_base;
+            prefetch_compile_args[1] = PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            prefetch_compile_args[2] = prefetch_d_buffer_pages;
+            prefetch_compile_args[3] = prefetch_downstream_cb_sem;
+            prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
+            prefetch_compile_args[10] = cmddat_q_base;
+            prefetch_compile_args[11] = cmddat_q_size_g;
+            prefetch_compile_args[12] = 0;
 
-            tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch_d.cpp",
-                {prefetch_d_core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = prefetch_d_compile_args,
-                    .defines = prefetch_d_defines
-                }
-            );
+            configure_kernel_variant<false, true>(program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                prefetch_compile_args,
+                prefetch_core,
+                phys_prefetch_core,
+                {0, 0}, // upstream core unused
+                phys_prefetch_d_core);
         } else {
             uint32_t scratch_db_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
             TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
+            prefetch_compile_args[12] = scratch_db_base;
 
-            configure_host_connected_prefetcher<true>(
+            configure_kernel_variant<true, true>(
                 program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch_hd.cpp",
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                prefetch_compile_args,
                 prefetch_core,
                 phys_prefetch_core,
-                phys_dispatch_core,
-                dispatch_buffer_base,
-                DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                dispatch_buffer_pages,
-                prefetch_downstream_cb_sem,
-                dispatch_cb_sem,
-                prefetch_q_base,
-                prefetch_q_rd_ptr_addr,
-                cmddat_q_base,
-                scratch_db_base,
-                prefetch_sync_sem);
+                {0, 0}, // upstream core unused
+                phys_dispatch_core);
         }
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -1285,7 +1219,8 @@ int main(int argc, char **argv) {
             // dispatch_hd and dispatch_d
             dispatch_compile_args[11] = dispatch_downstream_cb_sem;
             dispatch_compile_args[12] = dispatch_h_cb_sem;
-            configure_dispatch_kernel_variant<true, false>(program,
+            configure_kernel_variant<true, false>(program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
                 phys_dispatch_core,
@@ -1296,14 +1231,16 @@ int main(int argc, char **argv) {
             dispatch_compile_args[3] = dispatch_h_cb_sem;
             dispatch_compile_args[11] = dispatch_h_cb_sem;
             dispatch_compile_args[12] = dispatch_downstream_cb_sem;
-            configure_dispatch_kernel_variant<false, true>(program,
+            configure_kernel_variant<false, true>(program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_h_core,
                 phys_dispatch_h_core,
                 phys_dispatch_core,
                 {0,0});
         } else {
-            configure_dispatch_kernel_variant<true, true>(program,
+            configure_kernel_variant<true, true>(program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
                 phys_dispatch_core,
