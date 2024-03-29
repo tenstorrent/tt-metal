@@ -6,7 +6,7 @@ import numpy as np
 from collections import namedtuple
 
 import tt_lib as ttl
-from tt_lib.utils import _nearest_y
+from tt_lib.utils import _nearest_y, roundup
 
 SlidingWindowOpParams = namedtuple(
     "SlidingWindowOpParams", "stride_h stride_w pad_h pad_w window_h window_w batch_size input_h input_w"
@@ -22,9 +22,31 @@ def get_hash_from_sliding_window_op_params(sliding_window_op_params: SlidingWind
     return f"{sliding_window_op_params.stride_h}_{sliding_window_op_params.stride_w}_{sliding_window_op_params.pad_h}_{sliding_window_op_params.pad_w}_{sliding_window_op_params.window_h}_{sliding_window_op_params.window_w}_{sliding_window_op_params.batch_size}_{sliding_window_op_params.input_h}_{sliding_window_op_params.input_w}_{sliding_window_op_params.num_cores_w}_{sliding_window_op_params.num_cores_h}_{sliding_window_op_params.num_cores_nhw}_{sliding_window_op_params.act_reshard_num_cores_nhw}"
 
 
-def get_sliding_window_op_output_nhw_shape(
+def get_sliding_window_op_output_nhw_shape_(
     input_n, input_h, input_w, stride_h, stride_w, pad_h, pad_w, window_h, window_w
 ):
+    output_h = ((int)((input_h + (2 * pad_h) - window_h) / stride_h)) + 1
+    output_w = ((int)((input_w + (2 * pad_w) - window_w) / stride_w)) + 1
+    return [input_n, output_h, output_w]
+
+
+def get_sliding_window_op_input_nhw_shape(sliding_window_op_params):
+    input_n = sliding_window_op_params.batch_size
+    input_h = sliding_window_op_params.input_h
+    input_w = sliding_window_op_params.input_w
+    return [input_n, input_h, input_w]
+
+
+def get_sliding_window_op_output_nhw_shape(sliding_window_op_params):
+    stride_h = sliding_window_op_params.stride_h
+    stride_w = sliding_window_op_params.stride_w
+    pad_h = sliding_window_op_params.pad_h
+    pad_w = sliding_window_op_params.pad_w
+    window_h = sliding_window_op_params.window_h
+    window_w = sliding_window_op_params.window_w
+    input_n = sliding_window_op_params.batch_size
+    input_h = sliding_window_op_params.input_h
+    input_w = sliding_window_op_params.input_w
     output_h = ((int)((input_h + (2 * pad_h) - window_h) / stride_h)) + 1
     output_w = ((int)((input_w + (2 * pad_w) - window_w) / stride_w)) + 1
     return [input_n, output_h, output_w]
@@ -33,7 +55,7 @@ def get_sliding_window_op_output_nhw_shape(
 def get_sliding_window_op_output_shard_nhw_size(
     num_cores_nhw, input_n, input_h, input_w, stride_h, stride_w, pad_h, pad_w, window_h, window_w, is_out_tiled=True
 ):
-    output_nhw_shape = get_sliding_window_op_output_nhw_shape(
+    output_nhw_shape = get_sliding_window_op_output_nhw_shape_(
         input_n, input_h, input_w, stride_h, stride_w, pad_h, pad_w, window_h, window_w
     )
     if is_out_tiled:
@@ -83,6 +105,54 @@ def calculate_shard_grid(grid_size, num_cores_nhw):
             )
             shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
     return shard_grid, shard_layout
+
+
+def calculate_memory_config(sliding_window_op_params, is_1d_systolic, padded_channels, calc_input=False, tile_size=1):
+    tensor_shape = (
+        get_sliding_window_op_input_nhw_shape(sliding_window_op_params)
+        if calc_input
+        else get_sliding_window_op_output_nhw_shape(sliding_window_op_params)
+    )
+    tensor_shape.append(padded_channels)
+    # tensor_shape is [N, H, W, C]
+    assert len(tensor_shape) == 4
+    needs_reshard = calc_input and sliding_window_op_params.act_reshard_num_cores_nhw > 0
+    if needs_reshard:
+        num_cores_nhw = sliding_window_op_params.act_reshard_num_cores_nhw
+        if is_1d_systolic:
+            num_cores_w = min(sliding_window_op_params.num_cores_w, num_cores_nhw)
+            num_cores_h = (num_cores_nhw + num_cores_w - 1) // num_cores_w
+        else:
+            num_cores_w = num_cores_nhw
+            num_cores_h = sliding_window_op_params.num_cores_h
+    else:
+        num_cores_nhw = sliding_window_op_params.num_cores_nhw
+        num_cores_w = sliding_window_op_params.num_cores_w
+        num_cores_h = sliding_window_op_params.num_cores_h
+
+    if is_1d_systolic:
+        logical_grid_size = (num_cores_nhw, 1)
+    else:
+        logical_grid_size = (num_cores_w, num_cores_h)
+
+    shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
+    nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2]
+    nhw_padded = roundup(nhw_shape, num_cores_nhw * tile_size)
+    # if (nhw_padded - nhw_shape) > 32:
+    #     breakpoint()
+    # assert (nhw_padded - nhw_shape) <= 32
+    nhw_shard = nhw_padded // num_cores_nhw
+    assert padded_channels % logical_grid_size[1] == 0
+    shard_shape = [nhw_shard, padded_channels // logical_grid_size[1]]
+    shard_orientation = (
+        ttl.tensor.ShardOrientation.ROW_MAJOR if is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
+    )
+    shard_halo = False
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_scheme = (
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if is_1d_systolic else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    return ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
 
 
 class SWOParallelConfig:
