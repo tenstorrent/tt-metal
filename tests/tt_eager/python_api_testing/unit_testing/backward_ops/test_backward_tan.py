@@ -5,7 +5,10 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+    data_gen_with_range,
+    compare_results,
+)
 
 
 @pytest.mark.parametrize(
@@ -17,13 +20,10 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_tan(input_shapes, device):
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
     # tt tan supports input range [-1.45, 1.45]
-    in_data = torch.Tensor(size=input_shapes).uniform_(-1.45, 1.45)
-    in_data.requires_grad = True
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1.45, 1.45, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
+
     pyt_y = torch.tan(in_data)
 
     tt_output_tensor_on_device = tt_lib.tensor.tan_bw(grad_tensor, input_tensor)
