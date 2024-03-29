@@ -407,11 +407,6 @@ def upsample(
             )
             shard_grid = _get_upsample_shard_grid_from_num_shards(nshards, input_tensor.device())
 
-            print(f"Resharding input tensor to {nshards} shards with HEIGHT sharding")
-
-            ## sharded to interleaved
-            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-
             ## construct new shard_spec
             shard_width = num_channels
             shard_height = batch_size * input_h * input_w // nshards
