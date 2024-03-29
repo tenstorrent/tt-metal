@@ -482,7 +482,8 @@ int main(int argc, char **argv) {
         args.push_back(prefetcher_iterations_g);
         tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
-        configure_dispatch_kernel_variant<true, true>(program,
+        configure_kernel_variant<true, true>(program,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
