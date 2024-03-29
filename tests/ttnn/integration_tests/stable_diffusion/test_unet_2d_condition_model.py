@@ -162,6 +162,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat16)
 
+    ttnn_timestep = ttnn_timestep.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_timestep = ttnn.from_torch(ttnn_timestep, ttnn.bfloat16)
     ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT)
     ttnn_timestep = ttnn.to_device(ttnn_timestep, device, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -185,18 +186,18 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         config=config,
     )
 
-    for i in range(50):
-        ttnn_output = model(
-            input,
-            timestep=ttnn_timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            class_labels=class_labels,
-            attention_mask=attention_mask,
-            cross_attention_kwargs=cross_attention_kwargs,
-            return_dict=return_dict,
-            config=config,
-        )
+    # for i in range(50):
+    #     ttnn_output = model(
+    #         input,
+    #         timestep=ttnn_timestep,
+    #         encoder_hidden_states=encoder_hidden_states,
+    #         class_labels=class_labels,
+    #         attention_mask=attention_mask,
+    #         cross_attention_kwargs=cross_attention_kwargs,
+    #         return_dict=return_dict,
+    #         config=config,
+    #     )
     ttnn_output = ttnn_to_torch(ttnn_output)
-    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.94)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)
     assert passing

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import tt_lib as ttl
 import torch
 from typing import Optional, Dict
 import os
@@ -223,6 +224,9 @@ class transformer_2d_model:
         if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
         residual = hidden_states
+        spilled_residual = residual.shape[-2] == 8192
+        if spilled_residual:
+            residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
 
         hidden_states = ttnn.to_layout(
             hidden_states,
@@ -253,6 +257,7 @@ class transformer_2d_model:
                 hidden_states, (self.batch_size, 1, self.input_height * self.input_width, in_channels)
             )
             if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
+                # hidden_states = ttnn.experimental.tensor.reshard(hidden_states, self.gn_expected_input_sharded_memory_config)
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
             hidden_states = ttnn.group_norm(
@@ -262,21 +267,21 @@ class transformer_2d_model:
                 input_mask=self.norm_input_mask,
                 weight=self.parameters.norm.weight,
                 bias=self.parameters.norm.bias,
-                memory_config=ttnn.get_memory_config(hidden_states),
+                memory_config=ttnn.L1_MEMORY_CONFIG,  # get_memory_config(hidden_states),
                 core_grid=self.group_norm_core_grid,
             )
-        hidden_states = ttnn.to_memory_config(
-            hidden_states, ttnn.L1_MEMORY_CONFIG
-        )  # sharded to interleaved since we can't tilize block sharded
         hidden_states = ttnn.reshape(
             hidden_states, (1, 1, self.batch_size * self.input_height * self.input_width, in_channels)
         )
-        hidden_states = ttnn.to_layout(
+        hidden_states = ttnn.to_memory_config(
+            hidden_states, ttnn.L1_MEMORY_CONFIG
+        )  # sharded to interleaved since we can't tilize block sharded
+        hidden_states = ttnn.experimental.tensor.tilize(
             hidden_states,
-            ttnn.TILE_LAYOUT,
-            memory_config=self.proj_in.conv.input_sharded_memory_config,
+            output_mem_config=hidden_states.memory_config(),
             use_multicore=True,
-        )  # tilize
+            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        )
 
         hidden_states = self.proj_in(hidden_states)
 
@@ -304,10 +309,12 @@ class transformer_2d_model:
         out_channels = in_channels if out_channels is None else out_channels
         if is_input_continuous:
             if not use_linear_projection:
-                hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
+                if hidden_states.memory_config() != self.proj_out.conv.input_sharded_memory_config:
+                    assert False
+                # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 hidden_states = self.proj_out(hidden_states)
-                hidden_states = ttnn.reshape(hidden_states, (1, 1, batch * height * width, inner_dim))
-
+                if spilled_residual:
+                    residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
                 if output_bfloat16:
                     hidden_states = ttnn.add(
                         hidden_states,

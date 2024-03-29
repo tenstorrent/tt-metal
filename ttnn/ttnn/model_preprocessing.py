@@ -20,6 +20,8 @@ from ttnn.tracer import trace, visualize
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
     weight = weight.T.contiguous()
+    while len(weight.shape) < 4:
+        weight = weight.unsqueeze(0)
     weight = ttnn.from_torch(weight, dtype=dtype, layout=layout)
     return weight
 
