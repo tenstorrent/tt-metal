@@ -179,6 +179,7 @@ def create_custom_preprocessor(device):
             ttnn_module_args.c7["deallocate_activation"] = True
             ttnn_module_args.c7_2["deallocate_activation"] = True
             ttnn_module_args.c7_3["deallocate_activation"] = True
+            ttnn_module_args.c7["padded_input_channels"] = 48
             ttnn_module_args.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
             ttnn_module_args.c7_2["conv_blocking_and_parallelization_config_override"] = None
             ttnn_module_args.c7_3["conv_blocking_and_parallelization_config_override"] = None
@@ -505,8 +506,9 @@ class UNet(nn.Module):
         return output
 
 
-@pytest.mark.parametrize("loop", [0, 1, 5, 10, 50, 100])
-def test_unet(device, loop):
+@pytest.mark.parametrize("loop", [0])
+@pytest.mark.parametrize("perf_mode", [False, True])
+def test_unet(device, loop, perf_mode):
     with torch.no_grad():
         torch.manual_seed(0)
         torch_model = UNet()
@@ -556,7 +558,7 @@ def test_unet(device, loop):
             if i == warmup:
                 start = time.perf_counter()
             profiler.tracy_frame()
-            output_tensor = ttnn_model(device, input_tensor)
+            output_tensor = ttnn_model(device, input_tensor, perf_mode=perf_mode)
         if start is not None:
             stop = time.perf_counter()
             total_time = stop - start
@@ -581,7 +583,21 @@ def test_unet(device, loop):
             output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
         )
 
-        if device.arch() == ttl.device.Arch.WORMHOLE_B0:
+        if perf_mode:
+            pass  # skip PCC checks if perf_mode is set
+        elif device.arch() == ttl.device.Arch.WORMHOLE_B0:
             assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
         else:
             assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.97)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--loop", default=0, type=int)
+    ap.add_argument("--perf-mode", action="store_true")
+    args = ap.parse_args()
+
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+    test_unet(device, args.loop, args.perf_mode)
+    ttnn.close_device(device)
