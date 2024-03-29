@@ -2,15 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 import os
 import pathlib
-import sqlite3
+import shutil
 
 from loguru import logger
 
-TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
-MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
+CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
+MODEL_CACHE_PATH = CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 
@@ -32,35 +31,22 @@ ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "Fa
 if ENABLE_FAST_RUNTIME_MODE:
     logger.info(f"ttnn: fast runtime mode was enabled")
 
+REPORTS_PATH = pathlib.Path("generated") / "reports"
+shutil.rmtree(REPORTS_PATH, ignore_errors=True)
+
 ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
 if ENABLE_LOGGING:
     logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
 
 
-DATABASE_FILE = pathlib.Path("generated") / "reports" / "ttnn.db"
-SQLITE_CONNECTION = None
+ENABLE_GRAPH_REPORT = get_bool_env_var("TTNN_ENABLE_GRAPH_REPORT", "False")
+if ENABLE_GRAPH_REPORT:
+    logger.info(f"ttnn: enabled graph report")
 
 
-@contextlib.contextmanager
-def manage_sqlite_db(db_file=DATABASE_FILE):
-    if not db_file.parent.exists():
-        db_file.parent.mkdir(parents=True)
-    db_file.unlink(missing_ok=True)
-    global SQLITE_CONNECTION
-    SQLITE_CONNECTION = sqlite3.connect(db_file)
-
-    cursor = SQLITE_CONNECTION.cursor()
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS operations
-                (operation_id int, name text)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS buffers
-                (operation_id int, address int, device_id int, core_y int, core_x int, page_index int, page_address int, page_size int, buffer_type int)"""
-    )
-    SQLITE_CONNECTION.commit()
-    yield
-    SQLITE_CONNECTION.close()
+ENABLE_BUFFER_REPORT = get_bool_env_var("TTNN_ENABLE_BUFFER_REPORT", "False")
+if ENABLE_BUFFER_REPORT:
+    logger.info(f"ttnn: enabled buffer report")
 
 
 import tt_lib as _tt_lib
@@ -140,6 +126,7 @@ from ttnn.core import (
 
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
+import ttnn.database
 
 from ttnn.decorators import (
     register_operation,
@@ -370,4 +357,4 @@ from ttnn.operations.maxpool2d import (
     global_avg_pool2d,
 )
 
-from ttnn._ttnn.reports import print_l1_buffers, get_buffer_pages
+from ttnn._ttnn.reports import print_l1_buffers
