@@ -417,8 +417,10 @@ void JitBuildState::copy_kernel(const string& kernel_in_path, const string& op_o
 {
     // TODO(pgk): get rid of this copy, compile kernel file in place as its own .o
     const string out_dir = this->out_path_ + op_out_path + this->target_name_;
-    const string src = env_.get_root_path() + kernel_in_path;
     const string dst = out_dir + "/kernel.cpp";
+    // Assume kernel_in_path is absolute and test if it exists, if it doesn't exist then assume
+    // it's relative to TT_METAL_HOME.
+    const string src = fs::exists(kernel_in_path) ? kernel_in_path : env_.get_root_path() + kernel_in_path;
     fs::copy(src, dst, fs::copy_options::overwrite_existing);
 }
 
