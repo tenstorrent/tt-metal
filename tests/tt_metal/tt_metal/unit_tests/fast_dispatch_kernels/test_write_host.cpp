@@ -177,7 +177,8 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     vector<uint32_t> args = {1};
     tt::tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
-    configure_dispatch_kernel_variant<true, true>(program,
+    configure_kernel_variant<true, true>(program,
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
         dispatch_compile_args,
         dispatch_core,
         phys_dispatch_core,
