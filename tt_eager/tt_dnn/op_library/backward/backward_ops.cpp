@@ -1370,8 +1370,13 @@ std::vector<Tensor> rad2deg_bw(const Tensor& grad, const Tensor& input, const Me
 
 std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = mul(neg(grad, output_mem_config), recip(square(input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
+    grad_tensor.emplace_back( where(eqz(input, output_mem_config),
+                                    where(eqz(grad, output_mem_config),
+                                        t_nan,
+                                        mul(t_inf, neg( sign(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config), output_mem_config),
+                                    mul(neg(grad, output_mem_config), recip(square(input, output_mem_config), output_mem_config), std::nullopt, output_mem_config), output_mem_config));
     return grad_tensor;
 }
 std::vector<Tensor> reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
