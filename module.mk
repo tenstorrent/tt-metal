@@ -17,17 +17,17 @@ CONFIG_LDFLAGS =
 TT_METAL_CREATE_STATIC_LIB ?= 0
 
 ifeq ($(CONFIG), release)
-CONFIG_CFLAGS += -O3
+CONFIG_CFLAGS += -O2
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
-CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
+CONFIG_CFLAGS += -O2 -DDEBUG=DEBUG
 CONFIG_LDFLAGS += -Wl,--verbose
 else ifeq ($(CONFIG), assert)
-CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG
+CONFIG_CFLAGS += -O2 -g -DDEBUG=DEBUG
 else ifeq ($(CONFIG), asan)
-CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fsanitize=address
+CONFIG_CFLAGS += -O2 -g -DDEBUG=DEBUG -fsanitize=address
 CONFIG_LDFLAGS += -fsanitize=address
 else ifeq ($(CONFIG), ubsan)
-CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fsanitize=undefined
+CONFIG_CFLAGS += -O2 -g -DDEBUG=DEBUG -fsanitize=undefined
 CONFIG_LDFLAGS += -fsanitize=undefined
 else ifeq ($(CONFIG), debug)
 CONFIG_CFLAGS += -O0 -g -DDEBUG=DEBUG
