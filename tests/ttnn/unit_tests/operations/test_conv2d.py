@@ -1141,3 +1141,120 @@ def test_halo_reshard_conv(
         use_1d_systolic_array,
         config_override,
     )
+
+
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array",
+    (
+        (16, 3, 480, 640, 3, 3, 2, 2, 1, 1, True),
+        (16, 16, 240, 320, 3, 3, 2, 2, 1, 1, True),
+        (8, 16, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (16, 8, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (16, 16, 120, 160, 1, 1, 1, 1, 0, 0, True),
+        (72, 16, 120, 160, 1, 1, 1, 1, 0, 0, True),
+        (72, 72, 120, 160, 3, 3, 2, 2, 1, 1, True),
+        (24, 72, 60, 80, 1, 1, 1, 1, 0, 0, True),
+        (88, 24, 60, 80, 1, 1, 1, 1, 0, 0, True),
+        (88, 88, 60, 80, 3, 3, 1, 1, 1, 1, True),
+        (24, 88, 60, 80, 1, 1, 1, 1, 0, 0, True),
+        (96, 24, 60, 80, 1, 1, 1, 1, 0, 0, True),
+        (96, 96, 60, 80, 5, 5, 2, 2, 2, 2, True),
+        (24, 96, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (96, 24, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (40, 96, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (240, 40, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (240, 240, 30, 40, 5, 5, 1, 1, 2, 2, True),
+        (64, 240, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (240, 64, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (40, 240, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (120, 40, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (120, 120, 30, 40, 5, 5, 1, 1, 2, 2, True),
+        (32, 120, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (120, 32, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (48, 120, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (144, 48, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (144, 144, 30, 40, 5, 5, 1, 1, 2, 2, True),
+        (40, 144, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (144, 40, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (48, 144, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (288, 48, 30, 40, 1, 1, 1, 1, 0, 0, True),
+        (288, 288, 30, 40, 5, 5, 2, 2, 2, 2, True),
+        (72, 288, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (288, 72, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (96, 288, 15, 20, 1, 1, 1, 1, 0, 0, True),
+        (576, 96, 15, 20, 1, 1, 1, 1, 0, 0, True),
+        (576, 576, 15, 20, 5, 5, 1, 1, 2, 2, True),
+        (144, 576, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (576, 144, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (96, 576, 15, 20, 1, 1, 1, 1, 0, 0, True),
+    ),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    [8, 16, 20],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_mobilenetv3_conv_gs(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+):
+    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
+        pytest.skip("Batch > 8 must be run fully bfp8")
+
+    if (
+        activations_dtype == ttnn.bfloat16
+        and batch_size == 20
+        and (
+            output_channels == 64
+            or (
+                stride_h == 2
+                and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
+            )
+        )
+    ):
+        pytest.skip("Skipping test because it won't fit in L1!")
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override=None,
+        use_shallow_conv_variant=input_channels == 16,
+        padded_input_channels=16 if input_channels == 16 else None,
+    )
