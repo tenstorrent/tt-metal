@@ -92,7 +92,7 @@ class upblock_2d:
             )
 
         if add_upsample:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
             hidden_states = self.upsample_2d(
                 hidden_states,
                 in_channels,

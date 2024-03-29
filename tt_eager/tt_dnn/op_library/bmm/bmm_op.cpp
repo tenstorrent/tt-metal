@@ -971,7 +971,7 @@ void Matmul::validate(
                             TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
                         }
 
-                        TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == N / program_config.per_core_N);
+                        TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == div_up(N, program_config.per_core_N));
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         TT_FATAL(K == program_config.in0_block_w);
                         TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
@@ -981,9 +981,7 @@ void Matmul::validate(
                     }
 
                     TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
-
                     TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
-                    TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == div_up(N, program_config.per_core_N));
                 }
 
                 if (input_tensor_b.memory_config().is_sharded()) {

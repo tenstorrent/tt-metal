@@ -7,6 +7,7 @@ import pytest
 import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
+import tt_lib as ttl
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as ttnn_basic_transformer_block,
 )
@@ -179,8 +180,21 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
     encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    grid_sizes = {8192: (8, 5), 2048: (8, 5), 512: (8, 8), 128: (4, 8)}
+    hidden_states = ttnn.reshape(
+        hidden_states, [1, 1, hidden_states.shape[-3] * hidden_states.shape[-2], hidden_states.shape[-1]]
+    )
+
+    grid_size = grid_sizes[hidden_states.shape[-2]]
+    hidden_states = ttl.tensor.interleaved_to_sharded(
+        hidden_states,
+        grid_size,
+        [hidden_states.shape[-2] // grid_size[0], hidden_states.shape[-1] // grid_size[1]],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.ShardOrientation.COL_MAJOR,
+    )
     ttnn_output = model(
         hidden_states=hidden_states,
         encoder_hidden_states=encoder_hidden_states,
@@ -192,6 +206,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
         attention_head_dim=attention_head_dim,
     )
 
+    ttnn_output = ttnn.reshape(ttnn_output, [1, 2, ttnn_output.shape[-2] // 2, ttnn_output.shape[-1]])
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
 

@@ -136,12 +136,16 @@ def test_feedforward_512x512(device, model_name, N, C, H, W, index, reset_seeds)
     )
     model = tt2_ttnn_feedforward(device, parameters)
 
-    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_hidden_state = torch_hidden_states.reshape(
+        (1, 1, torch_hidden_states.shape[-3] * torch_hidden_states.shape[-2], torch_hidden_states.shape[-1])
+    )
+    ttnn_hidden_state = ttnn.from_torch(ttnn_hidden_state, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device)
 
     output = model(config, ttnn_hidden_state)
     output = ttnn.from_device(output)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
+    output = output.reshape(torch_output.shape)
 
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.98)
