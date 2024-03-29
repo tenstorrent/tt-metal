@@ -1141,3 +1141,150 @@ def test_halo_reshard_conv(
         use_1d_systolic_array,
         config_override,
     )
+
+
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array",
+    (
+        (16, 3, 320, 320, 3, 3, 2, 2, 1, 1, True),
+        (16, 16, 160, 160, 3, 3, 1, 1, 1, 1, True),
+        (16, 16, 160, 160, 1, 1, 1, 1, 0, 0, True),
+        (64, 16, 160, 160, 1, 1, 1, 1, 0, 0, True),
+        (64, 64, 160, 160, 3, 3, 2, 2, 1, 1, True),
+        (24, 64, 80, 80, 1, 1, 1, 1, 0, 0, True),
+        (72, 24, 80, 80, 1, 1, 1, 1, 0, 0, True),
+        (72, 72, 80, 80, 3, 3, 1, 1, 1, 1, True),
+        (24, 72, 80, 80, 1, 1, 1, 1, 0, 0, True),
+        (72, 72, 80, 80, 5, 5, 2, 2, 2, 2, True),
+        (24, 72, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (72, 24, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (40, 72, 40, 40, 1, 1, 1, 1, 0, 0, True),
+        (120, 40, 40, 40, 1, 1, 1, 1, 0, 0, True),
+        (120, 120, 40, 40, 5, 5, 1, 1, 2, 2, True),
+        (32, 120, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (120, 32, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (40, 120, 40, 40, 1, 1, 1, 1, 0, 0, True),
+        (240, 40, 40, 40, 1, 1, 1, 1, 0, 0, True),
+        (240, 240, 40, 40, 3, 3, 2, 2, 1, 1, True),
+        (80, 240, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (200, 80, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (200, 200, 20, 20, 3, 3, 1, 1, 1, 1, True),
+        (80, 200, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (184, 80, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (184, 184, 20, 20, 3, 3, 1, 1, 1, 1, True),
+        (80, 184, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (480, 80, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (480, 480, 20, 20, 3, 3, 1, 1, 1, 1, True),
+        (120, 480, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (480, 120, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (112, 480, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (672, 112, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (672, 672, 20, 20, 3, 3, 1, 1, 1, 1, True),
+        (168, 672, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (672, 168, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (112, 672, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (672, 672, 20, 20, 5, 5, 2, 2, 2, 2, True),
+        (80, 672, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (480, 80, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (480, 480, 10, 10, 5, 5, 1, 1, 2, 2, True),
+        (80, 480, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (256, 480, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (256, 256, 10, 10, 3, 3, 2, 2, 1, 1, True),
+        (512, 256, 5, 5, 1, 1, 1, 1, 0, 0, True),
+        (128, 512, 5, 5, 1, 1, 1, 1, 0, 0, True),
+        (128, 128, 5, 5, 3, 3, 2, 2, 1, 1, True),
+        (256, 128, 3, 3, 1, 1, 1, 1, 0, 0, True),
+        (128, 256, 3, 3, 1, 1, 1, 1, 0, 0, True),
+        (128, 128, 3, 3, 3, 3, 2, 2, 1, 1, True),
+        (256, 128, 2, 2, 1, 1, 1, 1, 0, 0, True),
+        (64, 256, 2, 2, 1, 1, 1, 1, 0, 0, True),
+        (64, 64, 2, 2, 3, 3, 2, 2, 1, 1, True),
+        (128, 64, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (24, 672, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (480, 480, 10, 10, 3, 3, 1, 1, 1, 1, True),
+        (24, 480, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (512, 512, 5, 5, 3, 3, 1, 1, 1, 1, True),
+        (24, 512, 5, 5, 1, 1, 1, 1, 0, 0, True),
+        (256, 256, 3, 3, 3, 3, 1, 1, 1, 1, True),
+        (24, 256, 3, 3, 1, 1, 1, 1, 0, 0, True),
+        (256, 256, 2, 2, 3, 3, 1, 1, 1, 1, True),
+        (24, 256, 2, 2, 1, 1, 1, 1, 0, 0, True),
+        (128, 128, 1, 1, 3, 3, 1, 1, 1, 1, True),
+        (24, 128, 1, 1, 1, 1, 1, 1, 0, 0, True),
+        (546, 672, 20, 20, 1, 1, 1, 1, 0, 0, True),
+        (546, 480, 10, 10, 1, 1, 1, 1, 0, 0, True),
+        (546, 512, 5, 5, 1, 1, 1, 1, 0, 0, True),
+        (546, 256, 3, 3, 1, 1, 1, 1, 0, 0, True),
+        (546, 256, 2, 2, 1, 1, 1, 1, 0, 0, True),
+        (546, 128, 1, 1, 1, 1, 1, 1, 0, 0, True),
+    ),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 8, 16, 20],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_SSDlite_MobilenetV3_conv_gs(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+):
+    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
+        pytest.skip("Batch > 8 must be run fully bfp8")
+
+    if (
+        activations_dtype == ttnn.bfloat16
+        and batch_size == 20
+        and (
+            output_channels == 64
+            or (
+                stride_h == 2
+                and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
+            )
+        )
+    ):
+        pytest.skip("Skipping test because it won't fit in L1!")
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override=None,
+        use_shallow_conv_variant=input_channels == 16,
+        padded_input_channels=16 if input_channels == 16 else None,
+    )

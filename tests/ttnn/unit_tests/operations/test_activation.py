@@ -28,6 +28,21 @@ def run_activation_unary_test(device, h, w, ttnn_function, torch_function, pcc=0
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_activation_unary_test_nchw(device, n, c, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_hardtanh(device, h, w):
@@ -38,6 +53,37 @@ def test_hardtanh(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_hardswish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.hardswish, F.hardswish)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 16, 160, 160),
+        (1, 240, 40, 40),
+        (1, 240, 20, 20),
+        (1, 200, 20, 20),
+        (1, 184, 20, 20),
+        (1, 480, 20, 20),
+        (1, 672, 20, 20),
+        (1, 672, 10, 10),
+        (1, 480, 10, 10),
+    ),
+)
+def test_SSDlite_MobilenetV3_hardswish(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.hardswish, F.hardswish)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 72, 1, 1),
+        (1, 120, 1, 1),
+        (1, 480, 1, 1),
+        (1, 672, 1, 1),
+    ),
+)
+def test_SSDlite_MobilenetV3_hardsigmoid(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.hardsigmoid, F.hardsigmoid)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -56,6 +102,47 @@ def test_mish(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_relu6(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.relu6, F.relu6)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 256, 10, 10),
+        (1, 256, 5, 5),
+        (1, 512, 5, 5),
+        (1, 128, 5, 5),
+        (1, 128, 3, 3),
+        (1, 256, 3, 3),
+        (1, 128, 2, 2),
+        (1, 256, 2, 2),
+        (1, 64, 2, 2),
+        (1, 64, 1, 1),
+        (1, 128, 1, 1),
+        (1, 672, 20, 20),
+        (1, 480, 10, 10),
+    ),
+)
+def test_SSDlite_MobilenetV3_relu6(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.relu6, F.relu6)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    (
+        (1, 16, 160, 160),
+        (1, 64, 160, 160),
+        (1, 64, 80, 80),
+        (1, 72, 80, 80),
+        (1, 72, 40, 40),
+        (1, 24, 1, 1),
+        (1, 120, 40, 40),
+        (1, 32, 1, 1),
+        (1, 120, 1, 1),
+        (1, 168, 1, 1),
+    ),
+)
+def test_relu_SSDlite_MobilenetV3(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.relu, F.relu)
 
 
 @pytest.mark.parametrize("h", [64])
