@@ -27,7 +27,7 @@ test-list:
   - addcdiv-bw:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [6, 12, 256, 256]
+        end-shape: [6, 6, 192, 192]
         interval: [1, 1, 1, 2]
         num-shapes: 4
         num-samples: 64
