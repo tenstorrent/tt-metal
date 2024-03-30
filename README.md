@@ -92,38 +92,8 @@ print(output)
 
 ## Installing
 
-To find through all necessary instructions for setting up your Tenstorrent
-accelerator and this software, please refer to our full [installation
-instructions](./INSTALLING.md).
+Please follow the [installation instructions](./INSTALLING.md).
 
 ## Getting started
 
-### Environment setup
-
-If you just came reading from building from source, you can read ahead to
-[running an example](#running-example-programs).
-
-Otherwise, you must set up the necessary environment variables to use this
-project every time:
-
-```
-export ARCH_NAME=<arch name>
-export TT_METAL_HOME=<appropriate value based on installation method above>
-```
-
-where ``<arch name>`` is your target, which could be:
-
-- ``grayskull``
-- ``wormhole_b0``
-
-etc...
-
-If you're setting up an environment from source, you must further set up and
-activate the environment with:
-
-```
-export PYTHONPATH=<this repo dir>
-export TT_METAL_ENV=dev
-source build/python_env/bin/activate
-```
-
+Get started with [simple kernels](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
