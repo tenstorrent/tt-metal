@@ -48,6 +48,8 @@ std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float 
     return operation::decorate_as_composite(__func__, _unary_mul_bw)(grad, input, scalar, output_mem_config);
 }
 
+// unary_pow:
+// grad_input = grad * exponent * torch.pow(input, exponent - 1)
 std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon()*10.0f;
@@ -64,6 +66,7 @@ std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float
 
     Tensor result = mul_unary(power_input, exponent, output_mem_config);
     Tensor final_result = mul(result, grad, std::nullopt, output_mem_config);
+    final_result = where(gte_unary(final_result, 3.4e+38, output_mem_config), std::numeric_limits<float>::infinity(), where(lte_unary(final_result, -3.4e+38, output_mem_config), -std::numeric_limits<float>::infinity(), final_result, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(final_result);
     return grad_tensor;
 }
