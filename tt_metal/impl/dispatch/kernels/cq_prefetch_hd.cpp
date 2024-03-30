@@ -16,7 +16,7 @@
 constexpr uint32_t dispatch_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t local_dispatch_cb_sem_id = get_compile_time_arg_val(3);
+constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
 constexpr uint32_t dispatch_cb_sem_id = get_compile_time_arg_val(4);
 
 constexpr uint32_t pcie_base = get_compile_time_arg_val(5);
@@ -79,7 +79,7 @@ void kernel_main() {
         done = process_cmd<
             false,
             my_noc_xy,
-            local_dispatch_cb_sem_id,
+            my_dispatch_cb_sem_id,
             dispatch_noc_xy,
             dispatch_cb_sem_id,
             cmddat_q_base,
