@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+import tt_lib as ttl
 from typing import Callable
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -76,12 +77,18 @@ class TtMambaBlock(torch.nn.Module):
             print('****conv states', self.conv_states[i].shape)
 
         self.tt_ssm = TtMambaSSM(self.args,self.device, configs, load_fn)
+        
+        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+        )
 
     def forward(self, x):
         print('****mamba block', x.shape)
         x_input = x # b, e=d_model
         ttnn.deallocate(self.conv_states[0])
-        x = ttnn.linear(x, self.ssm_in_proj_weights, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
+        x = ttnn.linear(x, self.ssm_in_proj_weights, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8), compute_kernel_config=self.compute_kernel_config)
         
         # left shift conv states
         for i in range(3):
@@ -129,7 +136,7 @@ class TtMambaBlock(torch.nn.Module):
         x = self.tt_ssm(x) # output of ssm is sharded
         ttnn.deallocate(x_old)
         
-        res = ttnn.linear(x_input, self.mlp_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
+        res = ttnn.linear(x_input, self.mlp_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8), compute_kernel_config=self.compute_kernel_config)
         # shard res
         res_old = res
         res = ttnn.to_memory_config(res, memory_config=self.configs['sharded_d'])
@@ -147,7 +154,7 @@ class TtMambaBlock(torch.nn.Module):
         x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x_old)
         x_old = x
-        x = ttnn.linear(x, self.out_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
+        x = ttnn.linear(x, self.out_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8), compute_kernel_config=self.compute_kernel_config)
         ttnn.deallocate(x_old)
         
 
