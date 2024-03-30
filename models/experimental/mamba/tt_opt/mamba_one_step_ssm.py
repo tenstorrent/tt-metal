@@ -181,21 +181,18 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(bmulx)
         ttnn.deallocate(self.tt_hidden_state)
         self.tt_hidden_state = ttnn.to_memory_config(hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(hidden_state)
     
+        
+        # compute C
+        C = ttnn.linear(x, self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)  # b,n
+        C_old = C
+        C = ttnn.permute(C, (0, 2, 3, 1))  # b,n,1
+        ttnn.deallocate(C_old)
         
         return x
 
-        # compute C
-        #C_proj = ttnn.to_memory_config(self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        C0 = ttnn.linear(x, self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)  # b,n
-        #ttnn.deallocate(C_proj)
-        C1 = ttnn.permute(C0, (0, 2, 3, 1))  # b,n,1
-        ttnn.deallocate(C0)
-
         # hidden state @ C
-        #hidden_state1 = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        #ttnn.deallocate(hidden_state1)
+        hidden_state_old = hidden_state
         hidden_state3 = ttnn.to_torch(hidden_state1)
         ttnn.deallocate(hidden_state1)
         #hidden_state3 = ttnn.reshape(hidden_state2, (1, self.num_users, self.hidden_size, self.n))  # b, d, 32
