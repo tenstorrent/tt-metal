@@ -44,13 +44,15 @@
 | Stable Diffusion 1.4 512x512                             | 1                   | coming soon                  |                             |                                     |
 
 
-## LoudBox (2x4 mesh of WHs) Models 
+## T3000 (2x4 mesh of WHs) Models 
 
 | Model                                    | Batch                    | Throughput                 |
 |------------------------------------------|--------------------------|----------------------------|
 | [Falcon40B](./models/demos/falcon40b)    | coming soon              |                            |
 | [LLaMA-2-70B](./models/demos/llama2_70b) | coming soon              |                            |
 | Mixtral7Bx8                              | coming soon              |                            |
+| ResNet50 (data parallel)                 | coming soon              |                            |
+
 
 
 
