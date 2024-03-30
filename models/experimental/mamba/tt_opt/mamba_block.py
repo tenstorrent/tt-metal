@@ -70,7 +70,7 @@ class TtMambaBlock(torch.nn.Module):
                 load_fn(
                     f"conv_state{i}",
                     torch_tensor=torch.zeros(1, 1, self.num_users, self.args.d_inner),
-                    postfix=f"{self.num_users}",
+                    postfix=f"{self.num_users}"
                 )
             )
             print('****conv states', self.conv_states[i].shape)
@@ -80,28 +80,51 @@ class TtMambaBlock(torch.nn.Module):
     def forward(self, x):
         print('****mamba block', x.shape)
         x_input = x # b, e=d_model
-        x = ttnn.linear(x, self.ssm_in_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
-        # left shift conv states
         ttnn.deallocate(self.conv_states[0])
+        x = ttnn.linear(x, self.ssm_in_proj_weights, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
+        
+        # left shift conv states
         for i in range(3):
             self.conv_states[i] = self.conv_states[i + 1]
         self.conv_states[3] = x
+        
         print('****mamba block', x.shape)
+        
         # do the convolution
         x = ttnn.mul(self.conv1d_weights[0], self.conv_states[0], memory_config=ttnn.L1_MEMORY_CONFIG)
         print('****mamba block', x.shape, self.conv1d_weights[0].shape, self.conv_states[0].shape)
+        
         for i in range(1,4):
             prod = ttnn.mul(self.conv1d_weights[i], self.conv_states[i], memory_config=ttnn.L1_MEMORY_CONFIG)
+            x_old = x
             x = ttnn.add(x, prod, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_old)
+            ttnn.deallocate(prod)
+        
+        x_old = x
         x = ttnn.add(x, self.conv1d_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_old)
         print('****mamba block', x.shape)
+        
+        x_old = x
         x = ttnn.silu(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_old)
+        
+        x_old = x
         x = self.tt_ssm(x)
+        ttnn.deallocate(x_old)
+        
         res = ttnn.linear(x_input, self.mlp_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
         res_after_silu = ttnn.silu(res, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(res)
+        
+        x_old = x
         x = ttnn.mul(x, res_after_silu, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(res_after_silu)
+        ttnn.deallocate(x_old)
+        
+        x_old = x
         x = ttnn.linear(x, self.out_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
+        ttnn.deallocate(x_old)
 
         return x
