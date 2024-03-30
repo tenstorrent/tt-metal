@@ -280,7 +280,7 @@ def create_matmul_program_config(
     return program_config
 
 
-def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _compute_golden_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_tensor_a = ttnn.from_device(input_tensor_a)
     input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor_a = ttnn.to_torch(input_tensor_a)
@@ -292,7 +292,7 @@ def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_)
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, torch_function=_torch_matmul)
+@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, compute_golden=_compute_golden_matmul)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -416,7 +416,9 @@ def matmul(
     )
 
 
-def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_):
+def _compute_golden_linear(
+    input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_
+):
     import torch
 
     input_tensor_a = ttnn.to_torch(input_tensor_a)
@@ -438,7 +440,7 @@ def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, b
     return output_tensor
 
 
-@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, torch_function=_torch_linear)
+@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, compute_golden=_compute_golden_linear)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,

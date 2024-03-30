@@ -12,7 +12,7 @@ from tt_lib.utils import find_closest_largest_divisor, find_closest_largest_divi
 import math
 
 
-def _torch_layer_norm(
+def _compute_golden_layer_norm(
     input_tensor: ttnn.Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_
 ):
     import torch
@@ -91,7 +91,7 @@ def _layer_norm_validate_input_tensors(
 @ttnn.register_operation(
     name="ttnn.layer_norm",
     validate_input_tensors=_layer_norm_validate_input_tensors,
-    torch_function=_torch_layer_norm,
+    compute_golden=_compute_golden_layer_norm,
 )
 def layer_norm(
     input_tensor: ttnn.Tensor,
@@ -312,7 +312,7 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
     return input_mask_tensor
 
 
-def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
+def _compute_golden_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -336,7 +336,9 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
 
 
 def _fallback_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
-    output_tensor = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
+    output_tensor = _compute_golden_group_norm(
+        input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias
+    )
     output_tensor = ttnn.from_torch(
         output_tensor, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device()
     )
@@ -379,7 +381,7 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
 @ttnn.register_operation(
     name="ttnn.group_norm",
     validate_input_tensors=_group_norm_validate_input_tensors,
-    torch_function=_torch_group_norm,
+    compute_golden=_compute_golden_group_norm,
     fallback=_fallback_group_norm,
 )
 def group_norm(

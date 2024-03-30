@@ -73,7 +73,7 @@ def _torch_split_query_key_value_and_split_heads(
     return query, key, value
 
 
-def _fallback_split_query_key_value_and_split_heads(
+def _compute_golden_split_query_key_value_and_split_heads(
     input_tensor: ttnn.Tensor,
     kv_input_tensor: Optional[ttnn.Tensor] = None,
     *,
@@ -83,6 +83,8 @@ def _fallback_split_query_key_value_and_split_heads(
     **_,
 ):
     input_tensor = ttnn.to_torch(input_tensor)
+    if kv_input_tensor is not None:
+        kv_input_tensor = ttnn.to_torch(kv_input_tensor)
     return _torch_split_query_key_value_and_split_heads(
         input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=transpose_key
     )
@@ -90,7 +92,7 @@ def _fallback_split_query_key_value_and_split_heads(
 
 @ttnn.register_operation(
     name="ttnn.transformer.split_query_key_value_and_split_heads",
-    torch_function=_fallback_split_query_key_value_and_split_heads,
+    compute_golden=_compute_golden_split_query_key_value_and_split_heads,
     validate_input_tensors=_split_query_key_value_and_split_heads_validate_input_tensors,
 )
 def split_query_key_value_and_split_heads(
@@ -321,7 +323,7 @@ def _torch_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, atten
     return torch.softmax(input_tensor, -1)
 
 
-def _fallback_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
+def _compute_golden_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
     input_tensor = ttnn.to_torch(input_tensor)
 
     if attention_mask is not None:
@@ -357,7 +359,7 @@ def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *arg
 @ttnn.register_operation(
     name="ttnn.transformer.attention_softmax",
     validate_input_tensors=_attention_softmax_validate_input_tensors,
-    torch_function=_fallback_attention_softmax,
+    compute_golden=_compute_golden_attention_softmax,
 )
 def attention_softmax(
     input_tensor: ttnn.Tensor,
@@ -402,7 +404,7 @@ def attention_softmax(
 @ttnn.register_operation(
     name="ttnn.transformer.attention_softmax_",
     validate_input_tensors=_attention_softmax_validate_input_tensors,
-    torch_function=_torch_attention_softmax,
+    compute_golden=_compute_golden_attention_softmax,
 )
 def attention_softmax_(
     tensor: ttnn.Tensor,
@@ -470,7 +472,7 @@ def _torch_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-def _fallback_concatenate_heads(input_tensor: ttnn.Tensor, **_):
+def _compute_golden_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     input_tensor = ttnn.to_torch(input_tensor)
     return _torch_concatenate_heads(input_tensor)
 
@@ -490,7 +492,7 @@ def _concatenate_heads_validate_input_tensors(operation_name, input_tensor, *arg
 @ttnn.register_operation(
     name="ttnn.transformer.concatenate_heads",
     validate_input_tensors=_concatenate_heads_validate_input_tensors,
-    torch_function=_fallback_concatenate_heads,
+    compute_golden=_compute_golden_concatenate_heads,
 )
 def concatenate_heads(
     input_tensor: ttnn.Tensor,

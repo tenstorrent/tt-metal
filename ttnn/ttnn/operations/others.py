@@ -10,7 +10,7 @@ import tt_lib as ttl
 import ttnn
 
 
-def _torch_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
+def _compute_golden_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -48,7 +48,7 @@ def _embedding_validate_input_tensors(operation_name, input_tensor, weight, *arg
 @ttnn.register_operation(
     name="ttnn.embedding",
     validate_input_tensors=_embedding_validate_input_tensors,
-    torch_function=_torch_embedding,
+    compute_golden=_compute_golden_embedding,
 )
 def embedding(
     input_tensor: ttnn.Tensor,
@@ -116,7 +116,7 @@ def embedding(
     return embeddings
 
 
-def _torch_softmax(input_tensor: ttnn.Tensor, dim: int, **_):
+def _compute_golden_softmax(input_tensor: ttnn.Tensor, dim: int, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -141,7 +141,7 @@ def _softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 @ttnn.register_operation(
     name="ttnn.softmax",
     validate_input_tensors=_softmax_validate_input_tensors,
-    torch_function=_torch_softmax,
+    compute_golden=_compute_golden_softmax,
 )
 def softmax(
     input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -182,7 +182,7 @@ def softmax(
     return output_tensor
 
 
-def _torch_mean(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _compute_golden_mean(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -207,7 +207,7 @@ def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.mean",
     validate_input_tensors=_mean_validate_input_tensors,
-    torch_function=_torch_mean,
+    compute_golden=_compute_golden_mean,
 )
 def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
     """
@@ -339,7 +339,7 @@ def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwar
     )
 
 
-def _torch_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_):
+def _compute_golden_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -352,7 +352,7 @@ def _torch_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_
 @ttnn.register_operation(
     name="ttnn.upsample",
     validate_input_tensors=_upsample_validate_input_tensors,
-    torch_function=_torch_upsample,
+    compute_golden=_compute_golden_upsample,
 )
 def upsample(
     input_tensor: ttnn.Tensor,

@@ -9,7 +9,7 @@ import tt_lib as ttl
 import ttnn
 
 
-def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
+def _compute_golden_pad(input_tensor: ttnn.Tensor, padding, value):
     import torch
 
     input_tensor = ttnn.to_torch(input_tensor)
@@ -44,7 +44,7 @@ def _fallback_pad(input_tensor: ttnn.Tensor, padding, value, *, memory_config=tt
                 "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
             )
 
-    output_tensor = _torch_pad(input_tensor, padding, value)
+    output_tensor = _compute_golden_pad(input_tensor, padding, value)
     output_tensor = ttnn.from_torch(
         output_tensor,
         dtype=input_tensor.dtype,
@@ -73,7 +73,7 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.pad",
     validate_input_tensors=_pad_validate_input_tensors,
-    torch_function=_torch_pad,
+    compute_golden=_compute_golden_pad,
     fallback=_fallback_pad,
 )
 def pad(
@@ -144,7 +144,7 @@ def pad(
     return output_tensor
 
 
-def _torch_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
+def _compute_golden_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -185,7 +185,7 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 @ttnn.register_operation(
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
-    torch_function=_torch_permute,
+    compute_golden=_compute_golden_permute,
     fallback=_fallback_permute,
 )
 def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
@@ -245,7 +245,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         raise NotImplementedError
 
 
-def _torch_concat(tensors, dim=0, **_):
+def _compute_golden_concat(tensors, dim=0, **_):
     import torch
 
     torch_tensors = [ttnn.to_torch(tensor) for tensor in tensors]
@@ -256,7 +256,7 @@ def _fallback_concat(tensors, dim=0, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     dtype = tensors[0].dtype
     device = tensors[0].device()
     layout = tensors[0].layout
-    output_tensor = _torch_concat(tensors, dim=dim)
+    output_tensor = _compute_golden_concat(tensors, dim=dim)
     return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout, memory_config=memory_config)
 
 
@@ -276,7 +276,7 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
 @ttnn.register_operation(
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
-    torch_function=_torch_concat,
+    compute_golden=_compute_golden_concat,
     fallback=_fallback_concat,
 )
 def concat(
@@ -357,7 +357,7 @@ def concat(
         raise NotImplementedError
 
 
-def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
+def _compute_golden_split(input_tensor: ttnn.Tensor, split_size, dim):
     import torch
 
     input_tensor = ttnn.to_torch(input_tensor)
@@ -365,7 +365,7 @@ def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
 
 
 def _fallback_split(input_tensor, split_size, dim):
-    output_tensors = _torch_split(input_tensor, split_size, dim)
+    output_tensors = _compute_golden_split(input_tensor, split_size, dim)
     output_tensors = tuple(
         ttnn.from_torch(
             output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
@@ -390,7 +390,7 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
 @ttnn.register_operation(
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
-    torch_function=_torch_split,
+    compute_golden=_compute_golden_split,
     fallback=_fallback_split,
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
@@ -407,7 +407,7 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     raise NotImplementedError
 
 
-def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
+def _compute_golden_repeat_interleave(tensor, repeats, dim=0, **_):
     import torch
 
     if isinstance(repeats, ttnn.Tensor):
@@ -416,7 +416,7 @@ def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
 
 
 def _fallback_repeat_interleave(input_tensor, repeats, dim):
-    output_tensor = _torch_repeat_interleave(input_tensor, repeats, dim)
+    output_tensor = _compute_golden_repeat_interleave(input_tensor, repeats, dim)
     return ttnn.from_torch(
         output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
     )
@@ -437,7 +437,7 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
 @ttnn.register_operation(
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
-    torch_function=_torch_repeat_interleave,
+    compute_golden=_compute_golden_repeat_interleave,
     fallback=_fallback_repeat_interleave,
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
@@ -501,12 +501,12 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         raise NotImplementedError
 
 
-def _torch_repeat(tensor, shape, **_):
+def _compute_golden_repeat(tensor, shape, **_):
     return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
 
 
 def _fallback_repeat(input_tensor, shape):
-    output_tensor = _torch_repeat(input_tensor, shape)
+    output_tensor = _compute_golden_repeat(input_tensor, shape)
     return ttnn.from_torch(
         output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
     )
@@ -527,7 +527,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
 @ttnn.register_operation(
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
-    torch_function=_torch_repeat,
+    compute_golden=_compute_golden_repeat,
     fallback=_fallback_repeat,
 )
 def repeat(

@@ -9,7 +9,7 @@ import torch
 import transformers
 
 import ttnn
-from ttnn.tracer import trace, visualize, get_graph, to_networkx
+from ttnn.tracer import trace, visualize, get_graph
 
 from models.utility_functions import skip_for_wormhole_b0
 
@@ -69,7 +69,7 @@ def test_bloom(show_modules):
 
     last_hidden_state = output.last_hidden_state
     graph = last_hidden_state.graph
-    assert not list(nx.simple_cycles(to_networkx(graph)))
+    assert not list(nx.simple_cycles(graph))
     if show_modules:
         visualize(last_hidden_state, show_modules=show_modules)
 

@@ -17,6 +17,7 @@ def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorc
     # messages.append(str(expected_pytorch_result))
     # messages.append("Actual")
     # messages.append(str(actual_pytorch_result))
+    messages = [str(m) for m in messages]
     return "\n".join(messages)
 
 

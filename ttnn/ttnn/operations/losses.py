@@ -15,14 +15,14 @@ __all__ = []
 
 
 def register_ttl_loss_function(name, ttl_loss_function):
-    def _torch_loss(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, **_):
+    def _compute_golden_loss(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "mse_loss": torch.nn.MSELoss,
             "l1_loss": torch.nn.L1Loss,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(reduction=loss_mode)(input_tensor_a, input_tensor_b)
 
@@ -49,7 +49,7 @@ def register_ttl_loss_function(name, ttl_loss_function):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_loss_validate_input_tensors,
-        torch_function=_torch_loss,
+        compute_golden=_compute_golden_loss,
     )
     def loss_function(
         input_tensor_a: ttnn.Tensor,

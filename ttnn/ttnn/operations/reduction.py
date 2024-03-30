@@ -10,7 +10,7 @@ import tt_lib as ttl
 import ttnn
 
 
-def _torch_std(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _compute_golden_std(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -35,7 +35,7 @@ def _std_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.std",
     validate_input_tensors=_std_validate_input_tensors,
-    torch_function=_torch_std,
+    compute_golden=_compute_golden_std,
 )
 def std(
     input_tensor: ttnn.Tensor,
@@ -90,7 +90,7 @@ def std(
     return output_tensor
 
 
-def _torch_var(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _compute_golden_var(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -115,7 +115,7 @@ def _var_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.var",
     validate_input_tensors=_var_validate_input_tensors,
-    torch_function=_torch_var,
+    compute_golden=_compute_golden_var,
 )
 def var(
     input_tensor: ttnn.Tensor,
@@ -169,7 +169,7 @@ def var(
     return output_tensor
 
 
-def _torch_max(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
+def _compute_golden_max(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -197,7 +197,7 @@ def _max_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.max",
     validate_input_tensors=_max_validate_input_tensors,
-    torch_function=_torch_max,
+    compute_golden=_compute_golden_max,
 )
 def max(
     input_tensor: ttnn.Tensor,
@@ -252,7 +252,7 @@ def max(
     return output_tensor
 
 
-def _torch_min(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
+def _compute_golden_min(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -280,7 +280,7 @@ def _min_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.min",
     validate_input_tensors=_min_validate_input_tensors,
-    torch_function=_torch_min,
+    compute_golden=_compute_golden_min,
 )
 def min(
     input_tensor: ttnn.Tensor,
@@ -335,7 +335,7 @@ def min(
     return output_tensor
 
 
-def _torch_sum(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int], None] = None, keepdim=False, **_):
+def _compute_golden_sum(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int], None] = None, keepdim=False, **_):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -362,7 +362,7 @@ def _sum_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.sum",
     validate_input_tensors=_sum_validate_input_tensors,
-    torch_function=_torch_sum,
+    compute_golden=_compute_golden_sum,
 )
 def sum(
     input_tensor: ttnn.Tensor,

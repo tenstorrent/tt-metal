@@ -141,7 +141,7 @@ def _global_avg_pool2d_validate_input_tensors(operation_name, input_tensor, *arg
 @ttnn.register_operation(
     name="ttnn.global_avg_pool2d",
     validate_input_tensors=_global_avg_pool2d_validate_input_tensors,
-    torch_function=_torch_global_avg_pool2d,
+    compute_golden=_torch_global_avg_pool2d,
 )
 def global_avg_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""

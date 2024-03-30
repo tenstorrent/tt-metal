@@ -73,7 +73,8 @@ def test_evaluate_traced_torch_bert():
         input_tensor = torch.randint(0, 1000, (1, 128))
         outputs = model(input_tensor)
 
-    evaluated_output_tensor = evaluate(
+    evaluated_output_tensors = evaluate(
         outputs.pooler_output, input_node_to_tensor_map={input_tensor.node: input_tensor}
     )
+    evaluated_output_tensor = evaluated_output_tensors[1]
     assert torch.allclose(outputs.pooler_output, evaluated_output_tensor)

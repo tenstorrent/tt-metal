@@ -25,7 +25,7 @@ def _validate_input_tensors(operation_name, tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.all_gather",
     validate_input_tensors=_validate_input_tensors,
-    torch_function=None,
+    compute_golden=None,
 )
 def all_gather(
     multidevice_tensor: typing.Any,
