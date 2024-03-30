@@ -31,8 +31,7 @@ ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "Fa
 if ENABLE_FAST_RUNTIME_MODE:
     logger.info(f"ttnn: fast runtime mode was enabled")
 
-REPORTS_PATH = pathlib.Path("generated") / "reports"
-shutil.rmtree(REPORTS_PATH, ignore_errors=True)
+REPORTS_PATH = pathlib.Path("generated") / "ttnn" / "reports"
 
 THROW_EXCEPTION_ON_FALLBACK = get_bool_env_var("TTNN_THROW_EXCEPTION_ON_FALLBACK", "False")
 if THROW_EXCEPTION_ON_FALLBACK:

@@ -186,8 +186,8 @@ def operation_codegen(operation_id):
     # codegen_file = ttnn.REPORTS_PATH / "codegen" / f"{operation_id}.py"
     # with open(codegen_file) as f:
     #     content = f.read()
-    content = "# WIP"
-    return render_template("operation_codegen.html", content=content)
+    # return render_template("operation_codegen.html", content=content)
+    return "Feature not implemented yet!"
 
 
 if __name__ == "__main__":
