@@ -111,34 +111,39 @@ struct make_eltwise_binary {
         std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt,
         const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::optional<const DataType> output_dtype = std::nullopt) const {
-        Shape shape_a = input_tensor_a.get_legacy_shape();
-        Shape shape_b = input_tensor_b.get_legacy_shape();
-        Tensor in_a = input_tensor_a;
-        Tensor in_b = input_tensor_b;
-        if (shape_a[0] != shape_b[0])
-        {
-            if (shape_a[0] > shape_b[0])
-            {
-                Shape shape ({shape_a[0],1,1,1});
-                in_b = repeat(input_tensor_b, shape, output_mem_config);
-            }
-            else
-            {
-                Shape shape ({shape_b[0],1,1,1});
-                in_a = repeat(input_tensor_a, shape, output_mem_config);
-            }
-        }
-        TT_FATAL(
-            in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
-        return operation::run_with_autoformat(
-                   EltwiseBinary{
-                       binary_op_type,
-                       fused_activations,
-                       output_mem_config,
-                       output_dtype.value_or(input_tensor_a.get_dtype()),
-                       false},
-                   {in_a, in_b})
-            .at(0);
+        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+        operation::launch_with_autoformat(
+            [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                Tensor in_a = input_tensors.at(0);
+                Tensor in_b = input_tensors.at(1);
+                Shape shape_a = in_a.get_legacy_shape();
+                Shape shape_b = in_b.get_legacy_shape();
+                if (shape_a[0] != shape_b[0])
+                {
+                    if (shape_a[0] > shape_b[0])
+                    {
+                        Shape shape ({shape_a[0],1,1,1});
+                        in_b = repeat(in_b, shape, output_mem_config);
+                    }
+                    else
+                    {
+                        Shape shape ({shape_b[0],1,1,1});
+                        in_a = repeat(in_a, shape, output_mem_config);
+                    }
+                }
+                TT_FATAL(
+                    in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
+                return operation::run_with_autoformat(
+                        EltwiseBinary{
+                            binary_op_type,
+                            fused_activations,
+                            output_mem_config,
+                            output_dtype.value_or(in_a.get_dtype()),
+                            false},
+                        {in_a, in_b});
+            },
+        {input_tensor_a, input_tensor_b}, output_tensors);
+        return output_tensors.at(0);
     }
 };
 
