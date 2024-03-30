@@ -7,9 +7,8 @@
 #include <memory>
 #include <mutex>
 
-#include "common/env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "impl/dispatch/lock_free_queue.hpp"
+#include "impl/dispatch/work_executor.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/jit_build/build.hpp"
@@ -67,21 +66,6 @@ public:
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
-    // In asynchronous mode, each device has a worker thread that processes all host <--> cluster commands for this device.
-    // Commands are pushed to the worker queue and picked up + executed asyncrhonously.
-    // Higher level functions that have access to the device handle can queue up tasks asynchronously.
-    // In synchronous/pass through mode, we bypass the queue and tasks are executed immediately after being pushed.
-    enum class WorkerQueueMode {
-        SYNCHRONOUS = 0,
-        ASYNCHRONOUS = 1,
-    };
-
-    enum class WorkerState {
-        RUNNING = 0,
-        TERMINATE = 1,
-        IDLE = 2,
-    };
-
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap = {});
@@ -216,18 +200,12 @@ class Device {
     bool close();
     friend bool CloseDevice(Device *device);
 
-    void start_worker();
-    void run_worker();
-    void stop_worker();
-    void push_work(std::function<void()> work_executor, bool blocking = false);
+    // APIs to access this device's work executor
+    void push_work(std::function<void()>&& work, bool blocking = false);
     void synchronize();
-    void set_worker_mode(const WorkerQueueMode& mode);
+    void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);
-    static WorkerQueueMode get_worker_mode() { return worker_queue_mode; }
-    static WorkerQueueMode default_worker_queue_mode() {
-        static int value = parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkerQueueMode::SYNCHRONOUS));
-        return static_cast<WorkerQueueMode>(value);
-    }
+    WorkExecutorMode get_worker_mode() { return work_executor.get_worker_mode(); }
 
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
@@ -251,10 +229,9 @@ class Device {
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
     std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
-    LockFreeQueue<std::function<void()>> worker_queue;
-    std::thread worker_thread;
-    WorkerState worker_state = WorkerState::IDLE;
-    inline static WorkerQueueMode worker_queue_mode = default_worker_queue_mode();
+    // Work Executor for this device - can asynchronously process host side work for
+    // all tasks scheduled on this device
+    WorkExecutor work_executor;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
     uint8_t num_hw_cqs_;
@@ -283,8 +260,8 @@ class Device {
 
     inline bool in_main_thread() {
         // Detect if an instruction is being called in the main thread or worker thread
-        return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.parent_thread_id)
-                or get_worker_mode() == WorkerQueueMode::SYNCHRONOUS;
+        return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
+                or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
     }
 };
 

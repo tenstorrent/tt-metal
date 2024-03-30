@@ -349,11 +349,20 @@ inline std::vector<Tensor> run_with_autoformat(
 }
 
 void launch_op(
-    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> op_func,
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
 );
+
+void launch_with_autoformat(
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
+    const std::vector<Tensor> input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+);
+
+std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs = {});
 
 } //namespace operation
 

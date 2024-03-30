@@ -57,7 +57,7 @@ inline Tensor interleaved_to_sharded(
     const TensorMemoryLayout shard_scheme,
     const ShardOrientation shard_orientation,
     const std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [grid, shard_shape, shard_scheme, shard_orientation, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
@@ -152,7 +152,7 @@ inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
     const MemoryConfig &sharded_mem_config,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [sharded_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
@@ -176,7 +176,7 @@ inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);

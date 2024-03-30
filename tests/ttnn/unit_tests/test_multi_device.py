@@ -193,7 +193,7 @@ def test_multi_device_multi_op(pcie_device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device multi-op"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-    torch_input_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
     torch_output_golden = torch.exp(torch_output_golden)
 

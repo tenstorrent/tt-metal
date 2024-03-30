@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 
+#include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -18,7 +19,6 @@ Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias,
                            std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
     // NOTE: Currently only single core implementation exists.
-    std::vector<Tensor> output_tensors = {Tensor(a.get_workers())};
     std::vector<Tensor> input_tensors = {};
     if (has_bias) {
         input_tensors = {a, b, bias};
@@ -26,6 +26,7 @@ Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias,
         // bias contains dummy storage that may not be on device, dont send it to launch op
         input_tensors = {a, b};
     }
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output(std::move(input_tensors)))};
     operation::launch_op(
         [out_dt, a_height_nblocks, a_width_nblocks, b_width_nblocks,
          a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,

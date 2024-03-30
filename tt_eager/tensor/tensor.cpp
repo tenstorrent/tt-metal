@@ -20,7 +20,6 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "queue/queue.hpp"
 
-
 using namespace tt::constants;
 
 namespace tt {
@@ -78,6 +77,11 @@ void Tensor::deallocate(bool force) {
     if (this->tensor_attributes.use_count()) {
         // Check if the attributes didn't get moved to another tensor.
         // If not, we can deallocate this tensor.
+        if (this->tensor_attributes->dynamic_storage) {
+            // Tensor was populated with autoformat. Storage type can
+            // change based on op behaviour. Wait for tensor populated.
+            this->wait_for_metadata_populated();
+        }
         std::visit(
                 [force, this](auto& storage) {
                     using T = std::decay_t<decltype(storage)>;
@@ -87,7 +91,8 @@ void Tensor::deallocate(bool force) {
                         }
                     } else if constexpr (std::is_same_v<T, DeviceStorage>) {
                         if (this->workers.at(0)->in_main_thread()) {
-                            uint32_t ref_count_to_use = (this->workers.at(0)->get_worker_mode() == Device::WorkerQueueMode::SYNCHRONOUS) ? this->tensor_attributes.use_count() : this->tensor_attributes->main_thread_ref_count;
+                            // If owned by the main thread, deallocate this tensor only from the main thread
+                            uint32_t ref_count_to_use = (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS) ? this->tensor_attributes.use_count() : this->tensor_attributes->main_thread_ref_count;
                             if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                                 this->tensor_attributes->deallocated = true;
                                 this->workers.at(0)->push_work([force, *this] () mutable {
@@ -186,14 +191,19 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
 std::vector<Device*> Tensor::get_workers(bool blocking) const {
     // Initialize an empty worker vector (remains empty for host side storage)
     std::vector<Device*> workers = {};
+
+    if (this->tensor_attributes->dynamic_storage) {
+        // Tensor is populated by launch_with_autoformat
+        // Storage type can change based on op behaviour, wait until tensor populated.
+        this->wait_for_metadata_populated();
+    }
+
     std::visit([this, blocking, &workers] (auto&& storage) {
         using StorageType = std::decay_t<decltype(storage)>;
-        // Stall allowed if explictly blocking or running in sync mode
-        bool wait_for_tensor_populated = (Device::get_worker_mode() == Device::WorkerQueueMode::SYNCHRONOUS) or blocking;
         // Assign workers only to device tensors
         if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
             // Either explictly syncing or workers are pre-populated (this will happen for device tensors if using the correct APIs).
-            TT_FATAL(wait_for_tensor_populated or (this->workers.size() == 1), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
+            TT_FATAL(blocking or (this->workers.size() == 1), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
             if (this->workers.size() != 1) {
                 // Not populated - sync.
                 this->wait_for_metadata_populated();
@@ -204,7 +214,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
             }
         } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
             // Either explictly syncing or workers are pre-populated (this will happen for device tensors if using the correct APIs).
-            TT_FATAL(wait_for_tensor_populated or (this->workers.size() == storage.buffers.size()), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
+            TT_FATAL(blocking or (this->workers.size() == storage.buffers.size()), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
             if (this->workers.size() != storage.buffers.size()) {
                 // Not populated - sync.
                 this->wait_for_metadata_populated();
@@ -286,7 +296,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 
 Tensor Tensor::to(DeviceMesh *device_mesh, const MemoryConfig &mem_config) const {
     ZoneScoped;
-    TT_FATAL(device_mesh->get_devices().at(0)->get_worker_mode() == Device::WorkerQueueMode::SYNCHRONOUS, "Async mode is not currently supported for multi-device tensors");
+    TT_FATAL(device_mesh->get_devices().at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS, "Async mode is not currently supported for multi-device tensors");
     if (storage_type() == StorageType::MULTI_DEVICE_HOST) {
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(this->get_storage());
         std::vector<DeviceBuffer> device_buffers;

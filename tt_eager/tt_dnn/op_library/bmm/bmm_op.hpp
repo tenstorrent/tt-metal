@@ -324,7 +324,7 @@ inline Tensor matmul(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool untilize_out = false
 ) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor_a.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     operation::launch_op(
         [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
@@ -346,7 +346,8 @@ inline Tensor matmul(
     std::optional<const DataType> output_dtype = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool untilize_out = false) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor_a.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias}))};
+
     operation::launch_op(
         [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);

@@ -33,7 +33,8 @@ struct Tensor {
         Layout layout;
         std::atomic<bool> metadata_populated = false;
         uint32_t main_thread_ref_count = 0;
-        bool deallocated = false;
+        bool deallocated = false; // Set to true if device side storage was deallocated
+        bool dynamic_storage = false; // Storage type can change, depending on op behaviour
         TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) : storage(storage), shape(shape), dtype(dtype), layout(layout) {}
         TensorAttributes() : shape({0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
         ~TensorAttributes() = default;
@@ -49,15 +50,15 @@ struct Tensor {
         // Record the main thread ref count before pushing to a worker queue (number of owners in main thread).
         // Update the main thread ref count with the recorded value after the tensor is pushed to the queue(s),
         // since pushing to the queue requires an extra datacopy in the main thread, that gets balanced by the
-        // worker, howerver the worker cannot modify main_thread_ref_count.
+        // worker, however the worker cannot modify main_thread_ref_count.
         void increment_main_thread_ref_count(Device* worker) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count++;
             }
         }
 
         void decrement_main_thread_ref_count(Device* worker) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count--;
             }
         }
@@ -67,7 +68,7 @@ struct Tensor {
         }
 
         void update_main_thread_ref_count(Device* worker, uint32_t ref_count) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count = ref_count;
             }
         }
