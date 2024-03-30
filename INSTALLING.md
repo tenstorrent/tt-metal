@@ -1,38 +1,23 @@
-# Installing tt-metal
+# Install
 
-## Table of contents
-
-Step 1. Installing system-level dependencies
-
-Step 2. Installing Driver & Firmware
-
-Step 3. Installing system-level dependencies 
-
-Step 4. Installing developer dependencies
-    
-Step 5. Build from source
-
-
-### Step 1. Installing system-level dependencies (before accelerator-level dependencies)
-
-System-level dependencies include the third-party libraries and hugepages settings. We have split this section into two parts. This is because you will require some of the accelerator-level dependencies to continue installing the system-level dependencies after the initial set.
-
-#### Installing dependencies on Ubuntu (before accelerator-level)
-
-1. Install some system-level dependencies through `apt`.
-
-First, perform an update and install the dependencies:
+### Step 1. System-level dependencies
 
 ```sh
 sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
 
-### Step 2. Installing accelerator-level dependencies
+---
 
-You must have the following accelerator-level dependencies:
+### Step 2. Driver & Firmware
 
-Compatability Matrix
+Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd). 
+
+Install [TT-FLASH](https://github.com/tenstorrent/tt-flash) and the [firmware blob](https://github.com/tenstorrent/tt-firmware-gs).
+
+Install [TT_SMI](https://github.com/tenstorrent/tt-smi)
+
+Note the current compatability matrix:
 
 | Device              | OS              | Python   | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
 |---------------------|-----------------|----------|--------------------|------------------------------------|-----------------------------------------------------------|
@@ -40,129 +25,58 @@ Compatability Matrix
 | Wormhole & T3000    | Ubuntu 20.04    | 3.8.10   | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
 
 
-The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
+---
 
-Please read through the following repositories' READMEs and follow their instructions.
-
-#### Install TT-KMD (kernel-mode driver): [tt-kmd](https://github.com/tenstorrent/tt-kmd)
-
-#### Installing `tt-flash` firmware [tt-flash](https://github.com/tenstorrent/tt-flash)
-
-The firmware blob for Grayskull should be available [here](https://github.com/tenstorrent/tt-firmware-gs).
-
-#### Installing `tt-smi`: [tt-smi](https://github.com/tenstorrent/tt-smi)
-
-Note: Go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
-
-### Step 3. Installing system-level dependencies (after accelerator-level dependencies)
+### Step 3. Huge Pages 
 
 #### Installing dependencies on Ubuntu (after accelerator-level)
 
-1. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
-
-2. Invoke the first pass of the hugepages script and then reboot.
-
-```sh
-sudo -E python3 setup_hugepages.py first_pass && sudo reboot now
-```
-
-3. Invoke the second pass of the hugepages script and then check that hugepages is correctly set.
+1. Download [the raw latest version](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py). of the `setup_hugepages.py` script.
+   
+2. Run first setup script & reboot.
 
 ```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
+sudo -E python3 setup_hugepages.py first_pass                                             # run first setup script
+sudo reboot now                                                                           # reboot
+sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check     # run second setup script & checker
 ```
 
-**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
+---
 
-4. If you are working on a Tenstorrent cloud machine, you may have additional steps to complete Hugepages setup. Please refer to the [Hugepages section](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM#installing-hugepages-extra-steps) in the cloud machine setup instructions and come back to this step to continue.
+### Step 4. Developer dependencies
 
-   If you are not working on a Tenstorrent cloud machine, please skip this step and continue reading.
-
-5. If you are a developer, you should also go through the [section](#step-4-installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
-
-### Step 4. Installing developer dependencies
-
-#### Installing developer-level dependencies on Ubuntu
-
-1. Install system-level dependencies for development through `apt`.
+1. Install dependencies 
 
 ```sh
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config
 ```
 
-2. Download and install [Doxygen](https://www.doxygen.nl/download.html), version 1.9 or higher, but less than 1.10.
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
-3. Download and install [gtest](https://github.com/google/googletest) from source, version 1.13, and no higher.
+3. Download and install [gtest](https://github.com/google/googletest) from source (v1.13)
 
-4. If you are working on experimental, internal model development, you must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud. Otherwise, you may skip this step if you are not working on such models. If you are a regular user of this software, you do not need WekaFS.
+---
 
 ### Step 5. Build from source
 
-Currently, the best way to use our software is building from source.
-
-You must also ensure that you have all accelerator-level and system-level
-dependencies as outlined in the instructions above. This also includes
-developer dependencies if you are a developer.
-
-
-1. Clone the repo. If you're using a release, please use ``--branch
-   <VERSION_NUMBER>``.
-
-``<VERSION_NUMBER>`` is the release version you will be using. Otherwise, you can use ``main`` to get the latest development source.
-
+1. Clone the repo.
+   
 ```sh
-git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
-cd tt-metal
-```
-
-For example, if you are trying to use version `v0.44.0`, you can execute:
-
-```sh
-git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.44.0
-cd tt-metal
-```
-
-Note that we also recommend you periodically check LFS and pull its objects
-for submodules.
-
-```sh
+git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
 git submodule foreach 'git lfs fetch --all && git lfs pull'
+cd tt-metal
 ```
 
-2. Set up the environment. Note that this setup is required **every time you
-   want to use this project**.
+2. Set up the environment, build & activate environment. 
 
 ```sh
 export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
 export TT_METAL_HOME=<this repo dir>
 export PYTHONPATH=<this repo dir>
 export TT_METAL_ENV=dev
+
+make build
+
+source build/python_env/bin/activate
 ```
-
-3. Build the project and activate the environment.
-
-```sh
-make build && source build/python_env/bin/activate
-```
-
-You should look ahead to [Getting started](./README.md#getting-started) to further use
-this project.
-
-
-
----
-
-### A note about rebooting
-
-The full installation of accelerator-level and some system-level dependencies to use this software will require
-a large number of reboots.
-
-The minimum number of reboots you will require will be 2, for
-
-- Installing the kernel-mode driver.
-- Installing the first pass of hugepages changes.
-
-If you're using a Grayskull card, flashing the firmware with the required version will require another reboot. Wormhole doesn't have this requirement as you can use `tt-smi` to reset your card.
-
-If you're doing a full install on a Tenstorrent cloud machine and are planning to install WekaFS to use models along with the hugepages changes required to use WekaFS, you will require at least 2 more additional reboots. Because of the indeterminate nature of WekaFS, you may require more. 
 
