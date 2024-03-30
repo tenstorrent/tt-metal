@@ -1,0 +1,19 @@
+<html>
+
+<script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.1.1.min.js"></script>
+
+{{ summarized_report_script|safe }}
+{{ detailed_report_script|safe }}
+<body>
+
+    <div>
+        <h1>Summarized Report</h1>
+        {{ summarized_report_div|safe }}
+    </div>
+    <div>
+        <h1>Detailed Report</h1>
+    {{ detailed_report_div|safe }}
+</div>
+</body>
+
+</html>

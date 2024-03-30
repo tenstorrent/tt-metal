@@ -24,20 +24,27 @@ def get_or_create_sqlite_db(db_file):
     cursor = SQLITE_CONNECTION.cursor()
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS operations
-                (operation_id int, name text)"""
+                (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS buffers
+                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS buffer_pages
-                (operation_id int, address int, device_id int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
+                (operation_id int, device_id int, address int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS devices
                 (
                     device_id int,
-                    l1_num_banks int,
-                    l1_bank_size int,
+                    num_y_cores int,
+                    num_x_cores int,
                     num_y_compute_cores int,
                     num_x_compute_cores int,
+                    worker_l1_size int,
+                    l1_num_banks int,
+                    l1_bank_size int,
                     address_at_first_l1_bank int,
                     address_at_first_l1_cb_buffer int,
                     num_banks_per_storage_core int,
@@ -57,11 +64,9 @@ def get_or_create_sqlite_db(db_file):
 DEVICE_IDS_IN_DATABASE = set()
 
 
-def log(operation, operation_id, devices):
+def insert_devices(devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(ttnn.database.DATABASE_FILE)
     cursor = sqlite_connection.cursor()
-    cursor.execute(f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}')")
-    sqlite_connection.commit()
 
     for device in devices:
         if device.id() in DEVICE_IDS_IN_DATABASE:
@@ -70,10 +75,13 @@ def log(operation, operation_id, devices):
         cursor.execute(
             f"""INSERT INTO devices VALUES (
                 {device.id()},
-                {device_info.l1_num_banks},
-                {device_info.l1_bank_size},
+                {device_info.num_y_cores},
+                {device_info.num_x_cores},
                 {device_info.num_y_compute_cores},
                 {device_info.num_x_compute_cores},
+                {device_info.worker_l1_size},
+                {device_info.l1_num_banks},
+                {device_info.l1_bank_size},
                 {device_info.address_at_first_l1_bank},
                 {device_info.address_at_first_l1_cb_buffer},
                 {device_info.num_banks_per_storage_core},
@@ -89,13 +97,39 @@ def log(operation, operation_id, devices):
         sqlite_connection.commit()
         DEVICE_IDS_IN_DATABASE.add(device.id())
 
+
+def optional_value(value):
+    if value is None:
+        return "NULL"
+    return value
+
+
+def insert_operation(operation, operation_id, duration, matches_golden, desired_pcc, actual_pcc):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(ttnn.database.DATABASE_FILE)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute(
+        f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}', {duration}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)})"
+    )
+    sqlite_connection.commit()
+
     if ttnn.ENABLE_BUFFER_REPORT:
+        for buffer in ttnn._ttnn.reports.get_buffers():
+            cursor.execute(
+                f"""INSERT INTO buffers VALUES (
+                    {operation_id},
+                    {buffer.device_id},
+                    {buffer.address},
+                    {buffer.max_size_per_bank},
+                    {buffer.buffer_type.value}
+                )"""
+            )
         for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
             cursor.execute(
                 f"""INSERT INTO buffer_pages VALUES (
                     {operation_id},
-                    {buffer_page.address},
                     {buffer_page.device_id},
+                    {buffer_page.address},
                     {buffer_page.core_y},
                     {buffer_page.core_x},
                     {buffer_page.bank_id},

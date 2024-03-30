@@ -52,6 +52,11 @@ if ENABLE_BUFFER_REPORT:
     logger.info(f"ttnn: enabled buffer report")
 
 
+ENABLE_TENSOR_REPORT = get_bool_env_var("TTNN_ENABLE_TENSOR_REPORT", "False")
+if ENABLE_TENSOR_REPORT:
+    logger.info(f"ttnn: enabled tensor report")
+
+
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
