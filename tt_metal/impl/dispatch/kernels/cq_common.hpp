@@ -13,7 +13,7 @@
 
 template<uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
-void downstream_cb_acquire_pages(uint32_t n) {
+void cb_acquire_pages(uint32_t n) {
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
@@ -30,7 +30,7 @@ void downstream_cb_acquire_pages(uint32_t n) {
 
 template<uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
-void downstream_cb_release_pages(uint32_t n) {
+void cb_release_pages(uint32_t n) {
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n);
 }
 
@@ -38,9 +38,9 @@ template<uint32_t noc_xy,
          uint32_t sem_id,
          uint32_t cb_log_page_size>
 FORCE_INLINE
-uint32_t upstream_cb_acquire_pages(uint32_t cb_fence,
-                                   uint32_t block_next_start_addr[],
-                                   uint32_t rd_block_idx) {
+uint32_t cb_acquire_pages(uint32_t cb_fence,
+                          uint32_t block_next_start_addr[],
+                          uint32_t rd_block_idx) {
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
@@ -68,19 +68,12 @@ uint32_t upstream_cb_acquire_pages(uint32_t cb_fence,
 }
 
 template<uint32_t noc_xy,
-         uint32_t sem_id>
-FORCE_INLINE
-void upstream_cb_release_pages(uint32_t n) { // XXXX rename release pages above to be generic (no downstream)
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n);
-}
-
-template<uint32_t noc_xy,
          uint32_t sem_id,
          uint32_t cb_blocks,
          uint32_t cb_pages_per_block>
 FORCE_INLINE
-void upstream_cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
-                                     uint32_t& wr_block_idx) {
+void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
+                            uint32_t& wr_block_idx) {
 
     uint32_t sem_addr = get_semaphore(sem_id);
 
@@ -104,10 +97,10 @@ void upstream_cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
 template<uint32_t cb_base,
          uint32_t cb_blocks>
 FORCE_INLINE
-void upstream_move_rd_to_next_block(uint32_t& cmd_ptr,
-                                    uint32_t& cb_fence,
-                                    uint32_t block_noc_writes_to_clear[],
-                                    uint32_t& rd_block_idx) {
+void move_rd_to_next_block(uint32_t& cmd_ptr,
+                           uint32_t& cb_fence,
+                           uint32_t block_noc_writes_to_clear[],
+                           uint32_t& rd_block_idx) {
 
     // This is subtle: in the free-running case, we don't want to clear the current block
     // if the noc catches up so we artificially inflate the clear value by 1 when we start
@@ -131,27 +124,27 @@ template<uint32_t cb_base,
          uint32_t noc_xy,
          uint32_t cb_sem>
 FORCE_INLINE
-uint32_t upstream_get_cb_page(uint32_t& cmd_ptr,
-                              uint32_t& cb_fence,
-                              uint32_t block_noc_writes_to_clear[],
-                              uint32_t block_next_start_addr[],
-                              uint32_t& rd_block_idx) {
+uint32_t get_cb_page(uint32_t& cmd_ptr,
+                     uint32_t& cb_fence,
+                     uint32_t block_noc_writes_to_clear[],
+                     uint32_t block_next_start_addr[],
+                     uint32_t& rd_block_idx) {
 
     // Strided past the data that has arrived, get the next page
     if (cb_fence == block_next_start_addr[rd_block_idx]) {
-        upstream_move_rd_to_next_block<cb_base,
-                                       cb_blocks>(cmd_ptr,
-                                                  cb_fence,
-                                                  block_noc_writes_to_clear,
-                                                  rd_block_idx);
+        move_rd_to_next_block<cb_base,
+                              cb_blocks>(cmd_ptr,
+                                         cb_fence,
+                                         block_noc_writes_to_clear,
+                                         rd_block_idx);
     }
 
     // Wait for dispatcher to supply a page
-    uint32_t n_pages = upstream_cb_acquire_pages<noc_xy,
-                                                 cb_sem,
-                                                 cb_log_page_size>(cb_fence,
-                                                                   block_next_start_addr,
-                                                                   rd_block_idx);
+    uint32_t n_pages = cb_acquire_pages<noc_xy,
+                                        cb_sem,
+                                        cb_log_page_size>(cb_fence,
+                                                          block_next_start_addr,
+                                                          rd_block_idx);
     cb_fence += n_pages << cb_log_page_size;
 
     return n_pages;
