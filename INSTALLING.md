@@ -133,7 +133,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
    want to use this project**.
 
 ```
-export ARCH_NAME=<arch name>
+export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
 export TT_METAL_HOME=<this repo dir>
 export PYTHONPATH=<this repo dir>
 export TT_METAL_ENV=dev
