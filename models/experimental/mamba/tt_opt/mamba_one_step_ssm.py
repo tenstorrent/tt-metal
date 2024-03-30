@@ -113,9 +113,9 @@ class TtMambaSSM(torch.nn.Module):
 
                 
         # delta
-        delta_t = ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config)
+        delta_t = ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config, use_1d_systolic_array=True, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))
         delta_t_old = delta_t
-        delta_t = ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col), compute_kernel_config=self.compute_kernel_config)
+        delta_t = ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col), compute_kernel_config=self.compute_kernel_config, use_1d_systolic_array=True)
         ttnn.deallocate(delta_t_old)
         delta_t_old = delta_t
         delta_t = ttnn.softplus(delta_t, parameter1=1.0, parameter2=20.0, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -145,7 +145,7 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(abar)
 
         # B
-        B = ttnn.linear(x, self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config)
+        B = ttnn.linear(x, self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config, use_1d_systolic_array=True, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))
         B_old = B
         B = ttnn.repeat(B, ttnn.Shape([1, 1, 1, self.hidden_size], [1, 1, 32, self.hidden_size]))
         ttnn.deallocate(B_old)
@@ -177,7 +177,7 @@ class TtMambaSSM(torch.nn.Module):
     
         
         # compute C
-        C = ttnn.linear(x, self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config)  # b,n
+        C = ttnn.linear(x, self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_kernel_config, use_1d_systolic_array=True)  # b,n
         C_old = C
         C = ttnn.permute(C, (0, 2, 3, 1))  # b,n,1
         ttnn.deallocate(C_old)
