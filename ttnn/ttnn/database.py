@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sqlite3
+import shutil
 
 import ttnn
 
@@ -16,9 +17,8 @@ def get_or_create_sqlite_db(db_file):
     if SQLITE_CONNECTION is not None:
         return SQLITE_CONNECTION
 
-    if not db_file.parent.exists():
-        db_file.parent.mkdir(parents=True)
-    db_file.unlink(missing_ok=True)
+    shutil.rmtree(ttnn.REPORTS_PATH, ignore_errors=True)
+    ttnn.REPORTS_PATH.mkdir(parents=True)
     SQLITE_CONNECTION = sqlite3.connect(db_file)
 
     cursor = SQLITE_CONNECTION.cursor()
