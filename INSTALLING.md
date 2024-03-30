@@ -2,55 +2,16 @@
 
 ## Table of contents
 
-- [Installing tt-metal](#installing-tt-metal)
-    - [A note about rebooting](#a-note-about-rebooting)
-    - [Step 1. Installing system-level dependencies (before accelerator-level dependencies)](#step-1-installing-system-level-dependencies-before-accelerator-level-dependencies)
-      - [Installing dependencies on Ubuntu (before accelerator-level)](#installing-dependencies-on-ubuntu-before-accelerator-level)
-    - [Step 2. Installing accelerator-level dependencies](#step-2-installing-accelerator-level-dependencies)
-      - [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
-      - [Installing `tt-flash` firmware](#installing-tt-flash-firmware)
-      - [Installing `tt-smi`](#installing-tt-smi)
-    - [Step 3. Installing system-level dependencies (after accelerator-level dependencies)](#step-3-installing-system-level-dependencies-after-accelerator-level-dependencies)
-      - [Installing dependencies on Ubuntu (after accelerator-level)](#installing-dependencies-on-ubuntu-after-accelerator-level)
-    - [Step 4. Installing developer dependencies](#step-4-installing-developer-dependencies)
-      - [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
-      - [About wheel installation](#about-wheel-installation)
-    - [From source](#from-source)
+Step 1. Installing system-level dependencies
 
-If you want to run this software on a Tenstorrent cloud machine and have access
-to the internal Tenstorrent cloud, you can provision your own machine on the
-Tenstorrent cloud using documentation
-[here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM).
-Note that if you are not part of the tenstorrent-metal organization on GitHub
-and have not been granted explicit access to our internal developer resources,
-you will not be able to view this page.
+Step 2. Installing Driver & Firmware
 
-These are the official ways of installing this software:
+Step 3. Installing system-level dependencies 
 
-- [From source](#from-source)
+Step 4. Installing developer dependencies
+    
+Step 5. Build from source
 
-However, you must have the appropriate accelerator-level and related
-system-level dependencies. Otherwise, you may skip to your preferred
-installation method in the above list.
-
-### A note about rebooting
-
-The full installation of accelerator-level and some system-level dependencies to use this software will require
-a large number of reboots.
-
-The minimum number of reboots you will require will be 2, for
-
-- Installing the kernel-mode driver.
-- Installing the first pass of hugepages changes.
-
-If you're using a Grayskull card, flashing the firmware with the required
-version will require another reboot. Wormhole doesn't have this requirement as
-you can use `tt-smi` to reset your card.
-
-If you're doing a full install on a Tenstorrent cloud machine and are planning
-to install WekaFS to use models along with the hugepages changes required to
-use WekaFS, you will require at least 2 more additional reboots. Because of the
-indeterminate nature of WekaFS, you may require more.
 
 ### Step 1. Installing system-level dependencies (before accelerator-level dependencies)
 
@@ -67,40 +28,21 @@ sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
 
-2. Now continue to following sections to [install](#step-2-installing-accelerator-level-dependencies) accelerator-level dependencies and then the [required](#step-3-installing-system-level-dependencies-after-accelerator-level-dependencies) system-level dependencies that require the driver.
-
 ### Step 2. Installing accelerator-level dependencies
 
 You must have the following accelerator-level dependencies:
 
-For Grayskull:
-
-- At least 1 unharvested E150 attached to a PCIe x16 slot
-- TTKMD (Tenstorrent kernel-mode driver) v1.26
-- ``tt-flash`` acclerator firmware fw_pack-80.4.0.0_acec1267.tar.gz
-- ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
-
-For Wormhole B0:
-
-- At least 1 N150 or N300 attached via PCIe
-- TTKMD (Tenstorrent kernel-mode driver) v1.26
-- ``tt-flash`` acclerator firmware 2023-08-08 (7.D)
-- ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
-
-
 Compatability Matrix
 
-| Device              | OS              | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
-|---------------------|-----------------|--------------------|------------------------------------|-----------------------------------------------------------|
-| Grayskull           | Ubuntu 20.04    | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz   | tt-smi_2023-06-16-0283a02404487eea or above               |
-| Wormhole & T3000    | Ubuntu 20.04    | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
-
+| Device              | OS              | Python   | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
+|---------------------|-----------------|----------|--------------------|------------------------------------|-----------------------------------------------------------|
+| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz   | tt-smi_2023-06-16-0283a02404487eea or above               |
+| Wormhole & T3000    | Ubuntu 20.04    | 3.8.10   | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
 
 
 The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
-Please read through the following repositories' READMEs and follow their
-instructions.
+Please read through the following repositories' READMEs and follow their instructions.
 
 #### Install TT-KMD (kernel-mode driver): [tt-kmd](https://github.com/tenstorrent/tt-kmd)
 
@@ -154,7 +96,7 @@ sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 
 
 4. If you are working on experimental, internal model development, you must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud. Otherwise, you may skip this step if you are not working on such models. If you are a regular user of this software, you do not need WekaFS.
 
-### From source
+### Step 5. Build from source
 
 Currently, the best way to use our software is building from source.
 
@@ -205,3 +147,22 @@ make build && source build/python_env/bin/activate
 
 You should look ahead to [Getting started](./README.md#getting-started) to further use
 this project.
+
+
+
+---
+
+### A note about rebooting
+
+The full installation of accelerator-level and some system-level dependencies to use this software will require
+a large number of reboots.
+
+The minimum number of reboots you will require will be 2, for
+
+- Installing the kernel-mode driver.
+- Installing the first pass of hugepages changes.
+
+If you're using a Grayskull card, flashing the firmware with the required version will require another reboot. Wormhole doesn't have this requirement as you can use `tt-smi` to reset your card.
+
+If you're doing a full install on a Tenstorrent cloud machine and are planning to install WekaFS to use models along with the hugepages changes required to use WekaFS, you will require at least 2 more additional reboots. Because of the indeterminate nature of WekaFS, you may require more. 
+
