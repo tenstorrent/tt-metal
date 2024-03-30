@@ -102,21 +102,8 @@ class TtMambaSSM(torch.nn.Module):
     def forward(self, x):
         print("**********ssm block", x.shape)
 
-            
-
-        def post_hook_to_print_output(operation, args, kwargs, output):
-            print (operation.name)
-            for arg in args:
-                if type(arg) == ttnn.Tensor:
-                    print (arg)
-                    ttnn.deallocate(arg)
-            for arg in kwargs:
-                if type(arg) == ttnn.Tensor:
-                    print (arg)
-                    ttnn.deallocate(arg)
                 
         # delta
-                
         delta_t = ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
         delta_t_old = delta_t
         delta_t = ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))
@@ -161,16 +148,13 @@ class TtMambaSSM(torch.nn.Module):
         
         # bbar
         delta_t = ttnn.to_memory_config(delta_t_old, memory_config=self.configs['sharded_dn'])
-        ttnn.deallocate(delta_t_old)
         bbar = ttnn.mul(delta_t, B, memory_config=self.configs["sharded_dn"])
         ttnn.deallocate(delta_t)
         ttnn.deallocate(B)
             
         # multiply bbar and x
         x_bcast = ttnn.repeat_interleave(x, self.n, dim=3)
-        x_bcast_old = x_bcast
         x_bcast = ttnn.to_memory_config(x_bcast, memory_config=self.configs['sharded_dn'])
-        ttnn.deallocate(x_bcast_old)
         bmulx = ttnn.mul(bbar, x_bcast, memory_config=self.configs["sharded_dn"])
         ttnn.deallocate(bbar)
         ttnn.deallocate(x_bcast)
@@ -203,15 +187,15 @@ class TtMambaSSM(torch.nn.Module):
         C = ttnn.permute(C, (0, 3, 1, 2)) # b, d
         ttnn.deallocate(C_old)
         
-        return x
+        
 
         # x * D
         xD = ttnn.mul(x, self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(x)
+        
 
         # add xD and x
-        output = ttnn.add(xD, C3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.add(xD, C, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(xD)
-        ttnn.deallocate(C3)
+        ttnn.deallocate(C)
 
         return output
