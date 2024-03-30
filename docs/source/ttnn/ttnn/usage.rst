@@ -305,6 +305,7 @@ The following environment variable can be set in order to completely disable the
     ttnn.close_device(device)
 
 .. code-block:: bash
+
     flask --app ttnn/visualizer run
 
 
