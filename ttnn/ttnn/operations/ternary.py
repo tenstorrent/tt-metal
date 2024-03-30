@@ -21,13 +21,13 @@ def torch_mac(input, tensor1, tensor2):
 
 
 def register_ttl_ternary_function(name, ttl_ternary_function):
-    def _torch_ternary(input_tensor: ttnn.Tensor, **_):
+    def _compute_golden_ternary(input_tensor: ttnn.Tensor, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "mac": torch_mac,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor)
 
@@ -65,7 +65,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_ternary_validate_input_tensors,
-        torch_function=_torch_ternary,
+        compute_golden=_compute_golden_ternary,
     )
     def ternary_function(
         input: ttnn.Tensor,
@@ -138,14 +138,14 @@ def _is_scalar(value):
 
 
 def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name, param):
-    def _torch_ternary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _compute_golden_ternary(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "addcmul": torch.addcmul,
             "addcdiv": torch.addcdiv,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
 
         return torch_function(input_tensor, parameter)
@@ -182,7 +182,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_ternary_validate_input_tensors,
-        torch_function=_torch_ternary,
+        compute_golden=_compute_golden_ternary,
     )
     def ternary_function(
         input_tensor: ttnn.Tensor,
@@ -256,13 +256,13 @@ for ternary_function_name, ttl_ternary_function, name, param in TTL_TERNARY_FUNC
 
 
 def register_ttl_ternary_function_where(name, ttl_ternary_function):
-    def _torch_ternary(input_tensor: ttnn.Tensor, **_):
+    def _compute_golden_ternary(input_tensor: ttnn.Tensor, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "where": torch.where,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor)
 
@@ -300,7 +300,7 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_ternary_validate_input_tensors,
-        torch_function=_torch_ternary,
+        compute_golden=_compute_golden_ternary,
     )
     def ternary_function(
         predicate: ttnn.Tensor,

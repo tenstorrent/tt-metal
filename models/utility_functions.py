@@ -550,16 +550,16 @@ def comp_pcc(golden, calculated, pcc=0.99):
 
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
-        return True, f"PCC: {1.0}"
+        return True, 1.0
 
     if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
         logger.error("One tensor is all nan, the other is not.")
-        return False, f"PCC: {0.0}"
+        return False, 0.0
 
     # Test if either is completely zero
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.error("One tensor is all zero")
-        return False, f"PCC: {0.0}"
+        return False, 0.0
 
     # For now, mask all infs and nans so that we check the rest... TODO
     golden = golden.clone()
@@ -578,7 +578,7 @@ def comp_pcc(golden, calculated, pcc=0.99):
     ] = 0
 
     if torch.equal(golden, calculated):
-        return True, f"PCC: {1.0}"
+        return True, 1.0
 
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float32)
@@ -591,9 +591,9 @@ def comp_pcc(golden, calculated, pcc=0.99):
     )
 
     if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-        return True, f"PCC: {1.0}"
+        return True, 1.0
 
-    return cal_pcc >= pcc, f"PCC: {cal_pcc}"
+    return cal_pcc >= pcc, cal_pcc
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):

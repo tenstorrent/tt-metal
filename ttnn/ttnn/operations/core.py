@@ -112,7 +112,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 ttnn.Tensor.__getitem__ = __getitem__
 
 
-def _torch_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]], **_):
+def _compute_golden_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]], **_):
     import torch
 
     input_tensor = to_torch(input_tensor)
@@ -179,7 +179,7 @@ def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
 
 @ttnn.register_operation(
     name="ttnn.reshape",
-    torch_function=_torch_reshape,
+    compute_golden=_compute_golden_reshape,
     is_cpp_function=True,
     fallback=_fallback_reshape,
     validate_input_tensors=_reshape_validate_input_tensors,
@@ -852,7 +852,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 
 
 @ttnn.register_operation(
-    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, torch_function=_torch_identity
+    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, compute_golden=_torch_identity
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     if ttnn.is_sharded(input_tensor):
