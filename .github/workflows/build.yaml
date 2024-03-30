@@ -26,10 +26,10 @@ jobs:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/install-metal-deps
         with:
-          os: ubuntu-20.04
+          os: ${{ matrix.os }}
       - uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ubuntu-20.04
+          os: ${{ matrix.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -46,22 +46,32 @@ jobs:
         with:
           name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config.type }}
           path: ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar
-  build-cpptest:
+  build-other:
     strategy:
       matrix:
         config: [debug, release, assert]
         arch: [grayskull, wormhole_b0]
         os: [ubuntu-20.04]
+        test-group: [
+          {name: C++ tests, cmd: make tests},
+          {name: docs, cmd: ./tests/scripts/build_docs.sh},
+        ]
     needs: build-lib
-    name: build cpptest ${{ matrix.config }} ${{ matrix.arch }}
+    name: build ${{ matrix.test-group.name }} ${{ matrix.config }} ${{ matrix.arch }}
     env:
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ${{ matrix.config }}
       # So we can get all the makefile output we want
       SILENT: 0
-    runs-on: build
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ matrix.os }}
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ matrix.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -70,7 +80,7 @@ jobs:
           name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
-      - name: Build tt-metal tests
-        # Does not work yet
-        if: ${{ matrix.config != 'release' }}
-        run: make tests
+      - name: Build ${{ matrix.test-group.name }}
+        run: |
+          cd $GITHUB_WORKSPACE
+          ${{ matrix.test-group.cmd }}
