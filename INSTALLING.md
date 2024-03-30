@@ -23,7 +23,7 @@ System-level dependencies include the third-party libraries and hugepages settin
 
 First, perform an update and install the dependencies:
 
-```
+```sh
 sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
@@ -62,13 +62,13 @@ Note: Go through the [section](#installing-developer-dependencies), in addition 
 
 2. Invoke the first pass of the hugepages script and then reboot.
 
-```
+```sh
 sudo -E python3 setup_hugepages.py first_pass && sudo reboot now
 ```
 
 3. Invoke the second pass of the hugepages script and then check that hugepages is correctly set.
 
-```
+```sh
 sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
 
@@ -86,7 +86,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 1. Install system-level dependencies for development through `apt`.
 
-```
+```sh
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config
 ```
 
@@ -110,14 +110,14 @@ developer dependencies if you are a developer.
 
 ``<VERSION_NUMBER>`` is the release version you will be using. Otherwise, you can use ``main`` to get the latest development source.
 
-```
+```sh
 git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
 cd tt-metal
 ```
 
 For example, if you are trying to use version `v0.44.0`, you can execute:
 
-```
+```sh
 git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.44.0
 cd tt-metal
 ```
@@ -125,14 +125,14 @@ cd tt-metal
 Note that we also recommend you periodically check LFS and pull its objects
 for submodules.
 
-```
+```sh
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
 2. Set up the environment. Note that this setup is required **every time you
    want to use this project**.
 
-```
+```sh
 export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
 export TT_METAL_HOME=<this repo dir>
 export PYTHONPATH=<this repo dir>
@@ -141,7 +141,7 @@ export TT_METAL_ENV=dev
 
 3. Build the project and activate the environment.
 
-```
+```sh
 make build && source build/python_env/bin/activate
 ```
 
