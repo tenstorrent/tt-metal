@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 
 #include "tt_dnn/op_library/moreh_dot_backward/moreh_dot_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -26,10 +26,11 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
 ////////////////////////////////////////////////////////////////////////////
 //                         moreh_matmul_backward
 ////////////////////////////////////////////////////////////////////////////
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
+std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
+    const std::vector<bool>& are_required_outputs,
     std::optional<std::reference_wrapper<const Tensor>> input_grad,
     std::optional<std::reference_wrapper<const Tensor>> other_grad,
     const MemoryConfig& output_mem_config) {
@@ -46,7 +47,10 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         return dims;
     };
 
-    if (input_grad) {
+    const bool input_requires_grad = are_required_outputs.at(0);
+    const bool other_requires_grad = are_required_outputs.at(1);
+
+    if (input_requires_grad) {
         const auto& input_grad_tensor = input_grad->get();
         if (is_same_batch_shape(output_grad, input_grad_tensor)) {
             const auto& input_grad_shape = input_grad_tensor.get_legacy_shape().without_padding();
@@ -64,7 +68,7 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         outputs.push_back(nullptr);
     }
 
-    if (other_grad) {
+    if (other_requires_grad) {
         const auto& other_grad_tensor = other_grad->get();
         if (is_same_batch_shape(output_grad, other_grad_tensor)) {
             moreh_matmul(input, output_grad, true, false, other_grad_tensor, std::nullopt, output_mem_config);
@@ -82,17 +86,20 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     return outputs;
 }
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_matmul_backward(
+std::vector<std::variant<Tensor, char*>> moreh_matmul_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
+    const std::vector<bool>& are_required_outputs,
     std::optional<std::reference_wrapper<const Tensor>> input_grad,
     std::optional<std::reference_wrapper<const Tensor>> other_grad,
     const MemoryConfig& output_mem_config) {
     if (is_dot_backward(output_grad, input, other)) {
+        // TODO(seunghwan100): Add the argument "are_required_outputs" to moreh_dot_backward.
         return moreh_dot_backward(output_grad, input, other, input_grad, other_grad, output_mem_config);
     } else {
-        return moreh_matmul_backward_(output_grad, input, other, input_grad, other_grad, output_mem_config);
+        return moreh_matmul_backward_(
+            output_grad, input, other, are_required_outputs, input_grad, other_grad, output_mem_config);
     }
 }
 
