@@ -33,12 +33,19 @@ Note the current compatability matrix:
 
 1. Download [the raw latest version](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py). of the `setup_hugepages.py` script.
    
-2. Run first setup script & reboot.
-
+2. Run first setup script.
 ```sh
 sudo -E python3 setup_hugepages.py first_pass                                             # run first setup script
-sudo reboot now                                                                           # reboot
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check     # run second setup script & checker
+```
+
+3. Reboot
+```sh
+sudo reboot now                                                                           
+```
+
+4. Run second setup script & check setup. 
+```sh
+sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
 
 ---
@@ -67,7 +74,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 cd tt-metal
 ```
 
-2. Set up the environment, build & activate environment. 
+2. Set up the environment, build & activate. 
 
 ```sh
 export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
