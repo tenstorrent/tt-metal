@@ -16,13 +16,13 @@
 constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t downstream_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t downstream_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t local_downstream_cb_sem_id = get_compile_time_arg_val(3);
+constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(3);
 constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(4);
 
 constexpr uint32_t cmddat_cb_base = get_compile_time_arg_val(5);
 constexpr uint32_t cmddat_cb_log_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t cmddat_cb_pages = get_compile_time_arg_val(7);
-constexpr uint32_t local_upstream_cb_sem_id = get_compile_time_arg_val(8);
+constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(8);
 constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(9);
 constexpr uint32_t cmddat_cb_blocks = get_compile_time_arg_val(10);
 
@@ -66,16 +66,16 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
 
     DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_cb_base << " " << cmddat_cb_end << ENDL();
     if (data_ptr == fence) {
-        upstream_get_cb_page<
+        get_cb_page<
             cmddat_cb_base,
             cmddat_cb_blocks,
             cmddat_cb_log_page_size,
             my_noc_xy,
-            local_upstream_cb_sem_id>(data_ptr,
-                                      fence,
-                                      block_noc_writes_to_clear,
-                                      block_next_start_addr,
-                                      rd_block_idx);
+            my_upstream_cb_sem_id>(data_ptr,
+                                   fence,
+                                   block_noc_writes_to_clear,
+                                   block_next_start_addr,
+                                   rd_block_idx);
     }
 
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *cmd_ptr =
@@ -88,20 +88,20 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
     int32_t npages = 0;
 
     // TODO
-    // Ugly: upstream_get_cb_page was written to process 1 page at a time, we need multiple
+    // Ugly: get_cb_page was written to process 1 page at a time, we need multiple
     // If it wraps, it resets the data_ptr to the top of the buffer, hand it a dummy for now
     uint32_t dummy_data_ptr = data_ptr;
     while (npages < pages_pending) {
-        npages += upstream_get_cb_page<
+        npages += get_cb_page<
             cmddat_cb_base,
             cmddat_cb_blocks,
             cmddat_cb_log_page_size,
             my_noc_xy,
-            local_upstream_cb_sem_id>(dummy_data_ptr,
-                                      fence,
-                                      block_noc_writes_to_clear,
-                                      block_next_start_addr,
-                                      rd_block_idx);
+            my_upstream_cb_sem_id>(dummy_data_ptr,
+                                   fence,
+                                   block_noc_writes_to_clear,
+                                   block_next_start_addr,
+                                   rd_block_idx);
     }
 
     data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
@@ -137,7 +137,7 @@ void kernel_main() {
             done = process_cmd<
                 true,
                 my_noc_xy,
-                local_downstream_cb_sem_id,
+                my_downstream_cb_sem_id,
                 downstream_noc_xy,
                 downstream_cb_sem_id,
                 cmddat_cb_base,
@@ -160,7 +160,7 @@ void kernel_main() {
         // XXXXX should free in blocks...
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_cb_page_size - 1) >> cmddat_cb_log_page_size;
-        upstream_cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr += (cmddat_cb_page_size - (cmd_ptr & (cmddat_cb_page_size - 1))) & (cmddat_cb_page_size - 1);
