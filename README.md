@@ -32,6 +32,7 @@
 | Bloom                                                    | coming soon         |                              |                             |                                     |
 
 [1] - Observed from the host. Includes dispatch overahed and kernel execution time. 
+
 [2] - Ignoring host overhead. Kernel execution time only. 
 
 ## Wormhole (WH) Models
