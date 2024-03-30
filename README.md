@@ -2,11 +2,11 @@
 
 <h1>
    
-[Buy hardware](https://tenstorrent.com/cards/) | [Discord](https://discord.gg/tvhGzHQwaj)
+[Buy hardware](https://tenstorrent.com/cards/) | [Install](./INSTALLING.md) | [Discord](https://discord.gg/tvhGzHQwaj)
 
 </h1>
    
-<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
+<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="150"/>
 
 **TT-NN** is python & C++ Neural Network OP library.
 
@@ -78,7 +78,7 @@ print(output)
 
 <div align="center">
 
-<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="150"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
@@ -89,10 +89,6 @@ print(output)
 
 </h3>
 </div>
-
-## Installing
-
-Please follow the [installation instructions](./INSTALLING.md).
 
 ## Getting started
 
