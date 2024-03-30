@@ -16,7 +16,7 @@
 constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t downstream_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t downstream_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t local_downstream_cb_sem = get_compile_time_arg_val(3);
+constexpr uint32_t my_downstream_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t downstream_cb_sem = get_compile_time_arg_val(4);
 
 constexpr uint32_t pcie_base = get_compile_time_arg_val(5);
@@ -56,7 +56,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
 
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    downstream_cb_acquire_pages<my_noc_xy, local_downstream_cb_sem>(npages);
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem>(npages);
     static int count = 0;
     uint32_t dispatch_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (dispatch_pages_left >= npages) {
@@ -77,7 +77,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
 
     // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
-    downstream_cb_release_pages<downstream_noc_xy, downstream_cb_sem>(npages);
+    cb_release_pages<downstream_noc_xy, downstream_cb_sem>(npages);
 
     return fence;
 }
@@ -90,7 +90,7 @@ void kernel_main() {
     DPRINT << "prefetch_h" << ENDL();
 
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_downstream_cb_sem));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem));
 
     bool done = false;
     while (!done) {

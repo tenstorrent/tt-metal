@@ -23,7 +23,7 @@ CQWriteInterface cq_write_interface;
 constexpr uint32_t dispatch_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t local_dispatch_cb_sem_id = get_compile_time_arg_val(3);
+constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
 constexpr uint32_t upstream_dispatch_cb_sem_id = get_compile_time_arg_val(4);
 constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(5);
 constexpr uint32_t prefetch_sync_sem = get_compile_time_arg_val(6);
@@ -140,27 +140,27 @@ void process_write_host() {
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
                 }
-                upstream_move_rd_to_next_block<dispatch_cb_base,
-                                               dispatch_cb_blocks>(cmd_ptr,
-                                                                   cb_fence,
-                                                                   block_noc_writes_to_clear,
-                                                                   rd_block_idx);
+                move_rd_to_next_block<dispatch_cb_base,
+                                      dispatch_cb_blocks>(cmd_ptr,
+                                                          cb_fence,
+                                                          block_noc_writes_to_clear,
+                                                          rd_block_idx);
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = upstream_cb_acquire_pages<my_noc_xy,
-                                                         local_dispatch_cb_sem_id,
-                                                         dispatch_cb_log_page_size>(cb_fence,
-                                                                                    block_next_start_addr,
-                                                                                    rd_block_idx);;
+            uint32_t n_pages = cb_acquire_pages<my_noc_xy,
+                                                my_dispatch_cb_sem_id,
+                                                dispatch_cb_log_page_size>(cb_fence,
+                                                                           block_next_start_addr,
+                                                                           rd_block_idx);;
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // Release pages for prefetcher
             // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
-            upstream_cb_block_release_pages<prefetch_noc_xy,
-                                            upstream_dispatch_cb_sem_id,
-                                            dispatch_cb_blocks,
-                                            dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                         wr_block_idx);
+            cb_block_release_pages<prefetch_noc_xy,
+                                   upstream_dispatch_cb_sem_id,
+                                   dispatch_cb_blocks,
+                                   dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                                wr_block_idx);
         }
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = (length > available_data) ? available_data : length;
@@ -231,28 +231,28 @@ void process_write_linear(uint32_t num_mcast_dests) {
                     dst = get_noc_addr_helper(dst_noc, dst_addr);
                 }
 
-                upstream_move_rd_to_next_block<dispatch_cb_base,
-                                               dispatch_cb_blocks>(cmd_ptr,
-                                                                   cb_fence,
-                                                                   block_noc_writes_to_clear,
-                                                                   rd_block_idx);
+                move_rd_to_next_block<dispatch_cb_base,
+                                      dispatch_cb_blocks>(cmd_ptr,
+                                                          cb_fence,
+                                                          block_noc_writes_to_clear,
+                                                          rd_block_idx);
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = upstream_cb_acquire_pages<my_noc_xy,
-                                                         local_dispatch_cb_sem_id,
-                                                         dispatch_cb_log_page_size>(cb_fence,
-                                                                                    block_next_start_addr,
-                                                                                    rd_block_idx);
+            uint32_t n_pages = cb_acquire_pages<my_noc_xy,
+                                                my_dispatch_cb_sem_id,
+                                                dispatch_cb_log_page_size>(cb_fence,
+                                                                           block_next_start_addr,
+                                                                           rd_block_idx);
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // Release pages for prefetcher
             // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
-            upstream_cb_block_release_pages<prefetch_noc_xy,
-                                            upstream_dispatch_cb_sem_id,
-                                            dispatch_cb_blocks,
-                                            dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                         wr_block_idx);
+            cb_block_release_pages<prefetch_noc_xy,
+                                   upstream_dispatch_cb_sem_id,
+                                   dispatch_cb_blocks,
+                                   dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                                wr_block_idx);
         }
 
         if constexpr (multicast){
@@ -322,28 +322,28 @@ void process_write_paged() {
                     data_ptr = dispatch_cb_base;
                     dst = addr_gen.get_noc_addr(page_id, dst_addr_offset);
                 }
-                upstream_move_rd_to_next_block<dispatch_cb_base,
-                                               dispatch_cb_blocks>(cmd_ptr,
-                                                                   cb_fence,
-                                                                   block_noc_writes_to_clear,
-                                                                   rd_block_idx);
+                move_rd_to_next_block<dispatch_cb_base,
+                                      dispatch_cb_blocks>(cmd_ptr,
+                                                          cb_fence,
+                                                          block_noc_writes_to_clear,
+                                                          rd_block_idx);
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = upstream_cb_acquire_pages<my_noc_xy,
-                                                         local_dispatch_cb_sem_id,
-                                                         dispatch_cb_log_page_size>(cb_fence,
-                                                                                    block_next_start_addr,
-                                                                                    rd_block_idx);
+            uint32_t n_pages = cb_acquire_pages<my_noc_xy,
+                                                my_dispatch_cb_sem_id,
+                                                dispatch_cb_log_page_size>(cb_fence,
+                                                                           block_next_start_addr,
+                                                                           rd_block_idx);
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // Release pages for prefetcher
             // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
-            upstream_cb_block_release_pages<prefetch_noc_xy,
-                                            upstream_dispatch_cb_sem_id,
-                                            dispatch_cb_blocks,
-                                            dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                         wr_block_idx);
+            cb_block_release_pages<prefetch_noc_xy,
+                                   upstream_dispatch_cb_sem_id,
+                                   dispatch_cb_blocks,
+                                   dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                                wr_block_idx);
         }
 
         noc_async_write(data_ptr, dst, xfer_size);
@@ -428,19 +428,19 @@ void process_write_packed() {
                     data_ptr = dispatch_cb_base;
                 }
 
-                upstream_move_rd_to_next_block<dispatch_cb_base,
-                                               dispatch_cb_blocks>(cmd_ptr,
-                                                                   cb_fence,
-                                                                   block_noc_writes_to_clear,
-                                                                   rd_block_idx);
+                move_rd_to_next_block<dispatch_cb_base,
+                                      dispatch_cb_blocks>(cmd_ptr,
+                                                          cb_fence,
+                                                          block_noc_writes_to_clear,
+                                                          rd_block_idx);
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = upstream_cb_acquire_pages<my_noc_xy,
-                                                         local_dispatch_cb_sem_id,
-                                                         dispatch_cb_log_page_size>(cb_fence,
-                                                                                    block_next_start_addr,
-                                                                                    rd_block_idx);
+            uint32_t n_pages = cb_acquire_pages<my_noc_xy,
+                                                my_dispatch_cb_sem_id,
+                                                dispatch_cb_log_page_size>(cb_fence,
+                                                                           block_next_start_addr,
+                                                                           rd_block_idx);
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // This is done here so the common case doesn't have to restore the pointers
@@ -469,11 +469,11 @@ void process_write_packed() {
 
     // Release pages for prefetcher
     // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
-    upstream_cb_block_release_pages<prefetch_noc_xy,
-                                    upstream_dispatch_cb_sem_id,
-                                    dispatch_cb_blocks,
-                                    dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                 wr_block_idx);
+    cb_block_release_pages<prefetch_noc_xy,
+                           upstream_dispatch_cb_sem_id,
+                           dispatch_cb_blocks,
+                           dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                        wr_block_idx);
 
     cmd_ptr = data_ptr;
 }
@@ -558,12 +558,12 @@ void kernel_main() {
     bool done = false;
     while (!done) {
         if (cmd_ptr == cb_fence) {
-            upstream_get_cb_page<
+            get_cb_page<
                 dispatch_cb_base,
                 dispatch_cb_blocks,
                 dispatch_cb_log_page_size,
                 my_noc_xy,
-                local_dispatch_cb_sem_id>(cmd_ptr,
+                my_dispatch_cb_sem_id>(cmd_ptr,
                                           cb_fence,
                                           block_noc_writes_to_clear,
                                           block_next_start_addr,
@@ -647,18 +647,18 @@ void kernel_main() {
 
         // XXXXX move this inside while loop waiting for get_dispatch_cb_page above
         // XXXXX can potentially clear a partial block when stalled w/ some more bookkeeping
-        upstream_cb_block_release_pages<prefetch_noc_xy,
-                                        upstream_dispatch_cb_sem_id,
-                                        dispatch_cb_blocks,
-                                        dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                     wr_block_idx);
+        cb_block_release_pages<prefetch_noc_xy,
+                               upstream_dispatch_cb_sem_id,
+                               dispatch_cb_blocks,
+                               dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                            wr_block_idx);
     }
 
-    upstream_cb_block_release_pages<prefetch_noc_xy,
-                                    upstream_dispatch_cb_sem_id,
-                                    dispatch_cb_blocks,
-                                    dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                                 wr_block_idx);
+    cb_block_release_pages<prefetch_noc_xy,
+                           upstream_dispatch_cb_sem_id,
+                           dispatch_cb_blocks,
+                           dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
+                                                        wr_block_idx);
     noc_async_write_barrier();
 
     DPRINT << "dispatch out" << ENDL();
