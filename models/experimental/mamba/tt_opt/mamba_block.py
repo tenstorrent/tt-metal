@@ -91,23 +91,38 @@ class TtMambaBlock(torch.nn.Module):
         print('****mamba block', x.shape)
         
         # do the convolution
-        x = ttnn.mul(self.conv1d_weights[0], self.conv_states[0], memory_config=ttnn.L1_MEMORY_CONFIG)
+        # shard wt and state
+        conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[0], memory_config=self.configs['sharded_d'])
+        conv_state = ttnn.to_memory_config(self.conv_states[0], memory_config=self.configs['sharded_d'])
+        x = ttnn.mul(conv_state, conv1d_wt, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(conv1d_wt)
+        ttnn.deallocate(conv_state)
         print('****mamba block', x.shape, self.conv1d_weights[0].shape, self.conv_states[0].shape)
         
         for i in range(1,4):
-            prod = ttnn.mul(self.conv1d_weights[i], self.conv_states[i], memory_config=ttnn.L1_MEMORY_CONFIG)
+            conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[i], memory_config=self.configs['sharded_d'])
+            conv_state = ttnn.to_memory_config(self.conv_states[i], memory_config=self.configs['sharded_d'])
+            prod = ttnn.mul(conv_state, conv1d_wt, memory_config=self.configs['sharded_d'])
+            ttnn.deallocate(conv1d_wt)
+            ttnn.deallocate(conv_state)
             x_old = x
-            x = ttnn.add(x, prod, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.add(x, prod, memory_config=self.configs['sharded_d'])
             ttnn.deallocate(x_old)
             ttnn.deallocate(prod)
         
         x_old = x
-        x = ttnn.add(x, self.conv1d_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        conv1d_bias = ttnn.to_memory_config(self.conv1d_bias, memory_config=self.configs['sharded_d'])
+        x = ttnn.add(x, conv1d_bias, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(conv1d_bias)
         ttnn.deallocate(x_old)
         print('****mamba block', x.shape)
         
         x_old = x
-        x = ttnn.silu(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.silu(x, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(x_old)
+        
+        x_old = x
+        x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x_old)
         
         x_old = x
@@ -119,8 +134,8 @@ class TtMambaBlock(torch.nn.Module):
         res_old = res
         res = ttnn.to_memory_config(res, memory_config=self.configs['sharded_d'])
         ttnn.deallocate(res_old)
-        res_after_silu = ttnn.silu(res, memory_config=self.configs['sharded_d'])
-        ttnn.deallocate(res)
+        res_after_silu = res #ttnn.silu(res, memory_config=self.configs['sharded_d'])
+        #ttnn.deallocate(res)
         
         x_old = x
         x = ttnn.mul(x, res_after_silu, memory_config=self.configs['sharded_d'])
