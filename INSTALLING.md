@@ -87,31 +87,30 @@ For Wormhole B0:
 - ``tt-flash`` acclerator firmware 2023-08-08 (7.D)
 - ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
 
-The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
-As a suggestion, please install the dependencies in a **virtual environment**
-to ensure that your system Python installation does not get polluted.
+Compatability Matrix
+
+| Device              | OS              | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
+|---------------------|-----------------|--------------------|------------------------------------|-----------------------------------------------------------|
+| Grayskull           | Ubuntu 20.04    | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz   | tt-smi_2023-06-16-0283a02404487eea or above               |
+| Wormhole & T3000    | Ubuntu 20.04    | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
+
+
+
+The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
 Please read through the following repositories' READMEs and follow their
 instructions.
 
-#### Installing TTKMD (kernel-mode driver)
+#### Install TT-KMD (kernel-mode driver): [tt-kmd](https://github.com/tenstorrent/tt-kmd)
 
-Please refer to the Tenstorrent [tt-kmd](https://github.com/tenstorrent/tt-kmd) page to get the specific version you need and install.
-
-#### Installing `tt-flash` firmware
-
-Please refer to the Tenstorrent [tt-flash](https://github.com/tenstorrent/tt-flash) page to get the tt-flash tool.
-
-You will need to flash your accelerator with the specific version of firmware blob you are looking to install.
+#### Installing `tt-flash` firmware [tt-flash](https://github.com/tenstorrent/tt-flash)
 
 The firmware blob for Grayskull should be available [here](https://github.com/tenstorrent/tt-firmware-gs).
 
-#### Installing `tt-smi`
+#### Installing `tt-smi`: [tt-smi](https://github.com/tenstorrent/tt-smi)
 
-Please refer to the Tenstorrent [tt-smi](https://github.com/tenstorrent/tt-smi) page to get the specific version you need and install.
-
-If you are a developer, you should also go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
+Note: Go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
 
 ### Step 3. Installing system-level dependencies (after accelerator-level dependencies)
 
@@ -154,14 +153,6 @@ sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 
 3. Download and install [gtest](https://github.com/google/googletest) from source, version 1.13, and no higher.
 
 4. If you are working on experimental, internal model development, you must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud. Otherwise, you may skip this step if you are not working on such models. If you are a regular user of this software, you do not need WekaFS.
-
-#### About wheel installation
-
-We currently do not support installing our software from a wheel. Not all
-features have been tested. The wheel is not an official release asset.
-
-You can reference interim notes about wheel installation in
-[documentation](infra/README_WHEELS.md) within source.
 
 ### From source
 
