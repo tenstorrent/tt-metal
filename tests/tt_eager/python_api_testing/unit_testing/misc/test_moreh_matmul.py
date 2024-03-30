@@ -129,7 +129,9 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttl.operations.primary.moreh_matmul_backward(tt_output_grad, tt_input, tt_other, tt_input_grad, tt_other_grad)
+    ttl.operations.primary.moreh_matmul_backward(
+        tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
+    )
 
     # test for equivalance
     rtol = atol = 0.1
@@ -206,7 +208,10 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttl.operations.primary.moreh_matmul_backward(tt_output_grad, tt_input, tt_other, tt_input_grad, tt_other_grad)
+    tt_input_grad, tt_other_grad = ttl.operations.primary.moreh_matmul_backward(
+        tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
+    )
+
     # test for equivalance
     rtol = atol = 0.1
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
@@ -221,6 +226,8 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
         logger.debug(f"input_grad passing={passing}")
         logger.debug(f"input_grad pcc={output_pcc}")
         assert passing
+    else:
+        assert tt_input_grad is None
 
     if require_other_grad:
         ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(other_shape).to_torch()
@@ -229,6 +236,8 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
         logger.debug(f"other_grad passing={passing}")
         logger.debug(f"other_grad pcc={output_pcc}")
         assert passing
+    else:
+        assert tt_other_grad is None
 
 
 @skip_for_wormhole_b0()

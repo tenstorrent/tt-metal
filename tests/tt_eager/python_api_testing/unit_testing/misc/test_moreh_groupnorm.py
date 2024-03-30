@@ -112,7 +112,7 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
         eps,
         npu_gamma,
         npu_beta,
-        are_needed_outputs=(True, compute_mean_rstd, compute_mean_rstd),
+        are_required_outputs=(True, compute_mean_rstd, compute_mean_rstd),
         mean=npu_mean,
         rstd=npu_rstd,
     )
@@ -176,7 +176,7 @@ def tt_groupnorm_backward(
         npu_mean,
         npu_rstd,
         num_groups,
-        are_needed_outputs=(input_requires_grad, gamma_requires_grad, beta_requires_grad),
+        are_required_outputs=(input_requires_grad, gamma_requires_grad, beta_requires_grad),
         gamma=npu_gamma,
         input_grad=npu_dx,
         gamma_grad=npu_dg,
