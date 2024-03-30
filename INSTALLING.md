@@ -31,7 +31,7 @@ Note the current compatability matrix:
 
 #### Installing dependencies on Ubuntu (after accelerator-level)
 
-1. Download [the raw latest version](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py). of the `setup_hugepages.py` script.
+1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
    
 2. Run first setup script.
 ```sh
