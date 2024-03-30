@@ -86,7 +86,9 @@ class MambaTT(torch.nn.Module):
             dtype=ttnn.bfloat16,
         )
         for layer in self.layers:
+            x_old = x
             x = layer(x)
+            ttnn.deallocate(x_old)
 
         #x = ttnn.to_torch(x).to(torch.float32)
         #x = x.unsqueeze(1)

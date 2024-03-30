@@ -7,6 +7,7 @@ import torch
 from models.experimental.mamba.tt_opt import model_config
 from transformers import AutoTokenizer
 import pytest
+import ttnn
 
 
 
@@ -48,12 +49,14 @@ def run_demo(device, num_users, hidden_size, profile):
         
         input_data = tokenizer("Hello", return_tensors="pt")["input_ids"]
         input_data = input_data.repeat(num_users, 1)
-        out_data = model(input_data)     
+        out_data = model(input_data)
+        ttnn.deallocate(out_data)     
 
         if profile == 1:
             input_data = tokenizer("Hello", return_tensors="pt")["input_ids"]
             input_data = input_data.repeat(num_users, 1)
             out_data = model(input_data)
+            ttnn.deallocate(out_data)
 
     
 
