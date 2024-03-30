@@ -45,12 +45,15 @@ def run_demo(device, num_users, hidden_size, profile):
         # create random torch tensor of hidden size and num_users, with datatype bfloat16
 
         tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+        
         input_data = tokenizer("Hello", return_tensors="pt")["input_ids"]
         input_data = input_data.repeat(num_users, 1)
+        out_data = model(input_data)     
 
         if profile == 1:
+            input_data = tokenizer("Hello", return_tensors="pt")["input_ids"]
+            input_data = input_data.repeat(num_users, 1)
             out_data = model(input_data)
-        out_data = model(input_data)
 
     
 

@@ -88,9 +88,9 @@ class MambaTT(torch.nn.Module):
         for layer in self.layers:
             x = layer(x)
 
-        x = ttnn.to_torch(x).to(torch.float32)
-        x = x.unsqueeze(1)
-        x = self.norm_f(x)
-        x = self.lm_head(x)
+        #x = ttnn.to_torch(x).to(torch.float32)
+        #x = x.unsqueeze(1)
+        #x = self.norm_f(x)
+        #x = self.lm_head(x)
 
         return x

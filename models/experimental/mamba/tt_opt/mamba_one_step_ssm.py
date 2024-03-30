@@ -12,17 +12,7 @@ from models.utility_functions import torch2tt_tensor
 from models.helper_funcs import Linear
 from models.experimental.mamba.reference.args import ModelArgs
 
-def run(f, x0, x1=None):
-    x0_old = None
-    x1_old = None
-    x0_old = x0
-    if x1:
-        x1_old = x1
-    x = f
-    ttnn.deallocate(x0_old)
-    if x1_old:
-        ttnn.deallocate(x1_old)
-    return x
+
 
 
 class TtMambaSSM(torch.nn.Module):
@@ -111,55 +101,90 @@ class TtMambaSSM(torch.nn.Module):
 
     def forward(self, x):
         print("**********ssm block", x.shape)
+
+            
+
+        def post_hook_to_print_output(operation, args, kwargs, output):
+            print (operation.name)
+            for arg in args:
+                if type(arg) == ttnn.Tensor:
+                    print (arg)
+                    ttnn.deallocate(arg)
+            for arg in kwargs:
+                if type(arg) == ttnn.Tensor:
+                    print (arg)
+                    ttnn.deallocate(arg)
+                
         # delta
+                
         delta_t = ttnn.linear(x, self.delta_t_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        delta_t = run(ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col)), delta_t)
-        delta_t = run(ttnn.softplus(delta_t, parameter1=1.0, parameter2=20.0, memory_config=ttnn.L1_MEMORY_CONFIG), delta_t)
-        delta_t = run(ttnn.repeat_interleave(delta_t, self.n, dim=3), delta_t)
-        
+        delta_t_old = delta_t
+        delta_t = ttnn.linear(delta_t, self.dt_proj_weights, bias=self.dt_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))
+        ttnn.deallocate(delta_t_old)
+        delta_t_old = delta_t
+        delta_t = ttnn.softplus(delta_t, parameter1=1.0, parameter2=20.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(delta_t_old)
+        delta_t_old = delta_t
+        delta_t = ttnn.repeat_interleave(delta_t, self.n, dim=3)
+        ttnn.deallocate(delta_t_old)
+        delta_t_old = delta_t
+
+            
         # shard delta and A
-        delta_t = run(ttnn.to_memory_config(delta_t, memory_config=self.configs["sharded_dn"]), delta_t)
+        delta_t = ttnn.to_memory_config(delta_t, memory_config=self.configs["sharded_dn"])
         A = ttnn.to_memory_config(self.A, memory_config=self.configs["sharded_dn"])
         
-        abar = run(ttnn.mul(delta_t, A, memory_config=self.configs['sharded_dn']), A)
-        abar = run(ttnn.exp(abar, memory_config=self.configs['sharded_dn']), abar)
-        
+        #abar
+        abar = ttnn.mul(delta_t, A, memory_config=self.configs['sharded_dn'])
+        ttnn.deallocate(A)
+        ttnn.deallocate(delta_t)
+        abar_old = abar
+        abar = ttnn.exp(abar, memory_config=self.configs['sharded_dn'])
+        ttnn.deallocate(abar_old)
+            
         # multiply abar and hidden_state
-        hidden_state = ttnn.to_memory_config(self.tt_hidden_state, memory_config=self.configs["sharded_dn"])
-        amulh = run(ttnn.mul(abar, hidden_state, memory_config=self.configs["sharded_dn"]), abar, hidden_state)
+        hidden_state = ttnn.to_memory_config(self.tt_hidden_state, memory_config=self.configs["sharded_dn"])        
+        amulh = ttnn.mul(abar, hidden_state, memory_config=self.configs["sharded_dn"])
+        ttnn.deallocate(hidden_state)
+        ttnn.deallocate(abar)
 
         # B
         B = ttnn.linear(x, self.B_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        B = run(ttnn.repeat(B, ttnn.Shape([1, 1, 1, self.hidden_size], [1, 1, 32, self.hidden_size])), B)
-        
+        B_old = B
+        B = ttnn.repeat(B, ttnn.Shape([1, 1, 1, self.hidden_size], [1, 1, 32, self.hidden_size]))
+        ttnn.deallocate(B_old)
+            
         # shard B
-        B = run(ttnn.to_memory_config(B, memory_config=self.configs['sharded_dn']), B)
+        B_old = B
+        B = ttnn.to_memory_config(B, memory_config=self.configs['sharded_dn'])
+        ttnn.deallocate(B_old)
         
         # bbar
-        bbar = run(ttnn.mul(delta_t, B, memory_config=self.configs["sharded_dn"]), delta_t, B)
-        
-        # bcast and sha
-
+        delta_t = ttnn.to_memory_config(delta_t_old, memory_config=self.configs['sharded_dn'])
+        ttnn.deallocate(delta_t_old)
+        bbar = ttnn.mul(delta_t, B, memory_config=self.configs["sharded_dn"])
+        ttnn.deallocate(delta_t)
+        ttnn.deallocate(B)
+            
         # multiply bbar and x
-        x0 = ttnn.repeat_interleave(x, self.n, dim=3)
-        x1 = x0 #ttnn.to_memory_config(x0, memory_config=self.configs["sharded_large"])
-        #ttnn.deallocate(x0)
-        #bmulx0 = ttnn.mul(bbar0, x1, memory_config=self.configs["sharded_large"])
+        x_bcast = ttnn.repeat_interleave(x, self.n, dim=3)
+        x_bcast_old = x_bcast
+        x_bcast = ttnn.to_memory_config(x_bcast, memory_config=self.configs['sharded_dn'])
+        ttnn.deallocate(x_bcast_old)
+        bmulx = ttnn.mul(bbar, x_bcast, memory_config=self.configs["sharded_dn"])
+        ttnn.deallocate(bbar)
+        ttnn.deallocate(x_bcast)
+        
+        # add amulh and bmulx
+        hidden_state = ttnn.add(amulh, bmulx, memory_config=self.configs["sharded_large"])
+        ttnn.deallocate(amulh)
+        ttnn.deallocate(bmulx)
+        ttnn.deallocate(self.tt_hidden_state)
+        self.tt_hidden_state = ttnn.to_memory_config(hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(hidden_state)
+    
         
         return x
-
-        # deallocate bbar
-        ttnn.deallocate(bbar0)
-        ttnn.deallocate(x1)
-
-        # add amulh and bmulx
-        hidden_state1 = ttnn.add(amulh0, bmulx0, memory_config=self.configs["sharded_large"])
-        ttnn.deallocate(self.tt_hidden_state)
-        self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # deallocate amulh and bmulx
-        ttnn.deallocate(amulh0)
-        ttnn.deallocate(bmulx0)
 
         # compute C
         #C_proj = ttnn.to_memory_config(self.C_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
