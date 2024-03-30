@@ -63,10 +63,6 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->initialize(l1_bank_remap);
-    if (this->worker_queue_mode == WorkerQueueMode::ASYNCHRONOUS) {
-        this->worker_queue.parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        this->start_worker();
-    }
 }
 
 void Device::initialize_cluster() {
@@ -995,9 +991,6 @@ bool Device::close() {
 }
 
 Device::~Device() {
-    if (this->worker_queue_mode == WorkerQueueMode::ASYNCHRONOUS) {
-        stop_worker();
-    }
     if (this->initialized_) {
         this->close();
     }
@@ -1201,81 +1194,20 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *sw_command_queues_[cq_id];
 }
 
-void Device::push_work(std::function<void()> work_executor, bool blocking) {
-    if (this->worker_queue_mode == WorkerQueueMode::ASYNCHRONOUS) {
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
-            // Push function executor to worker queue
-            this->worker_queue.push(work_executor);
-            if (blocking) {
-                this->synchronize();
-            }
-        } else {
-            TT_ASSERT(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load(), "Only main thread or worker thread can push to device worker queue.");
-            work_executor();
-        }
-    } else {
-        // Synchronous execution: Run function right away.
-        work_executor();
-    }
-}
-
-void Device::start_worker() {
-    this->worker_state = WorkerState::RUNNING;
-    this->worker_thread = std::thread(&Device::run_worker, this);
-}
-
-void Device::run_worker() {
-    worker_queue.worker_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-    while (true) {
-        if(this->worker_queue.empty()) {
-            if (this->worker_state == WorkerState::TERMINATE) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
-        }
-        else {
-            auto func = this->worker_queue.pop();
-            (*func)();
-        }
-    }
-}
-
-void Device::stop_worker() {
-    if (this->worker_state == WorkerState::IDLE) {
-        return;
-    }
-    this->worker_state = WorkerState::TERMINATE;
-    this->worker_thread.join();
-    this->worker_state = WorkerState::IDLE;
+void Device::push_work(std::function<void()>&& work, bool blocking) {
+    this->work_executor.push_work(work, blocking);
 }
 
 void Device::synchronize() {
-    if (this->worker_queue_mode == WorkerQueueMode::ASYNCHRONOUS) {
-        // Blocking = wait for queue flushed
-        this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
-        // Wait for queue empty, i.e. flush command picked up
-        while(not this->worker_queue.empty()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
-        };
-    }
+    this->work_executor.synchronize();
 }
 
-void Device::set_worker_mode(const WorkerQueueMode& mode) {
-    if (this->worker_queue_mode == mode) {
-        return;
-    }
-    this->worker_queue_mode = mode;
-    if (this->worker_queue_mode == WorkerQueueMode::ASYNCHRONOUS) {
-        this->worker_queue.parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        this->start_worker();
-    } else if (this->worker_queue_mode == WorkerQueueMode::SYNCHRONOUS) {
-        this->synchronize();
-        this->stop_worker();
-    }
+void Device::set_worker_mode(const WorkExecutorMode& mode) {
+    this->work_executor.set_worker_mode(mode);
 }
 
 void Device::enable_async(bool enable) {
-    auto mode = enable ? WorkerQueueMode::ASYNCHRONOUS : WorkerQueueMode::SYNCHRONOUS;
+    auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
 }
 
