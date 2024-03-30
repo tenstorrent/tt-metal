@@ -111,20 +111,29 @@ class TtMambaBlock(torch.nn.Module):
         ttnn.deallocate(x_old)
         
         x_old = x
-        x = self.tt_ssm(x)
+        x = self.tt_ssm(x) # output of ssm is sharded
         ttnn.deallocate(x_old)
         
         res = ttnn.linear(x_input, self.mlp_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
-        res_after_silu = ttnn.silu(res, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # shard res
+        res_old = res
+        res = ttnn.to_memory_config(res, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(res_old)
+        res_after_silu = ttnn.silu(res, memory_config=self.configs['sharded_d'])
         ttnn.deallocate(res)
         
         x_old = x
-        x = ttnn.mul(x, res_after_silu, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.mul(x, res_after_silu, memory_config=self.configs['sharded_d'])
         ttnn.deallocate(res_after_silu)
         ttnn.deallocate(x_old)
         
+        # unshard x
+        x_old = x
+        x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_old)
         x_old = x
         x = ttnn.linear(x, self.out_proj_weights, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=8))
         ttnn.deallocate(x_old)
+        
 
         return x

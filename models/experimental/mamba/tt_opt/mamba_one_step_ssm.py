@@ -187,15 +187,23 @@ class TtMambaSSM(torch.nn.Module):
         C = ttnn.permute(C, (0, 3, 1, 2)) # b, d
         ttnn.deallocate(C_old)
         
-        
+        # shard x
+        # shard C
+        x = ttnn.to_memory_config(x, memory_config=self.configs['sharded_d'])
+        C_old = C
+        C = ttnn.to_memory_config(C, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(C_old)
 
         # x * D
-        xD = ttnn.mul(x, self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # shard D
+        D = ttnn.to_memory_config(self.D, memory_config=self.configs['sharded_d'])
+        xD = ttnn.mul(x, D, memory_config=self.configs['sharded_d'])
+        ttnn.deallocate(D)
         
 
         # add xD and x
-        output = ttnn.add(xD, C, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.add(xD, C, memory_config=self.configs['sharded_d'])
         ttnn.deallocate(xD)
         ttnn.deallocate(C)
 
-        return output
+        return output # sharded
