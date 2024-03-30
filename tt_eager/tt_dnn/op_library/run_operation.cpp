@@ -474,35 +474,43 @@ std::vector<Tensor> run_with_autoformat(
     return output_tensors;
 }
 
+void launch_with_autoformat(
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
+    const std::vector<Tensor> input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>> optional_input_tensors
+) {
+    // Mark each output tensor as having dynamic storage (can be on host or device, depending
+    // on autoformat behaviour).
+    for (auto& output_tensor : output_tensors) {
+        output_tensor.tensor_attributes->dynamic_storage = true;
+    }
+    launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors);
+}
+
 void launch_op(
-    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> op_func,
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors
 ) {
     // Send host side op compile and run to the worker queue
-    // Asserts to validate inputs and outputs - This API is only to be used for tensors on device. Inputs/Outputs cannot be on host.
+    // Assert to ensure that worker threads are specified.
     auto& workers = output_tensors.at(0).workers;
     for (auto& output_tensor : output_tensors) {
         TT_FATAL(output_tensor.workers.size(), "Worker threads must be specified for outputs populated by launch_op. This API can only be used for creating output tensors on device.");
         TT_FATAL(output_tensor.workers == workers, "Worker threads must be consistent across all outputs populated by launch_op.");
         // Populate device storage outside of thread, so that downstream
         // functions running in main can get storage type without blocking
+        // Assume that outputs will be allocated on device (this will happen unless
+        // autoformat moves them to host, in which case storage is dynamic and we
+        // need to repopulate it in the worker + block in main thread: see dynamic_storage
+        // var set in launch_with_autoformat).
         if (workers.size() == 1) {
             output_tensor.tensor_attributes->storage = DeviceStorage();
         }
         else {
             output_tensor.tensor_attributes->storage = MultiDeviceStorage();
-        }
-    }
-
-    for (const auto& input : input_tensors) {
-        TT_FATAL(input.storage_type() == StorageType::DEVICE or input.storage_type() == StorageType::MULTI_DEVICE, "All inputs must be on device when launc_op is called");
-    }
-
-    for (auto& input : optional_input_tensors) {
-        if (input.has_value()) {
-            TT_FATAL(input.value().storage_type() == StorageType::DEVICE or input.value().storage_type() == StorageType::MULTI_DEVICE, "All inputs must be on device when launch_op is called");
         }
     }
     // Record ref counts for all tensors before pushing to worker queue.
@@ -524,12 +532,16 @@ void launch_op(
     for (int i = 0; i < output_tensors.size(); i++) {
         output_tensor_ref_count.push_back(output_tensors[i].tensor_attributes->record_main_thread_ref_count());
     }
-
     // Async mode changes for tensor-parallel execution not mainlined. Use the first worker thread.
     workers.at(0)->push_work([op_func, optional_input_tensors, inputs = input_tensors, outputs = output_tensors] () mutable {
         auto local_tensors = op_func(inputs, optional_input_tensors);
         // Populate output tensors
         for (int i = 0; i < local_tensors.size(); i++) {
+            if (local_tensors.at(i).storage_type() == StorageType::OWNED) {
+                TT_ASSERT(outputs.at(i).tensor_attributes->dynamic_storage, "launch_with_autoformat must be used if output tensor for op can be placed on host.");
+                // This can happen when autoformat is used, moving tensors from device -> host
+                outputs.at(i).tensor_attributes->storage = OwnedStorage();
+            }
             outputs.at(i).populate_buffers_and_metadata(local_tensors.at((i)));
         }
     });
@@ -546,6 +558,67 @@ void launch_op(
     for (int i = 0; i < output_tensors.size(); i++) {
         output_tensors[i].tensor_attributes->update_main_thread_ref_count(workers.at(0), output_tensor_ref_count[i]);
     }
+}
+
+void validate_workers_and_storage(const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs, const std::vector<Device*>& workers) {
+    bool single_device_storage = false;
+    bool multi_device_storage = false;
+    // Verify that storage types are consistent - cannot mix single and multidevice storage. For multi-device tensors, ensure that workers are specified, since they cannot be inferred.
+    // This means that launch_op/launch_with_autoformat cannot be called with MultiDeviceHostStorage.
+    for (const auto& input: inputs) {
+        if (std::holds_alternative<DeviceStorage>(input.tensor_attributes->storage) or std::holds_alternative<OwnedStorage>(input.tensor_attributes->storage)) {
+            single_device_storage |= true;
+        } else if (std::holds_alternative<MultiDeviceStorage>(input.tensor_attributes->storage) or std::holds_alternative<MultiDeviceHostStorage>(input.tensor_attributes->storage)) {
+            multi_device_storage |= true;
+        }
+    }
+
+    for (auto& input : optional_inputs) {
+        if (input.has_value()) {
+            if (std::holds_alternative<DeviceStorage>(input.value().tensor_attributes->storage) or std::holds_alternative<OwnedStorage>(input.value().tensor_attributes->storage)) {
+                single_device_storage |= true;
+            } else if (std::holds_alternative<MultiDeviceStorage>(input.value().tensor_attributes->storage) or std::holds_alternative<MultiDeviceHostStorage>(input.value().tensor_attributes->storage)) {
+                multi_device_storage |= true;
+            }
+        }
+    }
+
+    TT_FATAL(not (single_device_storage and multi_device_storage), "Cannot mix single and multi-device tensors when calling launch op!");
+    if (multi_device_storage) {
+        TT_FATAL(workers.size(), "Workers must be specified when calling launch_op with with multi-device tensors. Workers cannot be inferred in this case.");
+    }
+}
+
+std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs) {
+    std::vector<Device*> workers_for_op = {};
+    // Infer output workers from inputs (assume that workers are correctly specified
+    // and that a tensor either has no workers or the correct number of workers).
+    for (auto& input : inputs) {
+        auto workers = input.get_workers();
+        if (workers.size()) {
+            workers_for_op = workers;
+            break;
+        }
+    }
+    if (not workers_for_op.size()) {
+        for (auto& input : optional_inputs) {
+            if (input.has_value()) {
+                auto workers = input.value().get_workers();
+                if (workers.size()) {
+                    workers_for_op = workers;
+                    break;
+                }
+            }
+        }
+    }
+    validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
+    // Workers not specified - inputs are on host and not multi-device.
+    // Use the default device from autoformat.
+    if (not workers_for_op.size()) {
+        TT_FATAL(AutoFormat::GetDefaultDevice(), "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for inputs to op.");
+        workers_for_op = {AutoFormat::GetDefaultDevice()};
+    }
+    return workers_for_op;
 }
 
 }
