@@ -12,7 +12,7 @@
 
 <h3>
 
-[TT-NN API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
+[API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
 
 </h3>
 
