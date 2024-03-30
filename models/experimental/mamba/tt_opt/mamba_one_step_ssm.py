@@ -189,19 +189,21 @@ class TtMambaSSM(torch.nn.Module):
         C = ttnn.permute(C, (0, 2, 3, 1))  # b,n,1
         ttnn.deallocate(C_old)
         
-        return x
-
         # hidden state @ C
         hidden_state_old = hidden_state
-        hidden_state3 = ttnn.to_torch(hidden_state1)
-        ttnn.deallocate(hidden_state1)
-        #hidden_state3 = ttnn.reshape(hidden_state2, (1, self.num_users, self.hidden_size, self.n))  # b, d, 32
-        hidden_state3 = hidden_state3.reshape(1, self.num_users, self.hidden_size, self.n)  # b, d, 32
-        hidden_state3 = ttnn.from_torch(hidden_state3, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        C2 = ttnn.matmul(hidden_state3, C1, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))  # b, d, 1
-        ttnn.deallocate(C1)
-        C3 = ttnn.permute(C2, (0, 3, 1, 2)) # b, d
-        ttnn.deallocate(C2)
+        hidden_state = ttnn.to_torch(hidden_state)
+        ttnn.deallocate(hidden_state_old)
+        hidden_state = hidden_state.reshape(1, self.num_users, self.hidden_size, self.n)  # b, d, 32
+        hidden_state = ttnn.from_torch(hidden_state, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        C_old = C
+        C = ttnn.matmul(hidden_state, C, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=self.row, x=self.col))  # b, d, 1
+        ttnn.deallocate(C_old)
+        ttnn.deallocate(hidden_state)
+        C_old = C
+        C = ttnn.permute(C, (0, 3, 1, 2)) # b, d
+        ttnn.deallocate(C_old)
+        
+        return x
 
         # x * D
         xD = ttnn.mul(x, self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
