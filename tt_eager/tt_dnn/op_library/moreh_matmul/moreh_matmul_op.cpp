@@ -94,11 +94,9 @@ std::vector<Tensor> MorehMatmul::create_output_tensors(
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
-    const auto& output_shapes = this->compute_output_shapes(input_tensors);
-    const auto& output_shape = output_shapes.at(0);
 
-    return {operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 void MorehMatmul::validate_with_output_tensors(
@@ -162,6 +160,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config) {
     // TODO
+    // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
     // if (is_dot_forward(input, other) && (!transpose_input && !transpose_other)) {
     //     return moreh_dot(input, other, output_mem_config);
     // }
