@@ -29,13 +29,11 @@ Note the current compatability matrix:
 
 ### Step 3. Huge Pages 
 
-#### Installing dependencies on Ubuntu (after accelerator-level)
-
 1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
    
 2. Run first setup script.
 ```sh
-sudo -E python3 setup_hugepages.py first_pass                                             # run first setup script
+sudo -E python3 setup_hugepages.py first_pass                                            
 ```
 
 3. Reboot
