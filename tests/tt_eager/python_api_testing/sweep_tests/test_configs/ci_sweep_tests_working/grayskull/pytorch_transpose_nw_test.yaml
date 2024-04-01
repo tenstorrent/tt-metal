@@ -22,8 +22,8 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
   - transpose-nw:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -46,5 +46,5 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM"]
-        out-buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
