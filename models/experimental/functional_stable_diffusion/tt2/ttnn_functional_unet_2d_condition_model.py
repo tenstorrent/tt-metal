@@ -594,9 +594,7 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
-
-        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
             # sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
@@ -651,8 +649,7 @@ class UNet2DConditionModel:
                 self.conv_out.in_channels,
             ),
         )
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
-        sample = ttnn.silu(sample)
+        sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
