@@ -459,6 +459,20 @@ uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
  */
 void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
 
+
+/**
+ * Release a previously instantiated trace, deallocating the associated trace buffers on device
+ * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
+ * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
+ */
+void ReleaseTrace(uint32_t trace_id);
+
 /**
  * Read device side profiler data and dump results into device side CSV log
  *
