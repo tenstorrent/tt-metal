@@ -27,11 +27,17 @@ void kernel_main() {
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+    //uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
+    i+=1; // skip an arg
     // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
     i+=1; // skip an arg
-    uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
+    //uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    i+=1; // skip an arg
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
+    //uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
+    i+=1; // skip an arg
+    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
 
     uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
     uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
@@ -56,14 +62,23 @@ void kernel_main() {
     uint32_t act_mcast_dest_noc_start_y                  = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_dest_noc_end_x                    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_dest_noc_end_y                    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_num_dests                         = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_num_cores                         = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_sender_semaphore_addr             = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_receiver_semaphore_addr           = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t act_mcast_sender_size_bytes                 = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_mcast_num_dests                         = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_mcast_num_cores                         = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_mcast_sender_semaphore_addr             = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_mcast_receiver_semaphore_addr           = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_mcast_sender_size_bytes                 = get_arg_val<uint32_t>(i); i+=1;
+    i+=5; //skip 5 rt args
+
+    constexpr uint32_t act_mcast_num_dests               = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_num_cores               = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_sender_semaphore_addr   = get_compile_time_arg_val(19);
+    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
+    constexpr uint32_t act_mcast_sender_size_bytes       = get_compile_time_arg_val(21);
+
     uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
+
     volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;

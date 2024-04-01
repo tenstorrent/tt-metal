@@ -738,6 +738,24 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     uint32_t act_block_w_extra_align_bytes = (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
+
+    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
+    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_num_blocks_w = num_blocks_act_w * conv_act_c_blocks; // Fold outer c_block loop together with weight_block_num_tiles = 9
+
+    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
+
+    if (read_3x3_window_in_inner_loop) {
+        const uint32_t window_size = weight_size_h * weight_size_w;
+        in0_block_w *= window_size;
+        in0_block_num_tiles *= window_size;
+        in0_subblock_num_tiles *= window_size;
+        in1_block_num_tiles *= window_size;
+        in0_num_blocks_w /= window_size;
+    }
+
     reader_compile_time_args = {(uint32_t)
         (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t) stride_h,
@@ -755,6 +773,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         (uint32_t) act_block_w_extra_align_bytes, // only used for 1d systolic variant
         (uint32_t) weight_size_h,
         (uint32_t) num_blocks_act_h_per_core,
+        (uint32_t) in0_block_num_tiles,
+        (uint32_t) conv_act_c_blocks,
+
+        (uint32_t) num_cores_y - 1,
+        (uint32_t) num_cores_y - 1,
+        (uint32_t) act_mcast_sender_semaphore,
+        (uint32_t) act_mcast_receiver_semaphore,
+        (uint32_t) in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
         };
 
     // define for bias
@@ -797,6 +823,38 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         weight_cb,
         bias_cb,
         (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
+        num_blocks_act_w, // = number of blocks of weight in height dim
+        in1_block_num_tiles,
+        conv_act_c_blocks,
+        weight_block_h_ntiles / conv_act_c_blocks,
+        weight_block_w_ntiles,
+        weight_matrix_width_ntiles, // weight_stride_h
+        weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
+        weight_block_w_ntiles, // weight_next_block_stride_w
+
+        // bias
+        bias_ntiles_per_core,
+
+        output_width_num_tiles, // out_next_tile_stride_h
+        1, // out_next_tile_stride_w
+        out_subblock_h_ntiles * output_width_num_tiles, // out_next_subblock_stride_h
+        out_subblock_w_ntiles, // out_next_subblock_stride_w
+        act_block_h_ntiles * output_width_num_tiles, // out_next_block_stride_h
+        //weight_block_w_ntiles, // out_next_block_stride_w
+        out_subblock_h_ntiles,
+        out_subblock_w_ntiles,
+        out_subblock_num_tiles,
+        act_block_h_ntiles / out_subblock_h_ntiles, // out_num_subblocks_h
+        weight_block_w_ntiles / out_subblock_w_ntiles,   // out_num_subblocks_w
+        num_blocks_act_h_per_core, // out_num_blocks_h
+        num_blocks_weight_w_per_core, // out_num_blocks_w
+        act_block_h_ntiles, // out_block_height_num_tiles
+        output_height_num_tiles, // out_height_num_tiles without block shape padding
+        output_width_num_tiles, // out_width_num_tiles withoug block shape padding
+
+        out_dram_addr,
+        weight_dram_addr,
+        bias_dram_addr,
     };
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
@@ -808,21 +866,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             (uint32_t) act_block_w_extra_align_bytes, // only used for 1d systolic variant
         };
         writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
-    }
-
-
-    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
-    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
-    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_num_blocks_w = num_blocks_act_w * conv_act_c_blocks; // Fold outer c_block loop together with weight_block_num_tiles = 9
-    if (read_3x3_window_in_inner_loop) {
-        const uint32_t window_size = weight_size_h * weight_size_w;
-        in0_block_w *= window_size;
-        in0_block_num_tiles *= window_size;
-        in0_subblock_num_tiles *= window_size;
-        in1_block_num_tiles *= window_size;
-        in0_num_blocks_w /= window_size;
     }
 
     vector<uint32_t> compute_kernel_args = {
@@ -1067,6 +1110,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             act_block_h_ntiles, // out_block_height_num_tiles
             output_height_num_tiles, // out_height_num_tiles without block shape padding
             output_width_num_tiles, // out_width_num_tiles withoug block shape padding
+
             out_start_tile_id,
             out_start_tile_id_h,
             out_start_tile_id_w,

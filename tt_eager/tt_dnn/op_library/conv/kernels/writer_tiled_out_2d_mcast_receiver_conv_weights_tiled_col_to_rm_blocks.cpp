@@ -10,43 +10,44 @@
 void kernel_main() {
     // This writer is for output tensor in tile format
     uint32_t i = 0;
-    uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
-    // Bias arg. Unused if bias fusion is not enabled.
-    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
+    i+=3;
 
-    uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_tile_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_subblock_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_subblock_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_tile_count = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_subblocks_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_subblocks_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_blocks_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_block_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
+    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(16);
+    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(18);
+    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(12); // == weight_next_block_stride_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(21);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(23);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(24);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(25);
+    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
+    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
+    i+=16;
+
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_height_num_outer = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+    i+=8;
 
     // Bias arg. Unused if bias fusion is not enabled.
-    const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
-    const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
+    i+=2;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
@@ -64,12 +65,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
 
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+    uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
 
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
-    const DataFormat out_df = get_dataformat(cb_id_out0);
 
     constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
-    const InterleavedPow2AddrGen<out_in_dram> s = {
+    constexpr InterleavedPow2AddrGen<out_in_dram> s = {
         .bank_base_address = out_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
@@ -102,19 +103,6 @@ void kernel_main() {
     // DPRINT << "out_height_num_tiles - " << out_height_num_tiles << ENDL();
     // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
 
-    const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const InterleavedPow2AddrGen<true> s_weight = {
-        .bank_base_address = weight_addr_dram_base,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
-    };
-
-    // const InterleavedAddrGenFast<true> s = {
-    //     .bank_base_address = out_addr,
-    //     .page_size = tile_nbytes,
-    //     .data_format = out_df
-    // };
-
-
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
@@ -136,7 +124,6 @@ void kernel_main() {
                 noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                 // Atomic increment source core counter
-                uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
                 noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
@@ -153,7 +140,6 @@ void kernel_main() {
                 noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                 // Atomic increment source core counter
-                uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
                 noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
