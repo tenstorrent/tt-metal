@@ -205,6 +205,7 @@ Tensor Tensor::pad(const Shape& output_tensor_shape, const Shape& input_tensor_s
     ZoneScoped;
     TT_ASSERT(
         this->storage_type() == StorageType::OWNED or
+        this->storage_type() == StorageType::MULTI_DEVICE_HOST or
         this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
 
