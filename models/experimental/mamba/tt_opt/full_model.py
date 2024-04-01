@@ -26,19 +26,21 @@ class TtTensorLoader:
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
-            torch_tensor=None,
+            tensor=None,
         ):
-            tensor_name = f"layers.{layer_num}.{name}"
-            tensor_cache_filepath = Path(self.tt_cache_path) / (tensor_name + postfix)
-            if torch_tensor is None:
-                torch_tensor = self.state_dict[tensor_name]
-            torch_tensor = tm_fn(torch_tensor)
-            if len(torch_tensor.size()) == 1:
-                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-            if len(torch_tensor.size()) == 2:
-                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
+            name = f"layers.{layer_num}.{name}"
+            tensor_cache_filepath = Path(self.tt_cache_path) / (name + postfix)
+            if tensor is None:
+                tensor = self.state_dict[name]
+            tensor = tm_fn(tensor)
+
+            # Make all loaded tensors rank 4 because there are performance issues with certain
+            # ops when using with rank 1/2 tensors in ttnn
+            while tensor.size() < 4:
+                tensor = tensor.unsqueeze(0)
+
             tt_tensor = ttnn.as_tensor(
-                torch_tensor,
+                tensor,
                 device=device,
                 layout=tt_layout,
                 memory_config=tt_memory_config,
