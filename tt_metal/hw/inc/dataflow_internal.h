@@ -29,7 +29,7 @@ void noc_fast_read_set_len(uint32_t len_bytes) {
 FORCE_INLINE
 void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
     DEBUG_STATUS('N', 'F', 'R', 'W');
-    DEBUG_SANITIZE_NOC_TRANSACTION(
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
         (uint64_t)(src_addr) | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32,
         dest_addr,
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE)
@@ -76,7 +76,7 @@ void noc_fast_write_set_len(uint32_t len_bytes) {
 // a fast write that assumes a single-dest (ie unicast)
 FORCE_INLINE
 void noc_fast_write(uint32_t src_addr, uint64_t dest_addr) {
-    DEBUG_SANITIZE_NOC_TRANSACTION(
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
         dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID) << 32,
         dest_addr,
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE)
