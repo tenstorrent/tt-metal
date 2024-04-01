@@ -175,7 +175,7 @@ class TtLlamaModel_optimized(nn.Module):
             for layer in self.layers[start_layer:end_layer]:
                 layer.load_layer()
 
-    def prepare_inputs(self, inp_ids, start_pos):
+    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
         """
         Prepare inputs for decode mode. Assume that current token is at
         start_pos, and KV cache has valid data up to start_pos.
@@ -226,9 +226,7 @@ class TtLlamaModel_optimized(nn.Module):
             cos_gathered, sin_gathered = gather_cos_sin(
                 torch.arange(start_pos, start_pos + seq_len), self.cos, self.sin
             )
-            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
-            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
-
+            
             cos_gathereds, sin_gathereds = [], []
             for device_id in range(self.num_devices):
                 cos_gathereds.append(
@@ -251,9 +249,16 @@ class TtLlamaModel_optimized(nn.Module):
                 )
 
             rot_mats = [cos_gathereds, sin_gathereds]
-
+            
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
+            if valid_seq_len is not None:
+                attn_mask[:, valid_seq_len:] = torch.finfo(
+                    attn_mask.dtype
+                ).min  # Mask columns beyond valid_seq_len as padding
+                attn_mask[valid_seq_len:, :] = torch.finfo(
+                    attn_mask.dtype
+                ).min  # Mask rows beyond valid_seq_len as padding
             attn_mask = attn_mask.expand(batch, 1, -1, -1)
 
             attn_masks = []
