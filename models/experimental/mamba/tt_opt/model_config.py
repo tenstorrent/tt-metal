@@ -14,7 +14,7 @@ def create_model_config(num_users, hidden_size):
 
     # num_users, hidden_size*2
     configs["sharded"] = ttnn.L1_MEMORY_CONFIG
-    '''
+    """
     ttnn.create_sharded_memory_config(
         shape=(1, 1, num_users, hidden_size*2 // (row * col)),
         core_grid=ttnn.CoreGrid(y=row, x=col),
@@ -22,10 +22,10 @@ def create_model_config(num_users, hidden_size):
         orientation=orientation,
         use_height_and_width_as_shard_shape=True,
     )
-    '''
+    """
 
     configs["sharded_large"] = ttnn.L1_MEMORY_CONFIG
-    '''
+    """
     ttnn.create_sharded_memory_config(
         shape=(1, 1, num_users, hidden_size*2 * latent // (row * col)),
         core_grid=ttnn.CoreGrid(y=row, x=col),
@@ -33,9 +33,9 @@ def create_model_config(num_users, hidden_size):
         orientation=orientation,
         use_height_and_width_as_shard_shape=True,
     )
-    '''
+    """
     configs["sharded_rank"] = ttnn.L1_MEMORY_CONFIG
-    '''
+    """
     ttnn.create_sharded_memory_config(
         shape=(1, 1, hidden_size*2 // 32, hidden_size*2 // (row * col)),
         core_grid=ttnn.CoreGrid(y=row, x=col),
@@ -43,7 +43,17 @@ def create_model_config(num_users, hidden_size):
         orientation=orientation,
         use_height_and_width_as_shard_shape=True,
     )
-    '''
+    """
+    configs["sharded_d"] = ttnn.create_sharded_memory_config(
+        shape=(1, 1, num_users, hidden_size * 2),
+        core_grid=ttnn.CoreGrid(y=row, x=col),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    configs["sharded_dn"] = ttnn.create_sharded_memory_config(
+        shape=(1, 1, num_users, hidden_size * 2 * latent),
+        core_grid=ttnn.CoreGrid(y=row, x=col),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
     return configs
 
 

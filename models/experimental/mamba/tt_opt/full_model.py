@@ -11,6 +11,7 @@ from typing import Callable
 
 from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
 
+
 class TtTensorLoader:
     def __init__(self, state_dict, device, tt_cache_path: str = ""):
         self.state_dict = state_dict
@@ -22,7 +23,7 @@ class TtTensorLoader:
             name: str,
             tm_fn: Callable = lambda x: x,
             postfix: str = "",
-            device: ttnn.device = self.device,
+            device: ttnn.Device = self.device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
@@ -36,6 +37,12 @@ class TtTensorLoader:
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
+
+            # Make all loaded tensors rank 4 because there are performance issues with certain
+            # ops when using with rank 1/2 tensors in ttnn
+            while len(torch_tensor.size()) < 4:
+                torch_tensor = torch_tensor.unsqueeze(0)
+
             tt_tensor = ttnn.as_tensor(
                 torch_tensor,
                 device=device,
