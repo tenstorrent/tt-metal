@@ -130,6 +130,7 @@ class TtFalconAttention(nn.Module):
         self.num_devices = len(devices)
         self.state_dict = state_dict
         self.model_config = model_config
+        self.padded_local_heads = nearest_32(num_heads)
 
         if (self.head_dim * num_heads) != self.hidden_size:
             raise ValueError(
@@ -168,7 +169,10 @@ class TtFalconAttention(nn.Module):
             tt_cache_path=tt_cache_path,
         )
 
-        self.scalar = [pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), device)[0] for device in devices]
+        self.scale = 1 / math.sqrt(self.head_dim)
+        self.scalar = []
+        for device in self.devices:
+            self.scalar.append(pad_by_zero(torch.Tensor([self.scale]), device)[0])
 
     def forward(
         self,
@@ -188,6 +192,8 @@ class TtFalconAttention(nn.Module):
         """
 
         assert not output_attentions
+
+        padded_layer_past_len = nearest_32(layer_past_len + 1)
 
         if llm_mode == "prefill":
             batch = hidden_states[0].get_legacy_shape()[0]
@@ -261,6 +267,45 @@ class TtFalconAttention(nn.Module):
                     output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
                 )
 
+            if self.model_config["l1_sharded"]:
+                for i in range(self.num_devices):
+                    key_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                        key_layer[i],
+                        sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            padded_layer_past_len, self.head_dim
+                        ),
+                    )
+
+                # Pad and transpose Q for batched matmul
+                for i in range(self.num_devices):
+                    query_layer[i] = tt_lib.tensor.pad(
+                        query_layer[i], [1, self.padded_local_heads, batch, self.head_dim], [0, 0, 0, 0], 0.0
+                    )
+
+                for i in range(self.num_devices):
+                    query_layer[i] = tt_lib.tensor.transpose(
+                        query_layer[i],
+                        -2,
+                        -3,
+                    )
+
+                for i in range(self.num_devices):
+                    query_layer[i] = tt_lib.tensor.reshape(
+                        query_layer[i],
+                        batch,
+                        1,
+                        self.padded_local_heads,
+                        self.head_dim,  # Batch must be in dim 0 to match K cache
+                    )
+
+                for i in range(self.num_devices):
+                    query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                        query_layer[i],
+                        sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            self.padded_local_heads, self.head_dim
+                        ),
+                    )
+
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
@@ -271,8 +316,14 @@ class TtFalconAttention(nn.Module):
                     key_layer[i],
                     -2,
                     -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-                )
+                    output_mem_config=(
+                        self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
+                        if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
+                        else tt_lib.tensor.MemoryConfig(
+                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+                        )
+                    ),
+                ),
             )
             key_layer[i].deallocate()
 
@@ -288,58 +339,90 @@ class TtFalconAttention(nn.Module):
                 )
                 query_layer[i].deallocate()
                 key_layer_transposed[i].deallocate()
-
-        elif llm_mode == "decode":
+        elif self.model_config["l1_sharded"]:
             for i, device in enumerate(self.devices):
-                # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
-                if is_wormhole_b0():
-                    attn_weights.append(
-                        tt_lib.operations.primary.transformers.attn_matmul(
-                            query_layer[i],
-                            key_layer_transposed[i],
-                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                        )
+                attn_weights.append(
+                    tt_lib.operations.primary.matmul(
+                        query_layer[i],
+                        key_layer_transposed[i],
+                        program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
+                            self.head_dim // 32, self.padded_local_heads // 32, padded_layer_past_len // 32
+                        ),
+                        output_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            self.padded_local_heads, padded_layer_past_len
+                        ),
+                        output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
-                else:
-                    attn_weights.append(
-                        tt_lib.operations.primary.transformers.group_attn_matmul(
-                            query_layer[i],
-                            key_layer_transposed[i],
-                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                        )
+                )
+                query_layer[i].deallocate()
+                key_layer_transposed[i].deallocate()
+        elif is_wormhole_b0():
+            for i, device in enumerate(self.devices):
+                attn_weights.append(
+                    tt_lib.operations.primary.transformers.attn_matmul(
+                        query_layer[i],
+                        key_layer_transposed[i],
+                        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                     )
+                )
+                query_layer[i].deallocate()
+                key_layer_transposed[i].deallocate()
+        else:
+            for i, device in enumerate(self.devices):
+                attn_weights.append(
+                    tt_lib.operations.primary.transformers.group_attn_matmul(
+                        query_layer[i],
+                        key_layer_transposed[i],
+                        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    )
+                )
                 query_layer[i].deallocate()
                 key_layer_transposed[i].deallocate()
 
-        for i in range(self.num_devices):
-            attn_weights[i] = tt_lib.tensor.bcast(
-                attn_weights[i],
-                self.scalar[i],
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.HW,
-                output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
-            )
-
-        if attention_mask is not None:
+        if llm_mode == "prefill" or self.model_config["l1_sharded"] == False:
             for i in range(self.num_devices):
-                attn_weights[i] = tt_lib.tensor.add(
+                attn_weights[i] = tt_lib.tensor.bcast(
                     attn_weights[i],
-                    attention_mask[i],
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+                    self.scalar[i],
+                    tt_lib.tensor.BcastOpMath.MUL,
+                    tt_lib.tensor.BcastOpDim.HW,
+                    output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
                 )
 
-        ###############
-        ### SOFTMAX ###
-        ###############
-        # TODO: Replace with scaled_softmax_attention_mask from BERT
-        for i in range(self.num_devices):
-            attn_weights[i] = tt_lib.operations.primary.softmax_in_place(
-                attn_weights[i],
-            )
+            if attention_mask is not None:
+                for i in range(self.num_devices):
+                    attn_weights[i] = tt_lib.tensor.add(
+                        attn_weights[i],
+                        attention_mask[i],
+                        output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+                    )
+            ###############
+            ### SOFTMAX ###
+            ###############
+            for i in range(self.num_devices):
+                attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(attn_weights[i])
+        else:
+            ###############
+            ### SOFTMAX ###
+            ###############
+            for i in range(self.num_devices):
+                attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+                    attn_weights[i],
+                    scale=self.scale,
+                    mask=attention_mask[i],
+                    program_config=tt_lib.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+                        compute_with_storage_grid_size=(8, 4),
+                        subblock_w=1,
+                        block_h=self.padded_local_heads // 32,
+                        block_w=padded_layer_past_len // 32,
+                    ),
+                    is_causal_mask=True,
+                )
 
         ######################
         ### V CACHE UPDATE ###
@@ -359,6 +442,14 @@ class TtFalconAttention(nn.Module):
                     [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
                     output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
                 )
+            if self.model_config["l1_sharded"]:
+                for i in range(self.num_devices):
+                    value_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                        value_layer[i],
+                        sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            padded_layer_past_len, self.head_dim
+                        ),
+                    )
 
         layer_present = layer_past if use_cache else None
 
@@ -378,7 +469,60 @@ class TtFalconAttention(nn.Module):
                 attn_weights[i].deallocate()
                 value_layer[i].deallocate()
 
-        elif llm_mode == "decode":
+        elif self.model_config["l1_sharded"]:
+            for i in range(self.num_devices):
+                attn_output.append(
+                    tt_lib.operations.primary.matmul(
+                        attn_weights[i],
+                        value_layer[i],
+                        program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
+                            padded_layer_past_len // 32,
+                            self.padded_local_heads // 32,
+                            self.head_dim // 32,
+                        ),
+                        output_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            self.padded_local_heads,
+                            self.head_dim,
+                        ),
+                        output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                    )
+                )
+                attn_weights[i].deallocate()
+                value_layer[i].deallocate()
+
+            for i in range(self.num_devices):
+                attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+                    attn_output[i], output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
+                )
+
+            # Get batch in dim 1
+            for i in range(self.num_devices):
+                attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, batch, self.padded_local_heads, self.head_dim)
+
+            # Get batch in dim 2
+            for i in range(self.num_devices):
+                attn_output[i] = tt_lib.tensor.transpose(
+                    attn_output[i],
+                    -2,
+                    -3,
+                )
+
+            # UNPAD
+            attn_output_shape = attn_output[0].get_legacy_shape()
+            for i in range(self.num_devices):
+                attn_output[i] = tt_lib.tensor.unpad(
+                    attn_output[i],
+                    [0, 0, 0, 0],
+                    [
+                        attn_output_shape[0] - 1,
+                        self.num_heads - 1,
+                        attn_output_shape[2] - 1,
+                        attn_output_shape[3] - 1,
+                    ],
+                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                )
+        else:
             for i in range(self.num_devices):
                 # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
                 if is_wormhole_b0():
