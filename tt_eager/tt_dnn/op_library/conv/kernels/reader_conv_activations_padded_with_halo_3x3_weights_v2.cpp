@@ -9,8 +9,8 @@
 
 
 void kernel_main() {
-    constexpr uint32_t LOCAL_INDICES_SIZE = 320;
-    uint32_t local_indices[LOCAL_INDICES_SIZE];
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 320;
+    uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
     uint32_t i = 0;
     uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
@@ -19,7 +19,9 @@ void kernel_main() {
     //uint32_t weight_size_w = get_arg_val<uint32_t>(i);
     i+=1;
 
-    uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+    //uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i);
+    i+=1;
     // inner loop bounds as compile-time args improve pef
     // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
     // uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
@@ -75,11 +77,6 @@ void kernel_main() {
     // assert(act_block_w_ntiles == act_block_w_datums/32)
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
 
-    // LOOP TO FILL READER INDICES
-    constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
-
-    uint32_t reader_idx = 0;
 
     /* REFERENCE; TODO: Remove
     volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
@@ -190,6 +187,15 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
     #endif
 
+    // LOOP TO FILL READER INDICES
+    constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
+    uint32_t reader_idx = 0;
+
+    // Copy packed reader indices to local memory for faster access
+    constexpr bool cache_packed_reader_indices = act_block_h_datums_read <= LOCAL_PACKED_READER_INDICES_MAX_SIZE;
+
     // TODO: need to make the read coalescing optimization cleaner
     // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
@@ -212,8 +218,10 @@ void kernel_main() {
         uint32_t start_reader_idx = 0;
         for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
             #ifdef SPLIT_READER
-            for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
-                local_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
+            if constexpr (cache_packed_reader_indices) {
+                for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
+                    local_packed_reader_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
+                }
             }
             #endif
             for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -227,7 +235,7 @@ void kernel_main() {
                 for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                     // local read from reader_index + reader_offset;
                     #ifdef SPLIT_READER
-                    uint32_t two_reader_indices = local_indices[bhd];
+                    uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                     #else // no split reader
                     uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
                     #endif
@@ -282,7 +290,9 @@ void kernel_main() {
                 // and if window_inner is const this loop should be removed by the compiler
                 #ifdef SPLIT_READER
                 uint32_t packed_reader_idx = packed_reader_indices_ptr[reader_idx];
-                local_indices[bhd] = packed_reader_idx;
+                if constexpr (cache_packed_reader_indices) {
+                    local_packed_reader_indices[bhd] = packed_reader_idx;
+                }
                 #else
                 uint32_t packed_reader_idx = packed_reader_indices_ptr[reader_idx];
                 #endif
@@ -308,7 +318,7 @@ void kernel_main() {
                     // when no read coalesing, main use case is window_inner == 1,
                     // and if window_inner is const this loop should be removed by the compiler
                     #ifdef SPLIT_READER
-                    uint32_t packed_reader_idx = local_indices[bhd];
+                    uint32_t packed_reader_idx = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                     #else
                     uint32_t packed_reader_idx = packed_reader_indices_ptr[reader_idx];
                     #endif
