@@ -140,6 +140,46 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             None,
             None,
         ),
+        # (1, 1, 32, 8192) (32 to 8 cores width shardrd)
+        (
+            32,
+            8192,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            (32, 256),
+            None,
+        ),
+        # (1, 1, 32, 8192) (64 to 8 cores width shardrd)
+        (
+            32,
+            8192,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            (32, 128),
+            None,
+        ),
+        # (1, 1, 32, 1280) (8 to 1 cores width shardrd)
+        (
+            32,
+            1280,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.WIDTH),
+            None,
+            None,
+        ),
+        # (1, 1, 128, 1280) (32 cores block sharded to 4 cores height sharded)
+        (
+            128,
+            1280,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            None,
+            None,
+        ),
     ],
 )
 def test_reshard(
