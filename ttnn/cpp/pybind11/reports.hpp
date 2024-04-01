@@ -14,8 +14,6 @@ namespace py = pybind11;
 namespace ttnn {
 namespace reports {
 void py_module(py::module& module) {
-    module.def("print_l1_buffers", &print_l1_buffers, py::arg("file_name") = std::nullopt);
-
     py::class_<ttnn::reports::BufferInfo>(module, "BufferInfo")
         .def_property_readonly("device_id", [](const ttnn::reports::BufferInfo& self) { return self.device_id; })
         .def_property_readonly("address", [](const ttnn::reports::BufferInfo& self) { return self.address; })
@@ -76,13 +74,7 @@ void py_module(py::module& module) {
             [](const ttnn::reports::DeviceInfo& self) { return self.total_l1_for_sharded_buffers; })
         .def_property_readonly("cb_limit", [](const ttnn::reports::DeviceInfo& self) { return self.cb_limit; });
 
-    module.def("get_device_info", [](const Device& device) -> ttnn::reports::DeviceInfo {
-            return ttnn::reports::get_device_info(device);
-        },
-        py::arg("device")
-        );
-
-
+    module.def("get_device_info", &get_device_info, py::arg("device"));
 }
 
 }  // namespace reports

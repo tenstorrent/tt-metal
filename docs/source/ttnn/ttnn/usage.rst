@@ -110,8 +110,8 @@ Basic Examples
 
     torch_input_tensor = torch.rand(32, 32, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.enable_debug_decorator():
-        with ttnn.override_pcc_of_debug_decorator(0.9998): # This is optional in case default value of 0.9999 is too high
+    with ttnn.enable_comparison_mode():
+        with ttnn.override_pcc_of_comparison_mode(0.9998): # This is optional in case default value of 0.9999 is too high
             output_tensor = ttnn.exp(input_tensor)
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
@@ -257,29 +257,10 @@ The following environment variable can be set in order to completely disable the
 
 
 
-12. Print L1 Buffers
---------------------
-
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(1, 1, 2, 4, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    output_tensor = ttnn.exp(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-    ttnn.print_l1_buffers()
-
-    ttnn.close_device(device)
-
-
-
-13. Visualize using Web Browser
+12. Visualize using Web Browser
 -------------------------------
+
+Set the following environment variables as needed
 
 .. code-block:: bash
 
@@ -288,6 +269,8 @@ The following environment variable can be set in order to completely disable the
     # Following flags enable optional reports if logging is already enabled
     export TTNN_ENABLE_GRAPH_REPORT=True # Dump graph after every operation
     export TTNN_ENABLE_BUFFER_REPORT=True # Dump buffers after every operation
+
+Run the code. i.e.:
 
 .. code-block:: python
 
@@ -304,13 +287,15 @@ The following environment variable can be set in order to completely disable the
 
     ttnn.close_device(device)
 
+Open the visualizer by running the following command:
+
 .. code-block:: bash
 
     flask --app ttnn/visualizer run
 
 
 
-14. Register pre- and/or post-operation hooks
+13. Register pre- and/or post-operation hooks
 ---------------------------------------------
 
 .. code-block:: python
@@ -337,7 +322,7 @@ The following environment variable can be set in order to completely disable the
 
 
 
-15. Query all operations
+14. Query all operations
 ------------------------
 
 .. code-block:: python
@@ -347,7 +332,7 @@ The following environment variable can be set in order to completely disable the
 
 
 
-16. Disable Fallbacks
+15. Disable Fallbacks
 ---------------------
 
 Fallbacks are used when the operation is not supported by the device. The fallbacks are implemented in the host and are slower than the device operations.

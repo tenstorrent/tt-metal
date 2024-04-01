@@ -37,35 +37,6 @@ def calculate_pcc(golden_outputs, outputs, desired_pcc):
     return True, actual_pcc
 
 
-ENABLE_VALIDATE_DECORATOR = True
-ENABLE_DEBUG_DECORATOR = False
-PEARSON_CORRELATION_COEFFICIENT = 0.9999
-
-
-@contextmanager
-def disable_validate_decorator():
-    global ENABLE_VALIDATE_DECORATOR
-    ENABLE_VALIDATE_DECORATOR = False
-    yield
-    ENABLE_VALIDATE_DECORATOR = True
-
-
-@contextmanager
-def enable_debug_decorator():
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = True
-    yield
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = False
-
-
-@contextmanager
-def override_pcc_of_debug_decorator(value):
-    global PEARSON_CORRELATION_COEFFICIENT
-    old_value = PEARSON_CORRELATION_COEFFICIENT
-    PEARSON_CORRELATION_COEFFICIENT = value
-    yield
-    PEARSON_CORRELATION_COEFFICIENT = old_value
-
-
 PRE_OPERATION_HOOKS = []
 
 
@@ -274,7 +245,7 @@ class Operation:
             matches = None
             actual_pcc = None
             if golden_output is not None:
-                matches, actual_pcc = calculate_pcc(golden_output, output, desired_pcc=PEARSON_CORRELATION_COEFFICIENT)
+                matches, actual_pcc = calculate_pcc(golden_output, output, desired_pcc=ttnn.CONFIG.comparison_mode_pcc)
 
             return output, matches, actual_pcc
 
@@ -294,7 +265,7 @@ class Operation:
                     logger.warning(f"{self.name}: falling back to CPU due to {exception_message}")
                     output = self.fallback(*function_args, **function_kwargs)
 
-                if ttnn.THROW_EXCEPTION_ON_FALLBACK and used_fallback:
+                if ttnn.CONFIG.throw_exception_on_fallback and used_fallback:
                     raise RuntimeError(f"Fallbacks are disabled, but {self.name} used a fallback")
                 return output
 
@@ -309,13 +280,11 @@ class Operation:
                 operation_id = OPERATION_ID
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
-                if is_top_level_operation and ttnn.ENABLE_LOGGING and ttnn.ENABLE_GRAPH_REPORT:
+                if is_top_level_operation and ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
                     if not ttnn.tracer.is_tracing_enabled():
                         ttnn.tracer.enable_tracing()
 
-                decorated_function = function
-                if ENABLE_VALIDATE_DECORATOR:
-                    decorated_function = validate_decorator(decorated_function)
+                decorated_function = validate_decorator(function)
 
                 if is_top_level_operation and ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
@@ -328,20 +297,22 @@ class Operation:
                                 f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                             )
 
-                if is_top_level_operation and ttnn.ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.CONFIG.enable_logging:
                     start = time.time()
                     logger.info(f"Started {self.name:50}")
 
-                    if ttnn.ENABLE_TENSOR_REPORT:
+                    if ttnn.CONFIG.enable_tensor_report:
                         input_tensors = get_tensors((function_args, function_kwargs))
-                        (ttnn.REPORTS_PATH / "input_tensors" / f"{operation_id}").mkdir(parents=True, exist_ok=True)
+                        (ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}").mkdir(
+                            parents=True, exist_ok=True
+                        )
                         for index, tensor in enumerate(input_tensors):
                             ttnn.dump_tensor(
-                                ttnn.REPORTS_PATH / "input_tensors" / f"{operation_id}" / f"{index}.bin",
+                                ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}" / f"{index}.bin",
                                 ttnn.from_device(tensor),
                             )
 
-                if is_top_level_operation and (ENABLE_DEBUG_DECORATOR or ttnn.ENABLE_TENSOR_REPORT):
+                if is_top_level_operation and ttnn.CONFIG.enable_comparison_mode:
                     output, matches_golden, actual_pcc = run_and_compare(
                         decorated_function, *function_args, **function_kwargs
                     )
@@ -350,7 +321,7 @@ class Operation:
                     actual_pcc = None
                     output = decorated_function(*function_args, **function_kwargs)
 
-                if is_top_level_operation and ttnn.ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
                     for device in devices:
                         ttnn.synchronize_device(device)
@@ -361,25 +332,29 @@ class Operation:
 
                     ttnn.database.insert_devices(devices)
                     ttnn.database.insert_operation(
-                        self, operation_id, duration, matches_golden, PEARSON_CORRELATION_COEFFICIENT, actual_pcc
+                        self, operation_id, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
                     )
 
-                    if ttnn.ENABLE_GRAPH_REPORT and output is not None:
-                        ttnn.tracer.visualize(output, file_name=ttnn.REPORTS_PATH / "graphs" / f"{operation_id}.svg")
+                    if ttnn.CONFIG.enable_graph_report and output is not None:
+                        ttnn.tracer.visualize(
+                            output, file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
+                        )
 
                         """
-                        codegen_reports = ttnn.REPORTS_PATH / "codegen"
+                        codegen_reports = ttnn.CONFIG.reports_path / "codegen"
                         codegen_reports.mkdir(parents=True, exist_ok=True)
-                        with open(ttnn.REPORTS_PATH / "codegen" / f"{operation_id}.py", "w") as f:
+                        with open(ttnn.CONFIG.reports_path / "codegen" / f"{operation_id}.py", "w") as f:
                             f.write(ttnn.tracer.codegen(output))
                         """
 
-                    if ttnn.ENABLE_TENSOR_REPORT:
+                    if ttnn.CONFIG.enable_tensor_report:
                         output_tensors = get_tensors(output)
-                        (ttnn.REPORTS_PATH / "output_tensors" / f"{operation_id}").mkdir(parents=True, exist_ok=True)
+                        (ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}").mkdir(
+                            parents=True, exist_ok=True
+                        )
                         for index, tensor in enumerate(output_tensors):
                             ttnn.dump_tensor(
-                                ttnn.REPORTS_PATH / "output_tensors" / f"{operation_id}" / f"{index}.bin",
+                                ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}" / f"{index}.bin",
                                 ttnn.from_device(tensor),
                             )
 
@@ -398,12 +373,17 @@ class Operation:
 
             return call_wrapper
 
-        if not ttnn.ENABLE_FAST_RUNTIME_MODE:
+        if not ttnn.CONFIG.enable_fast_runtime_mode:
+            # If fast runtime mode is enabled during import time, then don't decorate the original function
             function = runtime_decorator(function)
 
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        # If fast runtime mode is enabled during runtime, then only run the original function
+        if ttnn.CONFIG.enable_fast_runtime_mode:
+            return self.function(*function_args, **function_kwargs)
+
         global OPERATION_ID
         try:
             OPERATION_CALL_STACK.append(self.name)

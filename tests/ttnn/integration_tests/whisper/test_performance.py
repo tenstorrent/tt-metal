@@ -69,7 +69,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         )
 
         start = time.time()
-        with ttnn.disable_validate_decorator():
+        with ttnn.enable_fast_runtime_mode():
             tt_output = functional_whisper.whisper(
                 config,
                 input_embeds,

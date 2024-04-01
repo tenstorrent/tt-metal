@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import math
 import sqlite3
 from typing import Optional
@@ -14,120 +13,64 @@ from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool, ZoomInTool, Zo
 
 from flask import Flask, render_template
 import numpy as np
-import torch
 
 import ttnn
 
 
-@dataclasses.dataclass
-class Device:
-    device_id: int
-    num_y_cores: int
-    num_x_cores: int
-    num_y_compute_cores: int
-    num_x_compute_cores: int
-    worker_l1_size: int
-    l1_num_banks: int
-    l1_bank_size: int
-    address_at_first_l1_bank: int
-    address_at_first_l1_cb_buffer: int
-    num_banks_per_storage_core: int
-    num_compute_cores: int
-    num_storage_cores: int
-    total_l1_memory: int
-    total_l1_for_tensors: int
-    total_l1_for_interleaved_buffers: int
-    total_l1_for_sharded_buffers: int
-    cb_limit: int
-
-
-@dataclasses.dataclass
-class Operation:
-    operation_id: int
-    name: str
-    duration: float
-    matches_golden: Optional[bool]
-    desired_pcc: Optional[float]
-    actual_pcc: Optional[float]
-
-
-@dataclasses.dataclass
-class Buffer:
-    operation_id: int
-    device_id: int
-    address: int
-    max_size_per_bank: int
-    buffer_type: int
-
-
-@dataclasses.dataclass
-class BufferPage:
-    operation_id: int
-    device_id: int
-    address: int
-    core_y: int
-    core_x: int
-    bank_id: int
-    page_index: int
-    page_address: int
-    page_size: int
-    buffer_type: int
-
-
 def query_device_by_id(device_id):
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
     for row in cursor.fetchall():
-        operation = Device(*row)
+        operation = ttnn.database.Device(*row)
         return operation
 
     sqlite_connection.close()
 
 
 def query_operation_by_id(operation_id):
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operations WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
-        operation = Operation(*row)
+        operation = ttnn.database.Operation(*row)
         return operation
 
     sqlite_connection.close()
 
 
 def query_operations():
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM operations")
     for row in cursor.fetchall():
-        operation = Operation(*row)
+        operation = ttnn.database.Operation(*row)
         yield operation
 
     sqlite_connection.close()
 
 
 def query_buffers(operation_id):
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffers WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
-        yield Buffer(*row)
+        yield ttnn.database.Buffer(*row)
 
     sqlite_connection.close()
 
 
 def query_buffer_pages(operation_id):
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffer_pages WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
-        yield BufferPage(*row)
+        yield ttnn.database.BufferPage(*row)
 
     sqlite_connection.close()
 
@@ -463,7 +406,7 @@ def operation_buffer_report(operation_id):
 
 @app.route("/operation_graph/<operation_id>")
 def operation_graph(operation_id):
-    svg_file = ttnn.REPORTS_PATH / "graphs" / f"{operation_id}.svg"
+    svg_file = ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
     if not svg_file.exists():
         return "Graph not found! Was TTNN_ENABLE_GRAPH_REPORT=True set?"
     with open(svg_file) as f:
@@ -475,8 +418,8 @@ def operation_graph(operation_id):
 def operation_tensor_report(operation_id):
     operation = query_operation_by_id(operation_id=operation_id)
 
-    input_tensors_path = ttnn.REPORTS_PATH / "input_tensors" / f"{operation_id}"
-    output_tensors_path = ttnn.REPORTS_PATH / "output_tensors" / f"{operation_id}"
+    input_tensors_path = ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}"
+    output_tensors_path = ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}"
 
     input_tensors = []
     for tensor_path in input_tensors_path.glob("*.bin"):

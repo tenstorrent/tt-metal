@@ -71,7 +71,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
         decoder_input_ids = ttnn.from_torch(torch_decoder_input_ids, device=device)
 
         start = time.time()
-        with ttnn.disable_validate_decorator():
+        with ttnn.enable_fast_runtime_mode():
             output, *_ = functional_t5.t5_for_conditional_generation(
                 config,
                 input_ids,

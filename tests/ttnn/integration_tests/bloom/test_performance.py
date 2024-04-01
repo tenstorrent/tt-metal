@@ -79,7 +79,7 @@ def test_performance_of_bloom_for_question_answering(
     durations = []
     for _ in range(2):
         start = time.time()
-        with ttnn.disable_validate_decorator():
+        with ttnn.enable_fast_runtime_mode():
             tt_output = functional_bloom.bloom_for_question_answering(
                 config, input_ids, alibi, causal_mask, parameters=parameters
             )

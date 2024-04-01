@@ -204,8 +204,8 @@ def create_custom_preprocessor(device):
             ttnn_module_args.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
             ttnn_module_args.output_layer["math_fidelity"] = ttnn.MathFidelity.LoFi
-            ttnn_module_args.output_layer["dtype"] = ttnn.ttnn.bfloat16
-            ttnn_module_args.output_layer["weights_dtype"] = ttnn.ttnn.bfloat16
+            ttnn_module_args.output_layer["dtype"] = ttnn.CONFIG.bfloat16
+            ttnn_module_args.output_layer["weights_dtype"] = ttnn.CONFIG.bfloat16
             ttnn_module_args.output_layer["conv_blocking_and_parallelization_config_override"] = None
             ttnn_module_args.output_layer["activation"] = None
             ttnn_module_args.output_layer["deallocate_activation"] = True

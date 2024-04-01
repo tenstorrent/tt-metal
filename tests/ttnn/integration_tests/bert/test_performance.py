@@ -115,7 +115,7 @@ def test_performance(device, use_program_cache, model_name, sequence_size, bert)
             torch_attention_mask,
         )
         start = time.time()
-        with ttnn.disable_validate_decorator():
+        with ttnn.enable_fast_runtime_mode():
             ttnn_bert_inputs = [
                 ttnn.to_device(tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 if tensor is not None
