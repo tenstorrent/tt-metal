@@ -184,6 +184,7 @@ def run_test_LlamaModel_end_to_end(
         output_ids[user_id] = user_output_ids
 
     generated_ids = torch.concat((prefill_ids[..., :prefill_length], output_ids), dim=1)
+    print_output_prompts(generated_ids, tokenizer)
 
     for device in devices:
         tt_lib.device.Synchronize(device)
