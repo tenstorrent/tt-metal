@@ -299,6 +299,7 @@ int main() {
     DEBUG_STATUS('I', 'N', 'D');
 
     mailboxes->launch.run = RUN_MSG_DONE;
+    uint32_t id = 0;
 
     while (1) {
         init_sync_registers();
@@ -310,6 +311,10 @@ int main() {
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
+
+            uint32_t start_time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            uint32_t start_time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+
 
             // Always copy ncrisc even if its size is 0 (save branch)...
             l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
@@ -341,6 +346,11 @@ int main() {
             wait_ncrisc_trisc();
 
             mailboxes->launch.run = RUN_MSG_DONE;
+            uint32_t end_time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            uint32_t end_time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+            DPRINT << "id " << id << ENDL();
+            DPRINT << "time taken per brisc loop: " << (end_time_H - start_time_H) << " " << (end_time_L - start_time_L) << ENDL();
+            id++;
 
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {

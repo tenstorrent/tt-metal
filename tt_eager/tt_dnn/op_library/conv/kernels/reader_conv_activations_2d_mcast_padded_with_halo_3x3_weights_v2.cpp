@@ -22,64 +22,6 @@ void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr,
 }
 
 void kernel_main() {
-    uint32_t i = 0;
-    uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
-    //uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
-    i+=1; // skip an arg
-    // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    i+=1; // skip an arg
-    //uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    i+=1; // skip an arg
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
-    //uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
-    i+=1; // skip an arg
-    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
-
-    uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t first_partial_image_num_rows          = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_first_partial_image_row    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_full_images                       = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_full_image                 = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t last_partial_image_num_rows           = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t last_partial_left_aligned_row_width   = get_arg_val<uint32_t>(i); i+=1;
-
-    // moved these to compile-time args
-    // uint32_t window_outer                          = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t window_inner                          = get_arg_val<uint32_t>(i); i+=1;
-    i+=2; // skip 2 rt args
-
-    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
-    if(noop) {
-        return;
-    }
-
-    uint32_t act_mcast_dest_noc_start_x                  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_dest_noc_start_y                  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_dest_noc_end_x                    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_dest_noc_end_y                    = get_arg_val<uint32_t>(i); i+=1;
-
-    // uint32_t act_mcast_num_dests                         = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t act_mcast_num_cores                         = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t act_mcast_sender_semaphore_addr             = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t act_mcast_receiver_semaphore_addr           = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t act_mcast_sender_size_bytes                 = get_arg_val<uint32_t>(i); i+=1;
-    i+=5; //skip 5 rt args
-
-    constexpr uint32_t act_mcast_num_dests               = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_num_cores               = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_sender_semaphore_addr   = get_compile_time_arg_val(19);
-    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
-    constexpr uint32_t act_mcast_sender_size_bytes       = get_compile_time_arg_val(21);
-
-    uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
-
-    volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
@@ -88,74 +30,48 @@ void kernel_main() {
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     // need to have these as compile-time since we unroll loops based on them
-    constexpr uint32_t window_outer                        = get_compile_time_arg_val(6);
-    constexpr uint32_t window_inner                        = get_compile_time_arg_val(7);
-    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(8);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(6);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(7);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
+
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
+
+    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(19);
+    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
+
+    uint32_t i = 0;
+    i+=18;
+    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
+
+    if(noop) {
+        return;
+    }
+
+    uint32_t act_mcast_dest_noc_start_x                  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_start_y                  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_end_x                    = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_end_y                    = get_arg_val<uint32_t>(i); i+=1;
+    i+=5; //skip 5 rt args
+    uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
+
+    volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
     constexpr uint32_t tilized_in0_cb_id = tt::CB::c_intermed1;
     constexpr uint32_t cb_id_sharded_act = tt::CB::c_in3;
     constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CB::c_in6;
 
-    // Assumptions. Must be true. Validate on host.
-    // assert(act_block_w_datums == C * weight_size_w)
-    // assert(num_blocks_act_w == weight_size_h)
-    // assert(act_block_w_datums % C == 0)
-    // assert(act_block_w_datums % 32 == 0)
-    // assert( % 32 == 0)
-    // assert(act_block_h_ntiles == act_block_h_datums/32)
-    // assert(act_block_w_ntiles == act_block_w_datums/32)
-    // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
-
     // LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t reader_idx = 0;
-
-    /* REFERENCE; TODO: Remove
-    volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
-    uint32_t weights_top_left_corner_idx = 0;
-
-    // First partial right-aligned row
-    for (uint32_t k = 0; k < first_partial_right_aligned_row_width; k++) {
-        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-    }
-    weights_top_left_corner_idx += skip_after_partial_right_aligned_row; // Skip padded width
-
-    // First partial image
-    for (uint32_t j = 0; j < first_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w_; k++) {
-            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-        }
-        weights_top_left_corner_idx += weight_size_w - 1;
-    }
-    weights_top_left_corner_idx += skip_after_first_partial_image_row; // Skip padded rows
-
-    // Full images
-    for (uint32_t i = 0; i < num_full_images; i++) {
-        for (uint32_t j = 0; j < conv_act_size_h; j++) {
-            for (uint32_t k = 0; k < conv_act_size_w; k++) {
-                reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-            }
-            weights_top_left_corner_idx += weight_size_w - 1;
-        }
-        weights_top_left_corner_idx += skip_after_full_image; // Skip padded rows
-    }
-
-    // Last partial image
-    for (uint32_t j = 0; j < last_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w; k++) {
-            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-        }
-        weights_top_left_corner_idx += weight_size_w - 1;
-    }
-
-    // Last partial left-alighted row
-    for (uint32_t k = 0; k < last_partial_left_aligned_row_width; k++) {
-        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-    }
-    */
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);

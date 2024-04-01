@@ -7,18 +7,25 @@
 
 
 void kernel_main() {
-    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 320;
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 256;
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
     // This writer is for output tensor in tile format
-    uint32_t i = 0;
-    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-    i+=1;
-    //constexpr uint32_t weight_addr_dram_base = get_compile_time_arg_val(30);
-    //// Bias arg. Unused if bias fusion is not enabled.
-    //constexpr uint32_t bias_addr = get_compile_time_arg_val(31);
-    const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+
+    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
+
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+
     // Bias arg. Unused if bias fusion is not enabled.
-    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
 
     constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
     constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
@@ -36,26 +43,29 @@ void kernel_main() {
     constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
     constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
-    i+=16;
 
-    uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
+    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
-    i+=8;
+    // MCAST args
+    constexpr uint32_t act_block_h_datums                   = get_compile_time_arg_val(32);
+    constexpr uint32_t act_block_num_tiles                  = get_compile_time_arg_val(33);
+    constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(34);
+    constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(35);
+    constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(36);
+    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(37);
 
     constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
+    uint32_t i = 0;
+    i+=1;
+    const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13); i += 1;
+    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+    i+=16;
+    uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
+    i+=9;
     uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
@@ -72,19 +82,6 @@ void kernel_main() {
     uint32_t weights_mcast_num_cores                = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
-
-
-    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
-    // bias args are 3 and 4
-    constexpr uint32_t act_block_h_datums                   = get_compile_time_arg_val(32);
-    constexpr uint32_t act_block_num_tiles                  = get_compile_time_arg_val(33);
-    constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(34);
-    constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(35);
-    constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(36);
-    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(37);
-
 
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;

@@ -9,9 +9,21 @@
 
 void kernel_main() {
     // This writer is for output tensor in tile format
-    uint32_t i = 0;
-    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-    i+=3;
+    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
+
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+
+    // Bias arg. Unused if bias fusion is not enabled.
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
 
     constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
     constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
@@ -29,26 +41,15 @@ void kernel_main() {
     constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
     constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
-    i+=16;
 
+    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
+
+    uint32_t i = 0;
+    i+=19;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
-
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
-    i+=8;
-
-    // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
-    i+=2;
-
+    i+=10;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
         return;
@@ -59,10 +60,6 @@ void kernel_main() {
     uint32_t weights_mcast_sender_noc_y           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
-
-    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
 
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
     uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
