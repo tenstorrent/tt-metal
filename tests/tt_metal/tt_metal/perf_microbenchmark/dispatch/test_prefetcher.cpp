@@ -29,7 +29,8 @@ constexpr uint32_t PREFETCH_D_DEFAULT_BUFFER_SIZE = 256 * 1024;
 constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
 constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
-constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024 * 1024;
+constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
+constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
 constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
 constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024;
@@ -63,7 +64,8 @@ uint32_t max_prefetch_command_size_g;
 
 uint32_t dispatch_buffer_page_size_g = 4096;
 uint32_t prefetch_q_entries_g;
-uint32_t hugepage_buffer_size_g;
+uint32_t hugepage_issue_buffer_size_g;
+void * host_hugepage_completion_buffer_base_g;
 uint32_t cmddat_q_size_g;
 uint32_t scratch_db_size_g;
 uint32_t num_dram_banks_g;
@@ -102,13 +104,13 @@ void init(int argc, char **argv) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -t: test type: 0:Smoke 1:Random 2:PCIe, 3:DRAM (default {})", DEFAULT_TEST_TYPE);
+        log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write 6:Host (default {})", DEFAULT_TEST_TYPE);
         log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end.x);
         log_info(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
         log_info(LogTest, "  -b: run a \"big\" test (fills memory w/ fewer transactions) (default false)", DEFAULT_TEST_TYPE);
         log_info(LogTest, " -rb: gen data, readback and test every iteration - disable for perf measurements (default true)");
         log_info(LogTest, "  -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
-        log_info(LogTest, "  -hp: host huge page buffer size (default {})", DEFAULT_HUGEPAGE_BUFFER_SIZE);
+        log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
         log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", PREFETCH_D_DEFAULT_BUFFER_SIZE);
@@ -126,7 +128,7 @@ void init(int argc, char **argv) {
 
     warmup_g = test_args::has_command_option(input_args, "-w");
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
-    hugepage_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_BUFFER_SIZE);
+    hugepage_issue_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
@@ -149,6 +151,62 @@ void init(int argc, char **argv) {
     std::srand(seed);
     big_g = test_args::has_command_option(input_args, "-b");
     debug_g = test_args::has_command_option(input_args, "-d");
+}
+
+void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
+
+    for (int i = 0; i < DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE / sizeof(uint32_t); i++) {
+        host_hugepage_completion_buffer[i] = 0xbaadf00d;
+    }
+}
+
+// Note: this doesn't handle wrap, so don't write too much data to PCIe
+// cmds are prefetcher cmds w/ embedded data, this more or less parses the data out
+// device writes the cmd back with the data
+bool validate_host_results(
+    Device *device,
+    const vector<uint32_t>& cmds,
+    uint32_t*& host_hugepage_completion_buffer) {
+
+    log_info(tt::LogTest, "Validating data from hugepage");
+
+    bool failed = false;
+
+    uint32_t *results = (uint32_t *)host_hugepage_completion_buffer;
+
+    int fail_count = 0;
+    bool done = false;
+    int cmd_index = 0;
+    int host_data_index = 0;
+    while (cmd_index < cmds.size()) {
+        CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index + sizeof(CQPrefetchCmd) / sizeof(uint32_t)];
+        cmd_index += (sizeof(CQPrefetchCmd)) / sizeof(uint32_t);
+        uint32_t length = cmd->write_linear_host.length;
+        for (int i = 0; i < length / sizeof(uint32_t); i++) {
+            if (cmds[cmd_index] != results[host_data_index] && fail_count < 20) {
+                if (!failed) {
+                    tt::log_fatal("Data mismatch");
+                    fprintf(stderr, "First 20 host data failures: [idx] expected->read\n");
+                }
+
+                fprintf(stderr, "  [%02d] 0x%08x->0x%08x\n", host_data_index, (unsigned int)cmds[cmd_index], (unsigned int)results[host_data_index]);
+
+                failed = true;
+                fail_count++;
+            }
+
+            host_data_index++;
+            cmd_index++;
+        }
+
+        cmd_index += (4 - (cmd_index & 3)) & 3; // L1 alignment in words;
+        uint32_t dbps_words = dispatch_buffer_page_size_g / sizeof(uint32_t);
+        host_data_index += (dbps_words - (host_data_index & (dbps_words - 1))) & (dbps_words - 1);
+    }
+
+    host_hugepage_completion_buffer += host_data_index;
+
+    return !failed;
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
@@ -590,6 +648,25 @@ void gen_pcie_test(Device *device,
     }
 }
 
+void gen_host_test(Device *device,
+                   vector<uint32_t>& prefetch_cmds,
+                   vector<uint16_t>& cmd_sizes,
+                   uint32_t dst_addr) {
+
+    std::vector<uint32_t> dispatch_cmds;
+    gen_dispatcher_host_write_cmd(dispatch_cmds, 32);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    gen_dispatcher_host_write_cmd(dispatch_cmds, 36);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    gen_dispatcher_host_write_cmd(dispatch_cmds, 1024);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    gen_dispatcher_host_write_cmd(dispatch_cmds, 16384);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+}
+
 void gen_rnd_dram_paged_cmd(Device *device,
                             vector<uint32_t>& prefetch_cmds,
                             vector<uint16_t>& cmd_sizes,
@@ -827,19 +904,29 @@ void gen_prefetcher_cmds(Device *device,
 
     switch (test_type_g) {
     case 0:
-        gen_smoke_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        // No cmds, tests terminating - true smoke test
         break;
     case 1:
-        gen_rnd_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, dst_addr);
+        gen_smoke_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
         break;
     case 2:
-        gen_pcie_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_rnd_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, dst_addr);
         break;
     case 3:
-        gen_paged_read_dram_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_pcie_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
         break;
     case 4:
+        gen_paged_read_dram_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        break;
+    case 5:
         gen_paged_write_read_dram_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        break;
+    case 6:
+        gen_host_test(device, prefetch_cmds, cmd_sizes, dst_addr);
+        break;
+    case 7:
+        log_fatal("Unknown test");
+        exit(0);
         break;
     }
 }
@@ -873,6 +960,7 @@ void write_prefetcher_cmd(Device *device,
 
     uint32_t cmd_size_bytes = (uint32_t)cmd_size16b << PREFETCH_Q_LOG_MINSIZE;
     uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
+
     for (uint32_t i = 0; i < cmd_size_words; i++) {
         *host_mem_ptr = cmds[cmd_offset];
         host_mem_ptr++;
@@ -935,7 +1023,7 @@ void write_prefetcher_cmds(uint32_t iterations,
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
             uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
             uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
-            if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_buffer_size_g)) {
+            if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_issue_buffer_size_g)) {
                 // Wrap huge page
                 uint32_t offset = 0;
                 host_mem_ptr = (uint32_t *)host_hugepage_base;
@@ -1065,7 +1153,7 @@ int main(int argc, char **argv) {
         // Implementation syncs w/ device on prefetch_q but not on hugepage, ie, assumes we can't run
         // so far ahead in the hugepage that we overright un-read commands since we'll first
         // stall on the prefetch_q
-        TT_ASSERT(hugepage_buffer_size_g > prefetch_q_entries_g * max_prefetch_command_size_g, "Shrink the max command size or grow the hugepage buffer size or shrink the prefetch_q size");
+        TT_ASSERT(hugepage_issue_buffer_size_g > prefetch_q_entries_g * max_prefetch_command_size_g, "Shrink the max command size or grow the hugepage buffer size or shrink the prefetch_q size");
         TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
         TT_ASSERT(scratch_db_size_g >= MAX_PAGE_SIZE);
 
@@ -1075,6 +1163,14 @@ int main(int argc, char **argv) {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         host_hugepage_base = (void*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base_g);
+        host_hugepage_completion_buffer_base_g = (void *)((uint8_t *)host_hugepage_base + hugepage_issue_buffer_size_g);
+        uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base_g + hugepage_issue_buffer_size_g;
+        uint32_t* host_hugepage_completion_buffer = (uint32_t *)host_hugepage_completion_buffer_base_g;
+        vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
+        CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
+        tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_WRITE_PTR);
+        tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_READ_PTR);
+        dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
@@ -1130,7 +1226,7 @@ int main(int argc, char **argv) {
             prefetch_downstream_cb_sem, // overridden below for prefetch_d
             dispatch_cb_sem, // overridden below for prefetch_h
             dev_hugepage_base_g,
-            hugepage_buffer_size_g,
+            hugepage_issue_buffer_size_g,
             prefetch_q_base,
             prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
             prefetch_q_rd_ptr_addr,
@@ -1206,9 +1302,8 @@ int main(int argc, char **argv) {
              split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
-             // Hugepage compile args aren't used in this test since WriteHost is not tested here
-             0,
-             0,
+             dev_hugepage_completion_buffer_base,
+             DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
              DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
              0, // unused on hd, filled in below for h and d
@@ -1249,7 +1344,7 @@ int main(int argc, char **argv) {
                 {0,0});
         }
 
-        log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_buffer_size_g));
+        log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_issue_buffer_size_g));
         log_info(LogTest, "Prefetch prefetch_q entries {}", std::to_string(prefetch_q_entries_g));
         log_info(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
         log_info(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));
@@ -1294,7 +1389,11 @@ int main(int argc, char **argv) {
                 reset_worker_data(worker_data);
                 gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base);
                 run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
-                pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base);
+                if (test_type_g == 6) {
+                    pass &= validate_host_results(device, cmds, host_hugepage_completion_buffer);
+                } else {
+                    pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base);
+                }
                 if (!pass) {
                     break;
                 }
