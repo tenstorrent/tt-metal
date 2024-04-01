@@ -76,8 +76,6 @@ def test_split_tiled_w(shape, in_mem_config, out_mem_config, device, dtype=ttl.t
     profile_location = "splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
-    ttl.profiler.set_profiler_location(profile_location)
-
     assert shape[0] == 1
     untiled_shape = [1, 2, 16, 10240]
 

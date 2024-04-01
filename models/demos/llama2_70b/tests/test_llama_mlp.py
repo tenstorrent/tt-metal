@@ -73,7 +73,10 @@ def run_test_LlamaMLP_inference(
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
-    pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+    if model_config["LLM_MODE"] == "decode":
+        # shape should be (1, seq_len, batch, dim)
+        pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+
     tt_inp = pt_inp_normed.clone()
 
     # PyTorch output --------------------------------------------------------------------
@@ -147,28 +150,20 @@ def run_test_LlamaMLP_inference(
     ),
 )
 @pytest.mark.parametrize(
-    "batch, seq_len",
-    (
-        (32, 1),
-        # (1, 128),
-    ),
-    ids=(
-        "decode",
-        # "prefill"
-    ),
+    "batch, seq_len, pcc",
+    ((32, 1, 0.9999), (1, 128, 0.9998), (1, 2048, 0.9998)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
-@pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.9999),))
 def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    model_config_str,
     n_devices,
     all_devices,
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(all_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")

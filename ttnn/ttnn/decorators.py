@@ -192,8 +192,10 @@ def document_input_tensors(name, function, validate_input_tensors):
 def get_devices(arg):
     devices = set()
     if isinstance(arg, ttnn.Tensor):
-        if ttnn.has_storage_type_of(arg, ttnn.DEVICE_STORAGE_TYPE):
+        if ttnn.is_tensor_storage_on_device(arg) and arg.is_allocated():
             devices.add(arg.device())
+    elif isinstance(arg, ttnn.Device):
+        devices.add(arg)
     elif isinstance(arg, (list, tuple)):
         for element in arg:
             devices |= get_devices(element)
@@ -219,6 +221,10 @@ def query_operations(include_experimental=False):
         return ttnn_operations + ttl_operations
     else:
         return ttnn_operations
+
+
+OPERATION_ID = 0
+OPERATION_CALL_STACK = []
 
 
 @dataclasses.dataclass
@@ -256,10 +262,11 @@ class Operation:
             def call_wrapper(*function_args, **function_kwargs):
                 if self.torch_function is not None:
                     logger.info(f"{self.name} : Comparing against PyTorch")
-
-                if self.torch_function is not None:
                     torch_output = self.torch_function(*function_args, **function_kwargs)
                 else:
+                    logger.info(
+                        f"{self.name} : Skipping comparison against PyTorch because torch_function is not provided"
+                    )
                     torch_output = None
 
                 output = function(*function_args, **function_kwargs)
@@ -273,7 +280,12 @@ class Operation:
                                 raise TypeError(f"Expected Tensor, got {type(output)}")
                             output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
                         else:
-                            output = ttnn.to_torch(output)
+                            if isinstance(output, ttnn.Tensor):
+                                output = ttnn.to_torch(output)
+                            elif isinstance(output, (list, tuple)):
+                                output = [ttnn.to_torch(tensor) for tensor in output]
+                            else:
+                                raise TypeError(f"Expected Tensor, list or tuple, got {type(output)}")
                             raise RuntimeError(
                                 f"{self.name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
                             )
@@ -303,53 +315,78 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                is_top_level_operation = len(OPERATION_CALL_STACK) == 1
+
                 decorated_function = function
                 if ENABLE_VALIDATE_DECORATOR:
                     decorated_function = validate_decorator(decorated_function)
+
                 if ENABLE_DEBUG_DECORATOR:
                     decorated_function = debug_decorator(decorated_function)
 
-                if ttnn.tracer.ENABLE_TRACER:
+                if is_top_level_operation and (ttnn.tracer.ENABLE_TRACER or ttnn.ENABLE_LOGGING):
                     decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
 
-                for hook in PRE_OPERATION_HOOKS:
-                    hook_return_value = hook(self, function_args, function_kwargs)
-                    if hook_return_value is not None:
-                        raise RuntimeError(
-                            f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
-                        )
+                if is_top_level_operation:
+                    for hook in PRE_OPERATION_HOOKS:
+                        hook_return_value = hook(self, function_args, function_kwargs)
+                        if hook_return_value is not None:
+                            raise RuntimeError(
+                                f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
+                            )
 
-                if ttnn.TTNN_ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.ENABLE_LOGGING:
                     start = time.time()
                     logger.info(f"Started {self.name:50}")
 
-                output = decorated_function(*function_args, **function_kwargs)
+                try:
+                    output = decorated_function(*function_args, **function_kwargs)
+                finally:
+                    if is_top_level_operation and ttnn.ENABLE_LOGGING:
+                        devices = get_devices((function_args, function_kwargs))
+                        for device in devices:
+                            ttnn.synchronize_device(device)
+                        end = time.time()
+                        duration = end - start
+                        logger.info(f"Finished {self.name:50} in {duration:30} seconds")
+                        ttnn.database.log(self, OPERATION_ID, devices)
 
-                if ttnn.TTNN_ENABLE_LOGGING:
-                    for device in get_devices((function_args, function_kwargs)):
-                        ttnn.synchronize_device(device)
-                    end = time.time()
-                    duration = end - start
-                    logger.info(f"Finished {self.name:50} in {duration:30} seconds")
+                        if ttnn.ENABLE_GRAPH_REPORT and output is not None:
+                            ttnn.tracer.visualize(
+                                output, file_name=ttnn.REPORTS_PATH / "graphs" / f"{OPERATION_ID}.svg"
+                            )
 
-                for hook in POST_OPERATION_HOOKS:
-                    hook_return_value = hook(self, function_args, function_kwargs, output)
-                    if hook_return_value is not None:
-                        raise RuntimeError(
-                            f"Post-operation hook {hook} returned {hook_return_value} but must return None"
-                        )
+                        #    codegen_reports = ttnn.REPORTS_PATH / "codegen"
+                        #    codegen_reports.mkdir(parents=True, exist_ok=True)
+                        #    with open(ttnn.REPORTS_PATH / "codegen" / f"{OPERATION_ID}.py", "w") as f:
+                        #        f.write(ttnn.tracer.codegen(output))
+
+                if is_top_level_operation:
+                    for hook in POST_OPERATION_HOOKS:
+                        hook_return_value = hook(self, function_args, function_kwargs, output)
+                        if hook_return_value is not None:
+                            raise RuntimeError(
+                                f"Post-operation hook {hook} returned {hook_return_value} but must return None"
+                            )
 
                 return output
 
             return call_wrapper
 
-        if not ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
+        if not ttnn.ENABLE_FAST_RUNTIME_MODE:
             function = runtime_decorator(function)
 
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
-        return self.decorated_function(*function_args, **function_kwargs)
+        global OPERATION_ID
+        try:
+            OPERATION_CALL_STACK.append(self.name)
+            output = self.decorated_function(*function_args, **function_kwargs)
+        finally:
+            OPERATION_CALL_STACK.pop()
+            OPERATION_ID += 1
+        return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
 

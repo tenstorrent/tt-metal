@@ -95,14 +95,14 @@ def run_test_FalconCausalLM_end_to_end(
         tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
         tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
 
-        for i in range(num_layers):
+        for _ in range(num_layers):
             tt_k_cache = []
             tt_v_cache = []
-            for i in range(len(devices)):
+            for j in range(len(devices)):
                 tt_k_cache.append(
                     torch2tt_tensor(
-                        tt_k_cache_host[i],
-                        devices[i],
+                        tt_k_cache_host[j],
+                        devices[j],
                         tt_lib.tensor.Layout.TILE,
                         model_config["KV_CACHE_MEMCFG"],
                         model_config["KV_CACHE_DTYPE"],
@@ -110,8 +110,8 @@ def run_test_FalconCausalLM_end_to_end(
                 )
                 tt_v_cache.append(
                     torch2tt_tensor(
-                        tt_v_cache_host[i],
-                        devices[i],
+                        tt_v_cache_host[j],
+                        devices[j],
                         tt_lib.tensor.Layout.TILE,
                         model_config["KV_CACHE_MEMCFG"],
                         model_config["KV_CACHE_DTYPE"],
@@ -393,7 +393,7 @@ def run_test_FalconCausalLM_end_to_end(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("num_devices", (4, 8))
+@pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -459,8 +459,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
 
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-
-    tt_lib.profiler.set_profiler_location(f"falcon-40b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_end_to_end(
         devices,

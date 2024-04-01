@@ -39,6 +39,9 @@ class TtLlamaMLP_optimized(nn.Module):
         if load_weights:
             self.load_weights()
 
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+
     def free_weights(self):
         # Free weights
         for i in range(self.num_devices):
@@ -140,25 +143,106 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
 
     def prepare_inputs(self, x):
-        batch, seq_len = 32, 1
-        assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        x_multichip = []
-        for i in range(self.num_devices):
-            x_multichip.append(
-                torch2tt_tensor(
-                    x.clone(),
-                    self.devices[i],
-                    tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-                    tt_memory_config=self.model_config["L1_MEMCFG"],
+        if self.model_config["LLM_MODE"] == "decode":
+            batch, seq_len = 32, 1
+            assert x.size() == (seq_len, 1, batch, self.hidden_size)
+            x_multichip = []
+            for i in range(self.num_devices):
+                x_multichip.append(
+                    torch2tt_tensor(
+                        x.clone(),
+                        self.devices[i],
+                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                        tt_memory_config=self.model_config["L1_MEMCFG"],
+                    )
+                )
+            for i in range(self.num_devices):
+                x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+                    x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
+                )
+            return x_multichip
+        elif self.model_config["LLM_MODE"] == "prefill":
+            x_multichip = []
+            for i in range(self.num_devices):
+                x_multichip.append(
+                    torch2tt_tensor(
+                        x.clone(),
+                        self.devices[i],
+                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+                    )
+                )
+            return x_multichip
+
+    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
+        # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
+        if self.model_config["LLM_MODE"] == "decode":
+            return self.decode_forward(x)
+        elif self.model_config["LLM_MODE"] == "prefill":
+            return self.prefill_forward(x)
+        else:
+            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+
+    def prefill_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        hidden_states = []
+        w1_outs = []
+        w3_outs = []
+        # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
+
+        seq_tiles = x[0].shape[2] // 32
+        self.model_config["PADDED_FF1_MM_PROGCFG"] = self.model_config["PADDED_FF1_MM_PROGCFG_LAMBDA"](seq_tiles)
+        self.model_config["PADDED_FF3_MM_PROGCFG"] = self.model_config["PADDED_FF3_MM_PROGCFG_LAMBDA"](seq_tiles)
+        self.model_config["PADDED_FF2_MM_PROGCFG"] = self.model_config["PADDED_FF2_MM_PROGCFG_LAMBDA"](seq_tiles)
+        for i in range(len(x)):
+            """
+            x[i] is shape [1,32,128,8192]
+            self.w1_list[i] is shape [1,1,8192,4096]
+            """
+            w1_outs.append(
+                tt_lib.operations.primary.matmul(
+                    x[i],
+                    self.w1_list[i],
+                    program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                 )
             )
-        for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
-                x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
-            )
-        return x_multichip
 
-    def forward(self, x: list) -> list:
+        for i in range(len(x)):
+            w3_outs.append(
+                tt_lib.operations.primary.matmul(
+                    x[i],
+                    self.w3_list[i],
+                    program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+                )
+            )
+            x[i].deallocate(True)
+
+        for i in range(len(w1_outs)):
+            hidden_states.append(ttnn.mul(w1_outs[i], w3_outs[i]))
+            w1_outs[i].deallocate(True)
+            w3_outs[i].deallocate(True)
+
+        if self.emulated:
+            hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+        else:
+            hidden_states = tt_lib.tensor.all_gather(
+                hidden_states,
+                dim=3,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            )
+
+        for i in range(len(hidden_states)):
+            hidden_states[i] = tt_lib.operations.primary.matmul(
+                hidden_states[i],
+                self.w2_list[i],
+                program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+            )
+
+        return hidden_states
+
+    def decode_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = []
         w1_outs = []
         w3_outs = []

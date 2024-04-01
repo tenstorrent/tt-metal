@@ -12,6 +12,7 @@
 #include "tensix.h"
 #include "tensix_functions.h"
 #include "noc_overlay_parameters.h"
+#include "ckernel_structs.h"
 
 class c_tensix_core {
 
@@ -74,6 +75,8 @@ public:
 
     static uint read_packed_size(uint thread); // Return size in bytes of last packer output for a thread.
     static uint read_accumulated_packed_size(uint thread); // Return accumulated size of tiles processed by the packer
+
+    static void initialize_tensix_semaphores(vptr_uint instrn_buf); // Initialize tensix semaphores
 
     static uint wait(int cycles);
 
@@ -209,6 +212,14 @@ inline uint c_tensix_core::read_accumulated_packed_size(uint thread)
   }
 
   return packed_size;
+}
+
+inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
+  // Initialize sempahores - check if we need to do this still
+  // math->packer semaphore - max set to 1, as double-buffering is disabled by default
+  ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
+  ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf);
+  ex_sem_init(ckernel::semaphore::MATH_DONE, 1, 0, instrn_buf);
 }
 
 // NOC API

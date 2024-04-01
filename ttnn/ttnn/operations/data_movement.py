@@ -154,6 +154,22 @@ def _torch_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return torch.permute(input_tensor, order).contiguous().clone()
 
 
+def _fallback_permute(input_tensor, order):
+    if len(input_tensor.shape) != len(order):
+        raise RuntimeError(
+            "The number of dimensions in the tensor input does not match the length of the desired ordering"
+        )
+
+    device = input_tensor.device()
+    layout = input_tensor.layout
+    dtype = input_tensor.dtype
+
+    tensor = ttnn.to_torch(input_tensor)
+    tensor = tensor.permute(order).contiguous().clone()
+    tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+    return tensor
+
+
 def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -170,7 +186,7 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
     torch_function=_torch_permute,
-    # TODO(arakhmati): add proper fallback
+    fallback=_fallback_permute,
 )
 def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     r"""
@@ -201,7 +217,6 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     on_device = ttnn.is_tensor_storage_on_device(input_tensor)
     device = input_tensor.device()
     layout = input_tensor.layout
-    dtype = input_tensor.dtype
     rank = len(input_tensor.shape)
 
     if len(input_tensor.shape) < 4:
@@ -227,14 +242,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             output_tensor = ttnn.to_device(output_tensor, device)
         return output_tensor
     else:
-
-        def torch_permute(tensor, order):
-            return tensor.permute(order).contiguous().clone()
-
-        tensor = ttnn.to_torch(input_tensor)
-        tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
-        tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
-        return tensor
+        raise NotImplementedError
 
 
 def _torch_concat(tensors, dim=0, **_):
@@ -356,6 +364,17 @@ def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
     return torch.split(input_tensor, split_size, dim=dim)
 
 
+def _fallback_split(input_tensor, split_size, dim):
+    output_tensors = _torch_split(input_tensor, split_size, dim)
+    output_tensors = tuple(
+        ttnn.from_torch(
+            output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
+        )
+        for output_tensor in output_tensors
+    )
+    return output_tensors
+
+
 def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -372,7 +391,7 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
     torch_function=_torch_split,
-    # TODO(arakhmati): add proper fallback
+    fallback=_fallback_split,
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
@@ -385,15 +404,7 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
         * :attr:`split_size`: size of a single chunk.
         * :attr:`dim`:  dimension along which to split the tensor.
     """
-
-    output_tensors = _torch_split(input_tensor, split_size, dim)
-    output_tensors = tuple(
-        ttnn.from_torch(
-            output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
-        )
-        for output_tensor in output_tensors
-    )
-    return output_tensors
+    raise NotImplementedError
 
 
 def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
@@ -402,6 +413,13 @@ def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
     if isinstance(repeats, ttnn.Tensor):
         repeats = ttnn.to_torch(repeats)
     return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
+
+
+def _fallback_repeat_interleave(input_tensor, repeats, dim):
+    output_tensor = _torch_repeat_interleave(input_tensor, repeats, dim)
+    return ttnn.from_torch(
+        output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
+    )
 
 
 def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -420,7 +438,7 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
     torch_function=_torch_repeat_interleave,
-    # TODO(arakhmati): add proper fallback
+    fallback=_fallback_repeat_interleave,
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
@@ -465,8 +483,6 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
             raise RuntimeError("ttnn: repeats must be 0-dim or 1-dim tensor")
 
     dtype = input_tensor.dtype
-    device = input_tensor.device()
-    layout = input_tensor.layout
     rank = len(input_tensor.shape)
     if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
         output_tensor = ttl.tensor.repeat_interleave(input_tensor, repeats, dim=dim)
@@ -482,18 +498,18 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
         return output_tensor
     else:
-
-        def torch_repeat_interleave(tensor, repeats, dim=dim):
-            return _torch_repeat_interleave(tensor, repeats, dim)
-
-        output_tensor = ttl.tensor.decorate_external_operation(
-            torch_repeat_interleave, function_name="torch_repeat_interleave"
-        )(input_tensor, repeats, dim=dim)
-        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
+        raise NotImplementedError
 
 
 def _torch_repeat(tensor, shape, **_):
     return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
+
+
+def _fallback_repeat(input_tensor, shape):
+    output_tensor = _torch_repeat(input_tensor, shape)
+    return ttnn.from_torch(
+        output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
+    )
 
 
 def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -512,7 +528,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
     torch_function=_torch_repeat,
-    # TODO(arakhmati): add proper fallback
+    fallback=_fallback_repeat,
 )
 def repeat(
     input_tensor: ttnn.Tensor,
@@ -542,12 +558,9 @@ def repeat(
     if not isinstance(shape, ttnn.Shape):
         raise RuntimeError("ttnn: Expected shape to be a ttnn.Shape")
 
-    dtype = input_tensor.dtype
-    device = input_tensor.device()
-    layout = input_tensor.layout
     rank = len(input_tensor.shape)
     if rank == 4:
-        output_tensor = ttl.tensor.repeat(input_tensor, shape)
+        output_tensor = ttl.tensor.repeat(input_tensor, shape, output_mem_config=memory_config)
         *batch, _, _ = output_tensor.shape
         *_, h, w = output_tensor.shape
         *_, padded_h, padded_w = output_tensor.shape.with_tile_padding()
@@ -555,14 +568,7 @@ def repeat(
         output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
         return output_tensor
     else:
-
-        def torch_repeat(tensor, shape):
-            return _torch_repeat(tensor, shape)
-
-        output_tensor = ttl.tensor.decorate_external_operation(torch_repeat, function_name="torch_repeat")(
-            input_tensor, shape
-        )
-        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
+        raise NotImplementedError
 
 
 __all__ = []

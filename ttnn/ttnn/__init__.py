@@ -4,11 +4,12 @@
 
 import os
 import pathlib
+import shutil
 
 from loguru import logger
 
-TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
-MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
+CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
+MODEL_CACHE_PATH = CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 
@@ -22,17 +23,31 @@ def get_bool_env_var(name, default):
         raise RuntimeError(f'The value has to be either "True" or "False"')
 
 
-TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
-if TTNN_ENABLE_MODEL_CACHE:
+ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
+if ENABLE_MODEL_CACHE:
     logger.info(f"ttnn: model cache was enabled")
 
-TTNN_ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
-if TTNN_ENABLE_FAST_RUNTIME_MODE:
+ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
+if ENABLE_FAST_RUNTIME_MODE:
     logger.info(f"ttnn: fast runtime mode was enabled")
 
-TTNN_ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
-if TTNN_ENABLE_LOGGING:
-    logger.info(f"ttnn: enabled logging (and disabled fast runtime mode)")
+REPORTS_PATH = pathlib.Path("generated") / "reports"
+shutil.rmtree(REPORTS_PATH, ignore_errors=True)
+
+ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
+if ENABLE_LOGGING:
+    logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
+
+
+ENABLE_GRAPH_REPORT = get_bool_env_var("TTNN_ENABLE_GRAPH_REPORT", "False")
+if ENABLE_GRAPH_REPORT:
+    logger.info(f"ttnn: enabled graph report")
+
+
+ENABLE_BUFFER_REPORT = get_bool_env_var("TTNN_ENABLE_BUFFER_REPORT", "False")
+if ENABLE_BUFFER_REPORT:
+    logger.info(f"ttnn: enabled buffer report")
+
 
 import tt_lib as _tt_lib
 import ttnn._ttnn
@@ -48,8 +63,8 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     float32,
-    MemoryConfig,
     MathFidelity,
+    MemoryConfig,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -111,6 +126,7 @@ from ttnn.core import (
 
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
+import ttnn.database
 
 from ttnn.decorators import (
     register_operation,
@@ -327,6 +343,7 @@ from ttnn.operations.normalization import (
     rms_norm,
     group_norm,
     create_group_norm_weight_bias_rm,
+    create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
 

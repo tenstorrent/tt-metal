@@ -1058,6 +1058,14 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.multigammaln_bw
 
+.. autofunction:: tt_lib.tensor.repeat_bw
+
+.. autofunction:: tt_lib.tensor.floor_bw
+
+.. autofunction:: tt_lib.tensor.round_bw
+
+.. autofunction:: tt_lib.tensor.unary_div_no_nan_bw
+
 Loss Functions
 ==============
 

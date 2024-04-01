@@ -85,21 +85,24 @@ def test_sharded_tile(
 
 
 @pytest.mark.parametrize(
-    "input_shape, shard_scheme, shard_size",
+    "input_shape, shard_scheme, shard_size, num_cores",
     [
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512)),
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32)),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), 98),
+        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), 98),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), 98),
+        ([1, 1, 32, 40], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (32, 40), 1),
+        ([2, 64, 64, 320], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 40), 64),
     ],
 )
 @pytest.mark.parametrize(
     "shard_orientation",
     [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
-def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orientation, function_level_defaults):
+def test_sharded_rm(
+    device, input_shape, shard_size, shard_scheme, shard_orientation, num_cores, function_level_defaults
+):
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
-    num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -114,7 +117,7 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
         device,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_type=ttl.tensor.BufferType.DRAM,
         ),
     )
 
@@ -988,6 +991,104 @@ def test_sharded_matmul_2d(
     assert passing
 
 
+@pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_interleaved"])
+@pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_interleaved"])
+@pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_interleaved"])
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
+    device,
+    in0_sharded,
+    in1_sharded,
+    out_sharded,
+    activations_dtype,
+    weights_dtype,
+    output_dtype,
+    function_level_defaults,
+):
+    M = 6 * 32
+    N = 12 * 32
+    K = 2 * 32
+
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, 1, N]
+
+    grid_size = (6, 6)
+    compute_grid_size = device.compute_with_storage_grid_size()
+
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_block_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    # Generate the tensor
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            ttl.tensor.CoreCoord(1, grid_size[0]),
+            [M // grid_size[0], K],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+    if in1_sharded:
+        in1_t = ttl.tensor.interleaved_to_sharded(
+            in1_t,
+            ttl.tensor.CoreCoord(grid_size[1], 1),
+            [K, N // grid_size[1]],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=K // 32,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=M // (32 * grid_size[0]),
+        per_core_N=N // (32 * grid_size[1]),
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    output_mem_config = sharded_block_mem_config if out_sharded else interleaved_mem_config
+    output_t = ttl.operations.primary.matmul(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+        output_dtype=output_dtype,
+    )
+
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
@@ -1718,6 +1819,79 @@ def test_sharded_matmul_1d_in0(
     tt_out = tt2torch_tensor(output_t)
 
     passing, output = comp_pcc(pt_out, tt_out, 0.98)
+    logger.info(output)
+    assert passing
+
+
+# Have at least one example of 1d matmul with in1 mcasted that runs on WH
+def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
+    M = 4096
+    K = 64
+    N = 256
+    grid_size = (8, 4)
+    num_cores = grid_size[0] * grid_size[1]
+    dtype = ttl.tensor.DataType.BFLOAT16
+
+    grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, 1, N]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)[0]
+
+    output_mem_config = sharded_mem_config
+
+    in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t,
+        grid_size,
+        [M // num_cores, K],
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=K // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=M // 32 // num_cores,
+        per_core_N=N // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+    output_t = ttl.operations.primary.matmul_1d(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+        output_dtype=dtype,
+    )
+    output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
 

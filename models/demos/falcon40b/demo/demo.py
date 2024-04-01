@@ -346,7 +346,7 @@ def run_falcon_demo_kv(
     ### First run decode stage with compile ###
     # Update model_config for decode
     model_config = get_model_config(model_config_str, "decode", [batch_size, 1], len(devices))
-    tt_FalconCausalLM.model_config = model_config
+    tt_FalconCausalLM.set_model_config(model_config)
 
     attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
     if attention_mask_memconfig.is_sharded():
@@ -593,12 +593,11 @@ def test_demo(
     all_devices,
     use_program_cache,
 ):
-    num_devices = 4
+    num_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices)
 
     # disable_persistent_kernel_cache()
     disable_compilation_reports()
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon40b")
 
     # Set it up for prefill initially and change the model_config to decode
     model_config_str = "BFLOAT8_B-SHARDED"

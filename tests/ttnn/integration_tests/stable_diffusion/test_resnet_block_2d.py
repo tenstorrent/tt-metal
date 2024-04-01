@@ -162,6 +162,8 @@ def test_resnet_block_2d_512x512(
             initialize_model=lambda: resnet, custom_preprocessor=custom_preprocessor, device=device
         )
 
+    ttnn.dump_device_memory_state(device, prefix="GN_resnet_1_")
+
     ############ start of residual block #############
     temb_channels = 1280
     groups = 32
@@ -184,13 +186,13 @@ def test_resnet_block_2d_512x512(
     input = torch.permute(input, (0, 2, 3, 1))
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
-    input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    # input = ttnn.to_memory_config(input, resnet_block.conv1s[0].conv.input_sharded_memory_config)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     ttnn_output = resnet_block(
         input,
@@ -211,7 +213,7 @@ def test_resnet_block_2d_512x512(
         #     "grid_size": resnet_block.conv1s[0].conv.grid_size,
         # },
     )
-    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.L1_MEMORY_CONFIG)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_output = ttnn_to_torch(ttnn_output)
     ttnn_output = torch.reshape(
         ttnn_output,

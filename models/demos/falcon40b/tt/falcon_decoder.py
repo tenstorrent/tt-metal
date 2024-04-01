@@ -150,6 +150,11 @@ class TtFalconDecoderLayer:
 
         self.layernorm_eps = config.layer_norm_epsilon
 
+    def set_model_config(self, model_config):
+        self.model_config = model_config
+        self.self_attn.set_model_config(model_config)
+        self.mlp.set_model_config(model_config)
+
     def __call__(
         self,
         hidden_states: tt_lib.tensor.Tensor,

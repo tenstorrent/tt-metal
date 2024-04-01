@@ -60,4 +60,4 @@ def test_pre_operaiton_hook_for_storing_input_activations(device, batch_size, h,
         ttnn.exp(input_tensor) * 2 + 1
 
     # TODO(arakhmati): only store activations for top-level ops
-    assert len(activations) == 8
+    assert len(activations) == 3

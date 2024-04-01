@@ -169,14 +169,17 @@ Basic Examples
 
 .. code-block:: bash
 
-    # To generate a csv with all of the operations, their attributes and their input tensors:
+    # To print currently executing ttnn operations with their durations
+    export TTNN_ENABLE_LOGGING=True
+
+    # To generate a csv with all of the ttnn and tt_lib operations, their attributes and their input tensors:
     export OPERATION_HISTORY_CSV=operation_history.csv
 
-    # To print the currently executing operation and its input tensors to stdout
+    # To print the currently executing ttnn and tt_lib operation and its input tensors to stdout
     export TT_METAL_LOGGER_TYPES=Op
     export TT_METAL_LOGGER_LEVEL=Debug
 
-Logging cannot provide duration because the operations run asynchronously.
+Logging is not a substitute for profiling.
 Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
@@ -257,10 +260,6 @@ The following environment variable can be set in order to completely disable the
 12. Print L1 Buffers
 --------------------
 
-ttnn has a python decorator that optionally enables features during run-time. The features are related to validation and debugging of the operations.
-
-The following environment variable can be set in order to completely disable these features.
-
 .. code-block:: python
 
     import torch
@@ -279,7 +278,39 @@ The following environment variable can be set in order to completely disable the
 
 
 
-13. Register pre- and/or post-operation hooks
+13. Visualize using Web Browser
+-------------------------------
+
+.. code-block:: bash
+
+    export TTNN_ENABLE_LOGGING=True # Synchronize main thread after every operation and log the operation start, end and duration
+
+    # Following flags enable optional reports if logging is already enabled
+    export TTNN_ENABLE_GRAPH_REPORT=True # Dump graph after every operation
+    export TTNN_ENABLE_BUFFER_REPORT=True # Dump buffers after every operation
+
+.. code-block:: python
+
+    import torch
+    import ttnn
+
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+
+    torch_input_tensor = torch.rand(2048, 2048, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.exp(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output_tensor = ttnn.to_torch(output_tensor)
+
+    ttnn.close_device(device)
+
+.. code-block:: bash
+
+    flask --app ttnn/visualizer run
+
+
+
+14. Register pre- and/or post-operation hooks
 ---------------------------------------------
 
 .. code-block:: python
@@ -306,7 +337,7 @@ The following environment variable can be set in order to completely disable the
 
 
 
-14. Query all operations
+15. Query all operations
 ------------------------
 
 .. code-block:: python

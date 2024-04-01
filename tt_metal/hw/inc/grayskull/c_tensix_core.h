@@ -10,8 +10,10 @@
 
 #include "debug/fw_debug.h"
 #include "tensix.h"
+#include "ckernel_structs.h"
 #include "tensix_functions.h"
 #include "noc_overlay_parameters.h"
+#include "ckernel_structs.h"
 
 class c_tensix_core {
 
@@ -66,6 +68,8 @@ public:
     static inline void write_stream_register(uint32_t stream_id, uint32_t index, uint32_t value);
     static inline uint32_t read_stream_register(uint32_t stream_id, uint32_t index);
     static inline uint32_t read_stream_register_field(uint32_t stream_id, uint32_t index, uint32_t shift, uint32_t width);
+
+    static void initialize_tensix_semaphores(vptr_uint instrn_buf); // Initialize tensix semaphores
 
 private:
     static inline volatile tt_reg_ptr uint32_t* noc_stream_registers(uint32_t stream_id);
@@ -169,4 +173,10 @@ inline uint64_t c_tensix_core::read_wall_clock()
   uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 
   return ((uint64_t)high << 32) | low;
+}
+
+inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
+  // Initialize sempahores - check if we need to do this still
+  // math->packer semaphore - max set to 1, as double-buffering is disabled by default
+  ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
 }

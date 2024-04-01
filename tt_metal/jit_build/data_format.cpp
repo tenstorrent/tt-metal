@@ -23,6 +23,7 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Lf8,
     DataFormat::Fp8_e4m3,
     DataFormat::Int8,
+    DataFormat::Int32,
     DataFormat::UInt8,
     DataFormat::UInt32,
     DataFormat::UInt16,
@@ -74,7 +75,8 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
             (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
-            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16)) {
+            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
+            (data_format[i] == DataFormat::Int32)) {
             continue;
         }
 

@@ -177,3 +177,34 @@ def apply_rotary_emb(
     xq_out = xq @ rotation_mat
     xk_out = xk @ rotation_mat
     return xq_out, xk_out
+
+
+def get_rotation_mat_prefill(rot_mat, start_pos, seqlen, batch):
+    position_ids = torch.ones(batch, seqlen, dtype=torch.long) * torch.arange(start_pos, start_pos + seqlen).unsqueeze(
+        0
+    )
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
+
+
+def get_rotation_mat(rot_mat, start_pos, seqlen, batch):
+    position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
+
+
+#  Add-Multiply method of rotary embeddings for prefill
+def get_rot_transformation_mat(dhead):
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def gather_cos_sin(position_ids, cos, sin):
+    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
+    cos = cos.gather(0, position_id_expanded)
+    sin = sin.gather(0, position_id_expanded)
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin

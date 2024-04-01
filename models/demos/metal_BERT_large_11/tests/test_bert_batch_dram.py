@@ -293,8 +293,6 @@ def test_bert_batch_dram(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"BERT_large_full_{request.node.callspec.id}")
-
     run_bert_question_and_answering_inference(
         model_version,
         batch,
@@ -377,8 +375,6 @@ def test_bert_batch_dram_with_program_cache(
 
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-
-    tt_lib.profiler.set_profiler_location(f"BERT_large_full_with_program_cache_{request.node.callspec.id}")
 
     run_bert_question_and_answering_inference(
         model_version,

@@ -256,6 +256,7 @@ enum class DataFormat : std::uint8_t
   UInt8     = 30,
   UInt16    = 9,
   Int32     = 8,
+  UInt32    = 24,
   Tf32      = 4,
   testMan7  = 0x82,       // intermediate format for testing: 7bit mantissa (6+hidden)
   testMan2  = 0x8A,       // intermediate format for testing: 2bit mantissa (2+hidden)

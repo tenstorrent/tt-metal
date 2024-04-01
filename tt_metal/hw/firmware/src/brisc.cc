@@ -12,7 +12,6 @@
 #include "tensix_types.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
@@ -204,9 +203,7 @@ void device_setup() {
     core.ex_rmw_cfg(0, ECC_SCRUBBER_Scrub_On_Error_RMW, 1);
     core.ex_rmw_cfg(0, ECC_SCRUBBER_Delay_RMW, 0x100);
 
-    // Initialize sempahores - check if we need to do this still
-    // math->packer semaphore - max set to 1, as double-buffering is disabled by default
-    core.ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf[0]);
+    core.initialize_tensix_semaphores(instrn_buf[0]);
 
     // // unpacker semaphore
     // core.ex_sem_init(semaphore::UNPACK_MISC, 1, 1, instrn_buf[0]);

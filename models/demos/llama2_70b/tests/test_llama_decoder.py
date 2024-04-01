@@ -62,6 +62,22 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
 
         return x, start_pos, freqs_cis, attn_mask
 
+    def prepare_inputs_prefill(self, x, start_pos):
+        """
+        Prepare inputs for decode mode. Assume that current token is at
+        start_pos, and KV cache has valid data up to start_pos.
+        """
+        batch = x.size(0)
+        seq_len = x.size(1)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
+
+        attn_mask = torch.full((seq_len, seq_len), float("-inf"))
+        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask.expand(batch, self.n_heads, -1, -1)
+
+        return x, start_pos, freqs_cis, attn_mask
+
     def forward(self, x, start_pos, freqs_cis, mask):
         """
         x: (batch, seq, hidden_dim)
@@ -139,19 +155,27 @@ def run_test_LlamaDecoder_inference(
         for device in devices:
             tt_lib.device.Synchronize(device)
 
-    generation_start_pos = UNIT_TEST_START_POS
-    generation_length = UNIT_TEST_GENERATION_LENGTH
     all_tests_pass, all_pccs = True, []
+    if model_config["LLM_MODE"] == "prefill":
+        generation_start_pos = 0
+        generation_length = 1
+    else:
+        generation_start_pos = UNIT_TEST_START_POS
+        generation_length = UNIT_TEST_GENERATION_LENGTH
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
-        pt_input = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
-        tt_input = pt_input.clone()
-
+        pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
+        tt_input = pt_inp.clone()
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs(pt_input, start_pos)
+        if model_config["LLM_MODE"] == "prefill":
+            x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs_prefill(
+                pt_inp, start_pos
+            )
+        else:
+            x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs(pt_inp, start_pos)
 
         pytorch_out = pytorch_LlamaDecoder_model(
             x_input,
@@ -230,8 +254,12 @@ def run_test_LlamaDecoder_inference(
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
         cache_length_to_check = generation_start_pos + generation_length
-        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        if model_config["LLM_MODE"] == "prefill":
+            cache_pt = cache_pt[:, :, :seq_len, :]
+            cache_tt = cache_tt[:, :, :seq_len, :]
+        else:
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
         logger.info(f"Output: {output_pcc}")
 
@@ -263,28 +291,20 @@ def run_test_LlamaDecoder_inference(
     ),
 )
 @pytest.mark.parametrize(
-    "batch, seq_len",
-    (
-        (32, 1),
-        # (1, 128),
-    ),
-    ids=(
-        "decode",
-        # "prefill"
-    ),
+    "batch, seq_len, pcc",
+    ((32, 1, 0.9993), (1, 128, 0.9994), (1, 2048, 0.9992)),
+    ids=("decode", "prefill_128", "prefill_2k"),
 )
-@pytest.mark.parametrize("model_config_str, pcc", (("BFLOAT16-DRAM", 0.999),))
 def test_LlamaDecoder_inference(
     batch,
     seq_len,
     pcc,
-    model_config_str,
     n_devices,
     all_devices,
     emulated,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")

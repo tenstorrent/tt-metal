@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -16,10 +16,10 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("lambd", [0.5, 1.0, 2.2, 5.5, 9.9])
+@pytest.mark.parametrize("lambd", [2.2, 0.5, 1.0, 5.5, 9.9])
 def test_bw_hardshrink(input_shapes, lambd, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
     pyt_y = torch.nn.functional.hardshrink(in_data, lambd=lambd)
 
@@ -31,5 +31,5 @@ def test_bw_hardshrink(input_shapes, lambd, device):
 
     golden_tensor = [in_data.grad]
 
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

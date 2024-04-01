@@ -5,8 +5,7 @@
 import torch
 import pytest
 import tt_lib
-
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -28,25 +27,16 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_add(input_shapes, input_shapes_2, dimension, device):
-    in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
 
-    other_data = torch.randn(input_shapes_2, requires_grad=True).bfloat16()
-    other_tensor = (
-        tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
 
     in_data.retain_grad()
     other_data.retain_grad()
 
     pyt_y = torch.cat((in_data, other_data), dim=dimension)
 
-    grad_data = torch.randn(pyt_y.shape, requires_grad=True).bfloat16()
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
 
     tt_output_tensor_on_device = tt_lib.tensor.concat_bw(grad_tensor, input_tensor, other_tensor, dimension)
 
@@ -54,5 +44,5 @@ def test_bw_add(input_shapes, input_shapes_2, dimension, device):
 
     golden_tensor = [in_data.grad, other_data.grad]
 
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

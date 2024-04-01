@@ -17,6 +17,13 @@ if [[ $ARCH_NAME == "wormhole" ]]; then
   env pytest tests/ttnn/integration_tests/unet
 fi
 
+if [[ $ARCH_NAME == "wormhole_b0" ]]; then
+  env pytest models/experimental/mamba/tests/test_full_model.py
+  env pytest models/experimental/mamba/tests_opt/test_full_model.py
+  env pytest models/experimental/mamba/tests/test_benchmarks.py
+  env pytest models/experimental/mamba/tests/test_demo.py
+fi
+
 env pytest models/experimental/whisper -k whisper_attention
 env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
 
@@ -78,6 +85,11 @@ env pytest models/experimental/mistral/tests/test_mistral_feed_forward.py
 env pytest models/experimental/mistral/tests/test_mistral_rms_norm.py
 env pytest models/experimental/mistral/tests/test_mistral_transformer_block.py
 
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_mlp
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_rotary_embeddings
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_attention
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_decoder
+
 # GRAYSKULL ONLY
 
 if [[ $ARCH_NAME == "grayskull" ]]; then
@@ -133,6 +145,11 @@ env pytest models/experimental/mistral/tests/test_mistral_attention.py
 
 env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_1]
 env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_2]
+
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_mlp
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_rotary_embeddings
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_attention
+env pytest models/demos/ttnn_falcon7b/tests -k falcon_decoder
 
 #3524 SD gets lower PCC than FD for Resnet
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then

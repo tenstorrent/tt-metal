@@ -73,7 +73,8 @@ enum class UnaryOpType {
     ADD_UNARY_SFPU = 55,
     SUB_UNARY_SFPU = 56,
     MUL_UNARY_SFPU = 57,
-    DIV_UNARY_SFPU = 58
+    DIV_UNARY_SFPU = 58,
+    IDENTITY_UINT32 = 59
 };
 
 template <typename T>
@@ -118,6 +119,7 @@ enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHA
 struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
     const MemoryConfig output_mem_config;
+    bool fp32_dest_acc_en;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -137,26 +139,27 @@ struct EltwiseUnary {
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor& input_tensor);
 
 operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 operation::ProgramWithCallbacks eltwise_unary_single_core(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain);
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 
 inline Tensor run_eltwise_unary(
     const Tensor& input_tensor,
     std::vector<UnaryWithParam> ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
+    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;       // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     if(output_mem_config.is_sharded()){
        return operation::run_without_autoformat(
-               EltwiseUnary{ops_chain, output_mem_config}, {input_tensor})
+               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}, {input_tensor})
         .at(0);
     }
     Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     return operation::run_with_autoformat(
-               EltwiseUnary{ops_chain, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE})
+               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}, {input_tensor}, {input_format_params}, {Layout::TILE})
         .at(0);
 }
 
@@ -168,9 +171,10 @@ inline Tensor run_eltwise_unary(
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
     Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;       // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
                queue,
-               tt::tt_metal::operation::DeviceOperation(EltwiseUnary{ops_chain, output_mem_config}),
+               tt::tt_metal::operation::DeviceOperation(EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}),
                {input_tensor})
         .at(0);
 }
@@ -298,6 +302,7 @@ constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
+constexpr auto identity_uint32 = make_eltwise_unary<UnaryOpType::IDENTITY_UINT32>{};
 constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
 constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
 constexpr auto sub_unary_sfpu =
@@ -449,8 +454,9 @@ namespace primary {
 
 inline Tensor relu(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;       // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
-               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config}, {input_tensor})
+               EltwiseUnary{{UnaryWithParam{.op_type = UnaryOpType::RELU}}, output_mem_config, fp32_dest_acc_en}, {input_tensor})
         .at(0);
 }
 
