@@ -26,6 +26,14 @@ extern uint8_t noc_index;
 #include "noc_parameters.h"
 #include "noc_overlay_parameters.h"
 
+// A couple defines for specifying read/write and multi/unicast
+#define DEBUG_SANITIZE_NOC_READ true
+#define DEBUG_SANITIZE_NOC_WRITE false
+typedef bool debug_sanitize_noc_dir_t;
+#define DEBUG_SANITIZE_NOC_MULTICAST true
+#define DEBUG_SANITIZE_NOC_UNICAST false
+typedef bool debug_sanitize_noc_cast_t;
+
 #define DEBUG_VALID_L1_ADDR(a, l, extra_alignment_bytes) \
     ( \
         (a >= MEM_L1_BASE) && \
@@ -88,8 +96,13 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
 
 // Return value is the alignment requirement (in bytes) for the type of core the noc address points
 // to. Need to do this because L1 alignment needs to match the noc address alignment requirements,
-// even if it's different than the inherent L1 alignment requirements.
-uint32_t debug_sanitize_noc_addr(uint64_t noc_addr, uint32_t noc_len, bool multicast) {
+// even if it's different than the inherent L1 alignment requirements. Note that additional
+// alignment restrictions only apply for writes from L1, so need to specify direction as well.
+uint32_t debug_sanitize_noc_addr(
+    uint64_t noc_addr,
+    uint32_t noc_len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir) {
     // Different encoding of noc addr depending on multicast vs unitcast
     uint32_t x, y;
     if (multicast) {
@@ -118,12 +131,16 @@ uint32_t debug_sanitize_noc_addr(uint64_t noc_addr, uint32_t noc_len, bool multi
     uint32_t extra_alignment_req = NOC_L1_ALIGNMENT_BYTES;
     uint32_t invalid = multicast? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
     if (NOC_PCIE_XY_P(x, y)) {
-        extra_alignment_req = NOC_PCIE_ALIGNMENT_BYTES;
+        // Additional alignment restriction only applies to reads
+        if (dir == DEBUG_SANITIZE_NOC_READ)
+            extra_alignment_req = NOC_PCIE_ALIGNMENT_BYTES;
         if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
     } else if (NOC_DRAM_XY_P(x, y)) {
-        extra_alignment_req = NOC_DRAM_ALIGNMENT_BYTES;
+        // Additional alignment restriction only applies to reads
+        if (dir == DEBUG_SANITIZE_NOC_READ)
+            extra_alignment_req = NOC_DRAM_ALIGNMENT_BYTES;
         if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, noc_len, invalid);
         }
@@ -149,32 +166,48 @@ void debug_sanitize_worker_addr(uint32_t addr, uint32_t len, uint32_t extra_alig
     }
 }
 
-void debug_sanitize_noc_and_worker_addr(uint64_t noc_addr, uint32_t worker_addr, uint32_t len, bool multicast) {
+void debug_sanitize_noc_and_worker_addr(
+    uint64_t noc_addr,
+    uint32_t worker_addr,
+    uint32_t len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir
+) {
     // Check noc addr, get any extra alignment req for worker.
-    uint32_t extra_alignment_req = debug_sanitize_noc_addr(noc_addr, len, multicast);
+    uint32_t extra_alignment_req = debug_sanitize_noc_addr(noc_addr, len, multicast, dir);
 
     // Check worker addr
     debug_sanitize_worker_addr(worker_addr, len, extra_alignment_req);
 }
 
+// TODO: should be able clean up uses of the first three macros and remove them.
 #define DEBUG_SANITIZE_WORKER_ADDR(a, l) \
     debug_sanitize_worker_addr(a, l, NOC_L1_ALIGNMENT_BYTES)
 #define DEBUG_SANITIZE_NOC_ADDR(a, l) \
-    debug_sanitize_noc_addr(a, l, false)
+    debug_sanitize_noc_addr(a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) \
-    debug_sanitize_noc_addr(a, l, true)
-#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, false)
-#define DEBUG_SANITIZE_NOC_MULTI_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, true)
+    debug_sanitize_noc_addr(a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ)
+#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, multicast, dir)
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ)
+#define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ)
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE)
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l) \
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE)
 
 #else // !WATCHER_ENABLED
 
 #define DEBUG_SANITIZE_WORKER_ADDR(a, l)
 #define DEBUG_SANITIZE_NOC_ADDR(a, l)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l)
-#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir)
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l)
 
 #endif // WATCHER_ENABLED
 
