@@ -13,7 +13,6 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_complex
 
 
 def run_complex_polar_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
