@@ -425,7 +425,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.TMP_DIR / "model_graph.svg")
+    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
@@ -550,17 +550,17 @@ def preprocess_model(
     if reader_patterns_cache is None:
         reader_patterns_cache = {}
 
-    if model_name is None and not ttnn.ENABLE_MODEL_CACHE:
+    if model_name is None and not ttnn.CONFIG.enable_model_cache:
         logger.warning(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
         )
 
-    elif model_name is None and ttnn.ENABLE_MODEL_CACHE:
+    elif model_name is None and ttnn.CONFIG.enable_model_cache:
         logger.warning(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
         )
 
-    elif model_name is not None and not ttnn.ENABLE_MODEL_CACHE:
+    elif model_name is not None and not ttnn.CONFIG.enable_model_cache:
         logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
 
     if convert_to_ttnn is None:
@@ -568,7 +568,7 @@ def preprocess_model(
         def convert_to_ttnn(model, full_name):
             return True
 
-    if model_name is None or not ttnn.ENABLE_MODEL_CACHE:
+    if model_name is None or not ttnn.CONFIG.enable_model_cache:
         model = _initialize_model_and_preprocess_parameters(
             initialize_model=initialize_model,
             run_model=run_model,
@@ -579,7 +579,7 @@ def preprocess_model(
         )
 
     else:
-        model_cache_path = ttnn.MODEL_CACHE_PATH / model_name.replace("/", "_")
+        model_cache_path = ttnn.CONFIG.model_cache_path / model_name.replace("/", "_")
         version_file_path = model_cache_path / "version.txt"
 
         if version is None:
