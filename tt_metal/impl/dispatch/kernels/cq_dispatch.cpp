@@ -529,7 +529,12 @@ void process_write_packed() {
             }
         }
 
-        noc_async_write(data_ptr, dst, xfer_size);
+        if (mcast) {
+            noc_async_write_multicast(data_ptr, dst, xfer_size, num_dests);
+        } else {
+            noc_async_write(data_ptr, dst, xfer_size);
+        }
+
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
 
         count--;
