@@ -152,7 +152,10 @@ std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const Memo
     Tensor sqrt_result = sqrt(input, output_mem_config);
     Tensor result = mul(grad, recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     float t_nan  = std::nanf("");
+    float t_inf = std::numeric_limits<float>::infinity();
     result = where(lez(input, output_mem_config), t_nan, result, output_mem_config);
+    result = where(logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
+    result = where(logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config), t_inf, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
