@@ -26,6 +26,7 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
 ////////////////////////////////////////////////////////////////////////////
 //                         moreh_matmul_backward
 ////////////////////////////////////////////////////////////////////////////
+// TODO(seunghwan100): Change to std::vector<std::optional<Tensor>>
 std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
     const Tensor& output_grad,
     const Tensor& input,
@@ -86,6 +87,7 @@ std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
     return outputs;
 }
 
+// TODO(seunghwan100): Change to std::vector<std::optional<Tensor>>
 std::vector<std::variant<Tensor, char*>> moreh_matmul_backward(
     const Tensor& output_grad,
     const Tensor& input,
