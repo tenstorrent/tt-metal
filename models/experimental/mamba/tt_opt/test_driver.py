@@ -37,7 +37,7 @@ def get_tt_metal_model(num_users, hidden_size, configs, version):
 
 def run_demo(num_users, hidden_size, profile):
     configs = model_config.create_model_config(num_users, hidden_size)
-    model, device = get_tt_metal_model(num_users, hidden_size, configs, 'mamba-2.8b-slimpj')
+    model, device = get_tt_metal_model(num_users, hidden_size, configs, "mamba-2.8b-slimpj")
 
     # evaluate model:
     model.eval()
@@ -54,7 +54,7 @@ def run_demo(num_users, hidden_size, profile):
         out_data = model(input_data)
 
     ttnn.close_device(device)
-    
+
     return out_data
 
 
