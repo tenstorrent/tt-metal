@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
 @pytest.mark.parametrize(
@@ -17,13 +17,8 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_multigammaln(input_shapes, device):
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
-
-    in_data = torch.Tensor(size=input_shapes).uniform_(3, 10)
-    in_data.requires_grad = True
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    in_data, input_tensor = data_gen_with_range(input_shapes, 2, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
 
     pyt_y = torch.mvlgamma(in_data, 4)
 
@@ -34,6 +29,6 @@ def test_bw_multigammaln(input_shapes, device):
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
 
     assert comp_pass
