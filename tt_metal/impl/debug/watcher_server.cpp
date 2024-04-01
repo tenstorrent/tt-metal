@@ -547,20 +547,19 @@ static void dump_core(
     // Validate these first since they are used in diagnostic messages below.
     validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
 
-    auto &disabled_features_set = tt::llrt::OptionsG.get_watcher_disabled_features();
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        if (disabled_features_set.find("STATUS") == disabled_features_set.end())
+        if (!tt::llrt::OptionsG.watcher_status_disabled())
             dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core)
             dump_l1_status(f, device, core,  &mbox_data->launch);
-        if (disabled_features_set.find("NOC_SANITIZE") == disabled_features_set.end())
+        if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled())
             dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
-        if (disabled_features_set.find("ASSERT") == disabled_features_set.end())
+        if (!tt::llrt::OptionsG.watcher_assert_disabled())
             dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
-        if (disabled_features_set.find("PAUSE") == disabled_features_set.end())
+        if (!tt::llrt::OptionsG.watcher_pause_disabled())
             dump_pause_status(core, &mbox_data->pause_status, paused_cores);
     }
 
@@ -587,7 +586,7 @@ static void dump_core(
 
     // Ring buffer at the end because it can print a bunch of data
     if (watcher::enabled) {
-        if (disabled_features_set.find("RING_BUFFER") == disabled_features_set.end())
+        if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled())
             dump_ring_buffer(f, device, core);
     }
 
