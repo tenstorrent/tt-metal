@@ -14,9 +14,9 @@ jobs:
           # E150
           {arch: grayskull, runs-on: ["grayskull"], name: E150},
           # # N150
-          # {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
           # # N300
-          # {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
         ]
         test-group: [
           {name: ttnn group 1, cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -v --splits 2 --group 1},
