@@ -34,6 +34,10 @@ if ENABLE_FAST_RUNTIME_MODE:
 REPORTS_PATH = pathlib.Path("generated") / "reports"
 shutil.rmtree(REPORTS_PATH, ignore_errors=True)
 
+THROW_EXCEPTION_ON_FALLBACK = get_bool_env_var("TTNN_THROW_EXCEPTION_ON_FALLBACK", "False")
+if THROW_EXCEPTION_ON_FALLBACK:
+    logger.info(f"ttnn: throw an exception if a fallback is used instead of logging a warning")
+
 ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
 if ENABLE_LOGGING:
     logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")

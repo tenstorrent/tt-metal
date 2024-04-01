@@ -90,9 +90,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             (_slice.stop if _slice.stop is not None else input_tensor.shape[index])
             for index, _slice in enumerate(slices)
         ]
-        for start in slice_start:
-            if start != 0:
-                raise RuntimeError("ttnn.Tensor.__getitem__: cannot slice the given tensor on the device!")
 
         padded_slice_end = list(slice_end)
         if input_layout == ttnn.TILE_LAYOUT:
