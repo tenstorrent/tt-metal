@@ -16,12 +16,14 @@ namespace multi_device {
 DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids)
     : device_grid(device_grid)
 {
-    auto num_requested_devices = device_ids.size();
+    auto [num_rows, num_cols] = device_grid;
+    auto num_requested_devices = num_rows * num_cols;
     auto num_available_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
+    TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for DeviceMesh");
 
-    for (auto device_id : device_ids) {
-        managed_devices.emplace_back(device_id, std::unique_ptr<Device>(CreateDevice(device_id, 1)));
+    for (int i = 0; i < num_requested_devices; i++) {
+        managed_devices.emplace_back(device_ids[i], std::unique_ptr<Device>(CreateDevice(device_ids[i], 1)));
     }
 }
 

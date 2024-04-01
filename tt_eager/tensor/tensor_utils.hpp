@@ -57,6 +57,21 @@ namespace tt_metal {
 // Given a multi-device tensor and a device, returns the tensor on the given device.
 Tensor get_device_tensor(const Device* device, const Tensor& multi_device_tensor);
 
+// Returns true has MultiDeviceHost/MultiDevice Storage
+bool is_multi_device_tensor(const Tensor& tensor);
+
+// Given a multi-device tensor and a device, returns a list of per-device tensors.
+std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
+
+// Given a list of per-device shards, return a multi-device tensor
+Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors);
+
+// Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device tensors.
+Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
+
+// Given a multi-device tensor, and a callable, apply the function to all per-device tensors.
+void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
+
 // Given a multi-device tensor, return all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
 

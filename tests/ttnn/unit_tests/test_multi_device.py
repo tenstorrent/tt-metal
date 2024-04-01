@@ -25,6 +25,18 @@ def test_device_mesh_open_close_explicit(silicon_arch_name, silicon_arch_wormhol
     ttnn.close_device_mesh(multi_device)
 
 
+def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
+    """Manually open and close multi-device"""
+    num_pcie_devices = ttnn.get_num_pcie_devices()
+    if num_pcie_devices <= 1:
+        pytest.skip("Requires multiple devices to run")
+
+    device_grid, device_ids = ttnn.DeviceGrid(1, 2), ttnn.get_pcie_device_ids()
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 2
+    ttnn.close_device_mesh(multi_device)
+
+
 def test_multi_device_open_close_full_device_mesh_fixture(device_mesh):
     """Using `device_mesh` pytest fixture defined in conftest.py"""
     pass
@@ -89,13 +101,22 @@ def test_multi_device_check_per_device_shard(pcie_device_mesh, layout, memory_co
         shard_offset += shard_size
 
 
-def test_multi_device_replicate(pcie_device_mesh):
+@pytest.mark.parametrize("shape", [(1, 1, 32, 128), (1, 1, 16, 32)])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_multi_device_replicate(pcie_device_mesh, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
     from ttnn import ReplicateTensorToMesh, ListMeshToTensor
 
-    full_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    full_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ReplicateTensorToMesh(pcie_device_mesh))
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor,
+        mesh_mapper=ReplicateTensorToMesh(pcie_device_mesh),
+        layout=layout,
+        memory_config=memory_config,
+        device=pcie_device_mesh,
+    )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_device_mesh)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
     loopback_replicated_tensors = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(pcie_device_mesh))

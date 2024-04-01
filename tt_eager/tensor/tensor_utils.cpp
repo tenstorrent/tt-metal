@@ -219,6 +219,91 @@ Tensor get_device_tensor(const Device* device, const Tensor& multi_device_tensor
     TT_THROW("Device not found in multi-device tensor");
 }
 
+bool is_multi_device_tensor(const Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE or tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
+}
+
+
+std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor) {
+    std::vector<Tensor> tensors;
+
+    if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE) {
+        const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
+        for (int i = 0; i < tensor_storage.buffers.size(); ++i) {
+            tensors.push_back(Tensor{
+                DeviceStorage{tensor_storage.buffers[i]},
+                tensor_storage.shapes[i],
+                multi_device_tensor.get_dtype(),
+                multi_device_tensor.get_layout()
+            });
+        }
+    } else if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+        const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
+        for (int i = 0; i < tensor_storage.buffers.size(); ++i) {
+            tensors.push_back(Tensor{
+                OwnedStorage{tensor_storage.buffers[i]},
+                tensor_storage.shapes[i],
+                multi_device_tensor.get_dtype(),
+                multi_device_tensor.get_layout()
+            });
+        }
+    }
+    return tensors;
+}
+
+
+Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageType storage_type) {
+    if (tensors.empty()) {
+        TT_THROW("Cannot create multi-device tensor with empty tensor list");
+    }
+
+    if (storage_type == StorageType::MULTI_DEVICE) {
+        std::vector<DeviceBuffer> device_buffers;
+        std::vector<Shape> shapes;
+        for (const auto& tensor : tensors) {
+            device_buffers.push_back(std::get<DeviceStorage>(tensor.get_storage()).buffer);
+            shapes.push_back(tensor.get_legacy_shape());
+        }
+        return Tensor{
+            MultiDeviceStorage{device_buffers, shapes},
+            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_dtype(),
+            tensors.at(0).get_layout()
+        };
+    } else if (storage_type == StorageType::MULTI_DEVICE_HOST) {
+        std::vector<OwnedBuffer> owned_buffers;
+        std::vector<Shape> shapes;
+        for (const auto& tensor : tensors) {
+            owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
+            shapes.push_back(tensor.get_legacy_shape());
+        }
+        return Tensor{
+            MultiDeviceHostStorage{owned_buffers, shapes},
+            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_dtype(),
+            tensors.at(0).get_layout()
+        };
+    } else {
+        TT_THROW("Invalid storage type for multi-device tensor");
+    }
+}
+
+Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func) {
+    auto input_tensors = get_tensors_from_multi_device_storage(tensor);
+    std::vector<Tensor> output_tensors(input_tensors.size());
+    std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(),
+        [&](const auto& device_tensor) { return transform_func(device_tensor); });
+    return create_multi_device_tensor(output_tensors, tensor.storage_type());
+}
+
+void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable) {
+    auto input_tensors = get_tensors_from_multi_device_storage(tensor);
+    for (const auto& device_tensor : input_tensors) {
+        callable(device_tensor);
+    }
+}
+
+
 std::vector<Device*> get_devices(const Tensor& tensor) {
     std::vector<Device*> devices;
     if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
