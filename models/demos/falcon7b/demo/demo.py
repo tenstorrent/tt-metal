@@ -450,7 +450,7 @@ def test_demo(
         batch_size=32,
         num_layers=32,
         max_seq_len=1024,
-        model_config=get_model_config("BFLOAT16-DRAM"),
+        model_config=get_model_config("BFLOAT16-L1_SHARDED"),
         model_location_generator=model_location_generator,
         device=device,
     )

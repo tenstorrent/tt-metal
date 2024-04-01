@@ -5,6 +5,7 @@
 import tt_lib as ttl
 from loguru import logger
 from pathlib import Path
+from models.utility_functions import is_wormhole_b0
 
 OP_KEYS = (
     # Inputs
@@ -72,7 +73,7 @@ NO_DTYPE = (
     "LN_F_OUTPUT",
 )
 
-ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT16-L1")
+ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED")
 
 
 def pretty_print_model_config(model_config):
@@ -97,7 +98,7 @@ def get_model_config(model_config_str):
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
 
     # Set default dtype and mem_config based on model_config_str
-    if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1"):
+    if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
         dtype_str, mem_config_str = model_config_str.split("-")
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
@@ -108,6 +109,7 @@ def get_model_config(model_config_str):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
+        "l1_sharded": (mem_config_str == "L1_SHARDED"),
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
@@ -121,7 +123,7 @@ def get_model_config(model_config_str):
         if "MM_WEIGHTS_DTYPE" in key:
             model_config[key] = BFP8_DTYPE
 
-    if model_config_str in ("BFLOAT16-L1",):
+    if model_config_str in ("BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
@@ -130,6 +132,54 @@ def get_model_config(model_config_str):
         model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
+
+    if model_config_str in ("BFLOAT16-L1_SHARDED"):
+        # Q, K, V are batch sharded across cores
+        model_config["ATTN_BATCH_SHARDED_MEMCFG"] = lambda shard_height, shard_width: ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            # Volume must match batch size
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    shard_height,
+                    shard_width,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config[
+            "ATTN_BATCHED_MM_PROGCFG"
+        ] = lambda block_w, per_core_M, per_core_N: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            in0_block_w=block_w,
+            out_subblock_h=1,  # TODO: Maximize
+            out_subblock_w=1,  # TODO: Maximize
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+
+        if is_wormhole_b0():
+            model_config["COMPUTE_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
+                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        else:
+            model_config["COMPUTE_KERNEL_CONFIG"] = ttl.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+                math_approx_mode=True,
+            )
 
     # uncomment if need to see all the configs
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
