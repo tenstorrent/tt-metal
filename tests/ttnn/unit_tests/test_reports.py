@@ -29,6 +29,8 @@ def test_print_l1_buffers_of_add_operation(tmp_path, height, width):
 
     ttnn.to_torch(output_tensor)
 
+    ttnn.synchronize_device(device)
+
     ttnn.print_l1_buffers(str(tmp_path / "l1_buffer_state.txt"))
 
     device = ttnn.close_device(device)
