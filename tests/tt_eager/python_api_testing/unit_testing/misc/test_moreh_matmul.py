@@ -54,7 +54,6 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     return tt_input, tt_other, tt_output_grad, tt_input_grad, tt_other_grad, torch_input, torch_other, torch_output_grad
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -89,7 +88,6 @@ def test_moreh_matmul_1d(input_shape, device):
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -157,7 +155,6 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
@@ -240,7 +237,6 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
         assert tt_other_grad is None
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
@@ -284,7 +280,6 @@ def test_moreh_matmul(params, device):
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (

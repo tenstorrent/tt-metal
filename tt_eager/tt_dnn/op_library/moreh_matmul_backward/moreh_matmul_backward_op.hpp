@@ -19,6 +19,7 @@ using namespace tt_metal;
 /*
  * GENERAL matmul_backward
  */
+// TODO(seunghwan100): Change to std::vector<std::optional<Tensor>>
 std::vector<std::variant<Tensor, char *>> moreh_matmul_backward(
     const Tensor &output_grad,
     const Tensor &input,
