@@ -47,18 +47,21 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+          cache-dependency-path: |
+            tt_metal/python_env/requirements-dev.txt
+            pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |
-          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
@@ -87,18 +90,21 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+          cache-dependency-path: |
+            tt_metal/python_env/requirements-dev.txt
+            pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Build Docs
         timeout-minutes: 15
         run: |
-          source $HOME/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_build_docs.sh
@@ -124,17 +130,19 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+          cache-dependency-path: |
+            tt_metal/python_env/requirements-dev.txt
+            pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: multi-queue-single-device
         timeout-minutes: 5
         run: |
-          source $HOME/python_env/bin/activate
-          export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode fast-multi-queue-single-device
