@@ -61,7 +61,7 @@ def test_mamba_ssm_inference(model_version: MambaPretrainedModelName, batch, pcc
         cache_path = f"/tmp/{model_version}"
         ttnn.enable_program_cache(device)
     else:
-        cache_path = None
+        cache_path = ""
         ttnn.disable_and_clear_program_cache(device)
 
     config = model_config.create_model_config(batch, reference_model.args.d_model)
