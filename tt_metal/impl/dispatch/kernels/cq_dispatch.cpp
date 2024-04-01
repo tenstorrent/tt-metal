@@ -264,6 +264,9 @@ void process_write_host_d() {
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb(data_ptr, length);
+
+    // Move to next page
+    downstream_cb_data_ptr += (dispatch_cb_page_size - (downstream_cb_data_ptr & (dispatch_cb_page_size - 1))) & (dispatch_cb_page_size - 1);
 }
 
 // Note that for non-paged writes, the number of writes per page is always 1
@@ -733,7 +736,7 @@ void kernel_main() {
 
     {
         uint32_t completion_queue_wr_ptr_and_toggle = *get_cq_completion_write_ptr();
-        cq_write_interface.completion_fifo_wr_ptr = completion_queue_wr_ptr_and_toggle  & 0x7fffffff;
+        cq_write_interface.completion_fifo_wr_ptr = completion_queue_wr_ptr_and_toggle & 0x7fffffff;
         cq_write_interface.completion_fifo_wr_toggle = completion_queue_wr_ptr_and_toggle >> 31;
     }
     bool done = false;
