@@ -344,3 +344,15 @@ The following environment variable can be set in order to completely disable the
 
     import ttnn
     ttnn.query_operations()
+
+
+
+16. Disable Fallbacks
+---------------------
+
+Fallbacks are used when the operation is not supported by the device. The fallbacks are implemented in the host and are slower than the device operations.
+The user will be notified when a fallback is used. The fallbacks can be disabled by setting the following environment variable.
+
+.. code-block:: bash
+
+     export TTNN_THROW_EXCEPTION_ON_FALLBACK=True
