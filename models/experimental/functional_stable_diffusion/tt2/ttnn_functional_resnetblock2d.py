@@ -397,8 +397,7 @@ class resnetBlock2D:
                 hidden_states,
                 (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, in_channels),
             )
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
-        hidden_states = nonlinearity(hidden_states)
+        hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
 
         if up:
             assert False, "Up block within residual block is not implemented!"
@@ -482,7 +481,6 @@ class resnetBlock2D:
             hidden_states,
             (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, out_channels),
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
@@ -516,9 +514,7 @@ class resnetBlock2D:
             hidden_states,
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
         )
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
-
-        hidden_states = nonlinearity(hidden_states)
+        hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.conv2.conv.input_sharded_memory_config)
         hidden_states = self.conv2(hidden_states)
@@ -526,14 +522,10 @@ class resnetBlock2D:
 
         if use_in_shortcut:
             if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
-                if ttnn.is_sharded(input_tensor):
-                    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
                 input_tensor = ttnn.to_memory_config(input_tensor, self.conv_shortcut.conv.input_sharded_memory_config)
             input_tensor = self.conv_shortcut(input_tensor)
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):
-            if ttnn.is_sharded(input_tensor):
-                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
             input_tensor = ttnn.to_memory_config(input_tensor, ttnn.get_memory_config(hidden_states))
         output_tensor = ttnn.add(input_tensor, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
