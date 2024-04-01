@@ -478,7 +478,7 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
     // which assumes page size never changed between calls to this function (checked above).
     uint32_t bank_offset = align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
     uint32_t base_addr = dst_addr + bank_offset;
-    uint8_t start_page_cmd = start_page % num_banks;
+    uint16_t start_page_cmd = start_page % num_banks;
 
     CQDispatchCmd cmd;
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;

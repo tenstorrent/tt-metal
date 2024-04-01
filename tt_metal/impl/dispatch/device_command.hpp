@@ -11,8 +11,6 @@
 #include "dev_mem_map.h"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
-static constexpr uint32_t EVENT_PADDED_SIZE = 16;
-
 struct CommandHeader {
     uint32_t wrap = 0;
     uint32_t finish = 0;
