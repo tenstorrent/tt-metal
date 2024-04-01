@@ -1,5 +1,7 @@
 # Install
 
+These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN. 
+
 ### Step 1. System-level dependencies
 
 ```sh
@@ -19,7 +21,7 @@ Install [TT_SMI](https://github.com/tenstorrent/tt-smi)
 
 Note the current compatability matrix:
 
-| Device              | OS              | Python   | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
+| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-FLASH)                | TT-SMI                                                    |
 |---------------------|-----------------|----------|--------------------|------------------------------------|-----------------------------------------------------------|
 | Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz   | tt-smi_2023-06-16-0283a02404487eea or above               |
 | Wormhole & T3000    | Ubuntu 20.04    | 3.8.10   | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
@@ -30,8 +32,11 @@ Note the current compatability matrix:
 ### Step 3. Huge Pages 
 
 1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
+```sh
+wget https://raw.githubusercontent.com/tenstorrent-metal/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
+```
    
-2. Run first setup script.
+3. Run first setup script.
 ```sh
 sudo -E python3 setup_hugepages.py first_pass                                            
 ```
@@ -48,7 +53,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 ---
 
-### Step 4. Developer dependencies
+### Step 4. Software dependencies
 
 1. Install dependencies 
 
