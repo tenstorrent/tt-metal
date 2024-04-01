@@ -20,10 +20,8 @@ test-list:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_add1_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
   - eltwise-add1:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -44,7 +42,5 @@ test-list:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_add1_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
