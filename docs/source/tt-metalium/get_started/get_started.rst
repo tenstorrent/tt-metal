@@ -9,7 +9,7 @@ The GitHub page for the project is located here:
 https://github.com/tenstorrent-metal/tt-metal
 
 Installation and environment setup instructions are in the GitHub repository
-front-page README: https://github.com/tenstorrent-metal/tt-metal#installing
+front-page README: https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md
 
 Quick Start Guide
 -----------------
