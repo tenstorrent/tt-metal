@@ -84,7 +84,14 @@ void RunTimeOptions::ParseWatcherEnv() {
     watcher_auto_unpause = false;
 
     // Any watcher features to disabled based on env var.
-    for (std::string feature: {"ASSERT", "PAUSE", "RING_BUFFER", "NOC_SANITIZE", "STATUS"}) {
+    std::set all_features = {
+         watcher_status_str,
+         watcher_noc_sanitize_str,
+         watcher_assert_str,
+         watcher_pause_str,
+         watcher_ring_buffer_str
+    };
+    for (std::string feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
         if (getenv(env_var.c_str()) != nullptr) {
