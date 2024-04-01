@@ -9,41 +9,8 @@
 
 
 void kernel_main() {
-    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 320;
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 256;
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
-    uint32_t i = 0;
-    uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
-    //uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
-    i+=1;
-    //uint32_t weight_size_w = get_arg_val<uint32_t>(i);
-    i+=1;
-
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
-    //uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i);
-    i+=1;
-    // inner loop bounds as compile-time args improve pef
-    // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-
-    uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t first_partial_image_num_rows          = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_first_partial_image_row    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_full_images                       = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_full_image                 = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t last_partial_image_num_rows           = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t last_partial_left_aligned_row_width   = get_arg_val<uint32_t>(i); i+=1;
-
-    // moved these to compile-time args
-    // uint32_t window_outer                          = get_arg_val<uint32_t>(i); i+=1;
-    // uint32_t window_inner                          = get_arg_val<uint32_t>(i); i+=1;
-    i+=2; // skip 2 rt args
-
-    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
-    if(noop) {
-        return;
-    }
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
@@ -52,111 +19,26 @@ void kernel_main() {
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on them
-    constexpr uint32_t window_outer                        = get_compile_time_arg_val(6);
-    constexpr uint32_t window_inner                        = get_compile_time_arg_val(7);
-    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(8);
-    constexpr uint32_t act_block_num_tiles                 = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_size_w                       = get_compile_time_arg_val(10);
-    constexpr uint32_t conv_act_size_w_padded              = get_compile_time_arg_val(11);
-    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(12);
-    constexpr uint32_t weight_size_h                       = get_compile_time_arg_val(13);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(6);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(7);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(11);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_size_h= get_compile_time_arg_val(13);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+
+    uint32_t i = 0;
+    i+=15;
+    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
+
+    if(noop) {
+        return;
+    }
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
-
-    //DPRINT << "window_outer: " << window_outer << ENDL();
-    //DPRINT << "window_outer: " << window_inner << ENDL();
-
-    // Assumptions. Must be true. Validate on host.
-    // assert(act_block_w_datums == C * weight_size_w)
-    // assert(num_blocks_act_w == weight_size_h)
-    // assert(act_block_w_datums % C == 0)
-    // assert(act_block_w_datums % 32 == 0)
-    // assert(act_block_h_datums % 32 == 0)
-    // assert(act_block_h_ntiles == act_block_h_datums/32)
-    // assert(act_block_w_ntiles == act_block_w_datums/32)
-    // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
-
-
-    /* REFERENCE; TODO: Remove
-    volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
-    uint32_t weights_top_left_corner_idx = 0;
-
-    // First partial right-aligned row
-    DPRINT << "First partial right-aligned row" << ENDL();
-    for (uint32_t k = 0; k < first_partial_right_aligned_row_width; k++) {
-        //reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-        if (reader_indices_ptr[reader_idx] != weights_top_left_corner_idx) {
-          DPRINT << reader_idx << ": ";
-          DPRINT << reader_indices_ptr[reader_idx] << ", " << weights_top_left_corner_idx << ENDL();
-        }
-        reader_idx++;
-        weights_top_left_corner_idx++;
-    }
-    weights_top_left_corner_idx += skip_after_partial_right_aligned_row; // Skip padded width
-
-    // First partial image
-    DPRINT << "First partial image" << ENDL();
-    for (uint32_t j = 0; j < first_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w_; k++) {
-            //reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-            if (reader_indices_ptr[reader_idx] != weights_top_left_corner_idx) {
-                DPRINT << reader_idx << ": ";
-                DPRINT << reader_indices_ptr[reader_idx] << ", " << weights_top_left_corner_idx << ENDL();
-            }
-            reader_idx++;
-            weights_top_left_corner_idx++;
-        }
-        weights_top_left_corner_idx += weight_size_w - 1;
-    }
-    weights_top_left_corner_idx += skip_after_first_partial_image_row; // Skip padded rows
-
-    // Full images
-    DPRINT << "Full images" << ENDL();
-    for (uint32_t i = 0; i < num_full_images; i++) {
-        for (uint32_t j = 0; j < conv_act_size_h; j++) {
-            for (uint32_t k = 0; k < conv_act_size_w; k++) {
-                //reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-                if (reader_indices_ptr[reader_idx] != weights_top_left_corner_idx) {
-                    DPRINT << reader_idx << ": ";
-                    DPRINT << reader_indices_ptr[reader_idx] << ", " << weights_top_left_corner_idx << ENDL();
-                }
-                reader_idx++;
-                weights_top_left_corner_idx++;
-            }
-            weights_top_left_corner_idx += weight_size_w - 1;
-        }
-        weights_top_left_corner_idx += skip_after_full_image; // Skip padded rows
-    }
-
-    // Last partial image
-    DPRINT << "Last partial image" << ENDL();
-    for (uint32_t j = 0; j < last_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w; k++) {
-            //reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-            if (reader_indices_ptr[reader_idx] != weights_top_left_corner_idx) {
-                DPRINT << reader_idx << ": ";
-                DPRINT << reader_indices_ptr[reader_idx] << ", " << weights_top_left_corner_idx << ENDL();
-            }
-            reader_idx++;
-            weights_top_left_corner_idx++;
-        }
-        weights_top_left_corner_idx += weight_size_w - 1;
-    }
-
-    // Last partial left-alighned row
-    DPRINT << "Last partial left-aligned row" << ENDL();
-    for (uint32_t k = 0; k < last_partial_left_aligned_row_width; k++) {
-        //reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
-        if (reader_indices_ptr[reader_idx] != weights_top_left_corner_idx) {
-            DPRINT << reader_idx << ": ";
-            DPRINT << reader_indices_ptr[reader_idx] << ", " << weights_top_left_corner_idx<< ENDL();
-        }
-        reader_idx++;
-        weights_top_left_corner_idx++;
-    }
-    */
-
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
