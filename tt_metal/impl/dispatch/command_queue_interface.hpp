@@ -36,6 +36,8 @@ constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 // 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
 constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
+static constexpr uint32_t EVENT_PADDED_SIZE = 16;
+
 // Starting L1 address of commands
 inline uint32_t get_dispatch_buffer_base() {
     uint32_t dispatch_buffer_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE));
@@ -263,6 +265,7 @@ class SystemMemoryManager {
         return this->cq_size;
     }
 
+    // TODO: rename issue_queue_reserve?
     void issue_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) {
         uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
 
@@ -284,6 +287,7 @@ class SystemMemoryManager {
             (rd_toggle != cq_interface.issue_fifo_wr_toggle and cq_interface.issue_fifo_wr_ptr == rd_ptr));
     }
 
+    // TODO: rename
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
         // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
@@ -297,6 +301,7 @@ class SystemMemoryManager {
         memcpy(user_scratchspace, data, size_in_bytes);
     }
 
+    // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
         // All data needs to be 32B aligned
         uint32_t push_size_16B = align(push_size_B, 32) >> 4;
@@ -381,8 +386,8 @@ class SystemMemoryManager {
         }
     }
 
-    void fetch_queue_write(uint16_t command_size_B, const uint8_t cq_id) {
-        uint32_t command_size_16B = command_size_B >> PREFETCH_Q_LOG_MINSIZE;
+    void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id) {
+        uint16_t command_size_16B = command_size_B >> PREFETCH_Q_LOG_MINSIZE;
         tt::Cluster::instance().write_core((void *)&command_size_16B, sizeof(uint16_t), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id], true);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(uint16_t);
         tt_driver_atomics::sfence();
