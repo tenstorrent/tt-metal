@@ -99,6 +99,8 @@ class Trace {
     static bool has_instance(const uint32_t tid);
     static void add_instance(const uint32_t tid, shared_ptr<Buffer> buffer);
     static void remove_instance(const uint32_t tid);
+    static void release_all();  // note all instances across all devices are released
+    static shared_ptr<Buffer> get_instance(const uint32_t tid);
 };
 
 }  // namespace tt::tt_metal
