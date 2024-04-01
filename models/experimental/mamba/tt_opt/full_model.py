@@ -5,11 +5,11 @@
 import torch
 
 import ttnn
-import os
 from pathlib import Path
 from typing import Callable
 
 from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
+
 
 class TtTensorLoader:
     def __init__(self, state_dict, device, tt_cache_path: str = ""):
@@ -22,27 +22,28 @@ class TtTensorLoader:
             name: str,
             tm_fn: Callable = lambda x: x,
             postfix: str = "",
-            device: ttnn.device = self.device,
+            device: ttnn.Device = self.device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
             torch_tensor=None,
         ):
             tensor_name = f"layers.{layer_num}.{name}"
-            if self.tt_cache_path is not None:
-                tensor_cache_filepath = str(Path(self.tt_cache_path) / (tensor_name + postfix))
-            else:
-                tensor_cache_filepath = None
+            tensor_cache_filepath = Path(self.tt_cache_path) / (tensor_name + postfix)
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
+            if len(torch_tensor.size()) == 1:
+                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            if len(torch_tensor.size()) == 2:
+                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
             tt_tensor = ttnn.as_tensor(
                 torch_tensor,
                 device=device,
                 layout=tt_layout,
                 memory_config=tt_memory_config,
                 dtype=tt_dtype,
-                cache_file_name=tensor_cache_filepath,
+                cache_file_name=str(tensor_cache_filepath),
             )
             return tt_tensor
 
@@ -50,7 +51,7 @@ class TtTensorLoader:
 
 
 class MambaTT(torch.nn.Module):
-    def __init__(self, reference_model, device: ttnn.device, configs, tt_cache_path: str = "", num_layers=None):
+    def __init__(self, reference_model, device: ttnn.Device, configs, tt_cache_path: str = "", num_layers=None):
         super().__init__()
         self.args = reference_model.args
         self.device = device
@@ -85,7 +86,9 @@ class MambaTT(torch.nn.Module):
             dtype=ttnn.bfloat16,
         )
         for layer in self.layers:
+            x_old = x
             x = layer(x)
+            ttnn.deallocate(x_old)
 
         x = ttnn.to_torch(x).to(torch.float32)
         x = x.unsqueeze(1)
