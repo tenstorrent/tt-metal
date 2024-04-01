@@ -1,6 +1,6 @@
 # Install
 
-These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN. 
+These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
 
 ### Step 1. System-level dependencies
 
@@ -13,7 +13,7 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
 
 ### Step 2. Driver & Firmware
 
-Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd). 
+Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd).
 
 Install [TT-FLASH](https://github.com/tenstorrent/tt-flash) and the [firmware blob](https://github.com/tenstorrent/tt-firmware-gs).
 
@@ -29,24 +29,24 @@ Note the current compatability matrix:
 
 ---
 
-### Step 3. Huge Pages 
+### Step 3. Huge Pages
 
 1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
 ```sh
 wget https://raw.githubusercontent.com/tenstorrent-metal/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
 ```
-   
+
 3. Run first setup script.
 ```sh
-sudo -E python3 setup_hugepages.py first_pass                                            
+sudo -E python3 setup_hugepages.py first_pass
 ```
 
 3. Reboot
 ```sh
-sudo reboot now                                                                           
+sudo reboot now
 ```
 
-4. Run second setup script & check setup. 
+4. Run second setup script & check setup.
 ```sh
 sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
@@ -55,7 +55,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 ### Step 4. Software dependencies
 
-1. Install dependencies 
+1. Install dependencies
 
 ```sh
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config
@@ -70,14 +70,14 @@ sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 
 ### Step 5. Build from source
 
 1. Clone the repo.
-   
+
 ```sh
 git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 cd tt-metal
+git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-2. Set up the environment, build & activate. 
+2. Set up the environment, build & activate.
 
 ```sh
 export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
@@ -89,4 +89,3 @@ make build
 
 source build/python_env/bin/activate
 ```
-
