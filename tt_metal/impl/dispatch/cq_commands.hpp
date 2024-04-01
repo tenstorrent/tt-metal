@@ -116,9 +116,8 @@ struct CQDispatchWriteHostCmd {
 } __attribute__((packed));
 
 struct CQDispatchWritePagedCmd {
-    uint8_t pad1;
     uint8_t is_dram;          // one flag, false=l1
-    uint8_t start_page;
+    uint16_t start_page;
     uint32_t base_addr;
     uint32_t page_size;
     uint32_t pages;
