@@ -17,13 +17,13 @@ Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd).
 
 Install [TT-Flash](https://github.com/tenstorrent/tt-flash) and the [firmware blob](https://github.com/tenstorrent/tt-firmware-gs).
 
-Install [tt-smi](https://github.com/tenstorrent/tt-smi).
+Install [TT-SMI](https://github.com/tenstorrent/tt-smi).
 
-Install [tt-topology](https://github.com/tenstorrent/tt-smi) with `mesh` configuration if you're using a T3000.
+Install [TT-Topology](https://github.com/tenstorrent/tt-smi) with `mesh` configuration if you're using a T3000.
 
 Note the current compatability matrix:
 
-| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | tt-smi                | tt-topology     |
+| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology     |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|-----------------|
 | Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz (v4.0.0)  | v2.1.0 or above       | N/A             |
 | Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.8.11.0.tar.gz (v80.8.11.0)      | v2.1.0 or above       | N/A             |
