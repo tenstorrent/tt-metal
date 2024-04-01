@@ -79,6 +79,9 @@ def run_test_FalconCausalLM_end_to_end(
     # Clear global profiler state before starting measurements
     profiler.clear()
 
+    for device in devices:
+        device.enable_program_cache()
+
     num_devices = len(devices)
     global_batch = batch * num_devices
     model_name = model_location_generator(model_version, model_subdir="Falcon")
@@ -349,7 +352,7 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
@@ -386,6 +389,9 @@ class TestParametrized:
     ):
         if is_e75(device) and batch == 32:
             pytest.skip("Falcon batch 32 is not supported on E75")
+
+        if model_config_str == "BFLOAT16-L1_SHARDED":
+            pytest.skip("Sharded config is not supported on GS")
 
         model_config = get_model_config(model_config_str)
         tt_cache_path = get_tt_cache_path(model_version)
@@ -445,6 +451,8 @@ class TestParametrized:
     ):
         if num_devices > 1:
             pytest.skip(f"num_devices={num_devices} is not supported on CI yet")
+        if model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 2047:
+            pytest.skip(f"kv_cache_len={kv_cache_len} does not fit with L1_SHARDED")
         devices = get_devices_for_t3000(all_devices, num_devices)
 
         model_config = get_model_config(model_config_str)
