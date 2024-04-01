@@ -31,6 +31,7 @@
                     <th>Shape</th>
                     <th>Dtype</th>
                     <th>Layout</th>
+                    <th>String Representation</th>
                 </tr>
                 {% for tensor in input_tensors %}
                 <tr>
@@ -38,6 +39,7 @@
                     <td>{{tensor.shape}}</td>
                     <td>{{tensor.dtype}}</td>
                     <td>{{tensor.layout}}</td>
+                    <td>{{tensor}}</td>
                 </tr>
                 {% endfor %}
             </table>
@@ -51,6 +53,7 @@
                     <th>Shape</th>
                     <th>Dtype</th>
                     <th>Layout</th>
+                    <th>String Representation</th>
                 </tr>
                 {% for tensor in output_tensors %}
                 <tr>
@@ -58,6 +61,7 @@
                     <td>{{tensor.shape}}</td>
                     <td>{{tensor.dtype}}</td>
                     <td>{{tensor.layout}}</td>
+                    <td>{{tensor}}</td>
                 </tr>
                 {% endfor %}
             </table>
