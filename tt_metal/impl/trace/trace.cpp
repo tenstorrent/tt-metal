@@ -131,4 +131,17 @@ void Trace::remove_instance(const uint32_t tid) {
     });
 }
 
+void Trace::release_all() {
+    _safe_pool([&] {
+        Trace::buffer_pool.clear();
+    });
+}
+
+shared_ptr<Buffer> Trace::get_instance(const uint32_t tid) {
+    return _safe_pool([&] {
+        TT_FATAL(Trace::buffer_pool.find(tid) != Trace::buffer_pool.end());
+        return Trace::buffer_pool[tid];
+    });
+}
+
 }  // namespace tt::tt_metal

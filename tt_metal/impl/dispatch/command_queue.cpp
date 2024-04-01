@@ -734,9 +734,16 @@ void EndTrace(Trace& trace) {
 }
 
 uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
-    detail::DispatchStateCheck(true);
     uint32_t trace_id = trace.instantiate(cq);
     return trace_id;
+}
+
+void ReleaseTrace(uint32_t trace_id) {
+    if (trace_id == -1) {
+        Trace::release_all();
+    } else if (Trace::has_instance(trace_id)) {
+        Trace::remove_instance(trace_id);
+    }
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
