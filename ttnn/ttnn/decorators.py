@@ -297,15 +297,22 @@ class Operation:
         def fallback_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                used_fallback = False
                 try:
-                    return function(*function_args, **function_kwargs)
+                    output = function(*function_args, **function_kwargs)
                 except NotImplementedError:
+                    used_fallback = True
                     logger.warning(f"{self.name}: falling back to torch due to NotImplementedError")
-                    return self.fallback(*function_args, **function_kwargs)
+                    output = self.fallback(*function_args, **function_kwargs)
                 except Exception as e:
+                    used_fallback = True
                     exception_message = "\n".join(str(e).split("\n")[:3])
                     logger.warning(f"{self.name}: falling back to torch due to {exception_message}")
-                    return self.fallback(*function_args, **function_kwargs)
+                    output = self.fallback(*function_args, **function_kwargs)
+
+                if ttnn.THROW_EXCEPTION_ON_FALLBACK and used_fallback:
+                    raise RuntimeError(f"Fallbacks are disabled, but {self.name} used a fallback")
+                return output
 
             return call_wrapper
 
