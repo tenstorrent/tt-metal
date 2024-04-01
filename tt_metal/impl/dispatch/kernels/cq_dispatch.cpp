@@ -183,13 +183,13 @@ void process_write_host_h() {
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
             host_completion_queue_write_addr = get_noc_addr_helper(pcie_noc_xy_encoding, completion_queue_write_addr);
-            block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
+            block_noc_writes_to_clear[rd_block_idx]+=(last_chunk_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
         }
         noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);
         // This will update the write ptr on device and host
         // Since writes use static vc we don't need to barrier after writes since writes are ordered
         completion_queue_push_back(npages);
-        block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
+        block_noc_writes_to_clear[rd_block_idx]+=(xfer_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
 
         length -= xfer_size;
         data_ptr += xfer_size;
