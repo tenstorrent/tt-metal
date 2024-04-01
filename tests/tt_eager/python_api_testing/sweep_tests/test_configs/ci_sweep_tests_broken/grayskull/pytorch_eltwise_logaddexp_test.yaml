@@ -22,13 +22,13 @@ test-list:
         inputs:
           - input-1:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
           - input-2:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_logaddexp_sweep.csv
   - eltwise-logaddexp:
       shape:
@@ -58,5 +58,5 @@ test-list:
             data-layout: ["ROW_MAJOR"]
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_logaddexp_sweep.csv
