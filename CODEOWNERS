@@ -9,8 +9,9 @@ CONTRIBUTING.md @tt-rkim
 
 CODEOWNERS @tt-rkim
 
-third_party/ @tt-rkim @TT-billteng
-sfpi/ @pgkeller
+INSTALLING.md @tt-rkim
+
+third_party/ @tt-rkim @TT-billteng sfpi/ @pgkeller
 
 # Build stuff
 
