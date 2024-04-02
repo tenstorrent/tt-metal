@@ -273,6 +273,7 @@ def split_query_key_value_and_split_heads(
             kv_input_tensor,
             num_heads=num_heads,
             output_mem_config=memory_config,
+            transpose_k_heads=transpose_key,
         )
         query, key, value = query_key_value
 
