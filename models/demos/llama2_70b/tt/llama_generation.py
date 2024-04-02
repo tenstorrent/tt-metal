@@ -98,7 +98,6 @@ class TtLlamaModelForGeneration:
         logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
         logits = logits[..., : self.params.vocab_size].float()
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
-
         del tt_logits
 
         return logits
@@ -134,5 +133,7 @@ class TtLlamaModelForGeneration:
             del tt_logits
 
             output_logits[user_id] = logits[:, :seq_len, :]
+
+        logger.info(f"Finished prefill for all users up to {padded_seq_len} tokens, Starting decode...")
 
         return output_logits
