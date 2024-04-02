@@ -188,7 +188,6 @@ def latency_printout(latencies, args, generated_len):
         overall_time -= sum(latencies[:warmup_batch])
         overall_tokens -= warmup_batch * args.max_batch_size
         latencies = latencies[warmup_batch:]
-    latencies = latencies[1:]
     mean_latency = sum(latencies) / len(latencies)
     logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {1/mean_latency:.1f} tokens/s")
     logger.info(
