@@ -87,7 +87,6 @@ def create_summarized_l1_buffer_plot(operation_id):
     if len(device_ids) != 1:
         return "", "Cannot visualize buffer plot for multiple devices!"
     device_id = device_ids.pop()
-    print(device_id)
     device = ttnn.database.query_device_by_id(device_id)
 
     l1_size = device.worker_l1_size

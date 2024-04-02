@@ -265,10 +265,10 @@ Set the following environment variables as needed
 .. code-block:: bash
 
     # enable_logging - Synchronize main thread after every operation and log the operation start, end and duration
-    # enable_detailed_buffer_report (optional) - Enable it to visualize the detailed buffer report after every operation
-    # enable_graph_report (optional) - Enable it to visualize the graph after every operation
-    # enable_tensor_report (optional) - Enable it to visualize the input and output tensors of every operation
-    # enable_comparison_mode (optional) - Enable it to test the output of operations against their golden implementaiton
+    # enable_detailed_buffer_report (optional) - Enable to visualize the detailed buffer report after every operation
+    # enable_graph_report (optional) - Enable to visualize the graph after every operation
+    # enable_tensor_report (optional) - Enable to visualize the input and output tensors of every operation
+    # enable_comparison_mode (optional) - Enable to test the output of operations against their golden implementaiton
 
     export TTNN_CONFIG_OVERRIDES='{
         "enable_logging": true,
