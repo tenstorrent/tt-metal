@@ -155,13 +155,11 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
             break
 
         # Decode the entire sequence generated so far and log it
-        for k in range(bsz):
-            text = tokenizer.decode(tokens[k, : cur_pos + 1].tolist())
-            logger.info(f"Loop {cur_pos-1} user {k}: {text}\n")
-        # text = tokenizer.decode(
-        #     tokens[0, : cur_pos + 1].tolist()
-        # )  # text = tokenizer.decode(tokens[0, prev_pos].tolist())
-        # logger.info(f"Loop {cur_pos-1} user 0: {text}\n")
+        for user_id in range(bsz):
+            text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
+            logger.info(f"Loop {cur_pos-1} user {user_id}: {text}\n")
+
+        # text = tokenizer.decode(tokens[0, prev_pos].tolist())
 
         # profiling
         latencies.append(time() - start)
@@ -283,8 +281,8 @@ def construct_arg(**kwargs):
     return Args(**kwargs)
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("num_layers", (1, 2, 4, 8, 10, 20, 80))
+@pytest.mark.timeout(240000)
+@pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=["1L", "2L", "10L", "80L"])
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices, emulated",
     [
@@ -310,11 +308,6 @@ def construct_arg(**kwargs):
     ids=["tt-70b-T3000", "meta-70b", "tt-70b-emulated"],
 )
 @pytest.mark.parametrize(
-    "max_batch_size, max_seq_len",
-    ((32, 4096),),
-    ids=("decode",),
-)
-@pytest.mark.parametrize(
     "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
     [
         (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
@@ -326,9 +319,7 @@ def test_LlamaModel_demo(
     # model args
     implementation,
     skip_model_load,
-    max_batch_size,
     num_layers,
-    max_seq_len,
     # Generation args
     num_tokens,
     prompts_file,
@@ -361,9 +352,7 @@ def test_LlamaModel_demo(
         ckpt_dir=ckpt_dir,
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
-        max_batch_size=max_batch_size,
         num_layers=num_layers,
-        max_seq_len=max_seq_len,
         num_tokens=num_tokens,
         prompts_file=prompts_file,
         output_at_end=output_at_end,

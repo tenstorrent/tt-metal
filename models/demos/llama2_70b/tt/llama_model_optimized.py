@@ -252,7 +252,7 @@ class TtLlamaModel_optimized(nn.Module):
             
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
-            if valid_seq_len is not None:
+            if valid_seq_len:
                 attn_mask[:, valid_seq_len:] = torch.finfo(
                     attn_mask.dtype
                 ).min  # Mask columns beyond valid_seq_len as padding
