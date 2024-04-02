@@ -122,20 +122,20 @@ void kernel_main() {
         // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
         noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-        // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-        cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
         // Round robin self-mcast and receive tilized act matrix in cb_id_act
         // Compute should function like regular mm
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
             if (act_w_outer_i == act_mcast_sender_id) {
                 // MCAST SENDER: send entire tilized input to other cores in column
-                cb_reserve_back(cb_id_act, act_block_num_tiles);
-
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
                 noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
                 noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
+
+                // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
                 // Now we have the block in the CB address, we can mcast to dests!
                 uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
@@ -153,8 +153,6 @@ void kernel_main() {
                 noc_async_write_barrier();
             } else {
                 // MCAST RECEIVER: receive entire tilized input from sender core
-                cb_reserve_back(cb_id_act, act_block_num_tiles);
-
                 // Set act semaphore value to INVALID
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
