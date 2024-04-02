@@ -141,6 +141,7 @@ PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/matmul_single_core", "programming_examples/matmul_single_core"),
     TestEntry("programming_examples/matmul_multi_core", "programming_examples/matmul_multi_core"),
     TestEntry("programming_examples/matmul_multicore_reuse", "programming_examples/matmul_multicore_reuse"),
+    TestEntry("programming_examples/contributed/vecadd", "programming_examples/contributed/vecadd"),
     # Does not work on WH yet.
     # TestEntry("programming_examples/matmul_multicore_reuse_mcast", "programming_examples/matmul_multicore_reuse_mcast"),
 )
