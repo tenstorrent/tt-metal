@@ -11,7 +11,8 @@ CODEOWNERS @tt-rkim
 
 INSTALLING.md @tt-rkim
 
-third_party/ @tt-rkim @TT-billteng sfpi/ @pgkeller
+third_party/ @tt-rkim @TT-billteng
+sfpi/ @pgkeller
 
 # Build stuff
 
