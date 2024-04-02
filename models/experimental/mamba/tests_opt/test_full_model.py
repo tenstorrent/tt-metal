@@ -39,6 +39,7 @@ class MambaPytorch(torch.nn.Module):
         x = self.lm_head(x)
         return x
 
+
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, pcc, enable_cache",
@@ -51,7 +52,9 @@ class MambaPytorch(torch.nn.Module):
         ),
     ),
 )
-def test_mamba_model_inference(device, use_program_cache, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool):
+def test_mamba_model_inference(
+    device, use_program_cache, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool
+):
     torch.manual_seed(10)
 
     reference_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
