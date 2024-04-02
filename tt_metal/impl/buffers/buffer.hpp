@@ -192,11 +192,11 @@ class Buffer {
         return this->shard_parameters_.value();
     }
 
-    std::vector<uint32_t> get_dev_page_to_host_page_mapping() const {
+    const std::vector<uint32_t>& get_dev_page_to_host_page_mapping() const {
         return dev_page_to_host_page_mapping_;
     }
 
-    std::vector<uint32_t> get_host_page_to_dev_page_mapping() const {
+    const std::vector<uint32_t>& get_host_page_to_dev_page_mapping() const {
         return host_page_to_dev_page_mapping_;
     }
 
@@ -219,17 +219,17 @@ class Buffer {
     }
 
 
-    std::vector<CoreCoord> all_cores() const{
+    const std::vector<CoreCoord>& all_cores() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return all_cores_;
     }
 
-    std::vector< std::vector<uint32_t> > core_host_page_indices() const{
+    const std::vector< std::vector<uint32_t> >& core_host_page_indices() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return core_host_page_indices_;
     }
 
-    uint32_t num_cores() const{
+    uint32_t num_cores() const {
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
@@ -237,25 +237,26 @@ class Buffer {
         }
     }
 
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id() const{
+    const std::unordered_map<CoreCoord, uint32_t>& core_to_core_id() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return core_to_core_id_;
     }
 
-    std::vector<uint32_t> host_pages_in_shard(uint32_t core_id) const
+    const std::vector<uint32_t>& host_pages_in_shard(uint32_t core_id) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return core_host_page_indices_[core_id];
     }
 
-    std::vector<uint32_t> host_pages_in_shard(CoreCoord core) const
+    const std::vector<uint32_t>& host_pages_in_shard(CoreCoord core) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         auto core_id = core_to_core_id_.at(core);
         return core_host_page_indices_[core_id];
     }
 
-    std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
+    // Why is this dynamic?
+    const std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         std::vector<uint32_t> ret_vec;
@@ -267,14 +268,14 @@ class Buffer {
         return ret_vec;
     }
 
-    std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
+    const std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         auto core_id = core_to_core_id_.at(core);
         return dev_pages_in_shard(core_id);
     }
 
-    std::vector<uint32_t> get_host_page_to_local_shard_page_mapping() const
+    const std::vector<uint32_t>& get_host_page_to_local_shard_page_mapping() const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return host_page_to_local_shard_page_mapping_;
