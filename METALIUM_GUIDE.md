@@ -14,8 +14,8 @@ Additionally, it is built using cost-effective components: simple packages, GDDR
 This document desribes it. 
 
 * [All you need is a Tensix core and a mesh](#all-you-need-is-a-tensix-core-and-a-mesh)
-  - [Near Memory Compute](#near-memory-compute)
-  - [Distributed Memory and In-Place Compute](#distributed-memory-and-in-place-compute)
+  - [Near Memory Compute and Efficient use of SRAM](#near-memory-compute-and-efficient-use-of-SRAM)
+  - [Distributed Shared Memory and In-Place Compute](#distributed-memory-and-in-place-compute)
   - [Explicit Data Movement](#explicit-data-movement)
   - [Native Tile-Based Compute](#native-tile-based-compute)
   - [Think Bare Metal Cores, Not Threads](#native-tile-processing)
@@ -43,7 +43,7 @@ This document desribes it.
 ### All you need is a Tensix core and a mesh 
  A Tensix Core is:
  - **5 small RISC-V processors** (aka "Baby RISCVs") that run C/C++ kernels and dispatch instructions to the compute and data movement engines
- - **1 MB SRAM memory**, a scratch pad accessible by all RISCVs and engines within the core
+ - **1 MB SRAM memory**, (aka L1) a scratch pad accessible by all RISCVs and engines within the core
  - **Matrix engine (aka FPU)** that performs Matrix multiplication, elementwise, and dot product operations on small matricies (or tiles) of shape 32x32 and similar
  - **Vector engine (aka SFPU)** for vectorized kernels such as Top-k, Sort and special functions such as GELU, Exp, and Sqrt
  - **Data Movement engine** connected to 2 Networks on Chip (NoCs)
@@ -57,12 +57,14 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 
 <img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
 
-#### Near Memory Compute
-The high BW and large capacity SRAM in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for. 
+#### Near Memory Compute and Efficient use of SRAM
+The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for. 
 Tensix cores are connected into a mesh via 2 NOCs, and each Tensix core can communicate with any other Tensix core in the mesh, and with off-chip DRAM, as well as Ethernet cores.
+GPU fracture SRAM across levels within the chip: large register files, small L1, and L2. SRAM is primarily used for re-use and pre-fetch on the way to off-chip DRAM, not as a primary form of Tensor storage and large parts of it not at the peak silicon speed. 
+In contract, in TT architecture, entire SRAM in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relaying on HBM as the primary storage to hand-off data between operations.    
 
-#### Distributed Memory and In-Place Compute
-The mesh of Tensix cores architecture is the first one to efficiently implement distributed memory and enable programmers and compilers to optimize both layout and movement of the data. 
+#### Distributed Shared Memory and In-Place Compute
+The mesh of Tensix cores architecture is the first one to efficiently implement distributed shared memory within the chip and **enable programmers and compilers to optimize both layout and movement of the data**. 
 In many AI and HPC operations, such as as elementwise, the tensors can be laid out (ie "sharded") across SRAMs so that compute can operate on the local data **in-place** without any data movement. 
 Further elaboration in [Scalable Architecture](#scalable-architecture) section.  
 
