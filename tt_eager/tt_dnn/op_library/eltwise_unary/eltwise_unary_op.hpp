@@ -138,7 +138,7 @@ struct EltwiseUnary {
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor& input_tensor);
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(
+operation::ProgramWithCallbacks eltwise_unary_sharded(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);

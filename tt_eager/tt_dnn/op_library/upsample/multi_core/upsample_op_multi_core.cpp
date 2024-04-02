@@ -162,7 +162,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         TT_FATAL(false, "Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [writer_kernel, in_cb_id, out_cb_id](
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
         const void* operation,
         Program &program,
         const std::vector<Tensor>& input_tensors,
@@ -173,8 +173,8 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, in_cb_id, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb_id, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};

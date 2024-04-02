@@ -288,7 +288,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
-            return eltwise_unary_multi_core_height_or_block_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
+            return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
             break;
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
