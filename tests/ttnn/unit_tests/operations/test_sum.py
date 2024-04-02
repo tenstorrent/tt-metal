@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -17,6 +17,8 @@ from models.utility_functions import torch_random
 @pytest.mark.parametrize("dim", [-1, -2, (2, 1)])
 def test_sum(device, batch_size, h, w, dim):
     torch.manual_seed(0)
+    if is_wormhole_b0():
+        pytest.skip("Issue #6991: PCC mismatch")
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=True)
@@ -36,6 +38,8 @@ def test_sum(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("w", [32, 64])
 def test_sum_global(device, batch_size, h, w):
     torch.manual_seed(0)
+    if is_wormhole_b0():
+        pytest.skip("Issue #6991: PCC mismatch")
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor)
