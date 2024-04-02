@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 import ttnn
-import os
+
+from loguru import logger
+
 from pathlib import Path
 from typing import Callable
 
 from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
+
 
 class TtTensorLoader:
     def __init__(self, state_dict, device, tt_cache_path: str = ""):
@@ -22,7 +24,7 @@ class TtTensorLoader:
             name: str,
             tm_fn: Callable = lambda x: x,
             postfix: str = "",
-            device: ttnn.device = self.device,
+            device: ttnn.Device = self.device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
@@ -36,6 +38,12 @@ class TtTensorLoader:
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
+
+            # Make all loaded tensors rank 4 because there are performance issues with certain
+            # ops when using with rank 1/2 tensors in ttnn
+            while len(torch_tensor.size()) < 4:
+                torch_tensor = torch_tensor.unsqueeze(0)
+
             tt_tensor = ttnn.as_tensor(
                 torch_tensor,
                 device=device,
@@ -50,7 +58,7 @@ class TtTensorLoader:
 
 
 class MambaTT(torch.nn.Module):
-    def __init__(self, reference_model, device: ttnn.device, configs, tt_cache_path: str = "", num_layers=None):
+    def __init__(self, reference_model, device: ttnn.Device, configs, tt_cache_path: str = "", num_layers=None):
         super().__init__()
         self.args = reference_model.args
         self.device = device
@@ -60,7 +68,7 @@ class MambaTT(torch.nn.Module):
             self.num_layers = len(reference_model.layers)
         else:
             self.num_layers = num_layers
-        print(f"Initalizing MambaTT with {self.num_layers} layers")
+        logger.info(f"Initalizing MambaTT with {self.num_layers} layers")
 
         self.embedding = reference_model.embedding
 
@@ -75,8 +83,13 @@ class MambaTT(torch.nn.Module):
         self.lm_head = reference_model.lm_head
 
     def forward(self, x):
-        x = self.embedding(x)
-        x = x.squeeze(1)
+        assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
+
+        x = self.embedding(x)  # (B, 1, E)
+        x = x.squeeze(1).unsqueeze(0).unsqueeze(0)  # (1, 1, B, E)
+
+        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
+
         x = ttnn.from_torch(
             x,
             device=self.device,
@@ -87,9 +100,9 @@ class MambaTT(torch.nn.Module):
         for layer in self.layers:
             x = layer(x)
 
-        x = ttnn.to_torch(x).to(torch.float32)
-        x = x.unsqueeze(1)
-        x = self.norm_f(x)
+        x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
+        x = x.squeeze(0).squeeze(0).unsqueeze(1)
+        x = self.norm_f(x)  # (B, 1, E) -> (B, 1, E)
         x = self.lm_head(x)
 
         return x
