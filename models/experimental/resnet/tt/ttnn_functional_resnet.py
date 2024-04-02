@@ -111,8 +111,6 @@ def do_reshard(output_tensor, input_mem_config):
 
 
 def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None):
-    # breakpoint()
-
     conv1 = parameters.conv1(x)
     conv1 = do_reshard(conv1, parameters.conv2.conv.input_sharded_memory_config)
 
@@ -126,8 +124,6 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
     ttnn.deallocate(conv2)
 
     conv3_mem_config = ttnn.get_memory_config(conv3)
-    # if layer is not None and layer >= 3:
-    #     conv3 = ttnn.to_memory_config(conv3, ttnn.DRAM_MEMORY_CONFIG)
 
     if "downsample" in parameters and parameters.downsample is not None:
         identity = do_reshard(identity, parameters.downsample.conv.input_sharded_memory_config)
@@ -492,8 +488,6 @@ class ResNet50:
         return input_tensor
 
     def __call__(self, input_tensor):
-        # breakpoint()
-
         output_tensor = self.impl.conv1(input_tensor)
         if self.batch_size == 20:
             output_tensor = ttnn.experimental.tensor.move_sharded(output_tensor)
@@ -549,10 +543,8 @@ class ResNet50:
         # """
         # the last layers of the resnet
         # """
-        # output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(
-            output_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
-        )
+        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         output_tensor = ttnn.reshape(output_tensor, (self.batch_size, 1, 49, 2048))
 
         sharded_mem_config = ttnn.L1_MEMORY_CONFIG
