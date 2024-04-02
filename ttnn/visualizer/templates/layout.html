@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+
+<style>
+    .header_a {
+        padding: 10px;
+    }
+
+    header {
+        background-color: #D6EEEE;
+        color: black;
+        padding: 5px;
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        text-align: center;
+        padding: auto;
+    }
+
+    footer {
+        background-color: #D6EEEE;
+        color: black;
+        padding: 5px;
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+    }
+</style>
+
+<body>
+    <header>
+        <a class="header_a" , href=" /operations">Operations</a>
+        <a class="header_a" , href=" /operations_with_l1_buffer_usage">Operations With L1 Buffer Usage</a>
+    </header>
+
+    {% block content %}{% endblock %}
+    <footer>
+    </footer>
+</body>
+
+</html>

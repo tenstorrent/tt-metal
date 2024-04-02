@@ -21,6 +21,6 @@ def pytest_make_parametrize_id(config, val, argname):
 
 @pytest.fixture(autouse=True)
 def pre_and_post():
-    logger.info(f"ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(ttnn.CONFIG))}")
+    logger.debug(f"ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(ttnn.CONFIG))}")
     ttnn.database.delete_reports()
     yield
