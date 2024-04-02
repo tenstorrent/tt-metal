@@ -523,8 +523,9 @@ int main(int argc, char **argv) {
         }
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
-        log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-        log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
+        uint32_t total_iterations = iterations_g * prefetcher_iterations_g;
+        log_info(LogTest, "Ran in {}us (for total iterations: {})", elapsed_seconds.count() * 1000 * 1000, total_iterations);
+        log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 /total_iterations);
         if (iterations_g > 0) {
             float total_words = 0;
             if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
@@ -552,12 +553,12 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            total_words *= iterations_g;
-            float bw = total_words * sizeof(uint32_t) * prefetcher_iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
+            total_words *= total_iterations;
+            float bw = total_words * sizeof(uint32_t) / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
-            log_info(LogTest, "BW: {} GB/s (from total_words: {} size: {} MB via host_iter: {} for num_cores: {})",
-                ss.str(), total_words, total_words * sizeof(uint32_t) / (1024.0 * 1024.0), iterations_g, all_workers_g.size());
+            log_info(LogTest, "BW: {} GB/s (from total_words: {} size: {} MB via host_iter: {} prefetcher_iter: {} for num_cores: {})",
+                ss.str(), total_words, total_words * sizeof(uint32_t) / (1024.0 * 1024.0), iterations_g, prefetcher_iterations_g, all_workers_g.size());
         } else {
             log_info(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
         }
