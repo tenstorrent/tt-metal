@@ -410,7 +410,7 @@ class HWCommandQueue {
     void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking);
     void enqueue_write_buffer(std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<const Buffer>> buffer, HostDataType src, bool blocking);
     void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
-    void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
+    void enqueue_program(Program& program, bool blocking);
     void enqueue_record_event(std::shared_ptr<Event> event);
     void populate_record_event(std::shared_ptr<Event> event);
     void enqueue_wait_for_event(std::shared_ptr<Event> event);
@@ -443,7 +443,6 @@ struct CommandInterface {
     std::optional<HostDataType> src;
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
-    std::optional<std::reference_wrapper<Trace>> trace;
 };
 
 class CommandQueue {
