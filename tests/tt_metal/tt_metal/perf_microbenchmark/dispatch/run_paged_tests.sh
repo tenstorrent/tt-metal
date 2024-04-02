@@ -128,17 +128,19 @@ done
 # PERF                                        #
 ###############################################
 
+
 DIR="TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/paged_write_tests_sanity_perf_dram_${SUFFIX}"
 mkdir -p $DIR
 
-# 3.3 GB/s whb0
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 1024 -max 1024 -lps 10 -pbs 2 -np 128 -c -i 1000 |& tee ${DIR}/perf_write_128_page_1024b_size_dispatch_buffer_1024b_pages_1000_iter_dram_pbs2.log
+# 3.845 GB/s whb0
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 1024 -max 1024 -lps 10 -pbs 2 -np 128 -c -i 1 -pi 10000 & tee ${DIR}/perf_write_128_page_1024b_size_dispatch_buffer_1024b_pages_10000_iter_dram_pbs2.log
 
-# 5.7 GB/s whb0
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 2048 -max 2048 -lps 11 -pbs 2 -np 128 -c -i 1000 |& tee ${DIR}/perf_write_128_page_2048b_size_dispatch_buffer_2048b_pages_1000_iter_dram_pbs2.log
+# 6.374 GB/s whb0
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 2048 -max 2048 -lps 11 -pbs 2 -np 128 -c -i 1 -pi 10000 |& tee ${DIR}/perf_write_128_page_2048b_size_dispatch_buffer_2048b_pages_10000_iter_dram_pbs2.log
 
-# 8.6 GB/s whb0
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 4096 -max 4096 -lps 12 -pbs 2 -np 128 -c -i 1000 |& tee ${DIR}/perf_write_128_page_4096b_size_dispatch_buffer_4096b_pages_1000_iter_dram_pbs2.log
+# 9.600 GB/s whb0
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 4096 -max 4096 -lps 12 -pbs 2 -np 128 -c -i 1 -pi 10000 |& tee ${DIR}/perf_write_128_page_4096b_size_dispatch_buffer_4096b_pages_10000_iter_dram_pbs2.log
 
-# 11.7 GB/s whb0 - DRAM.   Have to reduce number of pages to not exceed 1MB L1 for GS.
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 100 -c -i 1000 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_1000_iter_dram_pbs2.log
+# 11.7 GB/s whb0
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 128 -c -i 1000 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_1000_iter_dram_pbs2.log
+# FIXME Hangs TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 128 -c -i 1 -pi 10000 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_10000_iter_dram_pbs2.log
