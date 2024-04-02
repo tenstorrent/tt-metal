@@ -251,13 +251,14 @@ class EnqueueProgramCommand : public Command {
    private:
     uint32_t command_queue_id;
     Device* device;
-    const Program& program;
+    Program& program;
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
-    std::optional<std::reference_wrapper<Trace>> trace = {};
+    static std::vector<uint32_t> commands;
+    uint32_t expected_num_workers_completed;
 
    public:
-    EnqueueProgramCommand(uint32_t command_queue_id, Device* device, const Program& program, SystemMemoryManager& manager, std::optional<std::reference_wrapper<Trace>> trace);
+    EnqueueProgramCommand(uint32_t command_queue_id, Device* device, Program& program, SystemMemoryManager& manager, uint32_t expected_num_workers_completed);
 
     const void assemble_device_commands(uint32_t src_address);
 
