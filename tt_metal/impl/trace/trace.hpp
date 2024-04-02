@@ -38,19 +38,18 @@ enum class TraceState {
 };
 
 class Trace {
-   // TODO: delete the extra bloat not needed once implementation is complete
    private:
-    struct TraceNode {
-        DeviceCommand command;
-        const vector<uint32_t> data;
-        EnqueueCommandType command_type;
-        uint32_t num_data_bytes;
-    };
+    friend class EnqueueProgramCommand;
+    friend void EnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
+
+    // Labels to make the code more readable
+    static constexpr bool kClearBuffer = true;
+    static constexpr bool kBlocking = true;
+    static constexpr bool kNonblocking = false;
+    static constexpr bool kEnableCQBypass = true;
+    static constexpr bool kDisableCQBypass = true;
 
     TraceState state;
-    bool capture_complete;
-    vector<TraceNode> history;
-    uint32_t num_data_bytes;
 
     // Trace queue used to capture commands
     unique_ptr<CommandQueue> tq;
@@ -67,13 +66,7 @@ class Trace {
         return func();
     }
 
-    // Internal methods
-    void record(const TraceNode& trace_node);
     static uint32_t next_id();
-
-    // Friends of trace class
-    friend class EnqueueProgramCommand;
-    friend void EnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
 
    public :
     Trace();

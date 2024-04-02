@@ -710,7 +710,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 }
 
 void HWCommandQueue::enqueue_program(
-    Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking) {
+    Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
 }
 
@@ -1162,19 +1162,18 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
         Device * device = cq.device();
-        std::optional<std::reference_wrapper<Trace>> trace;  // TODO TMZ: remove trace from enqueue_program interface
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(program, device);
-            cq.hw_command_queue().enqueue_program(program, trace, blocking);
+            cq.hw_command_queue().enqueue_program(program, blocking);
             // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem leaks on device.
             program.get().release_buffers();
         } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
             detail::CompileProgram(device, *program);
             program->allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(*program, device);
-            cq.hw_command_queue().enqueue_program(*program, trace, blocking);
+            cq.hw_command_queue().enqueue_program(*program, blocking);
             // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem leaks on device.
             program->release_buffers();
         }
@@ -1338,7 +1337,7 @@ HWCommandQueue& CommandQueue::hw_command_queue() {
 
 void CommandQueue::dump() {
     int cid = 0;
-    log_info(LogMetalTrace, "Dumping {}, mode={}", this->name());
+    log_info(LogMetalTrace, "Dumping {}, mode={}", this->name(), this->get_mode());
     for (const auto& cmd : this->worker_queue) {
         log_info(LogMetalTrace, "[{}]: {}", cid, cmd.type);
         cid++;
@@ -1429,23 +1428,27 @@ void CommandQueue::run_worker() {
 
 void CommandQueue::run_command(const CommandInterface& command) {
     log_trace(LogDispatch, "{} received {} in {} mode", this->name(), command.type, this->mode);
-    if (not this->passthrough_mode()) {
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == parent_thread_id or this->trace_mode()) {
-            // Push to worker queue for trace or async mode. In trace mode, store the execution in the queue.
+    if (this->async_mode()) {
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == parent_thread_id) {
             // In async mode when parent pushes cmd, feed worker through queue.
             this->worker_queue.push(command);
-            if (command.blocking.has_value() and *command.blocking == true) {
+            bool blocking = command.blocking.has_value() and *command.blocking;
+            if (blocking) {
                 TT_ASSERT(not this->trace_mode(), "Blocking commands cannot be traced!");
                 this->wait_until_empty();
             }
-        }
-        else {
+        } else {
             // Handle case where worker pushes command to itself (passthrough)
             TT_ASSERT(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_thread_id, "Only main thread or worker thread can run commands through the SW command queue");
             run_command_impl(command);
         }
-    } else {
+    } else if (this->trace_mode()) {
+        // In trace mode push to the trace queue
+        this->worker_queue.push(command);
+    } else if (this->passthrough_mode()) {
         this->run_command_impl(command);
+    } else {
+        TT_THROW("Unsupported CommandQueue mode!");
     }
 }
 
