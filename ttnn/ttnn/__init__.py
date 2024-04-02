@@ -4,6 +4,7 @@
 
 import contextlib
 import dataclasses
+import json
 import os
 import pathlib
 import pprint
@@ -21,7 +22,7 @@ class Config:
     throw_exception_on_fallback: bool = False
     enable_logging: bool = False
     enable_graph_report: bool = False
-    enable_buffer_report: bool = False
+    enable_detailed_buffer_report: bool = False
     enable_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
@@ -30,6 +31,51 @@ class Config:
 
 
 CONFIG = Config()
+CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
+if "TTNN_CONFIG_PATH" in os.environ:
+    CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
+
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+
+
+def load_config_from_dictionary(config):
+    global CONFIG
+    for key, value in config.items():
+        print(type(config[key]))
+        if hasattr(CONFIG, key):
+            setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
+        else:
+            raise RuntimeError(f"Unknown configuration key: {key}")
+
+
+def load_config_from_json_file(json_path):
+    global CONFIG
+    with open(json_path, "r") as f:
+        config = json.load(f)
+    load_config_from_dictionary(config)
+
+
+def save_config_to_json_file(json_path):
+    with open(json_path, "w") as f:
+        normalized_config = dataclasses.asdict(Config())
+        for key, value in normalized_config.items():
+            if isinstance(value, pathlib.Path):
+                value = str(value)
+            normalized_config[key] = value
+        json.dump(normalized_config, f, indent=4)
+
+
+if CONFIG_PATH.exists():
+    logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
+    load_config_from_json_file(CONFIG_PATH)
+else:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    save_config_to_json_file(CONFIG_PATH)
+
+
+if CONFIG_OVERRIDES:
+    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
+    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
 def get_bool_env_var(name, default):
@@ -42,46 +88,7 @@ def get_bool_env_var(name, default):
         raise RuntimeError(f'The value has to be either "True" or "False"')
 
 
-CONFIG.enable_model_cache = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
-if CONFIG.enable_model_cache:
-    logger.info(f"ttnn: model cache was enabled")
-
-CONFIG.enable_fast_runtime_mode = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
-if CONFIG.enable_fast_runtime_mode:
-    logger.info(f"ttnn: fast runtime mode was enabled")
-
-CONFIG.reports_path = pathlib.Path("generated") / "ttnn" / "reports"
-
-CONFIG.throw_exception_on_fallback = get_bool_env_var("TTNN_THROW_EXCEPTION_ON_FALLBACK", "False")
-if CONFIG.throw_exception_on_fallback:
-    logger.info(f"ttnn: throw an exception if a fallback is used instead of logging a warning")
-
-CONFIG.enable_logging = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
-if CONFIG.enable_logging:
-    logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
-
-
-CONFIG.enable_graph_report = get_bool_env_var("TTNN_ENABLE_GRAPH_REPORT", "False")
-if CONFIG.enable_graph_report:
-    logger.info(f"ttnn: enabled graph report")
-
-
-CONFIG.enable_buffer_report = get_bool_env_var("TTNN_ENABLE_BUFFER_REPORT", "False")
-if CONFIG.enable_buffer_report:
-    logger.info(f"ttnn: enabled buffer report")
-
-
-CONFIG.enable_tensor_report = get_bool_env_var("TTNN_ENABLE_TENSOR_REPORT", "False")
-if CONFIG.enable_tensor_report:
-    logger.info(f"ttnn: enabled tensor report")
-
-
-CONFIG.enable_comparison_mode = get_bool_env_var("TTNN_ENABLE_COMPARISON_MODE", "False")
-if CONFIG.enable_comparison_mode:
-    logger.info(f"ttnn: enabled tensor report")
-
-
-logger.info(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
+logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
 @contextlib.contextmanager
@@ -125,6 +132,7 @@ from ttnn.types import (
     float32,
     MathFidelity,
     MemoryConfig,
+    BufferType,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,

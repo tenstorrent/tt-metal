@@ -953,7 +953,7 @@ def as_tensor(
 
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
             tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
-            logger.info(
+            logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
@@ -968,7 +968,7 @@ def as_tensor(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
-            logger.info(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+            logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
