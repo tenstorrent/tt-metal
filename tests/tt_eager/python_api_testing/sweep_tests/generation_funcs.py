@@ -7,6 +7,7 @@ import random
 from itertools import permutations, product
 from functools import lru_cache
 import tt_lib as ttl
+import ttnn
 import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
 from loguru import logger
@@ -50,8 +51,11 @@ def gen_func_with_cast_tt(gen_func, dtype):
             x = x.to(torch.bfloat16)
 
         elif dtype == ttl.tensor.DataType.BFLOAT8_B:
-            tt_tensor = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT8_B)
-            x = tt_tensor.to_torch()
+            tt_tensor = ttnn.from_torch(
+                x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+            )
+
+            x = ttnn.to_torch(tt_tensor)
 
         elif dtype == ttl.tensor.DataType.UINT32:
             x = x.to(torch.int32)
