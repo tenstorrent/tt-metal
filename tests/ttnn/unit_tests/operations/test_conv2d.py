@@ -990,6 +990,7 @@ def test_unet_conv(
     )
 
 
+@skip_for_wormhole_b0("Issue #6989: AttributeError: 'NoneType' object has no attribute 'enable_program_cache'")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
