@@ -841,6 +841,9 @@ def test_sd_conv_wh(
     config_override,
     enable_auto_formatting,
 ):
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6990/#6985")
+
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
         if enable_auto_formatting:
             pytest.skip("Not running split SD conv with auto formatting")
