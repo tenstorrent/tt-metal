@@ -59,14 +59,24 @@ def use_ttnn_model_cache():
 #     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9997)
 
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor_b
+from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
 
 
+# @skip_for_wormhole_b0()
+# @pytest.mark.parametrize("model_name", ["conv"])
+# @pytest.mark.parametrize("batch_size", [1])
+# @pytest.mark.parametrize("num_input_channels", [128])
+# @pytest.mark.parametrize("input_height", [64])
+# @pytest.mark.parametrize("input_width", [64])
+# @pytest.mark.parametrize("num_output_channels", [128])
+# @pytest.mark.parametrize("kernel_size", [(3, 3)])
+# @pytest.mark.parametrize("padding", [(1, 1)])
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("model_name", ["conv"])
+@pytest.mark.parametrize("model_name", [None, "conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
-@pytest.mark.parametrize("input_height", [64])
-@pytest.mark.parametrize("input_width", [64])
+@pytest.mark.parametrize("input_height", [64])  # 28
+@pytest.mark.parametrize("input_width", [66])  # 28
 @pytest.mark.parametrize("num_output_channels", [128])
 @pytest.mark.parametrize("kernel_size", [(3, 3)])
 @pytest.mark.parametrize("padding", [(1, 1)])
@@ -87,27 +97,60 @@ def test_conv(
     torch_model = torch.nn.Conv2d(num_input_channels, num_output_channels, kernel_size, padding=padding)
     torch_output_tensor = torch_model(torch_input_tensor)
 
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        model_name=model_name,
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        device=device,
-        reader_patterns_cache=reader_patterns_cache,
-        custom_preprocessor=custom_preprocessor_b,
+    # reader_patterns_cache = {}
+    # parameters = preprocess_model(
+    #     model_name=model_name,
+    #     initialize_model=lambda: torch_model,
+    #     run_model=lambda model: model(torch_input_tensor),
+    #     device=device,
+    #     reader_patterns_cache=reader_patterns_cache,
+    #     custom_preprocessor=custom_preprocessor_b,
+    # )
+
+    # input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    # input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+
+    # output_tensor = parameters.copy_input_to_device(input_tensor)
+    # output_tensor = parameters(output_tensor)
+    # output_tensor = parameters.copy_output_from_device(output_tensor)
+
+    # output_tensor = ttnn.to_torch(output_tensor)
+    # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+
+    math_fidelity = ttnn.MathFidelity.HiFi4
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat8_b
+
+    filter_height = 3
+    filter_width = 3
+    stride_h = 1
+    stride_w = 1
+    pad_h = 0
+    pad_w = 0
+    use_1d_systolic_array = True
+    config_override = None
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        num_output_channels,
+        num_input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
     )
-
-    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-
-    output_tensor = parameters.copy_input_to_device(input_tensor)
-    output_tensor = parameters(output_tensor)
-    output_tensor = parameters.copy_output_from_device(output_tensor)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 # @skip_for_wormhole_b0()
