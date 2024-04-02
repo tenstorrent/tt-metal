@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if defined(WATCHER_ENABLED)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER)
 
 #include "hostdevcommon/debug_ring_buffer_common.h"
 
@@ -19,12 +19,15 @@ inline uint32_t* get_debug_ring_buffer() {
 
 void push_to_ring_buffer(uint32_t val) {
     auto buf = get_debug_ring_buffer();
-    volatile tt_l1_ptr int32_t* curr_ptr = &reinterpret_cast<DebugRingBufMemLayout *>(buf)->current_ptr;
+    volatile tt_l1_ptr int16_t* curr_ptr = &reinterpret_cast<DebugRingBufMemLayout *>(buf)->current_ptr;
+    volatile tt_l1_ptr uint16_t* wrapped = &reinterpret_cast<DebugRingBufMemLayout *>(buf)->wrapped;
     uint32_t* data = reinterpret_cast<DebugRingBufMemLayout *>(buf)->data;
 
     // Bounds check, set to -1 to wrap since we increment before using.
-    if (*curr_ptr >= RING_BUFFER_ELEMENTS - 1)
+    if (*curr_ptr >= RING_BUFFER_ELEMENTS - 1) {
         *curr_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+        *wrapped = 1;
+    }
     data[++(*curr_ptr)] = val;
 }
 

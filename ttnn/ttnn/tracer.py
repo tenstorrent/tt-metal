@@ -17,7 +17,6 @@ from pyrsistent import PClass, field
 logger.disable("torchtrail")
 
 import torchtrail
-from torchtrail.multidigraph import MultiDiGraph, merge_graphs
 
 import ttnn
 
@@ -57,9 +56,9 @@ class TTNNOperation(PClass):
 
 
 class TracedTTNNTensor(ttnn.Tensor, torchtrail.tracer.TracedTensor):
-    def __init__(self, tensor: ttnn.Tensor, *, graph: MultiDiGraph, node: torchtrail.tracer.Node, output_index: int):
+    def __init__(self, tensor: ttnn.Tensor, *, graph: nx.MultiDiGraph, node: torchtrail.tracer.Node, output_index: int):
         super().__init__(tensor)
-        self.graph: MultiDiGraph = graph
+        self.graph: nx.MultiDiGraph = graph
         self.node: torchtrail.tracer.Node = node
         self.output_index: int = output_index
 
@@ -72,7 +71,8 @@ def create_ttnn_input_tensor(tensor: ttnn.Tensor) -> TracedTTNNTensor:
     unique_id = torchtrail.tracer.get_unique_id()
     node_name = f"ttnn_input_{unique_id}"
     node = torchtrail.tracer.Node(name=node_name, unique_id=unique_id)
-    graph = MultiDiGraph().add_node(node, operation=TTNNTensor(), shapes=(tuple(tensor.shape),), dtypes=(tensor.dtype,))
+    graph = torchtrail.tracer.GRAPH_STACK[-1]
+    graph.add_node(node, operation=TTNNTensor(), shapes=(tuple(tensor.shape),), dtypes=(tensor.dtype,))
     return TracedTTNNTensor(tensor, graph=graph, node=node, output_index=0)
 
 
@@ -145,15 +145,15 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         function_args, function_kwargs = preprocess_args_and_kwargs(*function_args, **function_kwargs)
         input_tensors = get_input_tensors(function_args) + get_input_tensors(function_kwargs)
 
+        GRAPH_STACK.append(nx.MultiDiGraph())
+
         node_name = f"{pretty_operation_name}_{torchtrail.tracer.get_unique_id()}"
 
-        start_time = time.time()
         operation_return_type = operation(*function_args, **function_kwargs)
-        end_time = time.time()
-
-        duration = None
 
         output_tensors = preprocess_return_value(operation_return_type)
+
+        GRAPH_STACK.pop()
 
         shapes = tuple(tuple(tensor.shape) for tensor in output_tensors)
         dtypes = tuple(tensor.dtype for tensor in output_tensors)
@@ -161,10 +161,8 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         unique_id = torchtrail.tracer.get_unique_id()
         node_name = f"{pretty_operation_name}_{unique_id}"
         node = torchtrail.tracer.Node(name=node_name, unique_id=unique_id)
-        if input_tensors:
-            graph = merge_graphs(*((tensor.graph, tensor.node) for tensor in input_tensors))
-        else:
-            graph = MultiDiGraph()
+
+        graph = torchtrail.tracer.GRAPH_STACK[-1]
 
         try:
             arg_name_value_pairs = get_arg_name_value_pairs(
@@ -173,17 +171,16 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         except Exception as e:
             arg_name_value_pairs = []
 
-        graph = graph.add_node(
+        graph.add_node(
             node,
             operation=TTNNOperation(
                 pretty_name=pretty_operation_name, operation=operation, arg_name_value_pairs=arg_name_value_pairs
             ),
             shapes=shapes,
             dtypes=dtypes,
-            duration=duration,
         )
         for input_index, tensor in enumerate(input_tensors):
-            graph = graph.add_edge(
+            graph.add_edge(
                 tensor.node,
                 node,
                 source_output_index=tensor.output_index,
@@ -207,27 +204,43 @@ def visualize(*function_args, file_name=None, **function_kwargs):
     if shutil.which("dot") is None:
         logger.warning("Graphviz is not installed. Skipping visualization.")
         return
-    logger.info(f"Dumping graph of the model to {file_name}")
+    logger.debug(f"Dumping graph of the model to {file_name}")
     return torchtrail.visualize(*function_args, file_name=file_name, **function_kwargs)
 
 
 get_graph = torchtrail.get_graph
-to_networkx = torchtrail.multidigraph.to_networkx
 
-
+GRAPH_STACK = None
 ENABLE_TRACER = False
+
+
+def enable_tracing():
+    global ENABLE_TRACER
+    global GRAPH_STACK
+    if ENABLE_TRACER:
+        raise ValueError("Tracing is already enabled.")
+    ENABLE_TRACER = True
+    torchtrail.tracer.enable_tracing()
+    GRAPH_STACK = torchtrail.tracer.GRAPH_STACK
+
+
+def disable_tracing():
+    global ENABLE_TRACER
+    global GRAPH_STACK
+    ENABLE_TRACER = False
+    torchtrail.tracer.disable_tracing()
+    GRAPH_STACK = torchtrail.tracer.GRAPH_STACK
+
+
+def is_tracing_enabled():
+    return ENABLE_TRACER and torchtrail.tracer.is_tracing_enabled()
 
 
 @contextmanager
 def trace():
-    with torchtrail.trace():
-        global ENABLE_TRACER
-
-        ENABLE_TRACER = True
-
-        yield
-
-        ENABLE_TRACER = False
+    enable_tracing()
+    yield
+    disable_tracing()
 
 
 def get_module_input_nodes(module_operation):

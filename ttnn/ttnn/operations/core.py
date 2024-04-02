@@ -90,9 +90,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             (_slice.stop if _slice.stop is not None else input_tensor.shape[index])
             for index, _slice in enumerate(slices)
         ]
-        for start in slice_start:
-            if start != 0:
-                raise RuntimeError("ttnn.Tensor.__getitem__: cannot slice the given tensor on the device!")
 
         padded_slice_end = list(slice_end)
         if input_layout == ttnn.TILE_LAYOUT:
@@ -115,7 +112,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 ttnn.Tensor.__getitem__ = __getitem__
 
 
-def _torch_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]], **_):
+def _compute_golden_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]], **_):
     import torch
 
     input_tensor = to_torch(input_tensor)
@@ -182,7 +179,7 @@ def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
 
 @ttnn.register_operation(
     name="ttnn.reshape",
-    torch_function=_torch_reshape,
+    compute_golden=_compute_golden_reshape,
     is_cpp_function=True,
     fallback=_fallback_reshape,
     validate_input_tensors=_reshape_validate_input_tensors,
@@ -855,7 +852,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 
 
 @ttnn.register_operation(
-    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, torch_function=_torch_identity
+    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, compute_golden=_torch_identity
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     if ttnn.is_sharded(input_tensor):
@@ -956,7 +953,7 @@ def as_tensor(
 
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
             tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
-            logger.info(
+            logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
@@ -971,7 +968,7 @@ def as_tensor(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
-            logger.info(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+            logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)

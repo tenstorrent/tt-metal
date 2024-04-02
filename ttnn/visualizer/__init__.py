@@ -2,162 +2,292 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
-import sqlite3
+import math
 
-from bokeh.resources import CDN
-from bokeh.embed import file_html
-from bokeh.models import ColumnDataSource, Grid, LinearAxis, Plot, Rect, Range1d, WheelZoomTool
+from bokeh.embed import components
+from bokeh.models import Plot, ColumnDataSource, LinearAxis, CustomJSTickFormatter, NumeralTickFormatter, Rect, Range1d
+from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool, ZoomInTool, ZoomOutTool, HoverTool
+
 from flask import Flask, render_template
 import numpy as np
 
 import ttnn
 
-
-@dataclasses.dataclass
-class DeviceInfo:
-    device_id: int
-    l1_num_banks: int
-    l1_bank_size: int
-    num_y_compute_cores: int
-    num_x_compute_cores: int
-    address_at_first_l1_bank: int
-    address_at_first_l1_cb_buffer: int
-    num_banks_per_storage_core: int
-    num_compute_cores: int
-    num_storage_cores: int
-    total_l1_memory: int
-    total_l1_for_tensors: int
-    total_l1_for_interleaved_buffers: int
-    total_l1_for_sharded_buffers: int
-    cb_limit: int
+BUFFER_TO_COLOR_INDEX = {}
+COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown"]
 
 
-@dataclasses.dataclass
-class Operation:
-    operation_id: int
-    name: str
+def duration_to_string(duration):
+    if duration < 1e-6:
+        return f"{duration * 1e9:.2f} ns"
+    elif duration < 1e-3:
+        return f"{duration * 1e6:.2f} us"
+    elif duration < 1:
+        return f"{duration * 1e3:.2f} ms"
+    return f"{duration:.2f} s"
 
 
-@dataclasses.dataclass
-class BufferPage:
-    operation_id: int
-    address: int
-    device_id: int
-    core_y: int
-    core_x: int
-    bank_id: int
-    page_index: int
-    page_address: int
-    page_size: int
-    buffer_type: int
+def duration_to_color(duration):
+    if duration < 1e-6:
+        return "green"
+    elif duration < 1e-3:
+        return "yellow"
+    elif duration < 1:
+        return "orange"
+    return "red"
 
 
 app = Flask(__name__)
 
 
-def query_operations():
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
-    cursor = sqlite_connection.cursor()
-
-    cursor.execute("SELECT * FROM operations")
-    for row in cursor.fetchall():
-        operation = Operation(*row)
-        yield operation
-
-    sqlite_connection.close()
-
-
-def query_buffer_pages(operation_id):
-    sqlite_connection = sqlite3.connect(ttnn.database.DATABASE_FILE)
-    cursor = sqlite_connection.cursor()
-
-    cursor.execute("SELECT * FROM buffer_pages WHERE operation_id = ?", (operation_id,))
-    for row in cursor.fetchall():
-        yield BufferPage(*row)
-
-    sqlite_connection.close()
-
-
-ADDRESS_TO_ID = {}
-COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black"]
-
-
 @app.route("/")
 def root():
-    return render_template("index.html")
+    return operations()
 
 
 @app.route("/operations")
 def operations():
-    operations = [(operation_index, operation) for operation_index, operation in enumerate(query_operations())]
-    return render_template("operations.html", operations=operations)
+    operations = list(ttnn.database.query_operations())
+
+    return render_template(
+        "operations.html",
+        operations=operations,
+        duration_to_string=duration_to_string,
+        duration_to_color=duration_to_color,
+    )
 
 
-@app.route("/l1_visualizer/<operation_id>")
-def l1_visualizer(operation_id):
-    core_grid = [10, 12]
-    core_height = 100
-    core_width = 10
-    core_height_offset = core_height + 10
-    core_width_offset = core_width + 10
+@app.route("/operations_with_l1_buffer_usage")
+def operations_with_l1_buffer_usage():
+    operations = list(ttnn.database.query_operations())
+
+    l1_reports = {}
+    for operation in operations:
+        l1_reports[operation.operation_id] = create_summarized_l1_buffer_plot(operation.operation_id)
+
+    return render_template(
+        "operations_with_l1_buffer_usage.html",
+        operations=operations,
+        duration_to_string=duration_to_string,
+        duration_to_color=duration_to_color,
+        l1_reports=l1_reports,
+    )
+
+
+def create_summarized_l1_buffer_plot(operation_id):
+    glyph_y_location = 0
+    glyph_height = 1
+
+    buffers = list(ttnn.database.query_buffers(operation_id))
+    if len(buffers) == 0:
+        return "", "There are no L1 Buffers!"
+    device_ids = set(buffer.device_id for buffer in buffers)
+    if len(device_ids) != 1:
+        return "", "Cannot visualize buffer plot for multiple devices!"
+    device_id = device_ids.pop()
+    print(device_id)
+    device = ttnn.database.query_device_by_id(device_id)
+
+    l1_size = device.worker_l1_size
+
+    memory_glyph_y_location = [glyph_y_location]
+    memory_glyph_x_location = [l1_size // 2]
+    memory_height = [glyph_height]
+    memory_width = [l1_size]
+    memory_color = ["white"]
+    memory_line_color = ["black"]
+
+    memory_data_source = ColumnDataSource(
+        dict(
+            glyph_y_location=memory_glyph_y_location,
+            glyph_x_location=memory_glyph_x_location,
+            glyph_height=memory_height,
+            glyph_width=memory_width,
+            color=memory_color,
+            line_color=memory_line_color,
+        )
+    )
+
+    buffers_glyph_y_location = []
+    buffers_glyph_x_location = []
+    buffers_height = []
+    buffers_width = []
+    buffers_color = []
+    buffers_max_size_per_bank = []
+    buffers_address = []
+
+    for buffer in ttnn.database.query_buffers(operation_id):
+        if (buffer.device_id, buffer.address, buffer.buffer_type) not in BUFFER_TO_COLOR_INDEX:
+            BUFFER_TO_COLOR_INDEX[(buffer.device_id, buffer.address, buffer.buffer_type)] = len(BUFFER_TO_COLOR_INDEX)
+
+        buffers_address.append(buffer.address)
+        buffers_max_size_per_bank.append(buffer.max_size_per_bank)
+        buffers_glyph_y_location.append(glyph_y_location)
+        buffers_glyph_x_location.append(buffer.address + buffer.max_size_per_bank // 2)
+        buffers_height.append(glyph_height)
+        buffers_width.append(buffer.max_size_per_bank)
+        buffers_color.append(
+            COLORS[BUFFER_TO_COLOR_INDEX[(buffer.device_id, buffer.address, buffer.buffer_type)] % len(COLORS)]
+        )
+
+    buffers_glyph_x_location = np.asarray(buffers_glyph_x_location)
+    buffers_glyph_y_location = np.asarray(buffers_glyph_y_location)
+    buffers_height = np.asarray(buffers_height)
+    buffers_width = np.asarray(buffers_width)
+    buffers_data_source = ColumnDataSource(
+        dict(
+            glyph_y_location=buffers_glyph_y_location,
+            glyph_x_location=buffers_glyph_x_location,
+            glyph_height=buffers_height,
+            glyph_width=buffers_width,
+            color=buffers_color,
+            address=buffers_address,
+            max_size_per_bank=buffers_max_size_per_bank,
+        )
+    )
+
+    plot = Plot(title=None, width=800, height=100, min_border=0, toolbar_location="below")
+
+    xaxis = LinearAxis()
+    plot.x_range = Range1d(0, l1_size)
+    plot.add_layout(xaxis, "below")
+    plot.xaxis.axis_label = "L1 Address Space"
+    plot.xaxis.formatter = NumeralTickFormatter(format="0000000")
+
+    memory_glyph = Rect(
+        y="glyph_y_location",
+        x="glyph_x_location",
+        height="glyph_height",
+        width="glyph_width",
+        line_color="line_color",
+        fill_color="color",
+    )
+    plot.add_glyph(memory_data_source, memory_glyph)
+
+    buffer_glyph = Rect(
+        y="glyph_y_location",
+        x="glyph_x_location",
+        height="glyph_height",
+        width="glyph_width",
+        line_color="black",
+        fill_color="color",
+    )
+    buffer_renderer = plot.add_glyph(buffers_data_source, buffer_glyph)
+
+    plot.add_tools(
+        WheelZoomTool(),
+        PanTool(),
+        ResetTool(),
+        ZoomInTool(),
+        ZoomOutTool(),
+        HoverTool(
+            renderers=[buffer_renderer],
+            tooltips=[("Address", "@address"), ("Max Size Per Bank", "@max_size_per_bank")],
+        ),
+    )
+    return components(plot)
+
+
+def create_detailed_l1_buffer_plot(operation_id):
+    buffers = list(ttnn.database.query_buffers(operation_id))
+    device_ids = set(buffer.device_id for buffer in buffers)
+    if len(buffers) == 0:
+        return "", "There are no L1 Buffers!"
+    if len(device_ids) != 1:
+        return "", "Cannot visualize buffer plot for multiple devices!"
+    device_id = device_ids.pop()
+    device = ttnn.database.query_device_by_id(device_id)
+    l1_size = device.worker_l1_size
+
+    core_grid = [device.num_y_cores, device.num_x_cores]
+    num_cores = math.prod(core_grid)
+    core_glyph_height = 100
+    core_glyph_width = 10
+    core_glyph_y_offset = core_glyph_height + 20
+    core_glyph_x_offset = core_glyph_width + 10
 
     cores_y = []
     cores_x = []
-    for y in range(core_grid[0]):
-        for x in range(core_grid[1]):
-            cores_y.append(y * core_height_offset)
-            cores_x.append(x * core_width_offset)
+    cores_glyph_y_location = []
+    cores_glyph_x_location = []
+    for core_y in range(core_grid[0]):
+        for core_x in range(core_grid[1]):
+            cores_y.append(core_y)
+            cores_x.append(core_x)
+            cores_glyph_y_location.append(core_y * core_glyph_y_offset)
+            cores_glyph_x_location.append(core_x * core_glyph_x_offset)
 
-    cores_x = np.asarray(cores_x)
-    cores_y = np.asarray(cores_y)
-    cores_h = np.asarray([core_height for _ in range(len(cores_y))])
-    cores_w = np.asarray([core_width for _ in range(len(cores_x))])
-    cores = ColumnDataSource(dict(core_x=cores_x, core_y=cores_y, core_w=cores_w, core_h=cores_h))
-
-    buffers_y = []
-    buffers_x = []
-    buffers_h = []
-    buffers_w = []
-    buffers_colors = []
-
-    for buffer_page in query_buffer_pages(operation_id):
-        if buffer_page.address not in ADDRESS_TO_ID:
-            ADDRESS_TO_ID[buffer_page.address] = len(ADDRESS_TO_ID)
-
-        core_y = buffer_page.core_y * core_height_offset + core_height // 2
-        core_x = buffer_page.core_x * core_width_offset
-
-        y = core_y
-        one_mb = 1024 * 1024
-        y = core_y - (one_mb - buffer_page.page_address) / (one_mb) * core_height
-        x = core_x
-        h = buffer_page.page_size / (1024 * 1024) * core_height
-
-        buffers_y.append(y)
-        buffers_x.append(x)
-        buffers_h.append(h)
-        buffers_w.append(core_width)
-        buffers_colors.append(COLORS[ADDRESS_TO_ID[buffer_page.address] % len(COLORS)])
-
-    buffers_x = np.asarray(buffers_x)
-    buffers_y = np.asarray(buffers_y)
-    buffers_h = np.asarray(buffers_h)
-    buffers_w = np.asarray(buffers_w)
-    buffers = ColumnDataSource(
-        dict(buffer_x=buffers_x, buffer_y=buffers_y, buffer_w=buffers_w, buffer_h=buffers_h, color=buffers_colors)
+    cores_glyph_y_location = np.asarray(cores_glyph_y_location)
+    cores_glyph_x_location = np.asarray(cores_glyph_x_location)
+    cores_height = np.full((num_cores,), core_glyph_height)
+    cores_width = np.full((num_cores,), core_glyph_width)
+    cores_data_source = ColumnDataSource(
+        dict(
+            glyph_y_location=cores_glyph_y_location,
+            glyph_x_location=cores_glyph_x_location,
+            glyph_height=cores_height,
+            glyph_width=cores_width,
+            core_y=cores_y,
+            core_x=cores_x,
+        )
     )
 
-    plot = Plot(title=None, width=1000, height=1000, min_border=0, toolbar_location="below")
-    plot.add_tools(WheelZoomTool())
+    buffer_pages_glyph_y_location = []
+    buffer_pages_glyph_x_location = []
+    buffer_pages_height = []
+    buffer_pages_width = []
+    buffer_pages_color = []
+
+    num_buffer_pages = 0
+    for buffer_page in ttnn.database.query_buffer_pages(operation_id):
+        if (buffer_page.device_id, buffer_page.address, buffer_page.buffer_type) not in BUFFER_TO_COLOR_INDEX:
+            BUFFER_TO_COLOR_INDEX[(buffer_page.device_id, buffer_page.address, buffer_page.buffer_type)] = len(
+                BUFFER_TO_COLOR_INDEX
+            )
+
+        buffer_page_glyph_y_location = buffer_page.core_y * core_glyph_y_offset + core_glyph_height // 2
+        buffer_page_glyph_y_location = (
+            buffer_page_glyph_y_location - (l1_size - buffer_page.page_address) / (l1_size) * core_glyph_height
+        )
+        buffer_page_glyph_x_location = buffer_page.core_x * core_glyph_x_offset
+
+        buffer_page_glyph_height = buffer_page.page_size / l1_size * core_glyph_height
+
+        buffer_pages_glyph_y_location.append(buffer_page_glyph_y_location)
+        buffer_pages_glyph_x_location.append(buffer_page_glyph_x_location)
+        buffer_pages_height.append(buffer_page_glyph_height)
+        buffer_pages_width.append(core_glyph_width)
+        buffer_pages_color.append(
+            COLORS[
+                BUFFER_TO_COLOR_INDEX[(buffer_page.device_id, buffer_page.address, buffer_page.buffer_type)]
+                % len(COLORS)
+            ]
+        )
+        num_buffer_pages += 1
+    if num_buffer_pages == 0:
+        return (
+            "",
+            "Detailed L1 Buffer Report is not Available! Set  TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' in your environment",
+        )
+
+    buffer_pages_glyph_x_location = np.asarray(buffer_pages_glyph_x_location)
+    buffer_pages_glyph_y_location = np.asarray(buffer_pages_glyph_y_location)
+    buffer_pages_height = np.asarray(buffer_pages_height)
+    buffer_pages_width = np.asarray(buffer_pages_width)
+    buffer_pages_data_source = ColumnDataSource(
+        dict(
+            glyph_y_location=buffer_pages_glyph_y_location,
+            glyph_x_location=buffer_pages_glyph_x_location,
+            glyph_height=buffer_pages_height,
+            glyph_width=buffer_pages_width,
+            color=buffer_pages_color,
+        )
+    )
+
+    plot = Plot(title=None, width=800, height=800, min_border=0, toolbar_location="below")
+
     plot.y_range = Range1d(-100, 1200)
     plot.x_range = Range1d(-10, 250)
-
-    glyph = Rect(x="core_x", y="core_y", width="core_w", height="core_h", line_color="black", fill_color="white")
-    plot.add_glyph(cores, glyph)
-
-    glyph = Rect(x="buffer_x", y="buffer_y", width="buffer_w", height="buffer_h", line_color=None, fill_color="color")
-    plot.add_glyph(buffers, glyph)
 
     xaxis = LinearAxis()
     plot.add_layout(xaxis, "below")
@@ -165,29 +295,128 @@ def l1_visualizer(operation_id):
     yaxis = LinearAxis()
     plot.add_layout(yaxis, "left")
 
-    plot.add_layout(Grid(dimension=0, ticker=xaxis.ticker))
-    plot.add_layout(Grid(dimension=1, ticker=yaxis.ticker))
+    plot.yaxis.axis_label = "Core Y"
+    plot.xaxis.axis_label = "Core X"
 
-    return file_html(plot, CDN, "my plot")
+    plot.yaxis.ticker.desired_num_ticks = 1
+    plot.yaxis.formatter = CustomJSTickFormatter(
+        code=f"""
+        return "";
+    """
+    )
+    plot.xaxis.ticker.desired_num_ticks = 1
+    plot.xaxis.formatter = CustomJSTickFormatter(
+        code=f"""
+        return "";
+    """
+    )
+
+    core_glyph = Rect(
+        y="glyph_y_location",
+        x="glyph_x_location",
+        height="glyph_height",
+        width="glyph_width",
+        line_color="black",
+        fill_color="white",
+    )
+    core_renderer = plot.add_glyph(cores_data_source, core_glyph)
+
+    buffer_page_glyph = Rect(
+        y="glyph_y_location",
+        x="glyph_x_location",
+        height="glyph_height",
+        width="glyph_width",
+        line_color=None,
+        fill_color="color",
+    )
+    plot.add_glyph(buffer_pages_data_source, buffer_page_glyph)
+
+    plot.add_tools(
+        WheelZoomTool(),
+        PanTool(),
+        ResetTool(),
+        ZoomInTool(),
+        ZoomOutTool(),
+        HoverTool(
+            renderers=[core_renderer],
+            tooltips=[("Core", "(@core_y, @core_x)")],
+        ),
+    )
+    return components(plot)
 
 
-@app.route("/operation_graph/<operation_id>")
-def operation_graph(operation_id):
-    svg_file = ttnn.REPORTS_PATH / "graphs" / f"{operation_id}.svg"
+@app.route("/operation_buffer_report/<operation_id>")
+def operation_buffer_report(operation_id):
+    operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
+        operation_id=operation_id
+    )
+
+    current_summarized_l1_report_script, current_summarized_l1_report_div = create_summarized_l1_buffer_plot(
+        operation_id
+    )
+    current_detailed_l1_report_script, current_detailed_l1_report_div = create_detailed_l1_buffer_plot(operation_id)
+
+    if previous_operation is not None:
+        previous_summarized_l1_report_script, previous_summarized_l1_report_div = create_summarized_l1_buffer_plot(
+            previous_operation.operation_id
+        )
+    else:
+        previous_summarized_l1_report_script, previous_summarized_l1_report_div = "", ""
+
+    def get_tensor_color(tensor):
+        if (tensor.device_id, tensor.address, tensor.buffer_type) not in BUFFER_TO_COLOR_INDEX:
+            return "white"
+        color_index = BUFFER_TO_COLOR_INDEX[(tensor.device_id, tensor.address, tensor.buffer_type)] % len(COLORS)
+        return COLORS[color_index]
+
+    input_tensors = list(ttnn.database.query_input_tensors(operation_id))
+    output_tensors = list(ttnn.database.query_output_tensors(operation_id))
+
+    return render_template(
+        "operation_buffer_report.html",
+        operation=operation,
+        previous_operation=previous_operation,
+        next_operation=next_operation,
+        current_summarized_l1_report_script=current_summarized_l1_report_script,
+        current_summarized_l1_report_div=current_summarized_l1_report_div,
+        previous_summarized_l1_report_script=previous_summarized_l1_report_script,
+        previous_summarized_l1_report_div=previous_summarized_l1_report_div,
+        current_detailed_l1_report_script=current_detailed_l1_report_script,
+        current_detailed_l1_report_div=current_detailed_l1_report_div,
+        input_tensors=input_tensors,
+        output_tensors=output_tensors,
+        get_tensor_color=get_tensor_color,
+    )
+
+
+@app.route("/operation_graph_report/<operation_id>")
+def operation_graph_report(operation_id):
+    svg_file = ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
     if not svg_file.exists():
-        return "Graph not found! Did you set TTNN_ENABLE_GRAPH_REPORT=True in your environment?"
+        return "Graph not found! Was TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' set?"
     with open(svg_file) as f:
         content = f.read()
     return content
 
 
-@app.route("/operation_codegen/<operation_id>")
-def operation_codegen(operation_id):
-    # codegen_file = ttnn.REPORTS_PATH / "codegen" / f"{operation_id}.py"
-    # with open(codegen_file) as f:
-    #     content = f.read()
-    content = "# WIP"
-    return render_template("operation_codegen.html", content=content)
+@app.route("/operation_tensor_report/<operation_id>")
+def operation_tensor_report(operation_id):
+    operation = ttnn.database.query_operation_by_id(operation_id=operation_id)
+
+    input_tensors_path = ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}"
+    output_tensors_path = ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}"
+
+    input_tensors = []
+    for tensor_path in input_tensors_path.glob("*.bin"):
+        input_tensors.append(ttnn.load_tensor(tensor_path))
+
+    output_tensors = []
+    for tensor_path in output_tensors_path.glob("*.bin"):
+        output_tensors.append(ttnn.load_tensor(tensor_path))
+
+    return render_template(
+        "operation_tensor_report.html", operation=operation, input_tensors=input_tensors, output_tensors=output_tensors
+    )
 
 
 if __name__ == "__main__":

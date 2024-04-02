@@ -348,6 +348,13 @@ inline std::vector<Tensor> run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);
 }
 
+void launch_op(
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> op_func,
+    const std::vector<Tensor> input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+);
+
 } //namespace operation
 
 } //namespace tt::tt_metal

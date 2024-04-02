@@ -507,6 +507,12 @@ Tensor to_layout_bfloat4_b(const Tensor& tensor, Layout target_layout);
 template <typename T>
 inline Tensor pad(
     const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
+    if (is_multi_device_tensor(tensor)) {
+        return transform(tensor, [&](const Tensor& device_tensor) {
+            return pad<T>(device_tensor, output_tensor_shape, input_tensor_start, pad_value);
+        });
+    }
+
     auto pad_value_ = static_cast<T>(pad_value);
     const auto input_tensor_shape = tensor.get_legacy_shape();
     const auto input_tensor_strides = tensor.strides();
@@ -908,7 +914,9 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                TT_THROW("Device storage isn't supported");
+                std::stringstream ss;
+                apply(tensor, [&](const Tensor& device_tensor) { ss << to_string<T>(device_tensor) << std::endl;});
+                return ss.str();
             } else {
                 raise_unsupported_storage<StorageType>();
             }

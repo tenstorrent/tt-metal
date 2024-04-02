@@ -19,8 +19,8 @@ __all__ = []
 
 
 def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
-    def _torch_math(input_tensor: ttnn.Tensor, **_):
-        name_to_torch_function = {
+    def _compute_golden_math(input_tensor: ttnn.Tensor, **_):
+        name_to_compute_golden_function = {
             "i0": torch.i0,
             "isfinite": torch.isfinite,
             "isinf": torch.inf,
@@ -49,7 +49,7 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
             "tril": torch.tril,
             "triu": torch.triu,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor)
 
@@ -67,7 +67,7 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_math_op_validate_input_tensors,
-        torch_function=_torch_math,
+        compute_golden=_compute_golden_math,
     )
     def math_op_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -155,8 +155,8 @@ def torch_multigammaln(x, *args, **kwargs):
 
 
 def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
-    def _torch_math_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-        name_to_torch_function = {
+    def _compute_golden_math_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+        name_to_compute_golden_function = {
             "atan2": torch.atan2,
             "hypot": torch.hypot,
             "squared_difference": torch_squared_difference,
@@ -176,7 +176,7 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
         input_tensor_b = ttnn.to_torch(input_tensor_b)
         input_tensor_b = input_tensor_b[slices]
 
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
 
     def _math_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -202,7 +202,7 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_math_binary_validate_input_tensors,
-        torch_function=_torch_math_binary,
+        compute_golden=_compute_golden_math_binary,
     )
     def math_binary_function(
         input_tensor_a: ttnn.Tensor,
@@ -268,10 +268,10 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
     def _is_scalar(value):
         return isinstance(value, (int, float))
 
-    def _torch_math_binary(
+    def _compute_golden_math_binary(
         input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, weight: Union[ttnn.Tensor, int, float], **_
     ):
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "lerp": torch.lerp,
         }
 
@@ -297,7 +297,7 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
             weight = ttnn.to_torch(weight)
             weight = weight[slices]
 
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         return torch_function(input_tensor_a, input_tensor_b, weight)
 
     def _math_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -323,7 +323,7 @@ def register_ttl_lerp_function(name, ttl_lerp_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_math_binary_validate_input_tensors,
-        torch_function=_torch_math_binary,
+        compute_golden=_compute_golden_math_binary,
     )
     def lerp_function(
         input_tensor_a: ttnn.Tensor,
@@ -397,13 +397,13 @@ def _is_scalar(value):
 
 
 def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, op_name, param):
-    def _torch_math_unary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _compute_golden_math_unary(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "polygamma": torch_polygamma,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
 
         if name == "polygamma":
@@ -425,7 +425,7 @@ def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, o
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_math_unary_validate_input_tensors,
-        torch_function=_torch_math_unary,
+        compute_golden=_compute_golden_math_unary,
     )
     def math_unary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG

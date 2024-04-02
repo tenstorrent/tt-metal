@@ -1,0 +1,54 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<html>
+<script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.1.1.min.js"></script>
+
+<style>
+    tr:nth-child(even) {
+        background-color: #D6EEEE;
+    }
+
+    th {
+        padding: 15px;
+        /* you could also change td instead th depending your html code */
+        background-color: white;
+        position: sticky;
+        z-index: 100;
+        top: 20px;
+    }
+
+    td {
+        padding: 15px;
+    }
+</style>
+
+<body>
+    <ul>
+        <div>
+            <table>
+                <tr>
+                    <th>Index</th>
+                    <th>Name</th>
+                    <th>Buffer Report</th>
+                </tr>
+                {% for operation in operations %}
+                <tr rowspan=2>
+                    <td>{{loop.index0}}</td>
+                    <td>{{operation.name}}</td>
+                    <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
+                </tr>
+                </tr>
+                <td colspan="100%"> {{ l1_reports[operation.operation_id][0]|safe }} {{
+                    l1_reports[operation.operation_id][1] | safe }}
+                </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </ul>
+</body>
+
+</html>
+
+{% endblock %}

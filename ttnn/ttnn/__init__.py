@@ -2,15 +2,80 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import dataclasses
+import json
 import os
 import pathlib
-import shutil
+import pprint
 
 from loguru import logger
 
-CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
-MODEL_CACHE_PATH = CACHE_PATH / "models"
-TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
+
+@dataclasses.dataclass
+class Config:
+    cache_path: pathlib.Path = pathlib.Path().home() / ".cache" / "ttnn"
+    model_cache_path: pathlib.Path = cache_path / "models"
+    tmp_dir: pathlib.Path = pathlib.Path("/") / "tmp" / "ttnn"
+    enable_model_cache: bool = False
+    enable_fast_runtime_mode: bool = False
+    throw_exception_on_fallback: bool = False
+    enable_logging: bool = False
+    enable_graph_report: bool = False
+    enable_detailed_buffer_report: bool = False
+    enable_tensor_report: bool = False
+    enable_comparison_mode: bool = False
+    comparison_mode_pcc: float = 0.9999
+    delete_reports_on_start: bool = True
+    reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
+    sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
+
+
+CONFIG = Config()
+CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
+if "TTNN_CONFIG_PATH" in os.environ:
+    CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
+
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+
+
+def load_config_from_dictionary(config):
+    global CONFIG
+    for key, value in config.items():
+        if hasattr(CONFIG, key):
+            setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
+        else:
+            raise RuntimeError(f"Unknown configuration key: {key}")
+
+
+def load_config_from_json_file(json_path):
+    global CONFIG
+    with open(json_path, "r") as f:
+        config = json.load(f)
+    load_config_from_dictionary(config)
+
+
+def save_config_to_json_file(json_path):
+    with open(json_path, "w") as f:
+        normalized_config = dataclasses.asdict(Config())
+        for key, value in normalized_config.items():
+            if isinstance(value, pathlib.Path):
+                value = str(value)
+            normalized_config[key] = value
+        json.dump(normalized_config, f, indent=4)
+
+
+if CONFIG_PATH.exists():
+    logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
+    load_config_from_json_file(CONFIG_PATH)
+else:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    save_config_to_json_file(CONFIG_PATH)
+
+
+if CONFIG_OVERRIDES:
+    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
+    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
 def get_bool_env_var(name, default):
@@ -23,30 +88,32 @@ def get_bool_env_var(name, default):
         raise RuntimeError(f'The value has to be either "True" or "False"')
 
 
-ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
-if ENABLE_MODEL_CACHE:
-    logger.info(f"ttnn: model cache was enabled")
-
-ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
-if ENABLE_FAST_RUNTIME_MODE:
-    logger.info(f"ttnn: fast runtime mode was enabled")
-
-REPORTS_PATH = pathlib.Path("generated") / "reports"
-shutil.rmtree(REPORTS_PATH, ignore_errors=True)
-
-ENABLE_LOGGING = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
-if ENABLE_LOGGING:
-    logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
+logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
-ENABLE_GRAPH_REPORT = get_bool_env_var("TTNN_ENABLE_GRAPH_REPORT", "False")
-if ENABLE_GRAPH_REPORT:
-    logger.info(f"ttnn: enabled graph report")
+@contextlib.contextmanager
+def enable_fast_runtime_mode():
+    global CONFIG
+    CONFIG.enable_fast_runtime_mode = True
+    yield
+    CONFIG.enable_fast_runtime_mode = False
 
 
-ENABLE_BUFFER_REPORT = get_bool_env_var("TTNN_ENABLE_BUFFER_REPORT", "False")
-if ENABLE_BUFFER_REPORT:
-    logger.info(f"ttnn: enabled buffer report")
+@contextlib.contextmanager
+def enable_comparison_mode():
+    global CONFIG
+    CONFIG.enable_comparison_mode = True
+    yield
+    CONFIG.enable_comparison_mode = False
+
+
+@contextlib.contextmanager
+def override_pcc_of_comparison_mode(value):
+    global CONFIG
+    old_value = CONFIG.comparison_mode_pcc
+    CONFIG.comparison_mode_pcc = value
+    yield
+    CONFIG.comparison_mode_pcc = old_value
 
 
 import tt_lib as _tt_lib
@@ -65,6 +132,7 @@ from ttnn.types import (
     float32,
     MathFidelity,
     MemoryConfig,
+    BufferType,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -131,9 +199,6 @@ import ttnn.database
 from ttnn.decorators import (
     register_operation,
     query_operations,
-    enable_debug_decorator,
-    override_pcc_of_debug_decorator,
-    disable_validate_decorator,
     register_pre_operation_hook,
     register_post_operation_hook,
 )
@@ -356,5 +421,3 @@ from ttnn.operations.maxpool2d import (
     MaxPool2d,
     global_avg_pool2d,
 )
-
-from ttnn._ttnn.reports import print_l1_buffers

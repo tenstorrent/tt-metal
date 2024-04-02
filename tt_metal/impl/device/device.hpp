@@ -7,7 +7,9 @@
 #include <memory>
 #include <mutex>
 
+#include "common/env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "impl/dispatch/lock_free_queue.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/jit_build/build.hpp"
@@ -65,6 +67,21 @@ public:
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
+    // In asynchronous mode, each device has a worker thread that processes all host <--> cluster commands for this device.
+    // Commands are pushed to the worker queue and picked up + executed asyncrhonously.
+    // Higher level functions that have access to the device handle can queue up tasks asynchronously.
+    // In synchronous/pass through mode, we bypass the queue and tasks are executed immediately after being pushed.
+    enum class WorkerQueueMode {
+        SYNCHRONOUS = 0,
+        ASYNCHRONOUS = 1,
+    };
+
+    enum class WorkerState {
+        RUNNING = 0,
+        TERMINATE = 1,
+        IDLE = 2,
+    };
+
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap = {});
@@ -193,12 +210,24 @@ class Device {
     void compile_command_queue_programs_for_grayskull();
     void configure_command_queue_programs();
     void clear_l1_state();
-
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
 
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
+
+    void start_worker();
+    void run_worker();
+    void stop_worker();
+    void push_work(std::function<void()> work_executor, bool blocking = false);
+    void synchronize();
+    void set_worker_mode(const WorkerQueueMode& mode);
+    void enable_async(bool enable);
+    static WorkerQueueMode get_worker_mode() { return worker_queue_mode; }
+    static WorkerQueueMode default_worker_queue_mode() {
+        static int value = parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkerQueueMode::SYNCHRONOUS));
+        return static_cast<WorkerQueueMode>(value);
+    }
 
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
@@ -222,6 +251,10 @@ class Device {
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
     std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+    LockFreeQueue<std::function<void()>> worker_queue;
+    std::thread worker_thread;
+    WorkerState worker_state = WorkerState::IDLE;
+    inline static WorkerQueueMode worker_queue_mode = default_worker_queue_mode();
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
     uint8_t num_hw_cqs_;
@@ -230,14 +263,29 @@ class Device {
     bool using_fast_dispatch = false;
     program_cache::detail::ProgramCache program_cache;
 
-    void enable_program_cache() { program_cache.enable(); }
+    // Program cache interface. Syncrhonize with worker worker threads before querying or
+    // modifying this structure, since worker threads use this for compiling ops
+    void enable_program_cache() {
+        this->synchronize();
+        program_cache.enable();
+    }
     void disable_and_clear_program_cache() {
+        this->synchronize();
         if (this->program_cache.is_enabled()) {
             program_cache.clear();
             program_cache.disable();
         }
     }
-    std::size_t num_program_cache_entries() { return program_cache.num_entries(); }
+    std::size_t num_program_cache_entries() {
+        this->synchronize();
+        return program_cache.num_entries();
+    }
+
+    inline bool in_main_thread() {
+        // Detect if an instruction is being called in the main thread or worker thread
+        return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.parent_thread_id)
+                or get_worker_mode() == WorkerQueueMode::SYNCHRONOUS;
+    }
 };
 
 }  // namespace tt_metal

@@ -65,6 +65,12 @@ class RunTimeOptions {
     inline void set_watcher_append(bool append)       { watcher_append = append; }
     inline int get_watcher_auto_unpause()             { return watcher_auto_unpause; }
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
+    inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
+    inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_status_str); }
+    inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }
+    inline bool watcher_assert_disabled() { return watcher_feature_disabled(watcher_assert_str); }
+    inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
+    inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -134,6 +140,18 @@ private:
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
+
+    // Watcher feature name strings (used in env vars + defines in the device code), as well as a
+    // set to track disabled features.
+    const std::string watcher_status_str = "STATUS";
+    const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
+    const std::string watcher_assert_str = "ASSERT";
+    const std::string watcher_pause_str = "PAUSE";
+    const std::string watcher_ring_buffer_str = "RING_BUFFER";
+    std::set<std::string> watcher_disabled_features;
+    bool watcher_feature_disabled(const std::string &name) {
+        return watcher_disabled_features.find(name) != watcher_disabled_features.end();
+    }
 };
 
 

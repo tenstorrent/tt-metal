@@ -1,3 +1,6 @@
+{% extends "layout.html" %}
+{% block content %}
+
 <html>
 
 <style>
@@ -5,7 +8,15 @@
         background-color: #D6EEEE;
     }
 
-    th,
+    th {
+        padding: 15px;
+        /* you could also change td instead th depending your html code */
+        background-color: white;
+        position: sticky;
+        z-index: 100;
+        top: 20px;
+    }
+
     td {
         padding: 15px;
     }
@@ -18,22 +29,35 @@
                 <tr>
                     <th>Index</th>
                     <th>Name</th>
+                    <th>Duration</th>
+                    <th>Matches Golden</th>
+                    <th>Buffer Report</th>
                     <th>Operation Graph</th>
-                    <th>Operation Codegen</th>
-                    <th>L1 Buffer Report</th>
+                    <th>Tensor Report</th>
                 </tr>
-                {% for operation_index, operation in operations %}
+                {% for operation in operations %}
                 <tr>
-                    <td>{{operation_index }}</td>
-                    <td>{{operation.name }}</td>
-                    <td><a href=" /operation_graph/{{ operation.operation_id }}">Open Graph</a> </td>
-                    <td><a href=" /operation_codegen/{{ operation.operation_id }}">Open Codegen</a> </td>
-                    <td><a href=" /l1_visualizer/{{ operation.operation_id }}">Open Report</a> </td>
+                    <td>{{loop.index0}}</td>
+                    <td>{{operation.name}}</td>
+                    <td bgcolor={{duration_to_color(operation.duration)}}>{{duration_to_string(operation.duration)}}
+                    </td>
+
+                    {% if operation.matches_golden is none %}
+                    <td bgcolor="gray"></td> {% else %}
+                    <td {% if operation.matches_golden==True %} bgcolor="green" {% else %} bgcolor="red" {% endif %}>
+                        Desired PCC = {{operation.desired_pcc}}<br>Actual PCC = {{operation.actual_pcc}}
+                    </td>
+                    {% endif %}
+                    <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph</a> </td>
+                    <td><a href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
                 </tr>
                 {% endfor %}
-            </table>
-        </div>
+                </table>
+                </div>
     </ul>
 </body>
 
 </html>
+
+{% endblock %}

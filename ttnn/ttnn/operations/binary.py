@@ -16,7 +16,7 @@ __all__ = []
 
 
 def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _torch_binary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _compute_golden_binary(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
         name_to_torch_function = {"pow": torch.pow}
@@ -38,7 +38,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_binary_validate_input_tensors,
-        torch_function=_torch_binary,
+        compute_golden=_compute_golden_binary,
     )
     def binary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -90,7 +90,7 @@ def _is_scalar(value):
     return isinstance(value, (int, float, complex))
 
 
-def _torch_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _compute_golden_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_tensor_a = ttnn.to_torch(input_tensor_a)
     if not _is_scalar(input_tensor_b):
         input_tensor_b = ttnn.to_torch(input_tensor_b)
@@ -98,7 +98,7 @@ def _torch_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a + input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.add", torch_function=_torch_add, is_cpp_function=True)
+@ttnn.register_operation(name="ttnn.add", compute_golden=_compute_golden_add, is_cpp_function=True)
 def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -157,7 +157,7 @@ def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, 
     )
 
 
-def _torch_sub(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _compute_golden_sub(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_shape_a = input_tensor_a.shape
     slices = [slice(0, dim) for dim in input_shape_a]
     input_tensor_a = ttnn.from_device(input_tensor_a)
@@ -176,7 +176,9 @@ def _torch_sub(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.sub", validate_input_tensors=_sub_validate_input_tensors, torch_function=_torch_sub)
+@ttnn.register_operation(
+    name="ttnn.sub", validate_input_tensors=_sub_validate_input_tensors, compute_golden=_compute_golden_sub
+)
 def sub(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -299,7 +301,7 @@ def _mul_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, 
     )
 
 
-def _torch_mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _compute_golden_mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_shape_a = input_tensor_a.shape
     slices = [slice(0, dim) for dim in input_shape_a]
     input_tensor_a = ttnn.from_device(input_tensor_a)
@@ -318,7 +320,9 @@ def _torch_mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.mul", validate_input_tensors=_mul_validate_input_tensors, torch_function=_torch_mul)
+@ttnn.register_operation(
+    name="ttnn.mul", validate_input_tensors=_mul_validate_input_tensors, compute_golden=_compute_golden_mul
+)
 def mul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -452,7 +456,9 @@ def _add_and_apply_activation_validate_input_tensors(operation_name, input_tenso
     )
 
 
-def _torch_add_and_apply_activation(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_):
+def _compute_golden_add_and_apply_activation(
+    input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_
+):
     import torch
 
     input_tensor_a = ttnn.to_torch(input_tensor_a)
@@ -471,7 +477,7 @@ def _torch_add_and_apply_activation(input_tensor_a: ttnn.Tensor, input_tensor_b:
 @ttnn.register_operation(
     name="ttnn.add_and_apply_activation",
     validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    torch_function=_torch_add_and_apply_activation,
+    compute_golden=_compute_golden_add_and_apply_activation,
 )
 def add_and_apply_activation(
     input_tensor_a: ttnn.Tensor,
@@ -522,7 +528,7 @@ def add_and_apply_activation(
 @ttnn.register_operation(
     name="ttnn.add_and_apply_activation_",
     validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    torch_function=_torch_add_and_apply_activation,
+    compute_golden=_compute_golden_add_and_apply_activation,
 )
 def add_and_apply_activation_(
     input_tensor_a: ttnn.Tensor,
@@ -571,7 +577,7 @@ def add_and_apply_activation_(
 
 
 def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
-    def _torch_elt_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+    def _compute_golden_elt_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
         import torch
 
         name_to_torch_function = {
@@ -625,7 +631,7 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_elt_binary_validate_input_tensors,
-        torch_function=_torch_elt_binary,
+        compute_golden=_compute_golden_elt_binary,
     )
     def elt_binary_function(
         input_tensor_a: ttnn.Tensor,
@@ -712,7 +718,7 @@ def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tens
     )
 
 
-def _torch_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _compute_golden_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     import torch
 
     input_tensor_a = ttnn.to_torch(input_tensor_a)
@@ -724,7 +730,7 @@ def _torch_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *
 @ttnn.register_operation(
     name="ttnn.nextafter",
     validate_input_tensors=_nextafter_validate_input_tensors,
-    torch_function=_torch_nextafter,
+    compute_golden=_compute_golden_nextafter,
 )
 def nextafter(
     input_tensor_a: ttnn.Tensor,
@@ -779,7 +785,7 @@ def _polyval_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _torch_polyval(input_tensor: ttnn.Tensor, coeff: List[float], **_):
+def _compute_golden_polyval(input_tensor: ttnn.Tensor, coeff: List[float], **_):
     import torch
 
     input_tensor = ttnn.to_torch(input_tensor)
@@ -790,7 +796,7 @@ def _torch_polyval(input_tensor: ttnn.Tensor, coeff: List[float], **_):
 @ttnn.register_operation(
     name="ttnn.polyval",
     validate_input_tensors=_polyval_validate_input_tensors,
-    torch_function=_torch_polyval,
+    compute_golden=_compute_golden_polyval,
 )
 def polyval(
     input_tensor: ttnn.Tensor,

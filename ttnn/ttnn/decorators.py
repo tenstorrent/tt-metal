@@ -13,66 +13,28 @@ from loguru import logger
 import ttnn
 
 
-def compare(torch_outputs, outputs, pcc):
+def calculate_pcc(golden_outputs, outputs, desired_pcc):
     import torch
 
     from models.utility_functions import comp_pcc
 
     if isinstance(outputs, ttnn.Tensor):
-        if not isinstance(torch_outputs, torch.Tensor):
-            raise TypeError(f"Expected torch.Tensor, got {type(torch_outputs)}")
+        if not isinstance(golden_outputs, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
-        torch_outputs = [torch_outputs]
+        golden_outputs = [golden_outputs]
     else:
         if not isinstance(outputs, (list, tuple)):
             raise TypeError(f"Expected list or tuple, got {type(outputs)}")
-        if not isinstance(torch_outputs, (list, tuple)):
-            raise TypeError(f"Expected list or tuple, got {type(torch_outputs)}")
+        if not isinstance(golden_outputs, (list, tuple)):
+            raise TypeError(f"Expected list or tuple, got {type(golden_outputs)}")
 
-    matches = True
-    last_message = None
-    for torch_output, output in zip(torch_outputs, outputs):
+    for golden_output, output in zip(golden_outputs, outputs):
         output = ttnn.to_torch(output)
-        passed, last_message = comp_pcc(torch_output, output, pcc)
-        matches &= passed
-    return matches, last_message
-
-
-ENABLE_VALIDATE_DECORATOR = True
-ENABLE_DEBUG_DECORATOR = False
-PEARSON_CORRELATION_COEFFICIENT = 0.9999
-USE_TORCH_OUTPUT_IF_MISMATCHES = False
-
-
-@contextmanager
-def disable_validate_decorator():
-    global ENABLE_VALIDATE_DECORATOR
-    ENABLE_VALIDATE_DECORATOR = False
-    yield
-    ENABLE_VALIDATE_DECORATOR = True
-
-
-@contextmanager
-def enable_debug_decorator():
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = True
-    yield
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = False
-
-
-@contextmanager
-def override_pcc_of_debug_decorator(value):
-    global PEARSON_CORRELATION_COEFFICIENT
-    old_value = PEARSON_CORRELATION_COEFFICIENT
-    PEARSON_CORRELATION_COEFFICIENT = value
-    yield
-    PEARSON_CORRELATION_COEFFICIENT = old_value
-
-
-def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
-    torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
-    if ttnn.is_tensor_storage_on_device(output):
-        torch_output = ttnn.to_device(torch_output, output.device())
-    return torch_output
+        passed, actual_pcc = comp_pcc(golden_output, output, desired_pcc)
+        if not passed:
+            return False, actual_pcc
+    return True, actual_pcc
 
 
 PRE_OPERATION_HOOKS = []
@@ -189,20 +151,33 @@ def document_input_tensors(name, function, validate_input_tensors):
     function.__doc__ = f"{doc}\n"
 
 
-def get_devices(arg):
+def get_devices(object):
     devices = set()
-    if isinstance(arg, ttnn.Tensor):
-        if ttnn.is_tensor_storage_on_device(arg) and arg.is_allocated():
-            devices.add(arg.device())
-    elif isinstance(arg, ttnn.Device):
-        devices.add(arg)
-    elif isinstance(arg, (list, tuple)):
-        for element in arg:
+    if isinstance(object, ttnn.Tensor):
+        if ttnn.is_tensor_storage_on_device(object) and object.is_allocated():
+            devices.add(object.device())
+    elif isinstance(object, ttnn.Device):
+        devices.add(object)
+    elif isinstance(object, (list, tuple)):
+        for element in object:
             devices |= get_devices(element)
-    elif isinstance(arg, dict):
-        for value in arg.values():
+    elif isinstance(object, dict):
+        for value in object.values():
             devices |= get_devices(value)
     return devices
+
+
+def get_tensors(object):
+    tensors = []
+    if isinstance(object, ttnn.Tensor):
+        tensors.append(object)
+    elif isinstance(object, (list, tuple)):
+        for element in object:
+            tensors += get_tensors(element)
+    elif isinstance(object, dict):
+        for value in object.values():
+            tensors += get_tensors(value)
+    return tensors
 
 
 REGISTERED_OPERATIONS = set()
@@ -232,7 +207,7 @@ class Operation:
     name: str
     function: callable
     validate_input_tensors: callable
-    torch_function: callable
+    compute_golden: callable
     is_cpp_function: bool
     fallback: callable
 
@@ -257,55 +232,42 @@ class Operation:
 
             return call_wrapper
 
-        def debug_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                if self.torch_function is not None:
-                    logger.info(f"{self.name} : Comparing against PyTorch")
-                    torch_output = self.torch_function(*function_args, **function_kwargs)
-                else:
-                    logger.info(
-                        f"{self.name} : Skipping comparison against PyTorch because torch_function is not provided"
-                    )
-                    torch_output = None
+        def run_and_compare(function, *function_args, **function_kwargs):
+            if self.compute_golden is not None:
+                logger.debug(f"{self.name}: Comparing against PyTorch")
+                golden_output = self.compute_golden(*function_args, **function_kwargs)
+            else:
+                logger.debug(f"{self.name}: Skipping comparison against PyTorch because compute_golden is not provided")
+                golden_output = None
 
-                output = function(*function_args, **function_kwargs)
+            output = function(*function_args, **function_kwargs)
 
-                if torch_output is not None:
-                    matches, last_message = compare(torch_output, output, pcc=PEARSON_CORRELATION_COEFFICIENT)
-                    if not matches:
-                        if USE_TORCH_OUTPUT_IF_MISMATCHES:
-                            logger.warning(f"{self.name}: Comparing against PyTorch failed, using PyTorch output")
-                            if not isinstance(output, ttnn.Tensor):
-                                raise TypeError(f"Expected Tensor, got {type(output)}")
-                            output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
-                        else:
-                            if isinstance(output, ttnn.Tensor):
-                                output = ttnn.to_torch(output)
-                            elif isinstance(output, (list, tuple)):
-                                output = [ttnn.to_torch(tensor) for tensor in output]
-                            else:
-                                raise TypeError(f"Expected Tensor, list or tuple, got {type(output)}")
-                            raise RuntimeError(
-                                f"{self.name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
-                            )
+            matches = None
+            actual_pcc = None
+            if golden_output is not None:
+                matches, actual_pcc = calculate_pcc(golden_output, output, desired_pcc=ttnn.CONFIG.comparison_mode_pcc)
 
-                return output
-
-            return call_wrapper
+            return output, matches, actual_pcc
 
         def fallback_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                used_fallback = False
                 try:
-                    return function(*function_args, **function_kwargs)
+                    output = function(*function_args, **function_kwargs)
                 except NotImplementedError:
-                    logger.warning(f"{self.name}: falling back to torch due to NotImplementedError")
-                    return self.fallback(*function_args, **function_kwargs)
+                    used_fallback = True
+                    logger.warning(f"{self.name}: falling back to CPU due to NotImplementedError")
+                    output = self.fallback(*function_args, **function_kwargs)
                 except Exception as e:
+                    used_fallback = True
                     exception_message = "\n".join(str(e).split("\n")[:3])
-                    logger.warning(f"{self.name}: falling back to torch due to {exception_message}")
-                    return self.fallback(*function_args, **function_kwargs)
+                    logger.warning(f"{self.name}: falling back to CPU due to {exception_message}")
+                    output = self.fallback(*function_args, **function_kwargs)
+
+                if ttnn.CONFIG.throw_exception_on_fallback and used_fallback:
+                    raise RuntimeError(f"Fallbacks are disabled, but {self.name} used a fallback")
+                return output
 
             return call_wrapper
 
@@ -315,16 +277,16 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
+                operation_id = OPERATION_ID
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
-                decorated_function = function
-                if ENABLE_VALIDATE_DECORATOR:
-                    decorated_function = validate_decorator(decorated_function)
+                if is_top_level_operation and ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
+                    if not ttnn.tracer.is_tracing_enabled():
+                        ttnn.tracer.enable_tracing()
 
-                if ENABLE_DEBUG_DECORATOR:
-                    decorated_function = debug_decorator(decorated_function)
+                decorated_function = validate_decorator(function)
 
-                if is_top_level_operation and (ttnn.tracer.ENABLE_TRACER or ttnn.ENABLE_LOGGING):
+                if is_top_level_operation and ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
 
                 if is_top_level_operation:
@@ -335,31 +297,72 @@ class Operation:
                                 f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                             )
 
-                if is_top_level_operation and ttnn.ENABLE_LOGGING:
+                if is_top_level_operation and ttnn.CONFIG.enable_logging:
                     start = time.time()
-                    logger.info(f"Started {self.name:50}")
+                    logger.debug(f"Started {self.name:50}")
 
-                try:
-                    output = decorated_function(*function_args, **function_kwargs)
-                finally:
-                    if is_top_level_operation and ttnn.ENABLE_LOGGING:
-                        devices = get_devices((function_args, function_kwargs))
-                        for device in devices:
-                            ttnn.synchronize_device(device)
-                        end = time.time()
-                        duration = end - start
-                        logger.info(f"Finished {self.name:50} in {duration:30} seconds")
-                        ttnn.database.log(self, OPERATION_ID, devices)
-
-                        if ttnn.ENABLE_GRAPH_REPORT and output is not None:
-                            ttnn.tracer.visualize(
-                                output, file_name=ttnn.REPORTS_PATH / "graphs" / f"{OPERATION_ID}.svg"
+                    input_tensors = get_tensors((function_args, function_kwargs))
+                    ttnn.database.insert_input_tensors(operation_id, input_tensors)
+                    if ttnn.CONFIG.enable_tensor_report:
+                        (ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}").mkdir(
+                            parents=True, exist_ok=True
+                        )
+                        for index, tensor in enumerate(input_tensors):
+                            ttnn.dump_tensor(
+                                ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}" / f"{index}.bin",
+                                ttnn.from_device(tensor),
                             )
 
-                        #    codegen_reports = ttnn.REPORTS_PATH / "codegen"
-                        #    codegen_reports.mkdir(parents=True, exist_ok=True)
-                        #    with open(ttnn.REPORTS_PATH / "codegen" / f"{OPERATION_ID}.py", "w") as f:
-                        #        f.write(ttnn.tracer.codegen(output))
+                if is_top_level_operation and ttnn.CONFIG.enable_comparison_mode:
+                    output, matches_golden, actual_pcc = run_and_compare(
+                        decorated_function, *function_args, **function_kwargs
+                    )
+                else:
+                    matches_golden = None
+                    actual_pcc = None
+                    output = decorated_function(*function_args, **function_kwargs)
+
+                if is_top_level_operation and ttnn.CONFIG.enable_logging:
+                    devices = get_devices((function_args, function_kwargs))
+                    for device in devices:
+                        ttnn.synchronize_device(device)
+
+                    end = time.time()
+                    duration = end - start
+                    logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
+
+                    ttnn.database.insert_devices(devices)
+
+                    output_tensors = get_tensors(output)
+
+                    ttnn.database.insert_operation(
+                        self, operation_id, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
+                    )
+                    ttnn.database.insert_output_tensors(operation_id, output_tensors)
+                    ttnn.database.insert_buffers(operation_id)
+
+                    if ttnn.CONFIG.enable_graph_report:
+                        ttnn.tracer.visualize(
+                            ttnn.tracer.GRAPH_STACK[-1],
+                            file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg",
+                        )
+
+                        """
+                        codegen_reports = ttnn.CONFIG.reports_path / "codegen"
+                        codegen_reports.mkdir(parents=True, exist_ok=True)
+                        with open(ttnn.CONFIG.reports_path / "codegen" / f"{operation_id}.py", "w") as f:
+                            f.write(ttnn.tracer.codegen(output))
+                        """
+
+                    if ttnn.CONFIG.enable_tensor_report:
+                        (ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}").mkdir(
+                            parents=True, exist_ok=True
+                        )
+                        for index, tensor in enumerate(output_tensors):
+                            ttnn.dump_tensor(
+                                ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}" / f"{index}.bin",
+                                ttnn.from_device(tensor),
+                            )
 
                 if is_top_level_operation:
                     for hook in POST_OPERATION_HOOKS:
@@ -369,16 +372,24 @@ class Operation:
                                 f"Post-operation hook {hook} returned {hook_return_value} but must return None"
                             )
 
+                if matches_golden is not None and not matches_golden:
+                    logger.error(f"{self.name}: Comparing against PyTorch failed")
+
                 return output
 
             return call_wrapper
 
-        if not ttnn.ENABLE_FAST_RUNTIME_MODE:
+        if not ttnn.CONFIG.enable_fast_runtime_mode:
+            # If fast runtime mode is enabled during import time, then don't decorate the original function
             function = runtime_decorator(function)
 
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        # If fast runtime mode is enabled during runtime, then only run the original function
+        if ttnn.CONFIG.enable_fast_runtime_mode:
+            return self.function(*function_args, **function_kwargs)
+
         global OPERATION_ID
         try:
             OPERATION_CALL_STACK.append(self.name)
@@ -392,7 +403,7 @@ class Operation:
 
 
 def register_operation(
-    *, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None, is_method=False
+    *, name, validate_input_tensors=None, compute_golden=None, is_cpp_function=False, fallback=None, is_method=False
 ):
     if is_cpp_function:
         if fallback is not None:
@@ -416,7 +427,7 @@ def register_operation(
             name=name,
             function=function,
             validate_input_tensors=validate_input_tensors,
-            torch_function=torch_function,
+            compute_golden=compute_golden,
             is_cpp_function=is_cpp_function,
             fallback=fallback,
         )

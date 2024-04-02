@@ -18,10 +18,10 @@ __all__ = []
 
 
 def register_ttl_relational_function_zero(name, ttl_relational_function, op_function):
-    def _torch_relational(input_tensor: ttnn.Tensor, **_):
+    def _compute_golden_relational(input_tensor: ttnn.Tensor, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "gtz": torch.gt,
             "ltz": torch.lt,
             "gez": torch.ge,
@@ -29,7 +29,7 @@ def register_ttl_relational_function_zero(name, ttl_relational_function, op_func
             "nez": torch.ne,
             "eqz": torch.eq,
         }
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, 0)
 
@@ -47,7 +47,7 @@ def register_ttl_relational_function_zero(name, ttl_relational_function, op_func
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_relational_validate_input_tensors,
-        torch_function=_torch_relational,
+        compute_golden=_compute_golden_relational,
     )
     def relational_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -90,10 +90,10 @@ def _is_scalar(value):
 
 
 def register_ttl_relational_function(name, ttl_relational_function, op_name):
-    def _torch_relational(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+    def _compute_golden_relational(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "gt": torch.gt,
             "gte": torch.ge,
             "lt": torch.lt,
@@ -116,7 +116,7 @@ def register_ttl_relational_function(name, ttl_relational_function, op_name):
             input_tensor_b = ttnn.to_torch(input_tensor_b)
             input_tensor_b = input_tensor_b[slices]
 
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
 
     def _relational_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -143,7 +143,7 @@ def register_ttl_relational_function(name, ttl_relational_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_relational_validate_input_tensors,
-        torch_function=_torch_relational,
+        compute_golden=_compute_golden_relational,
     )
     def relational_function(
         input_tensor_a: ttnn.Tensor,
@@ -246,7 +246,7 @@ ttnn.Tensor.__le__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "le")(se
 
 
 def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, param2):
-    def _torch_relational(
+    def _compute_golden_relational(
         input_tensor_a: ttnn.Tensor,
         input_tensor_b: ttnn.Tensor,
         param1: float = 1e-05,
@@ -256,7 +256,7 @@ def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, p
     ):
         import torch
 
-        name_to_torch_function = {
+        name_to_compute_golden_function = {
             "isclose": torch.isclose,
         }
 
@@ -274,7 +274,7 @@ def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, p
         input_tensor_b = ttnn.to_torch(input_tensor_b)
         input_tensor_b = input_tensor_b[slices]
 
-        torch_function = name_to_torch_function[name]
+        torch_function = name_to_compute_golden_function[name]
         return torch_function(input_tensor_a, input_tensor_b, rtol=param1, atol=param2, equal_nan=equal_nan)
 
     def _relational_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -300,7 +300,7 @@ def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, p
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_relational_validate_input_tensors,
-        torch_function=_torch_relational,
+        compute_golden=_compute_golden_relational,
     )
     def isclose_function(
         input_tensor_a: ttnn.Tensor,

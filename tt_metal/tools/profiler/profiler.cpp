@@ -91,11 +91,15 @@ void DeviceProfiler::readRiscProfilerResults(
 
             bool newRunStart = false;
 
+            uint32_t opTime_H = 0;
+            uint32_t opTime_L = 0;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex); index += PROFILER_L1_MARKER_UINT32_SIZE)
             {
                 if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0)
                 {
                     newRunStart = true;
+                    opTime_H = 0;
+                    opTime_L = 0;
                 }
                 else if (newRunStart)
                 {
@@ -116,6 +120,15 @@ void DeviceProfiler::readRiscProfilerResults(
                         if (marker || time_H)
                         {
                             uint32_t time_L = profile_buffer[index + 1];
+
+                            if (opTime_H == 0)
+                            {
+                                opTime_H = time_H;
+                            }
+                            if (opTime_L == 0)
+                            {
+                                opTime_L = time_L;
+                            }
 
                             TT_ASSERT (riscNumRead == riscNum,
                                     fmt::format("Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
@@ -149,8 +162,8 @@ void DeviceProfiler::readRiscProfilerResults(
                         uint32_t marker = (profile_buffer[index] >> 12) & 0x7FFFF ;
                         uint32_t sum = profile_buffer[index + 1];
 
-                        uint32_t time_H = profile_buffer[bufferRiscShift + kernel_profiler::GUARANTEED_MARKER_1_H] & 0xFFF;
-                        uint32_t time_L = profile_buffer[bufferRiscShift + kernel_profiler::GUARANTEED_MARKER_1_H + 1];
+                        uint32_t time_H = opTime_H;
+                        uint32_t time_L = opTime_L;
                         dumpResultToFile(
                                 runCounterRead,
                                 device_id,

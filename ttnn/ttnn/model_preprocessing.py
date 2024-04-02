@@ -425,7 +425,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.TMP_DIR / "model_graph.svg")
+    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
@@ -550,25 +550,27 @@ def preprocess_model(
     if reader_patterns_cache is None:
         reader_patterns_cache = {}
 
-    if model_name is None and not ttnn.ENABLE_MODEL_CACHE:
+    if model_name is None and not ttnn.CONFIG.enable_model_cache:
         logger.warning(
-            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
         )
 
-    elif model_name is None and ttnn.ENABLE_MODEL_CACHE:
+    elif model_name is None and ttnn.CONFIG.enable_model_cache:
         logger.warning(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
         )
 
-    elif model_name is not None and not ttnn.ENABLE_MODEL_CACHE:
-        logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
+    elif model_name is not None and not ttnn.CONFIG.enable_model_cache:
+        logger.warning(
+            "ttnn: model cache can be enabled by setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
+        )
 
     if convert_to_ttnn is None:
 
         def convert_to_ttnn(model, full_name):
             return True
 
-    if model_name is None or not ttnn.ENABLE_MODEL_CACHE:
+    if model_name is None or not ttnn.CONFIG.enable_model_cache:
         model = _initialize_model_and_preprocess_parameters(
             initialize_model=initialize_model,
             run_model=run_model,
@@ -579,7 +581,7 @@ def preprocess_model(
         )
 
     else:
-        model_cache_path = ttnn.MODEL_CACHE_PATH / model_name.replace("/", "_")
+        model_cache_path = ttnn.CONFIG.model_cache_path / model_name.replace("/", "_")
         version_file_path = model_cache_path / "version.txt"
 
         if version is None:
@@ -598,14 +600,14 @@ def preprocess_model(
             version_matches = False
 
         if cache_exists and version_matches:
-            logger.info(f'Loading model weights from cache: {model_cache_path}  (version "{version}")')
+            logger.debug(f'Loading model weights from cache: {model_cache_path}  (version "{version}")')
             model = _load_parameters(model_cache_path)
-            logger.info(f'Loaded model weights from cache: {model_cache_path}  (version "{version}")')
+            logger.debug(f'Loaded model weights from cache: {model_cache_path}  (version "{version}")')
         else:
             if initialize_model is None:
                 raise RuntimeError(f'Cached weights for the model {model_name} (version "{version}") don\'t exist')
 
-            logger.info(f'Saving model weights to cache: {model_cache_path} (version "{version}")')
+            logger.debug(f'Saving model weights to cache: {model_cache_path} (version "{version}")')
 
             model = _initialize_model_and_preprocess_parameters(
                 initialize_model=initialize_model,
@@ -625,12 +627,12 @@ def preprocess_model(
             with open(version_file_path, "w") as f:
                 f.write(version)
 
-            logger.info(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
+            logger.debug(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
 
     if device is not None:
-        logger.info(f"Moving model weights to device")
+        logger.debug(f"Moving model weights to device")
         model = move_to_device(model, device)
-        logger.info(f"Moved model weights to device")
+        logger.debug(f"Moved model weights to device")
 
     def _convert_ttnn_module_args_to_modules(model):
         if isinstance(model, ParameterDict):

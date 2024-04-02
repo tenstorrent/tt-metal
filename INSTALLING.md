@@ -1,5 +1,7 @@
 # Install
 
+These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
+
 ### Step 1. System-level dependencies
 
 ```sh
@@ -11,46 +13,51 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
 
 ### Step 2. Driver & Firmware
 
-Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd). 
+Install driver [(TT-KMD)](https://github.com/tenstorrent/tt-kmd).
 
-Install [TT-FLASH](https://github.com/tenstorrent/tt-flash) and the [firmware blob](https://github.com/tenstorrent/tt-firmware-gs).
+Install [TT-Flash](https://github.com/tenstorrent/tt-flash) and the [firmware blob](https://github.com/tenstorrent/tt-firmware-gs).
 
-Install [TT_SMI](https://github.com/tenstorrent/tt-smi)
+Install [TT-SMI](https://github.com/tenstorrent/tt-smi).
+
+Install [TT-Topology](https://github.com/tenstorrent/tt-smi) with `mesh` configuration if you're using a T3000.
 
 Note the current compatability matrix:
 
-| Device              | OS              | Python   | Driver (TT-KMD)    | tt-flash                           | tt-smi                                                    |
-|---------------------|-----------------|----------|--------------------|------------------------------------|-----------------------------------------------------------|
-| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz   | tt-smi_2023-06-16-0283a02404487eea or above               |
-| Wormhole & T3000    | Ubuntu 20.04    | 3.8.10   | v1.26              | 2023-08-08 (7.D)                   | tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above       |
-
+| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology     |
+|---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|-----------------|
+| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz (v4.0.0)  | v2.1.0 or above       | N/A             |
+| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.8.11.0.tar.gz (v80.8.11.0)      | v2.1.0 or above       | N/A             |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.8.11.0.tar.gz (v80.8.11.0)      | v2.1.0 or above       | v1.0.2 or above |
 
 ---
 
-### Step 3. Huge Pages 
+### Step 3. Huge Pages
 
 1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
-   
-2. Run first setup script.
 ```sh
-sudo -E python3 setup_hugepages.py first_pass                                            
+wget https://raw.githubusercontent.com/tenstorrent-metal/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
+```
+
+3. Run first setup script.
+```sh
+sudo -E python3 setup_hugepages.py first_pass
 ```
 
 3. Reboot
 ```sh
-sudo reboot now                                                                           
+sudo reboot now
 ```
 
-4. Run second setup script & check setup. 
+4. Run second setup script & check setup.
 ```sh
 sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
 
 ---
 
-### Step 4. Developer dependencies
+### Step 4. Software dependencies
 
-1. Install dependencies 
+1. Install dependencies
 
 ```sh
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config
@@ -65,14 +72,14 @@ sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 
 ### Step 5. Build from source
 
 1. Clone the repo.
-   
+
 ```sh
 git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 cd tt-metal
+git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-2. Set up the environment, build & activate. 
+2. Set up the environment, build & activate.
 
 ```sh
 export ARCH_NAME=<arch name>                # 'grayskull' or 'wormhole_b0'
@@ -84,4 +91,3 @@ make build
 
 source build/python_env/bin/activate
 ```
-

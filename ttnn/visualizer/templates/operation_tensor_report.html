@@ -1,0 +1,77 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<html>
+
+<style>
+    tr:nth-child(even) {
+        background-color: #D6EEEE;
+    }
+
+    th {
+        padding: 15px;
+        background-color: white;
+        position: sticky;
+        z-index: 100;
+        top: 0;
+    }
+
+    td {
+        padding: 15px;
+    }
+</style>
+
+<body>
+    <ul>
+        <div>
+            <p>{{ operation.name }}</p>
+            {% if input_tensors %}
+            <table>
+                <caption>Input Tensors</caption>
+                <tr>
+                    <th>Index</th>
+                    <th>Shape</th>
+                    <th>Dtype</th>
+                    <th>Layout</th>
+                    <th>String Representation</th>
+                </tr>
+                {% for tensor in input_tensors %}
+                <tr>
+                    <td>{{loop.index0}}</td>
+                    <td>{{tensor.shape}}</td>
+                    <td>{{tensor.dtype}}</td>
+                    <td>{{tensor.layout}}</td>
+                    <td>{{tensor}}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+
+            {% if output_tensors %}
+            <table>
+                <caption>Output Tensors</caption>
+                <tr>
+                    <th>Index</th>
+                    <th>Shape</th>
+                    <th>Dtype</th>
+                    <th>Layout</th>
+                    <th>String Representation</th>
+                </tr>
+                {% for tensor in output_tensors %}
+                <tr>
+                    <td>{{loop.index0}}</td>
+                    <td>{{tensor.shape}}</td>
+                    <td>{{tensor.dtype}}</td>
+                    <td>{{tensor.layout}}</td>
+                    <td>{{tensor}}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+        </div>
+    </ul>
+</body>
+
+</html>
+
+{% endblock %}

@@ -182,6 +182,12 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output
             TT_FATAL(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
+    if (is_multi_device_tensor(input_tensor_a)) {
+        return transform(input_tensor_a, [&](const Tensor& tensor) {
+            return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype);
+        });
+    }
+
     return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
 
 }

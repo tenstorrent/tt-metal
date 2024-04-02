@@ -45,60 +45,23 @@ def run_eltwise_relu_min_tests(
 
 
 test_sweep_args = [
-    # 2023-09-21
     (
-        (1, 10, 192, 160),
-        ttl.tensor.DataType.BFLOAT16,
+        (4, 2, 96, 160),
+        ttl.tensor.DataType.BFLOAT8_B,
         ttl.tensor.Layout.TILE,
+        "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        99.0,
-        895795,
-    ),
-    (
-        (2, 4, 192, 160),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         99.5,
-        14073508,
+        12915139,
     ),
     (
-        (6, 9, 192, 128),
-        ttl.tensor.DataType.BFLOAT16,
+        (3, 10, 64, 96),
+        ttl.tensor.DataType.BFLOAT8_B,
         ttl.tensor.Layout.TILE,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         97.5,
-        9248746,
-    ),
-    (
-        (3, 2, 192, 32),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        98.0,
-        18784230,
-    ),
-    (
-        (3, 8, 96, 160),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        98.0,
-        16934480,
-    ),
-    (
-        (4, 7, 32, 96),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        98.5,
-        13587334,
+        8726038,
     ),
 ]
 
