@@ -29,17 +29,23 @@ class TtMambaBlock(torch.nn.Module):
 
         # ssm wt
         self.ssm_in_proj_weights = load_fn(
-            in_proj_weight_name, lambda x: x[: self.args.d_inner, :].transpose(-1, -2), postfix="ssm"
+            in_proj_weight_name,
+            lambda x: x[: self.args.d_inner, :].transpose(-1, -2),
+            postfix="ssm",
+            tt_dtype=ttnn.bfloat8_b,
         )
 
         # mlp wt
         self.mlp_proj_weights = load_fn(
-            in_proj_weight_name, lambda x: x[self.args.d_inner :, :].transpose(-1, -2), postfix="mlp"
+            in_proj_weight_name,
+            lambda x: x[self.args.d_inner :, :].transpose(-1, -2),
+            postfix="mlp",
+            tt_dtype=ttnn.bfloat8_b,
         )
 
         # down proj wt
         out_proj_weight_name = "mixer.out_proj.weight"
-        self.out_proj_weights = load_fn(out_proj_weight_name, lambda x: x.transpose(-1, -2))
+        self.out_proj_weights = load_fn(out_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=ttnn.bfloat8_b)
 
         # conv states
         conv1d_weight_name = "mixer.conv1d.weight"
