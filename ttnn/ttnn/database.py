@@ -101,9 +101,11 @@ class OutputTensor:
 
 def delete_reports():
     global SQLITE_CONNECTION
+    if not ttnn.CONFIG.delete_reports_on_start:
+        return
+    logger.debug(f"Deleting reports from {ttnn.CONFIG.reports_path} and closing the sqlite connection.")
     if SQLITE_CONNECTION is not None:
         SQLITE_CONNECTION.close()
-    logger.debug(f"Deleting reports from {ttnn.CONFIG.reports_path} and closing the sqlite connection.")
     shutil.rmtree(ttnn.CONFIG.reports_path, ignore_errors=True)
     SQLITE_CONNECTION = None
 
