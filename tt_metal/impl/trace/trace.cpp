@@ -12,14 +12,14 @@
 namespace tt::tt_metal {
 
 // List of supported commands for tracing
-const unordered_set<EnqueueCommandType> trace_supported_commands = {
-    EnqueueCommandType::ENQUEUE_PROGRAM,
-};
+// const unordered_set<EnqueueCommandType> trace_supported_commands = {
+//     EnqueueCommandType::ENQUEUE_PROGRAM,
+// };
 
 unordered_map<uint32_t, shared_ptr<Buffer>> Trace::buffer_pool;
 std::mutex Trace::pool_mutex;
 
-Trace::Trace() : capture_complete(false), num_data_bytes(0), state(TraceState::EMPTY) {
+Trace::Trace() : state(TraceState::EMPTY) {
     this->tq = std::make_unique<CommandQueue>(*this);
 }
 
@@ -35,19 +35,14 @@ void Trace::end_capture() {
     this->state = TraceState::CAPTURED;
 }
 
-void Trace::record(const TraceNode& trace_node) {
-    this->num_data_bytes += trace_node.num_data_bytes;
-    this->history.push_back(trace_node);
-}
-
 void Trace::validate() {
     for (const auto& cmd : this->queue().worker_queue) {
-        if (cmd.blocking.has_value()) {
-            TT_FATAL(cmd.blocking.value() == false, "Blocking commands are not supported in traces");
-        }
-        if (trace_supported_commands.find(cmd.type) == trace_supported_commands.end()) {
-            TT_THROW("Unsupported command type for tracing");
-        }
+        // if (cmd.blocking.has_value()) {
+        //     TT_FATAL(cmd.blocking.value() == false, "Blocking commands are not supported in traces");
+        // }
+        // if (trace_supported_commands.find(cmd.type) == trace_supported_commands.end()) {
+        //     TT_THROW("Unsupported command type for tracing");
+        // }
     }
 }
 
@@ -56,57 +51,37 @@ uint32_t Trace::next_id() {
     return global_trace_id++;
 }
 
+// Stage the trace commands into device DRAM as an interleaved buffer for execution
 uint32_t Trace::instantiate(CommandQueue& cq) {
     this->state = TraceState::INSTANTIATING;
     uint32_t tid = next_id();
     TT_FATAL(this->has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
 
-    // Stage the trace commands into device DRAM that the command queue will read from
-    // - flatten commands into tightly packed data structure
-    // - allocate the data into a DRAM interleaved buffer using 2KB page size
-    // - commit the DRAM buffer via an enqueue WB command
-    // - map the trace id to the DRAM buffer for later enqueue Trace
-
+    // Record the captured Host API as commands via bypass mode
+    SystemMemoryManager& cq_manager = cq.device()->sysmem_manager();
+    cq_manager.set_bypass_mode(kEnableCQBypass, kClearBuffer);
     for (auto cmd : this->queue().worker_queue) {
-        TT_FATAL(
-            trace_supported_commands.find(cmd.type) != trace_supported_commands.end(),
-            "Unsupported command type found in trace");
-        cmd.trace = *this;
-        // #6024: Trace command flattening to a buffer should avoid using CQ
-        // however the use of it offloads work to a worker thread for speedup
-        // while can be queued up behind other commands and requires sync before
-        // yielding back to the main thread (eg. this->history usage below requires wait_until_empty)
         log_debug(LogMetalTrace, "Trace::instantiate found command {}", cmd.type);
         cq.run_command(cmd);
     }
     cq.wait_until_empty();
 
-    vector<uint32_t> trace_data;
-
+    // Extract the data from the bypass buffer and allocate it into a DRAM buffer
     SystemMemoryManager& manager = cq.hw_command_queue().manager;
-    uint32_t data_size = 0;
-    for (const auto& node : this->history) {
-        trace_data.insert(trace_data.end(), node.data.begin(), node.data.end());
-        data_size += node.num_data_bytes;
-    }
-    log_debug(LogMetalTrace, "Trace data size = {}, trace num_bytes = {}", data_size, this->num_data_bytes);
-    TT_FATAL(data_size == this->num_data_bytes, "Data size mismatch in trace");
+    std::vector<uint32_t>& data = cq_manager.get_bypass_data();
+    uint64_t data_size = data.size() * sizeof(uint32_t);
+    log_debug(LogMetalTrace, "Trace buffer data size = {}", data_size);
 
-    auto trace_buffer = std::make_shared<Buffer>(
-        cq.device(),
-        this->num_data_bytes,
-        DeviceCommand::PROGRAM_PAGE_SIZE,
-        BufferType::DRAM,
-        TensorMemoryLayout::INTERLEAVED);
+    // TODO: add CQ_PREFETCH_END_EXEC_BUF command to the end of the trace buffer as the last command
 
-    // Pin the trace buffer in memory through trace memory mgmt
-    this->add_instance(tid, trace_buffer);
+    // Commit the trace buffer to device DRAM in a blocking fashion before clearing the bypass mode and data
+    auto buffer = std::make_shared<Buffer>(
+        cq.device(), data_size, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED);
+    EnqueueWriteBuffer(cq, buffer, data, kBlocking);
+    cq_manager.set_bypass_mode(kDisableCQBypass, kClearBuffer);
 
-    // Commit the trace buffer to device DRAM in a blocking fashion
-    // Optional optimization: use a non-blocking enqueue WB command
-    EnqueueWriteBuffer(cq, trace_buffer, trace_data, true);
-
-    this->history.clear();
+    // Pin the trace buffer in memory until explicitly released by the user
+    this->add_instance(tid, buffer);
     this->state = TraceState::READY;
     return tid;
 }
