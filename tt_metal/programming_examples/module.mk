@@ -1,5 +1,7 @@
 PROGRAMMING_EXAMPLES_TESTDIR = $(OUT)/programming_examples
 PROGRAMMING_EXAMPLES_OBJDIR = $(OBJDIR)/programming_examples
+PROGRAMMING_EXAMPLES_CONTRIB_TESTDIR = $(OUT)/programming_examples/contrib
+PROGRAMMING_EXAMPLES_CONTRIB_OBJDIR = $(OBJDIR)/programming_examples/contrib
 
 PROGRAMMING_EXAMPLES_INCLUDES = $(COMMON_INCLUDES)
 PROGRAMMING_EXAMPLES_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lm
@@ -12,6 +14,7 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_single_core/module
 include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multi_core/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multicore_reuse/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multicore_reuse_mcast/module.mk
+include $(TT_METAL_HOME)/tt_metal/programming_examples/contrib/vecadd/module.mk
 
 # Need to depend on set_up_kernels.
 
@@ -27,6 +30,7 @@ programming_examples: programming_examples/loopback \
                       programming_examples/matmul_multi_core \
                       programming_examples/matmul_multicore_reuse \
                       programming_examples/matmul_multicore_reuse_mcast \
+					  programming_examples/contrib/vecadd \
                       $(PROFILER_TESTS)
 
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
@@ -37,3 +41,4 @@ programming_examples/matmul_multi_core: $(PROGRAMMING_EXAMPLES_TESTDIR)/matmul_m
 programming_examples/matmul_multicore_reuse: $(PROGRAMMING_EXAMPLES_TESTDIR)/matmul_multicore_reuse;
 programming_examples/matmul_multicore_reuse_mcast: $(PROGRAMMING_EXAMPLES_TESTDIR)/matmul_multicore_reuse_mcast;
 programming_examples/profiler/%: $(PROGRAMMING_EXAMPLES_TESTDIR)/profiler/%;
+programming_examples/contrib/vecadd: $(PROGRAMMING_EXAMPLES_TESTDIR)/contrib/vecadd;
