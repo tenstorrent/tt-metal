@@ -78,16 +78,6 @@ if CONFIG_OVERRIDES:
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
-def get_bool_env_var(name, default):
-    variable = os.environ.get(name, f"{default}")
-    if variable == "True":
-        return True
-    elif variable == "False":
-        return False
-    else:
-        raise RuntimeError(f'The value has to be either "True" or "False"')
-
-
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
