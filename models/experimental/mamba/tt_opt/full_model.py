@@ -35,12 +35,12 @@ class TtTensorLoader:
                 tensor_cache_filepath = str(Path(self.tt_cache_path) / (tensor_name + postfix))
             else:
                 tensor_cache_filepath = None
+
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
 
-            # Make all loaded tensors rank 4 because there are performance issues with certain
-            # ops when using with rank 1/2 tensors in ttnn
+            # All tensors need to be rank 4 because of op performance issues with rank 1/2 inputs in ttnn
             while len(torch_tensor.size()) < 4:
                 torch_tensor = torch_tensor.unsqueeze(0)
 
