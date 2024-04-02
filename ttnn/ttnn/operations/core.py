@@ -103,7 +103,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
 
         output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
-        padded_output_shape = list(output.shape)[-input_rank:]
+        padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 
     raise NotImplementedError
