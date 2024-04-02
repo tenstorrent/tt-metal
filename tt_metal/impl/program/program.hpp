@@ -117,15 +117,18 @@ class Program {
     void allocate_circular_buffers();
 
    private:
+    void populate_dispatch_data(Device *device);
+
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
-    ProgramDeviceMap program_device_map;
-
     // The buffer that holds the kernel/binaries/etc for this program
+    std::vector<std::unique_ptr<Buffer>> kg_buffers;
     std::unique_ptr<Buffer> buffer;
+    ProgramTransferInfo program_transfer_info;
 
     bool loaded_onto_device;
+    std::vector<uint32_t> cached_commands;
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 

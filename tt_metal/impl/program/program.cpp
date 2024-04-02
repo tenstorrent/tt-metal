@@ -557,26 +557,7 @@ void Program::invalidate_compile() {
     }
 }
 
-ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& program) {
-    std::unordered_map<PageTransferType, vector<transfer_info>> program_page_transfers = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<transfer_info>> runtime_arg_page_transfers = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<transfer_info>> cb_config_page_transfers = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<transfer_info>> go_signal_page_transfers = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_program_pages = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_runtime_arg_pages = {
-        {PageTransferType::MULTICAST, {}},
-        {PageTransferType::UNICAST,
-         {}}};  // Corresponds to the number of transfers within host data pages across all host data pages
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_cb_config_pages = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_go_signal_pages = {
-        {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
-
+void Program::populate_dispatch_data(Device* device) {
     static const map<RISCV, uint32_t> processor_to_local_mem_addr = {
         {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
         {RISCV::NCRISC, MEM_NCRISC_INIT_LOCAL_L1_BASE},
@@ -592,48 +573,6 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
         {RISCV::ERISC, eth_l1_mem::address_map::ERISC_L1_ARG_BASE},
     };
 
-    uint32_t num_transfers_within_page = 0;
-
-    uint32_t src = 0;
-    vector<uint32_t> program_pages;
-    uint32_t program_page_idx = 0;
-    uint32_t program_new_page_tracker = 0;
-    constexpr static uint32_t noc_transfer_alignment_in_bytes = 16;
-
-    auto update_program_page_transfers = [&num_transfers_within_page](
-                                             uint32_t src,
-                                             uint32_t num_bytes,
-                                             uint32_t dst,
-                                             vector<transfer_info>& transfers,
-                                             vector<uint32_t>& num_transfers_per_page,
-                                             const vector<pair<uint32_t, uint32_t>>& dst_noc_transfer_info,
-                                             bool linked = false) -> uint32_t {
-        while (num_bytes) {
-            uint32_t num_bytes_left_in_page = DeviceCommand::PROGRAM_PAGE_SIZE - (src % DeviceCommand::PROGRAM_PAGE_SIZE);
-            uint32_t num_bytes_in_transfer = std::min(num_bytes_left_in_page, num_bytes);
-            src = align(src + num_bytes_in_transfer, noc_transfer_alignment_in_bytes);
-
-            uint32_t transfer_instruction_idx = 1;
-            for (const auto& [dst_noc_encoding, num_receivers] : dst_noc_transfer_info) {
-                bool last = transfer_instruction_idx == dst_noc_transfer_info.size();
-                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_encoding = dst_noc_encoding, .num_receivers = num_receivers, .last_transfer_in_group = last, .linked = linked};
-                transfers.push_back(transfer_instruction);
-                num_transfers_within_page++;
-                transfer_instruction_idx++;
-            }
-
-            dst += num_bytes_in_transfer;
-            num_bytes -= num_bytes_in_transfer;
-
-            if ((src % DeviceCommand::PROGRAM_PAGE_SIZE) == 0) {
-                num_transfers_per_page.push_back(num_transfers_within_page);
-                num_transfers_within_page = 0;
-            }
-        }
-
-        return src;
-    };
-
     auto extract_dst_noc_multicast_info =
         [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -642,7 +581,8 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
             CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
             CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
 
-            uint32_t dst_noc_multicast_encoding = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+            uint32_t dst_noc_multicast_encoding =
+                NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
 
             uint32_t num_receivers = core_range.size();
             dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
@@ -650,35 +590,93 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
         return dst_noc_multicast_info;
     };
 
-    auto update_program_pages_with_new_page = [&program_pages, &src, &program_new_page_tracker]() {
-        program_pages.resize(program_pages.size() + align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t), 0);
-        src = 0;
-        program_new_page_tracker++;
-    };
-    auto align_program_page_idx_to_new_page = [&program_page_idx, &program_new_page_tracker]() {
-        program_page_idx = align(program_page_idx, DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t));
-        program_new_page_tracker--;
+    auto extract_dst_noc_unicast_info =
+        [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
+        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info;
+        for (const CoreRange& core_range : ranges) {
+            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                    CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    uint32_t dst_noc_unicast_encoding =
+                        NOC_XY_ENCODING(NOC_X(physical_coord.x), NOC_Y(physical_coord.y));
+                    dst_noc_unicast_info.push_back(std::make_pair(dst_noc_unicast_encoding, /*num_mcast_dests=*/0));
+                }
+            }
+        }
+        return dst_noc_unicast_info;
     };
 
-    auto get_noc_unicast_encoding = [](const CoreCoord& coord) {
-        return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y));
-    };
+    // Runtime Args
+    // TODO: add multicasting
+    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+        auto kernel = detail::GetKernel(*this, kernel_id);
 
-    auto update_program_page_for_kernel_group =
-        [&program_page_transfers,
-         &num_transfers_in_program_pages,
-         &update_program_page_transfers,
-         &extract_dst_noc_multicast_info,
-         &device,
-         &program,
-         &get_noc_unicast_encoding](uint32_t src, const KernelGroup& kernel_group, PageTransferType page_transfer_type) -> uint32_t {
+        uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+
+        for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+          // can make a vector of unicast encodings here
+            CoreCoord physical_core =
+                device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
+            const auto& runtime_args_data = kernel->runtime_args(core_coord);
+            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
+                detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
+
+            transfer_info_2 transfer_info = {
+                .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
+            this->program_transfer_info.runtime_args[dst].push_back(transfer_info);
+        }
+    }
+    // Unicast/Multicast Semaphores
+    for (const Semaphore& semaphore : this->semaphores()) {
+        vector<uint32_t> semaphore_data(1);
+        semaphore_data[0] = semaphore.initial_value();
+
+        // TODO: use semaphore.core_type from main
+        if (semaphore.core_type() == CoreType::WORKER) {
+            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
+            transfer_info_2 transfer_info = {
+                .dst_base_addr = semaphore.address(),
+                .dst_noc_info = dst_noc_multicast_info,
+                .linked = false,
+                .data = semaphore_data};
+            this->program_transfer_info.multicast_semaphores[semaphore.address()].push_back(transfer_info);
+        } else if (semaphore.core_type() == CoreType::ETH) {
+            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
+            transfer_info_2 transfer_info = {
+                .dst_base_addr = semaphore.address(),
+                .dst_noc_info = dst_noc_unicast_info,
+                .linked = false,
+                .data = semaphore_data};
+            this->program_transfer_info.unicast_semaphores[semaphore.address()].push_back(transfer_info);
+        }
+    }
+
+    // Circular Buffer Configs handled in EnqueueProgram
+
+    // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
+    // Program Binaries and Go Signals
+    // TODO: cleanup put the WORKERS and ETH logic together..
+    for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
             extract_dst_noc_multicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
+
+        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
+        vector<uint32_t> go_signals_data(sizeof(launch_msg_t) / sizeof(uint32_t));
+        uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
+        for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
+            go_signals_data[i] = launch_message_data[i];
+        }
+        transfer_info_2 transfer_info = {
+            .dst_base_addr = GET_MAILBOX_ADDRESS_HOST(launch),
+            .dst_noc_info = dst_noc_multicast_info,
+            .linked = false,
+            .data = go_signals_data};
+        this->program_transfer_info.go_signals.push_back(transfer_info);
 
         // So far, we don't support linking optimizations for kernel groups
         // which use multiple core ranges
         bool linked = dst_noc_multicast_info.size() == 1;
-
         vector<KernelHandle> kernel_ids;
         if (kernel_group.riscv0_id)
             kernel_ids.push_back(kernel_group.riscv0_id.value());
@@ -686,13 +684,10 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
             kernel_ids.push_back(kernel_group.riscv1_id.value());
         if (kernel_group.compute_id)
             kernel_ids.push_back(kernel_group.compute_id.value());
-        if (kernel_group.erisc_id)
-            kernel_ids.push_back(kernel_group.erisc_id.value());
-
         for (size_t i = 0; i < kernel_ids.size(); i++) {
             KernelHandle kernel_id = kernel_ids[i];
             vector<RISCV> sub_kernels;
-            std::shared_ptr<Kernel> kernel = detail::GetKernel(program, kernel_id);
+            std::shared_ptr<Kernel> kernel = detail::GetKernel(*this, kernel_id);
             if (kernel->processor() == RISCV::COMPUTE) {
                 sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
             } else {
@@ -701,6 +696,11 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
             uint32_t sub_kernel_index = 0;
             const auto& binaries = kernel->binaries(device->id());
+
+            std::vector<uint32_t> dst_base_addrs(binaries.size());
+            std::vector<uint32_t> page_offsets(binaries.size());
+            std::vector<uint32_t> lengths(binaries.size());
+            vector<uint32_t> binaries_data;
             for (size_t j = 0; j < binaries.size(); j++) {
                 const ll_api::memory& kernel_bin = binaries[j];
 
@@ -711,289 +711,117 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
                     uint64_t relo_addr =
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
-                    uint32_t num_bytes = len * sizeof(uint32_t);
+                    dst_base_addrs[j] = (uint32_t)relo_addr;
+                    page_offsets[j] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    lengths[j] = len * sizeof(uint32_t);
 
-                    if (page_transfer_type == PageTransferType::UNICAST) {
-                        for (const auto& logical_core : kernel->logical_cores()) {
-                            uint32_t dst_noc = get_noc_unicast_encoding(
-                                device->physical_core_from_logical_core(logical_core, kernel_group.get_core_type()));
-                            src = update_program_page_transfers(
-                                src,
-                                num_bytes,
-                                relo_addr,
-                                program_page_transfers.at(PageTransferType::UNICAST),
-                                num_transfers_in_program_pages.at(PageTransferType::UNICAST),
-                                {{dst_noc, 1}});
-                        }
-                    } else if (page_transfer_type == PageTransferType::MULTICAST) {
-                        src = update_program_page_transfers(
-                            src,
-                            num_bytes,
-                            relo_addr,
-                            program_page_transfers.at(PageTransferType::MULTICAST),
-                            num_transfers_in_program_pages.at(PageTransferType::MULTICAST),
-                            dst_noc_multicast_info,
-                            linked);
-                    }
+                    binaries_data.resize(binaries_data.size() + len);
+                    std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
+                    binaries_data.resize(
+                        align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+
+                    kernel_bins_transfer_info kernel_bins_transfer_info = {
+                        .dst_base_addrs = dst_base_addrs,
+                        .page_offsets = page_offsets,
+                        .lengths = lengths,
+                        .dst_noc_info = dst_noc_multicast_info,
+                        .linked = false,
+                        .data = binaries_data};
+                    this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
+
+                    this->kg_buffers.push_back(std::make_unique<Buffer>(
+                        device,
+                        binaries_data.size() * sizeof(uint32_t),
+                        DeviceCommand::PROGRAM_PAGE_SIZE,
+                        BufferType::DRAM));
+
                     k++;
                 });
                 sub_kernel_index++;
             }
         }
-        return src;
-    };
-    auto populate_program_binaries_pages =
-        [&program_pages, &program_page_idx, &device, &program](const KernelGroup& kernel_group) {
-            vector<KernelHandle> kernel_ids;
-            if (kernel_group.riscv0_id)
-                kernel_ids.push_back(kernel_group.riscv0_id.value());
-            if (kernel_group.riscv1_id)
-                kernel_ids.push_back(kernel_group.riscv1_id.value());
-            if (kernel_group.compute_id)
-                kernel_ids.push_back(kernel_group.compute_id.value());
-            if (kernel_group.erisc_id)
-                kernel_ids.push_back(kernel_group.erisc_id.value());
-            for (KernelHandle kernel_id : kernel_ids) {
-                auto kernel = detail::GetKernel(program, kernel_id);
-
-                for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
-                    kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
-                        std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
-
-                        program_page_idx =
-                            align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(uint32_t));
-                    });
-                }
-            }
-        };
-
-    // Step 1: Get transfer info for runtime args (soon to just be host data). We
-    // want to send host data first because of the higher latency to pull
-    // in host data.
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
-        uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
-        const auto& kernel_core_type = kernel->get_kernel_core_type();
-        for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-            CoreCoord physical_core =
-                device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-            const auto& runtime_args = kernel->runtime_args(core_coord);
-            uint32_t num_bytes = runtime_args.size() * sizeof(uint32_t);
-            uint32_t dst_noc = get_noc_unicast_encoding(physical_core);
-
-            // Only one receiver per set of runtime arguments
-            src = update_program_page_transfers(
-                src,
-                num_bytes,
-                dst,
-                runtime_arg_page_transfers.at(PageTransferType::MULTICAST),
-                num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST),
-                {{dst_noc, 1}});
-        }
     }
+    for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::ETH)) {
+        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
+            extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
-    // Cleanup step of separating runtime arg pages from program pages
-    if (num_transfers_within_page) {
-        num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    src = 0;  // Resetting since in a new page
-    // Step 2: Continue constructing pages for circular buffer configs
-    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
-        // No CB support for ethernet cores
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(cb->core_ranges().ranges(), CoreType::WORKER);
-        constexpr static uint32_t num_bytes = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-        for (const auto buffer_index : cb->buffer_indices()) {
-            src = update_program_page_transfers(
-                src,
-                num_bytes,
-                CIRCULAR_BUFFER_CONFIG_BASE + buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
-                cb_config_page_transfers.at(PageTransferType::MULTICAST),
-                num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST),
-                dst_noc_multicast_info);
-        }
-    }
-
-    // Cleanup step of separating runtime arg pages from program pages
-    if (num_transfers_within_page) {
-        num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Split kernel groups by multicast/unicast, program multicast transfers first then unicast
-    std::vector<KernelGroup> kernel_group_multicast;
-    std::vector<KernelGroup> kernel_group_unicast;
-    for (const KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
-        kernel_group_multicast.emplace_back(kernel_group);
-    }
-    for (const KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
-        kernel_group_unicast.emplace_back(kernel_group);
-    }
-    // Enqueue program binaries and go siggals in this order:
-    // - Multicast Program Binaries
-    // - Unicast Program Binaries
-    // - Multicast Go Signals
-    // - Unicast Go Signals
-    // This probably has better perf than sending binaries and go signals together:
-    // - Multicast Program Binaries
-    // - Multicast Go Signals
-    // - Unicast Program Binaries
-    // - Unicast Go Signals
-    // Step 3a (Multicast): Determine the transfer information for each program binary
-    src = 0;  // Restart src since multicast program binaries begins in a new page
-    for (const KernelGroup& kernel_group : kernel_group_multicast) {
-        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::MULTICAST);
-    }
-    // Step 4 (Multicast): Continue constructing pages for semaphore configs, only multicast/worker cores supported
-    for (const Semaphore& semaphore : program.semaphores()) {
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
-
-        src = update_program_page_transfers(
-            src,
-            L1_ALIGNMENT,
-            semaphore.address(),
-            program_page_transfers.at(PageTransferType::MULTICAST),
-            num_transfers_in_program_pages.at(PageTransferType::MULTICAST),
-            dst_noc_multicast_info);
-    }
-
-    if (num_transfers_within_page) {
-        num_transfers_in_program_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Step 3b (Unicast)
-    // skipping step 4 since no semaphore support
-    update_program_pages_with_new_page();  // sets src to 0 since unicast program binaries begins in new page
-    for (const KernelGroup& kernel_group : kernel_group_unicast) {
-        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::UNICAST);
-    }
-    if (num_transfers_within_page) {
-        num_transfers_in_program_pages.at(PageTransferType::UNICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Step 5a (Multicast): Continue constructing pages for GO signals, multicast first then unicast
-    update_program_pages_with_new_page();  // sets src to 0 since multicast signals begins in new page
-    for (KernelGroup& kernel_group : kernel_group_multicast) {
         kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
-        src = update_program_page_transfers(
-            src,
-            sizeof(launch_msg_t),
-            GET_MAILBOX_ADDRESS_HOST(launch),
-            go_signal_page_transfers.at(PageTransferType::MULTICAST),
-            num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST),
-            dst_noc_multicast_info);
-    }
-    if (num_transfers_within_page) {
-        num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Step 5b (Unicast)
-    update_program_pages_with_new_page();  // sets src to 0 since unicast signals begins in new page
-    for (KernelGroup& kernel_group : kernel_group_unicast) {
-        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-        if (kernel_group.get_core_type() == CoreType::ETH) {
-            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
-            for (const auto& logical_eth_core : kernel->logical_cores()) {
-                uint32_t dst_noc =
-                    get_noc_unicast_encoding(device->physical_core_from_logical_core(logical_eth_core, CoreType::ETH));
-                src = update_program_page_transfers(
-                    src,
-                    sizeof(launch_msg_t),
-                    GET_ETH_MAILBOX_ADDRESS_HOST(launch),
-                    go_signal_page_transfers.at(PageTransferType::UNICAST),
-                    num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST),
-                    {{dst_noc, 1}});
-            }
-        } else {
-            TT_ASSERT(false, "All non-ethernet core go signals should be muticasted");
-        }
-    }
-    if (num_transfers_within_page) {
-        num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Allocate some more space for GO signal
-    update_program_pages_with_new_page();  // sets src to 0, but not needed
-
-    // Create a vector of all program binaries/cbs/semaphores
-    align_program_page_idx_to_new_page();
-    for (const KernelGroup& kernel_group : kernel_group_multicast) {
-        populate_program_binaries_pages(kernel_group);
-    }
-
-    for (const Semaphore& semaphore : program.semaphores()) {
-        program_pages[program_page_idx] = semaphore.initial_value();
-        program_page_idx += 4;
-    }
-
-    align_program_page_idx_to_new_page();
-    for (const KernelGroup& kernel_group : kernel_group_unicast) {
-        if (kernel_group.get_core_type() == CoreType::ETH) {
-            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
-            for (const auto& logical_core : kernel->logical_cores()) {
-                populate_program_binaries_pages(kernel_group);
-            }
-        }
-    }
-
-    // Since GO signal begin in a new page, I need to advance my idx
-    align_program_page_idx_to_new_page();
-    // uint32_t dispatch_core_word = ((uint32_t)dispatch_core.y << 16) | dispatch_core.x;
-    for (KernelGroup& kernel_group : kernel_group_multicast) {
-        // TODO(agrebenisan): Hanging when we extend the launch msg. Needs to be investigated. For now,
-        // only supporting enqueue program for cq 0 on a device.
-        // kernel_group.launch_msg.dispatch_core_x = dispatch_core.x;
-        // kernel_group.launch_msg.dispatch_core_y = dispatch_core.y;
-        static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
+        vector<uint32_t> go_signals_data(sizeof(launch_msg_t) / sizeof(uint32_t));
         uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
         for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
-            program_pages[program_page_idx + i] = launch_message_data[i];
+            go_signals_data[i] = launch_message_data[i];
         }
-        program_page_idx += sizeof(launch_msg_t) / sizeof(uint32_t);
-    }
+        transfer_info_2 transfer_info = {
+            .dst_base_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch),
+            .dst_noc_info = dst_noc_unicast_info,
+            .linked = false,
+            .data = go_signals_data};
+        this->program_transfer_info.go_signals.push_back(transfer_info);
 
-    align_program_page_idx_to_new_page();
-    for (KernelGroup& kernel_group : kernel_group_unicast) {
-        if (kernel_group.get_core_type() == CoreType::ETH) {
-            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
-            uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
-            for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
-                program_pages[program_page_idx + i] = launch_message_data[i];
+        vector<KernelHandle> kernel_ids;
+        if (kernel_group.erisc_id)
+            kernel_ids.push_back(kernel_group.erisc_id.value());
+        for (size_t i = 0; i < kernel_ids.size(); i++) {
+            KernelHandle kernel_id = kernel_ids[i];
+            vector<RISCV> sub_kernels;
+            std::shared_ptr<Kernel> kernel = detail::GetKernel(*this, kernel_id);
+            if (kernel->processor() == RISCV::COMPUTE) {
+                sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
+            } else {
+                sub_kernels = {kernel->processor()};
             }
-            program_page_idx += sizeof(launch_msg_t) / sizeof(uint32_t);
-        } else {
-            TT_ASSERT(false, "All non-ethernet core go signals should be multicasted");
+
+            uint32_t sub_kernel_index = 0;
+            const auto& binaries = kernel->binaries(device->id());
+            std::vector<uint32_t> dst_base_addrs(binaries.size());
+            std::vector<uint32_t> page_offsets(binaries.size());
+            std::vector<uint32_t> lengths(binaries.size());
+            vector<uint32_t> binaries_data;
+            for (size_t j = 0; j < binaries.size(); j++) {
+                const ll_api::memory& kernel_bin = binaries[j];
+
+                uint32_t k = 0;
+                uint32_t num_spans = kernel_bin.num_spans();
+                kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
+                    uint64_t relo_addr =
+                        tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
+
+                    dst_base_addrs[j] = (uint32_t)relo_addr;
+                    page_offsets[j] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    lengths[j] = len * sizeof(uint32_t);
+
+                    binaries_data.resize(binaries_data.size() + len);
+                    std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
+                    binaries_data.resize(
+                        align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+
+                    kernel_bins_transfer_info kernel_bins_transfer_info = {
+                        .dst_base_addrs = dst_base_addrs,
+                        .page_offsets = page_offsets,
+                        .lengths = lengths,
+                        .dst_noc_info = dst_noc_unicast_info,
+                        .linked = false,
+                        .data = binaries_data};
+                    this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
+
+                    this->kg_buffers.push_back(std::make_unique<Buffer>(
+                        device,
+                        binaries_data.size() * sizeof(uint32_t),
+                        DeviceCommand::PROGRAM_PAGE_SIZE,
+                        BufferType::DRAM));
+
+                    k++;
+                });
+                sub_kernel_index++;
+            }
         }
     }
+    std::uint32_t num_active_cores = 0;
+    num_active_cores += this->logical_cores().at(CoreType::WORKER).size();
+    num_active_cores += this->logical_cores().at(CoreType::ETH).size();
+    this->program_transfer_info.num_active_cores = num_active_cores;
 
-    TT_ASSERT(
-        program_new_page_tracker == 0, "Number of new program pages not aligned between sizing and populating data.");
-
-    uint32_t num_workers = 0;
-    // Explicitly sum the worker and eth cores, since we don't have support for all core types
-    num_workers += program.logical_cores().at(CoreType::WORKER).size();
-    num_workers += program.logical_cores().at(CoreType::ETH).size();
-    return {
-        .num_workers = num_workers,
-        .program_pages = std::move(program_pages),
-        .program_page_transfers = std::move(program_page_transfers),
-        .runtime_arg_page_transfers = std::move(runtime_arg_page_transfers),
-        .cb_config_page_transfers = std::move(cb_config_page_transfers),
-        .go_signal_page_transfers = std::move(go_signal_page_transfers),
-        .num_transfers_in_program_pages = std::move(num_transfers_in_program_pages),
-        .num_transfers_in_runtime_arg_pages = std::move(num_transfers_in_runtime_arg_pages),
-        .num_transfers_in_cb_config_pages = std::move(num_transfers_in_cb_config_pages),
-        .num_transfers_in_go_signal_pages = std::move(num_transfers_in_go_signal_pages),
-    };
+    return;
 }
 
 void Program::compile( Device * device )
@@ -1027,9 +855,10 @@ void Program::compile( Device * device )
                 build_options.set_name(kernel_path_suffix);
                 bool cache_hit = true;
                 bool path_exists = std::filesystem::exists(build_options.path);
-                if ( enable_persistent_kernel_cache && path_exists ) {
-                    if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
-                } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
+                if (enable_persistent_kernel_cache && path_exists) {
+                    if (not detail::HashLookup::inst().exists(kernel_hash))
+                        detail::HashLookup::inst().add(kernel_hash);
+                } else if (detail::HashLookup::inst().add(kernel_hash)) {
                     cache_hit = false;
                     GenerateBinaries(device, build_options, kernel);
                 }
@@ -1053,8 +882,7 @@ void Program::compile( Device * device )
     this->construct_core_range_set_for_worker_cores();
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->program_device_map = ConstructProgramDeviceMap(device, *this);
-        this->buffer = std::make_unique<Buffer>(device, this->program_device_map.program_pages.size() * sizeof(uint32_t),  DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM);
+        this->populate_dispatch_data(device);  // TODO: maybe rename
     }
 
     if (detail::CompilationReporter::enabled()) {
