@@ -10,6 +10,8 @@
 
 using namespace tt::tt_metal;
 
+using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
+
 std::shared_ptr<Buffer> MakeBuffer(Device *device, uint32_t size, uint32_t page_size, bool sram)
 {
     InterleavedBufferConfig config{
@@ -35,7 +37,7 @@ std::shared_ptr<Buffer> MakeBufferBFP16(Device *device, uint32_t n_tiles, bool s
     return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
 }
 
-CBHandle MakeCircularBuffer(Program& program, const CoreCoord& core, tt::CB cb, uint32_t size, uint32_t page_size, tt::DataFormat format)
+CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CB cb, uint32_t size, uint32_t page_size, tt::DataFormat format)
 {
     CircularBufferConfig cb_src0_config = CircularBufferConfig(
         size,
@@ -54,7 +56,7 @@ CBHandle MakeCircularBuffer(Program& program, const CoreCoord& core, tt::CB cb, 
 // @param core: The core to create the circular buffer on.
 // @param cb: Which circular buffer to create (c_in0, c_in1, c_out0, c_out1, etc..). This is just an ID
 // @param n_tiles: The number of tiles the circular buffer can hold.
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreCoord& core, tt::CB cb, uint32_t n_tiles)
+CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CB cb, uint32_t n_tiles)
 {
     constexpr uint32_t tile_size = 2 * (32 * 32);
     return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
