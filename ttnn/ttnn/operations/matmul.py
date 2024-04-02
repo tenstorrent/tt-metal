@@ -5,6 +5,8 @@
 import math
 from typing import Optional, Tuple
 
+from toolz.functoolz import memoize
+
 import ttnn
 
 MatmulDefaultProgramConfig = ttnn.experimental.operations.primary.MatmulDefaultProgramConfig
@@ -79,6 +81,7 @@ def _validate_activation(activation):
         )
 
 
+@memoize
 def create_matmul_1d_systolic_array_program_config(
     *,
     input_shape_a: Tuple[int, ...],
@@ -160,6 +163,7 @@ def create_matmul_1d_systolic_array_program_config(
     )
 
 
+@memoize
 def create_matmul_program_config(
     *, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array, compute_kernel_config
 ):
