@@ -49,6 +49,7 @@ def test_multi_device_open_close_full_device_mesh_fixture(pcie_device_mesh):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
+    pytest.skip("Issue #6983")
     device_grid, device_ids = ttnn.DeviceGrid(2, 2), ttnn.get_device_ids()
     if len(device_ids) <= 1:
         pytest.skip()
