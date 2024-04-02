@@ -1,3 +1,6 @@
+{% extends "layout.html" %}
+{% block content %}
+
 <html>
 
 <style>
@@ -11,7 +14,7 @@
         background-color: white;
         position: sticky;
         z-index: 100;
-        top: 0;
+        top: 20px;
     }
 
     td {
@@ -46,7 +49,7 @@
                     </td>
                     {% endif %}
                     <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
-                    <td><a href=" /operation_graph/{{ operation.operation_id}}">Open Graph</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph</a> </td>
                     <td><a href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
                 </tr>
                 {% endfor %}
@@ -56,3 +59,5 @@
 </body>
 
 </html>
+
+{% endblock %}

@@ -234,10 +234,10 @@ class Operation:
 
         def run_and_compare(function, *function_args, **function_kwargs):
             if self.compute_golden is not None:
-                logger.info(f"{self.name}: Comparing against PyTorch")
+                logger.debug(f"{self.name}: Comparing against PyTorch")
                 golden_output = self.compute_golden(*function_args, **function_kwargs)
             else:
-                logger.info(f"{self.name}: Skipping comparison against PyTorch because compute_golden is not provided")
+                logger.debug(f"{self.name}: Skipping comparison against PyTorch because compute_golden is not provided")
                 golden_output = None
 
             output = function(*function_args, **function_kwargs)
@@ -299,10 +299,11 @@ class Operation:
 
                 if is_top_level_operation and ttnn.CONFIG.enable_logging:
                     start = time.time()
-                    logger.info(f"Started {self.name:50}")
+                    logger.debug(f"Started {self.name:50}")
 
+                    input_tensors = get_tensors((function_args, function_kwargs))
+                    ttnn.database.insert_input_tensors(operation_id, input_tensors)
                     if ttnn.CONFIG.enable_tensor_report:
-                        input_tensors = get_tensors((function_args, function_kwargs))
                         (ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}").mkdir(
                             parents=True, exist_ok=True
                         )
@@ -328,16 +329,22 @@ class Operation:
 
                     end = time.time()
                     duration = end - start
-                    logger.info(f"Finished {self.name:50} in {duration:30} seconds")
+                    logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
 
                     ttnn.database.insert_devices(devices)
+
+                    output_tensors = get_tensors(output)
+
                     ttnn.database.insert_operation(
                         self, operation_id, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
                     )
+                    ttnn.database.insert_output_tensors(operation_id, output_tensors)
+                    ttnn.database.insert_buffers(operation_id)
 
-                    if ttnn.CONFIG.enable_graph_report and output is not None:
+                    if ttnn.CONFIG.enable_graph_report:
                         ttnn.tracer.visualize(
-                            output, file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
+                            ttnn.tracer.GRAPH_STACK[-1],
+                            file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg",
                         )
 
                         """
@@ -348,7 +355,6 @@ class Operation:
                         """
 
                     if ttnn.CONFIG.enable_tensor_report:
-                        output_tensors = get_tensors(output)
                         (ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}").mkdir(
                             parents=True, exist_ok=True
                         )

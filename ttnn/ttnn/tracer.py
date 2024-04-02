@@ -204,7 +204,7 @@ def visualize(*function_args, file_name=None, **function_kwargs):
     if shutil.which("dot") is None:
         logger.warning("Graphviz is not installed. Skipping visualization.")
         return
-    logger.info(f"Dumping graph of the model to {file_name}")
+    logger.debug(f"Dumping graph of the model to {file_name}")
     return torchtrail.visualize(*function_args, file_name=file_name, **function_kwargs)
 
 
