@@ -28,6 +28,21 @@ def run_activation_unary_test(device, h, w, ttnn_function, torch_function, pcc=0
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_activation_unary_test_chw(device, c, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_hardtanh(device, h, w):
@@ -62,6 +77,19 @@ def test_relu6(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.gelu, F.gelu)
+
+
+@pytest.mark.parametrize(
+    "c, h, w",
+    (
+        (1, 3136, 384),
+        (1, 784, 768),
+        (1, 196, 1536),
+        (1, 49, 3072),
+    ),
+)
+def test_gelu_swintransformer_v2(device, c, h, w):
+    run_activation_unary_test_chw(device, c, h, w, ttnn.gelu, F.gelu)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -139,6 +167,21 @@ def run_activation_unary_test_glu(device, batch_size, h, w, ttnn_function, torch
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_activation_unary_test_nchw(device, n, c, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("batch_size", [1, 4])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -172,6 +215,14 @@ def torch_reglu(input_tensor, *args, **kwargs):
     split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
     tensA, tensB = split_tensors[0], split_tensors[1]
     return tensA * F.relu(tensB)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w",
+    ((1, 13, 13, 512),),
+)
+def test_relu_swintransformer_v2(device, n, c, h, w):
+    run_activation_unary_test_nchw(device, n, c, h, w, ttnn.relu, F.relu)
 
 
 def torch_swiglu(input_tensor, *args, **kwargs):
