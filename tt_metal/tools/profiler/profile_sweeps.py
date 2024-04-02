@@ -38,7 +38,7 @@ def main(directory, result):
             clear_profiler_runtime_artifacts()
 
             start = time.time()
-            profile_command(command, outFolder, "")
+            profile_command(command, profile_output_folder, "")
             duration = time.time() - start
 
             with open(f"{outFolder}/total_time.txt", "w") as file:
