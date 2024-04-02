@@ -392,6 +392,20 @@ def operation_buffer_report(operation_id):
 
 @app.route("/operation_graph_report/<operation_id>")
 def operation_graph_report(operation_id):
+    # graph = ttnn.database.load_graph(operation_id)
+
+    # import graphviz
+
+    # graphviz_graph = graphviz.Digraph()
+    # for node in graph:
+    #     attributes = graph.nodes[node]
+    #     print(attributes)
+    #     node_name = attributes["name"]
+    #     graphviz_graph.node(name=f"{node}", label=node_name)
+    #     for child in graph[node]:
+    #         graphviz_graph.edge(f"{node}", f"{child}")
+
+    # return graphviz_graph.pipe(format="svg").decode("utf-8")
     svg_file = ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
     if not svg_file.exists():
         return "Graph not found! Was TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' set?"

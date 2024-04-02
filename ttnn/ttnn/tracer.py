@@ -140,6 +140,8 @@ def trace_ttnn_operation(pretty_operation_name, operation):
     import torch
 
     def call_wrapper(*function_args, **function_kwargs):
+        operation_id = ttnn.decorators.OPERATION_ID
+
         original_function_args = function_args
         original_function_kwargs = function_kwargs
         function_args, function_kwargs = preprocess_args_and_kwargs(*function_args, **function_kwargs)
@@ -178,6 +180,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
             ),
             shapes=shapes,
             dtypes=dtypes,
+            operation_id=operation_id,
         )
         for input_index, tensor in enumerate(input_tensors):
             graph.add_edge(

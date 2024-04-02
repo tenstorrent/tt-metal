@@ -77,7 +77,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         )
 
         start = time.time()
-        with ttnn.enable_fast_runtime_mode():
+        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
             tt_output = bert.bert_for_question_answering(
                 config,
                 *ttnn_bert_inputs,

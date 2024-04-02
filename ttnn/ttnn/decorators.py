@@ -298,6 +298,10 @@ class Operation:
                             )
 
                 if is_top_level_operation and ttnn.CONFIG.enable_logging:
+                    devices = get_devices((function_args, function_kwargs))
+                    for device in devices:
+                        ttnn.synchronize_device(device)
+
                     start = time.time()
                     logger.debug(f"Started {self.name:50}")
 
@@ -323,7 +327,6 @@ class Operation:
                     output = decorated_function(*function_args, **function_kwargs)
 
                 if is_top_level_operation and ttnn.CONFIG.enable_logging:
-                    devices = get_devices((function_args, function_kwargs))
                     for device in devices:
                         ttnn.synchronize_device(device)
 
@@ -340,19 +343,15 @@ class Operation:
                     )
                     ttnn.database.insert_output_tensors(operation_id, output_tensors)
                     ttnn.database.insert_buffers(operation_id)
+                    if ttnn.CONFIG.enable_detailed_buffer_report:
+                        ttnn.database.insert_buffer_pages(operation_id)
 
                     if ttnn.CONFIG.enable_graph_report:
                         ttnn.tracer.visualize(
                             ttnn.tracer.GRAPH_STACK[-1],
                             file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg",
                         )
-
-                        """
-                        codegen_reports = ttnn.CONFIG.reports_path / "codegen"
-                        codegen_reports.mkdir(parents=True, exist_ok=True)
-                        with open(ttnn.CONFIG.reports_path / "codegen" / f"{operation_id}.py", "w") as f:
-                            f.write(ttnn.tracer.codegen(output))
-                        """
+                        # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
 
                     if ttnn.CONFIG.enable_tensor_report:
                         (ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}").mkdir(
