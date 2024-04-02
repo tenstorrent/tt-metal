@@ -298,7 +298,9 @@ def run_conv_with_split(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
-@skip_for_wormhole_b0()
+@skip_for_wormhole_b0(
+    "Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range"
+)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array",
     (
@@ -750,6 +752,9 @@ def test_sd_conv(
         )
 
 
+@skip_for_wormhole_b0(
+    "Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range"
+)
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -842,9 +847,6 @@ def test_sd_conv_wh(
     config_override,
     enable_auto_formatting,
 ):
-    if device.core_grid.y == 7:
-        pytest.skip("Issue #6990/#6985")
-
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
         if enable_auto_formatting:
             pytest.skip("Not running split SD conv with auto formatting")

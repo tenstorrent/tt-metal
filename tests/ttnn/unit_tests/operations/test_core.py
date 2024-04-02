@@ -192,6 +192,10 @@ def test_reshard(
     input_override,
     output_override,
 ):
+    if device.core_grid.y < input_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
+    if device.core_grid.y < output_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
     input_shape = [1, 1, input_height, input_width]
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
