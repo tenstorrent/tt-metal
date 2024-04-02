@@ -82,28 +82,14 @@ logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))
 
 
 @contextlib.contextmanager
-def enable_fast_runtime_mode():
+def manage_config_attribute(name, value):
     global CONFIG
-    CONFIG.enable_fast_runtime_mode = True
+    original_value = getattr(CONFIG, name)
+    setattr(CONFIG, name, value)
+    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    CONFIG.enable_fast_runtime_mode = False
-
-
-@contextlib.contextmanager
-def enable_comparison_mode():
-    global CONFIG
-    CONFIG.enable_comparison_mode = True
-    yield
-    CONFIG.enable_comparison_mode = False
-
-
-@contextlib.contextmanager
-def override_pcc_of_comparison_mode(value):
-    global CONFIG
-    old_value = CONFIG.comparison_mode_pcc
-    CONFIG.comparison_mode_pcc = value
-    yield
-    CONFIG.comparison_mode_pcc = old_value
+    setattr(CONFIG, name, original_value)
+    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
 import tt_lib as _tt_lib

@@ -110,8 +110,8 @@ Basic Examples
 
     torch_input_tensor = torch.rand(32, 32, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.enable_comparison_mode():
-        with ttnn.override_pcc_of_comparison_mode(0.9998): # This is optional in case default value of 0.9999 is too high
+    with ttnn.manage_config_attribute("enable_comparison_mode", True):
+        with ttnn.manage_config_attribute("comparison_mode_pcc", 0.9998): # This is optional in case default value of 0.9999 is too high
             output_tensor = ttnn.exp(input_tensor)
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
