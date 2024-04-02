@@ -40,6 +40,14 @@ def duration_to_color(duration):
     return "red"
 
 
+def shorten_stack_trace(stack_trace, num_lines=12):
+    if stack_trace is None:
+        return None
+    stack_trace = stack_trace.split("\n")[:num_lines]
+    stack_trace = "\n".join(stack_trace)
+    return stack_trace
+
+
 app = Flask(__name__)
 
 
@@ -69,9 +77,7 @@ def operations_with_l1_buffer_usage():
     for operation in operations:
         l1_reports[operation.operation_id] = create_summarized_l1_buffer_plot(operation.operation_id)
         stack_trace = ttnn.database.query_stack_trace(operation_id=operation.operation_id)
-        stack_trace = stack_trace.split("\n")[:12]
-        stack_trace = "\n".join(stack_trace)
-        stack_traces[operation.operation_id] = stack_trace
+        stack_traces[operation.operation_id] = shorten_stack_trace(stack_trace)
 
     return render_template(
         "operations_with_l1_buffer_usage.html",
@@ -381,8 +387,7 @@ def operation_buffer_report(operation_id):
     output_tensors = list(ttnn.database.query_output_tensors(operation_id))
 
     stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
-    stack_trace = stack_trace.split("\n")[:12]
-    stack_trace = "\n".join(stack_trace)
+    stack_trace = shorten_stack_trace(stack_trace)
 
     return render_template(
         "operation_buffer_report.html",
