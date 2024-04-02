@@ -125,15 +125,19 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
-                "Device {}, ****** Core {}[physical {}]:   NAWW,****,****,****,****  {} using noc0 tried to access core (16,16) L1[addr=0x{:08x},len=102400]",
-                device->id(), core.str(), phys_core.str(),
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access core (16,16) L1[addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
                 (is_eth_core) ? "erisc" : "brisc", output_dram_buffer_addr
             );
             break;
         case SanitizeAlignment:
             expected = fmt::format(
-                "Device {}, ****** Core {}[physical {}]:   NARW,****,****,****,****  {} using noc0 reading L1[addr=0x{:08x},len=102400]",
-                device->id(), core.str(), phys_core.str(),
+                "Device {}, {} Core {}[physical {}]: {} using noc0 reading L1[addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
                 (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr
             );
             break;
@@ -143,12 +147,9 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             break;
     }
 
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            fixture->log_file_name,
-            {expected}
-        )
-    );
+    log_info(LogTest, "Expected error: {}", expected);
+    log_info(LogTest, "Reported error: {}", watcher_server_get_exception_message());
+    EXPECT_TRUE(watcher_server_get_exception_message() == expected);
 }
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {

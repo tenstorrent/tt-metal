@@ -32,6 +32,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
+    string risc;
     switch(riscv_type) {
         case DebugBrisc:
             assert_kernel = CreateKernel(
@@ -43,6 +44,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .noc = tt_metal::NOC::RISCV_0_default
                 }
             );
+            risc = "brisc";
             break;
         case DebugNCrisc:
             assert_kernel = CreateKernel(
@@ -54,6 +56,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .noc = tt_metal::NOC::RISCV_1_default
                 }
             );
+            risc = "ncrisc";
             break;
         case DebugTrisc0:
             assert_kernel = CreateKernel(
@@ -64,6 +67,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .defines = {{"TRISC0", "1"}}
                 }
             );
+            risc = "trisc0";
             break;
         case DebugTrisc1:
             assert_kernel = CreateKernel(
@@ -74,6 +78,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .defines = {{"TRISC1", "1"}}
                 }
             );
+            risc = "trisc1";
             break;
         case DebugTrisc2:
             assert_kernel = CreateKernel(
@@ -84,6 +89,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .defines = {{"TRISC2", "1"}}
                 }
             );
+            risc = "trisc2";
             break;
         case DebugErisc:
             assert_kernel = CreateKernel(
@@ -94,6 +100,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                     .noc = tt_metal::NOC::NOC_0
                 }
             );
+            risc = "erisc";
             break;
         default:
             log_info("Unsupported risc type: {}, skipping test...", riscv_type);
@@ -127,62 +134,24 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on.
-    string risc;
     string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    string debug_status = "*,*,*,*,*";
-    int line_num = 27;
-    switch(riscv_type) {
-        case DebugBrisc:
-            risc = "brisc";
-            break;
-        case DebugNCrisc:
-            risc = "ncrisc";
-            debug_status = "***,*,*,*,*";
-            break;
-        case DebugTrisc0:
-            risc = "trisc0";
-            debug_status = "***,*,*,*,*";
-            break;
-        case DebugTrisc1:
-            risc = "trisc1";
-            debug_status = "***,*,*,*,*";
-            break;
-        case DebugTrisc2:
-            risc = "trisc2";
-            debug_status = "***,*,*,*,*";
-            break;
-        case DebugErisc:
-            risc = "erisc";
-            debug_status = "*,X,X,X,X";
-            break;
-        default:
-            break;
-    }
+    int line_num = 30;
 
-    // TODO: Once #5601 is fixed, we can check the whole string again.
-    /*string expected = fmt::format(
-        "Device {}, Core (x={},y={}):    {}  {} tripped assert {}:{}",
-        device->id(),
-        phys_core.x,
-        phys_core.y,
-        debug_status,
-        risc,
-        kernel,
-        line_num
-    );*/
     string expected = fmt::format(
-        "  {} tripped assert on line {}. Current kernel: {}",
+        "Device {}, {} Core {}[physical {}]: {} tripped an assert on line {}. Current kernel: {}.",
+        device->id(),
+        (riscv_type == DebugErisc) ? "Ethnet" : "Worker",
+        logical_core.str(),
+        phys_core.str(),
         risc,
         line_num,
         kernel
     );
+    expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
 
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            fixture->log_file_name,
-            {expected}
-        )
-    );
+    log_info(LogTest, "Expected error: {}", expected);
+    log_info(LogTest, "Reported error: {}", watcher_server_get_exception_message());
+    EXPECT_TRUE(expected == watcher_server_get_exception_message());
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertBrisc) {

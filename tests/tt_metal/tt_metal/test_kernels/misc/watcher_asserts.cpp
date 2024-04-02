@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "debug/assert.h"
+#include "debug/ring_buffer.h"
 
 /*
  * A test for the assert feature.
@@ -24,6 +25,8 @@ void MAIN {
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
     (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))
+    WATCHER_RING_BUFFER_PUSH(a);
+    WATCHER_RING_BUFFER_PUSH(b);
     ASSERT(a != b);
 #endif
 
