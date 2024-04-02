@@ -561,6 +561,8 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias, dtype):
     torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
     core_grid = ttnn.CoreGrid(x=8, y=8)
     TILE_HEIGHT = 32
 
