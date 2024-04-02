@@ -153,17 +153,21 @@ static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, c
     string out;
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
+        string risc_status;
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
             char v = ((char *)&debug_status[cpu])[byte];
             if (v == 0) break;
             if (isprint(v)) {
-                out += v;
+                risc_status += v;
             } else {
                 log_running_kernels(launch_msg);
                 TT_THROW("Watcher data corrupted, unexpected debug status on core {}, unprintable character {}",
                           core.str(), (int)v);
             }
         }
+        // Pad risc status to 4 chars for alignment
+        string pad(4 - risc_status.length(), ' ');
+        out += (pad + risc_status);
         if (cpu != num_riscv_per_core - 1) out += ',';
     }
 
@@ -524,17 +528,27 @@ static void dump_core(
     FILE *f,
     std::map<int, bool>& used_kernel_names,
     Device *device,
-    CoreCoord core,
+    CoreDescriptor logical_core,
     bool dump_all,
     std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores
 ) {
+    // Watcher only treats ethernet + worker cores.
+    bool is_eth_core = (logical_core.type == CoreType::ETH);
+    CoreCoord core = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
 
-    string pad(11 - core.str().length(), ' ');
+    // Print device id, core coords (logical)
     fprintf(f, "Device %i, ", device->id());
-    fprintf(f, "Core %s:%s  ", core.str().c_str(), pad.c_str());
+    string core_type = is_eth_core ? "Ethnet Core" : "Worker Core";
+    string pad(11 - core.str().length(), ' ');
+    fprintf(
+        f, "%s %s[physical %s]:%s ",
+        core_type.c_str(),
+        logical_core.coord.str().c_str(),
+        core.str().c_str(),
+        pad.c_str()
+    );
 
     // Ethernet cores have a different mailbox base addr
-    bool is_eth_core = tt::llrt::is_ethernet_core(core, device->id());
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;
     if (is_eth_core) {
         mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
@@ -607,17 +621,17 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
         CoreCoord grid_size = device->logical_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
-                CoreCoord logical_core(x, y);
-                CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-                if (device->storage_only_cores().find(logical_core) == device->storage_only_cores().end()) {
-                    dump_core(f, used_kernel_names, device, worker_core, dump_all, paused_cores);
+                CoreDescriptor logical_core = {{x, y}, CoreType::WORKER};
+                if (device->storage_only_cores().find(logical_core.coord) == device->storage_only_cores().end()) {
+                    dump_core(f, used_kernel_names, device, logical_core, dump_all, paused_cores);
                 }
             }
         }
 
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+            CoreDescriptor logical_core = {eth_core, CoreType::ETH};
             CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-            dump_core(f, used_kernel_names, device, physical_core, dump_all, paused_cores);
+            dump_core(f, used_kernel_names, device, logical_core, dump_all, paused_cores);
         }
 
         for (auto k_id : used_kernel_names) {

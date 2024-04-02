@@ -102,7 +102,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
-    auto check_core = [&](const CoreCoord &phys_core, bool is_eth_core) {
+    auto check_core = [&](const CoreCoord &logical_core, const CoreCoord &phys_core, bool is_eth_core) {
         vector<string> expected_waypoints;
         string expected;
         // Need to update the expected strings based on each core.
@@ -119,8 +119,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {}, Core {}:    {},X,X,X,X  k_id:{}",
-                    device->id(), phys_core.str(),
+                    "Device {}, Ethnet Core {}[physical {}]:   {},   X,   X,   X,   X  k_id:{}",
+                    device->id(), logical_core.str(), phys_core.str(),
                     waypoint,
                     k_id_s
                 );
@@ -140,8 +140,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_ids = "";
                 }
                 expected = fmt::format(
-                    "Device {}, Core {}:    {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
-                    device->id(), phys_core.str(),
+                    "Device {}, Worker Core {}[physical {}]:   {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
+                    device->id(), logical_core.str(), phys_core.str(),
                     waypoint, waypoint, waypoint, waypoint, waypoint,
                     k_ids
                 );
@@ -157,14 +157,15 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            CoreCoord phys_core = device->worker_core_from_logical_core({x, y});
-            check_core(phys_core, false);
+            CoreCoord logical_core = {x, y};
+            CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
+            check_core(logical_core, phys_core, false);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-            check_core(phys_core, true);
+            check_core(core, phys_core, true);
         }
     }
 }
