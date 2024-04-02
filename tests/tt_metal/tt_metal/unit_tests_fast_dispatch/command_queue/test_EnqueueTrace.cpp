@@ -167,45 +167,33 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     CommandQueue& command_queue = this->device_->command_queue();
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
-
-    Program op0 = create_simple_unary_program(input, interm);
-    Program op1 = create_simple_unary_program(interm, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
 
-    // Trace mode output
-    vector<uint32_t> trace_output;
-    trace_output.resize(input_data.size());
-
-    // Eager mode
-    vector<uint32_t> expected_output_data;
-    vector<uint32_t> eager_output_data;
-    expected_output_data.resize(input_data.size());
-    eager_output_data.resize(input_data.size());
-
     // Capture trace on a trace queue
     Trace trace;
-    CommandQueue& trace_queue = BeginTrace(trace);
-    EnqueueProgram(trace_queue, op0, kNonBlocking);
-    EnqueueProgram(trace_queue, op1, kNonBlocking);
+    BeginTrace(trace);
+    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kBlocking);
+    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
     EndTrace(trace);
 
-    trace_queue.dump();
+    trace.queue().dump();
 
     // Instantiate a trace on a device bound command queue
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
-    log_info(LogTest, "Instantiated trace id {} completed!", trace_id);
+    auto trace_buffer = Trace::get_instance(trace_id);
+    vector<uint32_t> trace_data;
+    EnqueueReadBuffer(command_queue, trace_buffer, trace_data.data(), kBlocking);
+
+    log_info(LogTest, "Instantiated trace id {} completed, trace buffer data = {}", trace_id, trace_data);
+    ReleaseTrace(trace_id);
 }
 
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
@@ -274,18 +262,16 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
+    ReleaseTrace(trace_id);
 
     // Expect same output across all loops
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
-    command_queue.set_mode(current_mode);
 }
 
 TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
     CommandQueue& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
 
     std::shared_ptr<Buffer> input = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
     std::shared_ptr<Buffer> output = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
@@ -359,7 +345,7 @@ TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
-    command_queue.set_mode(current_mode);
+    ReleaseTrace(trace_id);
 }
 
 } // end namespace basic_tests
