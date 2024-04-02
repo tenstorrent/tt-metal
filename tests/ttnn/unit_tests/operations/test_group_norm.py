@@ -133,6 +133,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
 @pytest.mark.parametrize("num_groups", [32])
 def test_group_norm_with_block_sharded(device, N, C, H, W, num_groups):
     torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=8, x=4)
 
