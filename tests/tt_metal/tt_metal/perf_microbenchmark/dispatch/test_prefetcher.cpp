@@ -85,8 +85,8 @@ CoreRange all_workers_g = {
 bool send_to_all_g = false;
 bool perf_test_g = false;
 
-uint32_t max_xfer_size_bytes_g = 0xFFFFFFFF;
-uint32_t min_xfer_size_bytes_g = 0;
+uint32_t max_xfer_size_bytes_g = dispatch_buffer_page_size_g;
+uint32_t min_xfer_size_bytes_g = 4;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
