@@ -170,7 +170,7 @@ Basic Examples
 .. code-block:: bash
 
     # To print currently executing ttnn operations with their durations
-    export TTNN_ENABLE_LOGGING=True
+    export TTNN_CONFIG_OVERRIDES='{"enable_logging": true}'
 
     # To generate a csv with all of the ttnn and tt_lib operations, their attributes and their input tensors:
     export OPERATION_HISTORY_CSV=operation_history.csv
@@ -253,7 +253,7 @@ The following environment variable can be set in order to completely disable the
 
 .. code-block:: bash
 
-    export TTNN_ENABLE_FAST_RUNTIME_MODE=True
+    export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": true}'
 
 
 
@@ -264,11 +264,19 @@ Set the following environment variables as needed
 
 .. code-block:: bash
 
-    export TTNN_ENABLE_LOGGING=True # Synchronize main thread after every operation and log the operation start, end and duration
+    # enable_logging - Synchronize main thread after every operation and log the operation start, end and duration
+    # enable_detailed_buffer_report (optional) - Enable it to visualize the detailed buffer report after every operation
+    # enable_graph_report (optional) - Enable it to visualize the graph after every operation
+    # enable_tensor_report (optional) - Enable it to visualize the input and output tensors of every operation
+    # enable_comparison_mode (optional) - Enable it to test the output of operations against their golden implementaiton
 
-    # Following flags enable optional reports if logging is already enabled
-    export TTNN_ENABLE_GRAPH_REPORT=True # Dump graph after every operation
-    export TTNN_ENABLE_BUFFER_REPORT=True # Dump buffers after every operation
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_logging": true,
+        "enable_graph_report": true,
+        "enable_detailed_buffer_report": true,
+        "enable_tensor_report": true,
+        "enable_comparison_mode": true
+    }'
 
 Run the code. i.e.:
 
@@ -280,10 +288,17 @@ Run the code. i.e.:
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
 
-    torch_input_tensor = torch.rand(2048, 2048, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    output_tensor = ttnn.exp(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_input_tensor_a = torch.rand(2048, 2048, dtype=torch.float32)
+    torch_input_tensor_b = torch.rand(2048, 2048, dtype=torch.float32)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(input_tensor_a)
+    ttnn.deallocate(input_tensor_b)
+
     torch_output_tensor = ttnn.to_torch(output_tensor)
+    ttnn.deallocate(output_tensor)
 
     ttnn.close_device(device)
 

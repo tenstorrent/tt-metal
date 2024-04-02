@@ -55,9 +55,9 @@ def test_enable_logging(height, width):
 
 @pytest.mark.parametrize("height", [1024 * 5])
 @pytest.mark.parametrize("width", [1024 * 2])
-def test_enable_logging_and_enable_buffer_report(height, width):
+def test_enable_logging_and_enable_detailed_buffer_report(height, width):
     ttnn.CONFIG.enable_logging = True
-    ttnn.CONFIG.enable_buffer_report = True
+    ttnn.CONFIG.enable_detailed_buffer_report = True
 
     torch.manual_seed(0)
 
@@ -82,7 +82,7 @@ def test_enable_logging_and_enable_buffer_report(height, width):
     device = ttnn.close_device(device)
 
     ttnn.CONFIG.enable_logging = False
-    ttnn.CONFIG.enable_buffer_report = False
+    ttnn.CONFIG.enable_detailed_buffer_report = False
 
     sqlite_connection = ttnn.database.get_or_create_sqlite_db()
     cursor = sqlite_connection.cursor()
