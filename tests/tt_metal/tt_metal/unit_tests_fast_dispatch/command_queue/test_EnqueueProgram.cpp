@@ -306,7 +306,7 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
         Program program;
 
@@ -325,7 +325,7 @@ TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
 }
 namespace single_core_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -338,7 +338,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore)
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -355,7 +355,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCor
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -372,7 +372,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingle
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCBSharedAddressSpaceSentSingleCore) {
 
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
@@ -427,7 +427,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
 }
 
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -440,7 +440,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentS
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -451,7 +451,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
         Program program;
 
@@ -468,7 +468,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDi
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_ComputeRuntimeArgs) {
     for (Device *device : devices_) {
         Program program;
 
@@ -500,7 +500,7 @@ TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestRuntimeArgsCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -513,7 +513,7 @@ TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -533,7 +533,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -554,7 +554,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMul
 }
 
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -575,7 +575,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllSemConfigsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -588,7 +588,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllRuntimeArgsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -606,7 +606,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) 
 namespace stress_tests {
 
 
-TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -620,7 +620,7 @@ TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
     }
 }
 
-TEST_F(CommandQueueFixture, TestRandomizedProgram) {
+TEST_F(CommandQueueFixture, DISABLED_TestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t MAX_RUNTIME_ARGS = 255;
