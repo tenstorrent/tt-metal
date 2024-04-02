@@ -132,10 +132,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
-    if (not device->is_mmio_capable()) {
-        // ensure that the write is flushed before doing host readback in `cb_config_successful` when tunneling to remote device
-        Finish(cq);
-    }
+    Finish(cq);
 
     auto pass_1 = cb_config_successful(device, program_config);
 
@@ -184,7 +181,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
             tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, sem_buffer_size, sem_vector);
 
             uint32_t sem_id = 0;
-            for (uint32_t i = 0; i < sem_vector.size(); i += sizeof(uint32_t)) {
+            for (uint32_t i = 0; i < sem_vector.size(); i += (L1_ALIGNMENT / sizeof(uint32_t))) {
 
                 bool sem_match = sem_vector.at(i) == sem_id;
                 sem_id++;
@@ -306,7 +303,7 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestArbiterDoesNotHang) {
+TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
         Program program;
 
@@ -321,11 +318,10 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestArbiterDoesNotHang) {
         Finish(device->command_queue());
     }
 }
-
 }
 namespace single_core_tests {
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -338,7 +334,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlySentSi
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -355,7 +351,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbSeqConfigCorrectlySent
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -372,8 +368,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbRandomConfigCorrectlyS
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCBSharedAddressSpaceSentSingleCore) {
-
+TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -426,8 +421,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCBSharedAddressSpaceSent
     }
 }
 
-
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -440,7 +434,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleCbConfigCorrectlyUpdate
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -451,7 +445,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestSingleSemaphoreConfigCorrectl
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
         Program program;
 
@@ -468,7 +462,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAutoInsertedBlankBriscKernelI
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_ComputeRuntimeArgs) {
+TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
     for (Device *device : devices_) {
         Program program;
 
@@ -500,20 +494,21 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_ComputeRuntimeArgs) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestRuntimeArgsCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
-        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 9, 12, 1);
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 9, 12, 1));
     }
 }
 
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -533,7 +528,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentMult
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -553,8 +548,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllCbConfigsCorrectlySentUpda
     }
 }
 
-
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -575,7 +569,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestMultiCbConfigsCorrectlySentUp
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -588,7 +582,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllSemConfigsCorrectlySentMul
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestAllRuntimeArgsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -620,7 +614,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
     }
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestRandomizedProgram) {
+TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t MAX_RUNTIME_ARGS = 255;
