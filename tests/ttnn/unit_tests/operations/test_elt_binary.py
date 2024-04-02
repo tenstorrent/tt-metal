@@ -37,7 +37,7 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, torch_function, low, 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_ldexp(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.ldexp, torch.ldexp, -60, 60)
+    run_elt_binary_test_range(device, h, w, ttnn.ldexp, torch.ldexp, -60, 60, pcc=0.9995)
 
 
 @pytest.mark.parametrize("h", [64])
