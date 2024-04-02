@@ -37,6 +37,10 @@ namespace tt::tt_metal {
 
 uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
+void align_commands_vector(vector<uint32_t> &commands, uint32_t byte_alignment) {
+    commands.resize(align(commands.size(), byte_alignment / sizeof(uint32_t)), 0);
+}
+
 // EnqueueReadBufferCommandSection
 std::vector<uint32_t> EnqueueReadBufferCommand::commands;
 
@@ -346,24 +350,645 @@ void EnqueueWriteBufferCommand::process() {
     this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
 }
 
+// EnqueueProgramCommand Section
+std::vector<uint32_t> EnqueueProgramCommand::commands;
+
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
     Device* device,
-    const Program& program,
+    Program& program,
     SystemMemoryManager& manager,
-    std::optional<std::reference_wrapper<Trace>> trace) :
+    uint32_t expected_num_workers_completed) :
     command_queue_id(command_queue_id),
     manager(manager),
+    expected_num_workers_completed(expected_num_workers_completed),
     program(program) {
     this->device = device;
-    this->trace = trace;
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    if (program.cached_commands.empty()) {
+        this->commands.clear();
+        CQPrefetchCmd no_flush;
+        no_flush.base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
+        uint32_t* no_flush_ptr;
+
+        CQPrefetchCmd flush;
+        flush.base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
+        uint32_t* flush_ptr;
+
+        uint32_t padding;
+
+        // Wait Noc Write Barrier, wait for binaries to be written to DRAM
+        // also wait for previous program to be done
+        flush.relay_inline.length = sizeof(CQDispatchCmd);
+        flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT);
+
+        flush_ptr = (uint32_t*)&flush;
+        for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+            this->commands.push_back(*flush_ptr++);
+        }
+
+        CQDispatchCmd write_barrier_cmd;
+        write_barrier_cmd.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+        write_barrier_cmd.wait.barrier = 1;
+        write_barrier_cmd.wait.notify_prefetch = 1;
+        write_barrier_cmd.wait.addr = DISPATCH_MESSAGE_ADDR;
+        write_barrier_cmd.wait.count = 0;
+
+        uint32_t* write_barrier_cmd_ptr = (uint32_t*)&write_barrier_cmd;
+        for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+            this->commands.push_back(*write_barrier_cmd_ptr++);
+        }
+
+        align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+
+        // Stall to allow binaries to commit to DRAM first
+        // TODO: this can be removed for all but the first program run
+        CQPrefetchCmd stall_cmd;
+        stall_cmd.base.cmd_id = CQ_PREFETCH_CMD_STALL;
+        uint32_t* stall_ptr = (uint32_t*)&stall_cmd;
+        for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+            this->commands.push_back(*stall_ptr++);
+        }
+
+        uint32_t stall_aligned_size = align(sizeof(CQPrefetchCmd), HUGEPAGE_ALIGNMENT);
+        TT_ASSERT(stall_aligned_size == CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+
+        padding = stall_aligned_size - sizeof(CQPrefetchCmd);
+        for (int i = 0; i < padding / sizeof(uint32_t); i++) {
+            this->commands.push_back(0);
+        }
+
+        // TODO: add a function to align to commands.size()
+        // Runtime Args Cmd
+        for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
+            std::uint32_t num_packed_cmds = transfer_info.size();
+            flush.relay_inline.stride =
+                sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                align(num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), sizeof(CQDispatchCmd));
+            for (int i = 0; i < num_packed_cmds; i++) {
+                TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
+                flush.relay_inline.stride += transfer_info[i].data.size() * sizeof(uint32_t);
+                flush.relay_inline.stride = align(flush.relay_inline.stride, L1_ALIGNMENT);
+            }
+            // In general, length does not include alignment
+            flush.relay_inline.length = flush.relay_inline.stride - sizeof(CQPrefetchCmd);
+            flush.relay_inline.stride = align(flush.relay_inline.stride, HUGEPAGE_ALIGNMENT);
+
+            flush_ptr = (uint32_t*)&flush;
+            for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*flush_ptr++);
+            }
+            CQDispatchCmd write_packed_cmd;
+            write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd.write_packed.is_multicast = false;
+            write_packed_cmd.write_packed.count = num_packed_cmds;
+            write_packed_cmd.write_packed.addr = 0;
+            write_packed_cmd.write_packed.size = 0;
+
+            uint32_t* write_packed_cmd_ptr = (uint32_t*)&write_packed_cmd;
+            for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*write_packed_cmd_ptr++);
+            }
+            for (int i = 0; i < num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(0);
+            }
+            if ((padding = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                            num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd)) %
+                           L1_ALIGNMENT) != 0) {
+                for (int j = 0; j < (L1_ALIGNMENT - padding) / sizeof(uint32_t); j++) {
+                    this->commands.push_back(0);
+                }
+            }
+            // Runtime Args Data
+            for (int i = 0; i < num_packed_cmds; i++) {
+                for (int j = 0; j < transfer_info[i].data.size(); j++) {
+                    this->commands.push_back(0);
+                }
+                if ((padding = (transfer_info[i].data.size() * sizeof(uint32_t)) % L1_ALIGNMENT) != 0) {
+                    for (int j = 0; j < (L1_ALIGNMENT - padding) / sizeof(uint32_t); j++) {
+                        this->commands.push_back(0);
+                    }
+                }
+            }
+            align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+        }
+        // Multicast Semaphores Cmd
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
+            std::uint32_t num_packed_cmds = 0;
+            std::uint32_t write_packed_len = transfer_info_vec[0].data.size();
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    TT_ASSERT(transfer_info.data.size() == write_packed_len, "Not all data vectors in write packed semaphore cmd equal in len");
+                    num_packed_cmds += 1;
+                }
+            }
+            flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
+            // stride data
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    // Same data across set of CoreRanges
+                    flush.relay_inline.stride += transfer_info.data.size() * sizeof(uint32_t);
+                    flush.relay_inline.stride = align(flush.relay_inline.stride, L1_ALIGNMENT);
+                }
+            }
+            flush.relay_inline.length = flush.relay_inline.stride - sizeof(CQPrefetchCmd);
+            flush.relay_inline.stride = align(flush.relay_inline.stride, HUGEPAGE_ALIGNMENT);
+
+            flush_ptr = (uint32_t*)&flush;
+            for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*flush_ptr++);
+            }
+            CQDispatchCmd write_packed_cmd;
+            write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd.write_packed.is_multicast = true;
+            write_packed_cmd.write_packed.count = num_packed_cmds;
+            write_packed_cmd.write_packed.addr = dst;
+            write_packed_cmd.write_packed.size = write_packed_len * sizeof(uint32_t);
+
+            uint32_t* write_packed_cmd_ptr = (uint32_t*)&write_packed_cmd;
+            for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*write_packed_cmd_ptr++);
+            }
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    for (int i = 0; i < sizeof(CQDispatchWritePackedMulticastSubCmd) / sizeof(uint32_t); i++) {
+                         this->commands.push_back(0);
+                    }
+                }
+            }
+            if ((padding = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                            num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd)) %
+                           L1_ALIGNMENT) != 0) {
+                for (int j = 0; j < (sizeof(CQDispatchCmd) - padding) / sizeof(uint32_t); j++) {
+                    this->commands.push_back(0);
+                }
+            }
+            // Semaphores Data
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    for (int i = 0; i < transfer_info.data.size(); i++) {
+                        this->commands.push_back(0);
+                    }
+                    if ((padding = (transfer_info.data.size() * sizeof(uint32_t)) % L1_ALIGNMENT) != 0) {
+                        for (int i = 0; i < (L1_ALIGNMENT - padding) / sizeof(uint32_t); i++) {
+                            this->commands.push_back(0);
+                        }
+                    }
+                }
+            }
+            align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+        }
+
+        // Unicast Semaphores Cmd
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
+          // TODO: loop over things inside transfer_info[i]
+            std::uint32_t num_packed_cmds = 0;
+            std::uint32_t write_packed_len = transfer_info_vec[0].data.size();
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    TT_ASSERT(transfer_info.data.size() == write_packed_len, "Not all data vectors in write packed semaphore cmd equal in len");
+                    num_packed_cmds += 1;
+                }
+            }
+            flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
+            // stride data
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    // Same data across set of CoreRanges
+                    flush.relay_inline.stride += transfer_info.data.size() * sizeof(uint32_t);
+                    flush.relay_inline.stride = align(flush.relay_inline.stride, L1_ALIGNMENT);
+                }
+            }
+            flush.relay_inline.length = flush.relay_inline.stride - sizeof(CQPrefetchCmd);
+            flush.relay_inline.stride = align(flush.relay_inline.stride, HUGEPAGE_ALIGNMENT);
+
+            flush_ptr = (uint32_t*)&flush;
+            for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*flush_ptr++);
+            }
+            CQDispatchCmd write_packed_cmd;
+            write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd.write_packed.is_multicast = false;
+            write_packed_cmd.write_packed.count = num_packed_cmds;
+            write_packed_cmd.write_packed.addr = dst;
+            write_packed_cmd.write_packed.size = write_packed_len * sizeof(uint32_t);
+
+            uint32_t* write_packed_cmd_ptr = (uint32_t*)&write_packed_cmd;
+            for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*write_packed_cmd_ptr++);
+            }
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    for (int i = 0; i < sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t); i++) {
+                         this->commands.push_back(0);
+                    }
+                }
+            }
+            if ((padding = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                            num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd)) %
+                           L1_ALIGNMENT) != 0) {
+                for (int j = 0; j < (sizeof(CQDispatchCmd) - padding) / sizeof(uint32_t); j++) {
+                    this->commands.push_back(0);
+                }
+            }
+            // Semaphores Data
+            for (const auto& transfer_info: transfer_info_vec) {
+                for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                    for (int i = 0; i < transfer_info.data.size(); i++) {
+                        this->commands.push_back(0);
+                    }
+                    if ((padding = (transfer_info.data.size() * sizeof(uint32_t)) % L1_ALIGNMENT) != 0) {
+                        for (int i = 0; i < (L1_ALIGNMENT - padding) / sizeof(uint32_t); i++) {
+                            this->commands.push_back(0);
+                        }
+                    }
+                }
+            }
+            align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+        }
+
+        // CB Configs Cmd
+        for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
+            for (const CoreRange& core_range : cb->core_ranges().ranges()) {
+                CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
+                CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, CoreType::WORKER);
+
+                uint32_t dst_noc_multicast_encoding =
+                    NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+
+                uint32_t num_receivers = core_range.size();
+
+                for (const auto buffer_index : cb->buffer_indices()) {
+                    // 1 cmd per buffer index
+                    flush.relay_inline.length = sizeof(CQDispatchCmd) + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                    flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) +
+                                               align(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), HUGEPAGE_ALIGNMENT);
+
+                    flush_ptr = (uint32_t*)&flush;
+                    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(*flush_ptr++);
+                    }
+
+                    CQDispatchCmd write_cb_configs_cmd;
+                    write_cb_configs_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+                    write_cb_configs_cmd.write_linear.num_mcast_dests = num_receivers;
+                    write_cb_configs_cmd.write_linear.noc_xy_addr = dst_noc_multicast_encoding;
+                    write_cb_configs_cmd.write_linear.addr = CIRCULAR_BUFFER_CONFIG_BASE + buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                    write_cb_configs_cmd.write_linear.length = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+
+                    uint32_t* write_cb_configs_cmd_ptr = (uint32_t*)&write_cb_configs_cmd;
+                    for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(*write_cb_configs_cmd_ptr++);
+                    }
+                    // CB config data reservation
+                    for (int i = 0; i < UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; i++) {
+                        this->commands.push_back(0);
+                    }
+
+                    align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+                }
+            }
+        }
+
+        // Program Binaries
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
+            for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
+                for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                    no_flush.relay_inline.length = sizeof(CQDispatchCmd);
+                    no_flush.relay_inline.stride =
+                        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT);
+
+                    no_flush_ptr = (uint32_t*)&no_flush;
+                    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(*no_flush_ptr++);
+                    }
+
+                    CQDispatchCmd write_program_bins_cmd;
+                    write_program_bins_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+                    write_program_bins_cmd.write_linear.num_mcast_dests = dst_noc_info.second;
+                    write_program_bins_cmd.write_linear.noc_xy_addr = dst_noc_info.first;
+                    write_program_bins_cmd.write_linear.addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+                    write_program_bins_cmd.write_linear.length = kg_transfer_info.lengths[kernel_idx];
+                    uint32_t* write_program_bins_cmd_ptr = (uint32_t*)&write_program_bins_cmd;
+                    for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(*write_program_bins_cmd_ptr++);
+                    }
+
+                    align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+
+                    CQPrefetchCmd relay_program_bins_cmd;  // program binaries
+                    relay_program_bins_cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
+                    relay_program_bins_cmd.relay_paged.is_dram = 1;
+                    relay_program_bins_cmd.relay_paged.start_page = kg_transfer_info.page_offsets[kernel_idx];
+                    relay_program_bins_cmd.relay_paged.base_addr = this->program.kg_buffers[buffer_idx]->address();
+                    relay_program_bins_cmd.relay_paged.page_size = this->program.kg_buffers[buffer_idx]->page_size();
+                    relay_program_bins_cmd.relay_paged.pages =
+                        align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE) /
+                        this->program.kg_buffers[buffer_idx]->page_size();
+
+                    uint32_t* relay_program_bins_cmd_ptr = (uint32_t*)&relay_program_bins_cmd;
+                    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(*relay_program_bins_cmd_ptr++);
+                    }
+
+                    align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+
+                }
+            }
+        }
+
+        if(program.program_transfer_info.num_active_cores > 0) {
+            // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+            flush.relay_inline.length = sizeof(CQDispatchCmd);
+            flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT);
+
+            flush_ptr = (uint32_t*)&flush;
+            for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*flush_ptr++);
+            }
+
+            CQDispatchCmd write_barrier_cmd;
+            write_barrier_cmd.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+            write_barrier_cmd.wait.barrier = 1;
+            write_barrier_cmd.wait.notify_prefetch = 0;
+            write_barrier_cmd.wait.addr = DISPATCH_MESSAGE_ADDR;
+            write_barrier_cmd.wait.count = 0;
+            // TODO: any way to not have dispatcher poll the addr here?
+            // TODO: also need to update CommandQueue to track total worker count and increment and wrap? Does noc semaphore inc wrap?
+
+            uint32_t* write_barrier_cmd_ptr = (uint32_t*)&write_barrier_cmd;
+            for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*write_barrier_cmd_ptr++);
+            }
+
+            align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+        }
+
+        for (const auto& transfer_info : program.program_transfer_info.go_signals) {
+            for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
+                // Go Signal Cmd
+                flush.relay_inline.length = sizeof(CQDispatchCmd) + transfer_info.data.size() * sizeof(uint32_t);
+                flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) +
+                                            align(transfer_info.data.size() * sizeof(uint32_t), HUGEPAGE_ALIGNMENT);
+
+                flush_ptr = (uint32_t*)&flush;
+                for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                    this->commands.push_back(*flush_ptr++);
+                }
+
+                CQDispatchCmd write_go_signal_cmd;
+                write_go_signal_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+                write_go_signal_cmd.write_linear.num_mcast_dests = dst_noc_info.second;
+                write_go_signal_cmd.write_linear.noc_xy_addr = dst_noc_info.first;
+                write_go_signal_cmd.write_linear.addr = transfer_info.dst_base_addr;
+                write_go_signal_cmd.write_linear.length = transfer_info.data.size() * sizeof(uint32_t);
+
+                uint32_t* write_go_signal_cmd_ptr = (uint32_t*)&write_go_signal_cmd;
+                for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                    this->commands.push_back(*write_go_signal_cmd_ptr++);
+                }
+                if ((padding = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) % HUGEPAGE_ALIGNMENT) != 0) {
+                    for (int i = 0; i < (HUGEPAGE_ALIGNMENT - padding) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(0);
+                    }
+                }
+                // Go Signal Data
+                for (int i = 0; i < transfer_info.data.size(); i++) {
+                    this->commands.push_back(transfer_info.data[i]);
+                }
+                if ((padding = (transfer_info.data.size() * sizeof(uint32_t)) % HUGEPAGE_ALIGNMENT) != 0) {
+                    for (int i = 0; i < (HUGEPAGE_ALIGNMENT - padding) / sizeof(uint32_t); i++) {
+                        this->commands.push_back(0);
+                    }
+                }
+            }
+        }
+        // TODO: add GO for FD2.1
+
+        if(program.program_transfer_info.num_active_cores > 0) {
+            // Wait Done
+            // TODO: maybe this can be removed, see the very first wait of EnqueueProgram
+            flush.relay_inline.length = sizeof(CQDispatchCmd);
+            flush.relay_inline.stride = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT);
+
+            flush_ptr = (uint32_t*)&flush;
+            for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*flush_ptr++);
+            }
+
+            CQDispatchCmd wait_cmd;
+            wait_cmd.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+            wait_cmd.wait.barrier = 0;
+            wait_cmd.wait.notify_prefetch = 0;
+            wait_cmd.wait.addr = DISPATCH_MESSAGE_ADDR;
+            wait_cmd.wait.count = 0;
+
+            uint32_t* wait_cmd_ptr = (uint32_t*)&wait_cmd;
+            for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
+                this->commands.push_back(*wait_cmd_ptr++);
+            }
+
+            align_commands_vector(this->commands, HUGEPAGE_ALIGNMENT);
+        }
+        program.loaded_onto_device = true;
+        program.cached_commands = this->commands;
+    } else {
+        this->commands.resize(program.cached_commands.size());
+        std::copy(program.cached_commands.begin(), program.cached_commands.end(), this->commands.begin());
+    }
 }
 
 const void EnqueueProgramCommand::assemble_device_commands(uint32_t host_data_src) {
+    // uint32_t padded_page_size = align(this->buffer.page_size(), 32);
+    uint32_t prefetch_cmd_idx_offset = sizeof(CQPrefetchCmd) / sizeof(uint32_t);
+    uint32_t hp_aligned_prefetch_cmd_idx_offset = sizeof(CQPrefetchCmd);
+    hp_aligned_prefetch_cmd_idx_offset += hp_aligned_prefetch_cmd_idx_offset % HUGEPAGE_ALIGNMENT;
+    hp_aligned_prefetch_cmd_idx_offset /= sizeof(uint32_t);
+
+    uint32_t hp_aligned_inline_cmds_idx_offset = sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd);
+    hp_aligned_inline_cmds_idx_offset += hp_aligned_inline_cmds_idx_offset % HUGEPAGE_ALIGNMENT;
+    hp_aligned_inline_cmds_idx_offset /= sizeof(uint32_t);
+
+    uint32_t cmd_idx = 0;   // this should always be HUGEPAGE aligned
+
+    // Wait for Noc Write Barrier
+    // wait for binaries to commit to dram, also wait for previous program to be done
+    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+    CQDispatchCmd* write_barrier_cmd = (CQDispatchCmd*)(this->commands.data() + cmd_idx + prefetch_cmd_idx_offset);
+
+    write_barrier_cmd->wait.addr = DISPATCH_MESSAGE_ADDR;
+    write_barrier_cmd->wait.count = expected_num_workers_completed;
+
+    cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+
+    // Stall Cmd
+    cmd_idx += align(sizeof(CQPrefetchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+
+    // Runtime Args
+    // Runtime Args Cmd
+    for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
+        std::uint32_t num_packed_cmds = transfer_info.size();
+        std::uint32_t runtime_args_len = transfer_info[0].data.size();
+
+        CQDispatchCmd* write_packed_cmd = (CQDispatchCmd*)(this->commands.data() + cmd_idx + prefetch_cmd_idx_offset);
+        // TODO: assume runtime args always at least one data vector
+        // Maybe we can assert that all runtime args length are the same
+        write_packed_cmd->write_packed.size = runtime_args_len * sizeof(uint32_t);
+        // Size is padded by CQDispatchWritePackedCmd in dispatcher
+        write_packed_cmd->write_packed.addr = dst;
+
+        uint32_t write_packed_sub_cmd_idx =
+            cmd_idx + prefetch_cmd_idx_offset + sizeof(CQDispatchCmd) / sizeof(uint32_t);
+        for (int i = 0; i < num_packed_cmds; i++) {
+            CQDispatchWritePackedUnicastSubCmd* write_packed_sub_cmd =
+                (CQDispatchWritePackedUnicastSubCmd*)(this->commands.data() + write_packed_sub_cmd_idx + i * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t));
+            write_packed_sub_cmd->noc_xy_addr = transfer_info[i].dst_noc_info[0].first;
+        }
+        std::uint32_t packed_data_idx = cmd_idx + align(
+                                                      sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                                                          num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
+                                                      L1_ALIGNMENT) /
+                                                      sizeof(uint32_t);
+        for (int i = 0; i < num_packed_cmds; i++) {
+            uint32_t* runtime_args_data = (uint32_t*)(this->commands.data() + packed_data_idx);
+            for (int j = 0; j < transfer_info[i].data.size(); j++) {
+                runtime_args_data[j] = transfer_info[i].data[j];
+            }
+            packed_data_idx += transfer_info[i].data.size();
+            packed_data_idx = align(packed_data_idx * sizeof(uint32_t), L1_ALIGNMENT) / sizeof(uint32_t);
+        }
+        cmd_idx = align(packed_data_idx * sizeof(uint32_t), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+    }
+
+    // TODO: semaphores can be moved to static portion of commands
+    // Semaphores
+    // Multicast Semaphore Cmd
+    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
+        uint32_t write_packed_sub_cmd_idx = cmd_idx + prefetch_cmd_idx_offset + sizeof(CQDispatchCmd) / sizeof(uint32_t);
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                CQDispatchWritePackedMulticastSubCmd* write_packed_sub_cmd = (CQDispatchWritePackedMulticastSubCmd*)(this->commands.data() + write_packed_sub_cmd_idx);
+                write_packed_sub_cmd->noc_xy_addr = dst_noc_info.first;
+                write_packed_sub_cmd->num_mcast_dests = dst_noc_info.second;
+            }
+            write_packed_sub_cmd_idx += sizeof(CQDispatchWritePackedMulticastSubCmd) / sizeof(uint32_t);
+        }
+        std::uint32_t packed_data_idx = align(write_packed_sub_cmd_idx * sizeof(uint32_t), L1_ALIGNMENT) / sizeof(uint32_t);
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                uint32_t* semaphores_data = (uint32_t*)(this->commands.data() + packed_data_idx);
+                for (int i = 0; i < transfer_info.data.size(); i++) {
+                    semaphores_data[i] = transfer_info.data[i];
+                }
+                packed_data_idx += transfer_info.data.size();
+                packed_data_idx = align(packed_data_idx * sizeof(uint32_t), L1_ALIGNMENT) / sizeof(uint32_t);
+            }
+        }
+        cmd_idx = align(packed_data_idx * sizeof(uint32_t), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+    }
+
+    // Unicast Semaphore Cmd
+    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
+        uint32_t write_packed_sub_cmd_idx = cmd_idx + prefetch_cmd_idx_offset + sizeof(CQDispatchCmd) / sizeof(uint32_t);
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                CQDispatchWritePackedUnicastSubCmd* write_packed_sub_cmd = (CQDispatchWritePackedUnicastSubCmd*)(this->commands.data() + write_packed_sub_cmd_idx);
+                write_packed_sub_cmd->noc_xy_addr = dst_noc_info.first;
+            }
+            write_packed_sub_cmd_idx += sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t);
+        }
+        std::uint32_t packed_data_idx = align(write_packed_sub_cmd_idx * sizeof(uint32_t), L1_ALIGNMENT) / sizeof(uint32_t);
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                uint32_t* semaphores_data = (uint32_t*)(this->commands.data() + packed_data_idx);
+                for (int i = 0; i < transfer_info.data.size(); i++) {
+                    semaphores_data[i] = transfer_info.data[i];
+                }
+                packed_data_idx += transfer_info.data.size();
+                packed_data_idx = align(packed_data_idx * sizeof(uint32_t), L1_ALIGNMENT) / sizeof(uint32_t);
+            }
+        }
+        cmd_idx = align(packed_data_idx * sizeof(uint32_t), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+    }
+
+    // CB Configs commands already programmed, just populate data
+    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
+        for (const CoreRange& core_range : cb->core_ranges().ranges()) {
+            for (const auto buffer_index : cb->buffer_indices()) {
+                cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+
+                uint32_t* cb_config_data = (uint32_t*)(this->commands.data() + cmd_idx);
+                cb_config_data[0] = cb->address() >> 4;
+                cb_config_data[1] = cb->size() >> 4;
+                cb_config_data[2] = cb->num_pages(buffer_index);
+                cb_config_data[3] = cb->size() / cb->num_pages(buffer_index) >> 4;
+
+                cmd_idx += align(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+            }
+        }
+    }
+
+    // Program Binaries
+    // already programmed, offset idx
+    for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+        const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
+        for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
+            for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+                cmd_idx += align(sizeof(CQPrefetchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+            }
+        }
+    }
+
+    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+    if (program.program_transfer_info.num_active_cores > 0) {
+        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+        CQDispatchCmd* write_barrier_cmd = (CQDispatchCmd*)(this->commands.data() + cmd_idx + prefetch_cmd_idx_offset);
+
+        write_barrier_cmd->wait.addr = DISPATCH_MESSAGE_ADDR;
+        write_barrier_cmd->wait.count = expected_num_workers_completed;
+
+        cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+    }
+
+    // Go Signals
+    // already programmed, offset idx
+    for (const auto& transfer_info : program.program_transfer_info.go_signals) {
+        for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
+            cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+            cmd_idx += align(transfer_info.data.size() * sizeof(uint32_t), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+        }
+    }
+
+    // Wait Done
+    if (program.program_transfer_info.num_active_cores > 0) {
+        // TODO: maybe this can be removed
+        CQDispatchCmd* write_barrier_cmd = (CQDispatchCmd*)(this->commands.data() + cmd_idx + prefetch_cmd_idx_offset);
+
+        write_barrier_cmd->wait.addr = DISPATCH_MESSAGE_ADDR;
+        write_barrier_cmd->wait.count = expected_num_workers_completed + program.program_transfer_info.num_active_cores;
+
+        cmd_idx += align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), HUGEPAGE_ALIGNMENT) / sizeof(uint32_t);
+    }
 }
 
 void EnqueueProgramCommand::process() {
+    this->assemble_device_commands(0);
+
+    uint32_t fetch_size_bytes = this->commands.size() * sizeof(uint32_t);
+
+    // move this into the command queue interface
+    TT_ASSERT(fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    this->manager.cq_write(this->commands.data(), fetch_size_bytes, write_ptr);
+    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+
+    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
 }
 
 std::vector<uint32_t> EnqueueRecordEventCommand::commands;
@@ -712,6 +1337,17 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 void HWCommandQueue::enqueue_program(
     Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
+    if (not program.loaded_onto_device) {
+        TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
+        }
+    }
+    tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
+
+    auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, this->expected_num_workers_completed);
+    this->enqueue_command(command, blocking);
+    this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
 }
 
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
@@ -1151,7 +1787,6 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
 
 void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_THROW("EnqueueProgram currently unsupported in FD2.0");
     if (cq.get_mode() != CommandQueue::CommandQueueMode::TRACE) {
         TT_FATAL(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
     }
