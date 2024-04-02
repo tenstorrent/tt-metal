@@ -121,28 +121,21 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    string expected, addr;
+    string expected;
     switch(feature) {
         case SanitizeAddress:
-            expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
-            expected[7] = '0' + device->id();
-            expected[18] = '0' + phys_core.x;
-            expected[22] = '0' + phys_core.y;
-            addr = fmt::format("{:08x}", output_dram_buffer_addr);
-            expected.replace(99, addr.length(), addr);
-            if (is_eth_core) {
-                expected[43] = 'e';
-            }
+            expected = fmt::format(
+                "Device {}, ****** Core {}[physical {}]:   NAWW,****,****,****,****  {} using noc0 tried to access core (16,16) L1[addr=0x{:08x},len=102400]",
+                device->id(), core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", output_dram_buffer_addr
+            );
             break;
         case SanitizeAlignment:
-            expected = "Device x, Core (x=x,y=x):    NARW,*,*,*,*  brisc using noc0 reading L1[addr=0x********,len=102400]";
-            expected[7] = '0' + device->id();
-            expected[18] = '0' + phys_core.x;
-            expected[22] = '0' + phys_core.y;
-            addr = fmt::format("{:08x}", l1_buffer_addr);
-            expected.replace(78, addr.length(), addr);
-            if (is_eth_core)
-                expected[43] = 'e';
+            expected = fmt::format(
+                "Device {}, ****** Core {}[physical {}]:   NARW,****,****,****,****  {} using noc0 reading L1[addr=0x{:08x},len=102400]",
+                device->id(), core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr
+            );
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
