@@ -13,6 +13,8 @@ import numpy as np
 
 import ttnn
 
+ttnn.CONFIG.delete_reports_on_start = False
+
 BUFFER_TO_COLOR_INDEX = {}
 COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown"]
 
@@ -267,7 +269,7 @@ def create_detailed_l1_buffer_plot(operation_id):
     if num_buffer_pages == 0:
         return (
             "",
-            "Detailed L1 Buffer Report is not Available! Set  TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' in your environment",
+            "Detailed L1 Buffer Report is not Available! Set  TTNN_CONFIG_OVERRIDES='{\"enable_detailed_buffer_report\": true}' in your environment",
         )
 
     buffer_pages_glyph_x_location = np.asarray(buffer_pages_glyph_x_location)
