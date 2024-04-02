@@ -79,6 +79,8 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos, *args, **kwargs)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
+        logger.info(f"Decoding {start_pos}th tokens")
+
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
 
         tt_logits = self.tt_model(
@@ -134,6 +136,6 @@ class TtLlamaModelForGeneration:
 
             output_logits[user_id] = logits[:, :seq_len, :]
 
-        logger.info(f"Finished prefill for all users up to {padded_seq_len} tokens, Starting decode...")
+        logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
 
         return output_logits
