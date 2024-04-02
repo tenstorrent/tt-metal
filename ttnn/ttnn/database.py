@@ -153,6 +153,10 @@ def get_or_create_sqlite_db():
                 (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
     )
     cursor.execute(
+        """CREATE TABLE IF NOT EXISTS stack_traces
+                (operation_id int, stack_trace text)"""
+    )
+    cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
                 (operation_id int, device_id int, address int, input_index int, buffer_type int)"""
     )
@@ -230,6 +234,16 @@ def insert_operation(operation, operation_id, duration, matches_golden, desired_
     cursor.execute(
         f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}', {duration}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)})"
     )
+    sqlite_connection.commit()
+
+
+def insert_stack_trace(operation_id, stack_trace):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    cursor = sqlite_connection.cursor()
+
+    formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
+
+    cursor.execute(f"INSERT INTO stack_traces VALUES ({operation_id}, '{formatted_stack_trace}')")
     sqlite_connection.commit()
 
 
@@ -440,6 +454,18 @@ def query_operations():
     for row in cursor.fetchall():
         operation = ttnn.database.Operation(*row)
         yield operation
+
+    sqlite_connection.close()
+
+
+def query_stack_trace(operation_id):
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, stack_trace = row
+        return stack_trace
 
     sqlite_connection.close()
 

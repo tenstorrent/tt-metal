@@ -278,6 +278,9 @@ Set the following environment variables as needed
         "enable_comparison_mode": true
     }'
 
+    # Or modify ~/.config/ttnn/config.json
+    # Or set TTNN_CONFIG_PATH to a json file of your choice
+
 Run the code. i.e.:
 
 .. code-block:: python
