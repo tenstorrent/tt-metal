@@ -113,8 +113,19 @@ def test_run_max_pool(
     if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
         pytest.skip("This case runs out of memory on Grayskull")
 
-    if in_n >= 16 and in_c >= 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0:
+    if in_n >= 16 and in_c >= 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
         pytest.skip("This case runs out of memory on Wormhole b0")
+
+    if (
+        is_wormhole_b0()
+        and act_shape == [16, 64, 112, 112]
+        and kernel_size == (3, 3)
+        and padding == (1, 1)
+        and stride == (2, 2)
+        and dilation == (1, 1)
+        and dtype == ttnn.bfloat16
+    ):
+        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
