@@ -26,6 +26,7 @@ class Config:
     enable_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
+    delete_reports_on_start: bool = True
     reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
     sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
 
@@ -41,7 +42,6 @@ CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 def load_config_from_dictionary(config):
     global CONFIG
     for key, value in config.items():
-        print(type(config[key]))
         if hasattr(CONFIG, key):
             setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
         else:
