@@ -7,6 +7,7 @@ import dataclasses
 from functools import wraps
 import inspect
 import time
+import traceback
 
 from loguru import logger
 
@@ -341,6 +342,7 @@ class Operation:
                     ttnn.database.insert_operation(
                         self, operation_id, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
                     )
+                    ttnn.database.insert_stack_trace(operation_id, traceback.format_stack())
                     ttnn.database.insert_output_tensors(operation_id, output_tensors)
                     ttnn.database.insert_buffers(operation_id)
                     if ttnn.CONFIG.enable_detailed_buffer_report:
