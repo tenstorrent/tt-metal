@@ -148,13 +148,15 @@ class SystemMemoryManager {
     vector<uint32_t> prefetch_q_dev_ptrs;
     vector<uint32_t> prefetch_q_dev_fences;
 
+    bool bypass_enable;
+    vector<uint32_t> bypass_buffer;
+
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
-        fast_write_callable(
-            tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)) {
-
+        fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
+        bypass_enable(false) {
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
@@ -233,6 +235,17 @@ class SystemMemoryManager {
         cq_interface.issue_fifo_limit = (CQ_START + cq_interface.offset + issue_queue_size) >> 4;
     }
 
+    void set_bypass_mode(const bool enable, const bool clear=true) {
+        this->bypass_enable = enable;
+        if (clear) {
+            this->bypass_buffer.clear();
+        }
+    }
+
+    std::vector<uint32_t>& get_bypass_data() {
+        return this->bypass_buffer;
+    }
+
     uint32_t get_issue_queue_size(const uint8_t cq_id) const {
         return this->cq_interfaces[cq_id].issue_fifo_size << 4;
     }
@@ -287,8 +300,7 @@ class SystemMemoryManager {
             (rd_toggle != cq_interface.issue_fifo_wr_toggle and cq_interface.issue_fifo_wr_ptr == rd_ptr));
     }
 
-    // TODO: rename
-    void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
+    void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
         // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
         //  but on host, we access a region of sysmem using addresses relative to a particular channel
@@ -298,11 +310,19 @@ class SystemMemoryManager {
         // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
-        memcpy(user_scratchspace, data, size_in_bytes);
+        if (this->bypass_enable) {
+            TT_THROW(size_in_bytes % sizeof(uint32_t) == 0, "Data not padded to {} bytes", sizeof(uint32_t));
+            this->bypass_buffer.insert(
+                this->bypass_buffer.end(), (uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t));
+        } else {
+            memcpy(user_scratchspace, data, size_in_bytes);
+        }
     }
 
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+        if (this->bypass_enable) return;
+
         // All data needs to be 32B aligned
         uint32_t push_size_16B = align(push_size_B, 32) >> 4;
 
@@ -366,6 +386,8 @@ class SystemMemoryManager {
     }
 
     void fetch_queue_reserve_back(const uint8_t cq_id) {
+        if (this->bypass_enable) return;
+
         // Wait for space in the FetchQ
         uint32_t fence;
         while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
@@ -387,6 +409,7 @@ class SystemMemoryManager {
     }
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id) {
+        if (this->bypass_enable) return;
         uint16_t command_size_16B = command_size_B >> PREFETCH_Q_LOG_MINSIZE;
         tt::Cluster::instance().write_core((void *)&command_size_16B, sizeof(uint16_t), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id], true);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(uint16_t);
