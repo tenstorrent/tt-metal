@@ -54,6 +54,37 @@ def test_enable_logging(height, width):
         assert operation.matches_golden is None
 
 
+@pytest.mark.parametrize("height", [1024])
+@pytest.mark.parametrize("width", [1024])
+def test_enable_logging_and_enable_graph_report(height, width):
+    ttnn.CONFIG.enable_logging = True
+    ttnn.CONFIG.enable_graph_report = True
+
+    torch.manual_seed(0)
+
+    device = ttnn.open_device(device_id=0)
+
+    torch_input_tensor = torch.rand(
+        (height, width),
+        dtype=torch.bfloat16,
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.to_torch(output_tensor)
+
+    device = ttnn.close_device(device)
+
+    ttnn.CONFIG.enable_logging = False
+    ttnn.CONFIG.enable_graph_report = False
+
+
 @pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.parametrize("height", [1024 * 5])
 @pytest.mark.parametrize("width", [1024 * 2])
