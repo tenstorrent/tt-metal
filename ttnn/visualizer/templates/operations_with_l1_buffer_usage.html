@@ -5,8 +5,14 @@
 <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.1.1.min.js"></script>
 
 <style>
-    tr:nth-child(even) {
+    tr:nth-child(3n+2) {
         background-color: #D6EEEE;
+    }
+
+    table,
+    th,
+    td {
+        border: 1px solid;
     }
 
     th {
@@ -30,15 +36,22 @@
                 <tr>
                     <th>Index</th>
                     <th>Name</th>
+                    <th>Stack Trace</th>
                     <th>Buffer Report</th>
                 </tr>
                 {% for operation in operations %}
-                <tr rowspan=2>
+                <tr rowspan=3>
                     <td>{{loop.index0}}</td>
                     <td>{{operation.name}}</td>
+                    <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
                     <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
                 </tr>
+                <tr>
+                    <td colspan="100%">
+                        <pre><code class="python">{{ stack_traces[operation.operation_id]|safe }}</code></pre>
+                    </td>
                 </tr>
+                <tr>
                 <td colspan="100%"> {{ l1_reports[operation.operation_id][0]|safe }} {{
                     l1_reports[operation.operation_id][1] | safe }}
                 </td>

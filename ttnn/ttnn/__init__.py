@@ -36,7 +36,7 @@ CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
 if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
-CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
 
 
 def load_config_from_dictionary(config):
@@ -45,19 +45,22 @@ def load_config_from_dictionary(config):
         if hasattr(CONFIG, key):
             setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
         else:
-            raise RuntimeError(f"Unknown configuration key: {key}")
+            logger.error(f"Unknown configuration key: {key}")
 
 
 def load_config_from_json_file(json_path):
     global CONFIG
-    with open(json_path, "r") as f:
-        config = json.load(f)
-    load_config_from_dictionary(config)
+    try:
+        with open(json_path, "r") as f:
+            config = json.load(f)
+        load_config_from_dictionary(config)
+    except:
+        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
 
 
 def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
-        normalized_config = dataclasses.asdict(Config())
+        normalized_config = dataclasses.asdict(CONFIG)
         for key, value in normalized_config.items():
             if isinstance(value, pathlib.Path):
                 value = str(value)

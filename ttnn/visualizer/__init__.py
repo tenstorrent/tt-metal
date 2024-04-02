@@ -7,6 +7,7 @@ import math
 from bokeh.embed import components
 from bokeh.models import Plot, ColumnDataSource, LinearAxis, CustomJSTickFormatter, NumeralTickFormatter, Rect, Range1d
 from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool, ZoomInTool, ZoomOutTool, HoverTool
+from bokeh.palettes import Category20
 
 from flask import Flask, render_template
 import numpy as np
@@ -16,7 +17,7 @@ import ttnn
 ttnn.CONFIG.delete_reports_on_start = False
 
 BUFFER_TO_COLOR_INDEX = {}
-COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown"]
+COLORS = Category20[20]
 
 
 def duration_to_string(duration):
@@ -64,8 +65,13 @@ def operations_with_l1_buffer_usage():
     operations = list(ttnn.database.query_operations())
 
     l1_reports = {}
+    stack_traces = {}
     for operation in operations:
         l1_reports[operation.operation_id] = create_summarized_l1_buffer_plot(operation.operation_id)
+        stack_trace = ttnn.database.query_stack_trace(operation_id=operation.operation_id)
+        stack_trace = stack_trace.split("\n")[:12]
+        stack_trace = "\n".join(stack_trace)
+        stack_traces[operation.operation_id] = stack_trace
 
     return render_template(
         "operations_with_l1_buffer_usage.html",
@@ -73,6 +79,7 @@ def operations_with_l1_buffer_usage():
         duration_to_string=duration_to_string,
         duration_to_color=duration_to_color,
         l1_reports=l1_reports,
+        stack_traces=stack_traces,
     )
 
 
@@ -373,6 +380,10 @@ def operation_buffer_report(operation_id):
     input_tensors = list(ttnn.database.query_input_tensors(operation_id))
     output_tensors = list(ttnn.database.query_output_tensors(operation_id))
 
+    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    stack_trace = stack_trace.split("\n")[:12]
+    stack_trace = "\n".join(stack_trace)
+
     return render_template(
         "operation_buffer_report.html",
         operation=operation,
@@ -387,6 +398,7 @@ def operation_buffer_report(operation_id):
         input_tensors=input_tensors,
         output_tensors=output_tensors,
         get_tensor_color=get_tensor_color,
+        stack_trace=stack_trace,
     )
 
 
@@ -432,6 +444,12 @@ def operation_tensor_report(operation_id):
     return render_template(
         "operation_tensor_report.html", operation=operation, input_tensors=input_tensors, output_tensors=output_tensors
     )
+
+
+@app.route("/operation_stack_trace/<operation_id>")
+def operation_stack_trace(operation_id):
+    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    return render_template("operation_stack_trace.html", stack_trace=stack_trace)
 
 
 if __name__ == "__main__":
