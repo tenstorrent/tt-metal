@@ -279,6 +279,12 @@ inline size_t debug_prologue(vector<uint32_t>& cmds) {
     if (debug_g) {
         CQDispatchCmd debug_cmd;
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
+        // compiler compains w/o these filled in later fields
+        debug_cmd.debug.pad = 0;
+        debug_cmd.debug.key = 0;
+        debug_cmd.debug.checksum = 0;
+        debug_cmd.debug.size = 0;
+        debug_cmd.debug.stride = 0;
         add_bare_dispatcher_cmd(cmds, debug_cmd);
     }
 
@@ -518,7 +524,7 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
     uint32_t xfer_size_words = (std::rand() % (dispatch_buffer_page_size_g / sizeof(uint32_t))) + 1;
     uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
     if (perf_test_g) {
-        TT_ASSERT(max_xfer_size_bytes_g < dispatch_buffer_page_size_g);
+        TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
         if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
         if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
     }
