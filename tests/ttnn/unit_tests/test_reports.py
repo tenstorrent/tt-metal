@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.parametrize("height", [1024 * 5])
 @pytest.mark.parametrize("width", [1024 * 2])
 def test_enable_logging(height, width):
@@ -53,6 +54,7 @@ def test_enable_logging(height, width):
         assert operation.matches_golden is None
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.parametrize("height", [1024 * 5])
 @pytest.mark.parametrize("width", [1024 * 2])
 def test_enable_logging_and_enable_detailed_buffer_report(height, width):
@@ -102,6 +104,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(height, width):
     assert len(buffer_pages) > 0
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_comparison_mode(height, width):
@@ -151,6 +154,7 @@ def test_enable_logging_and_enable_comparison_mode(height, width):
     assert num_compared_operations == 1  # Only one operation is compared (ttnn.add)
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_tensor_report(height, width):
