@@ -10,6 +10,7 @@ CONTRIBUTING.md @tt-rkim
 CODEOWNERS @tt-rkim
 
 INSTALLING.md @tt-rkim
+METALIUM_GUIDE.md @davorchap
 
 third_party/ @tt-rkim @TT-billteng
 sfpi/ @pgkeller
