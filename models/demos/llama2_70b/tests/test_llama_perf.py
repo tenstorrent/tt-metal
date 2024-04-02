@@ -279,6 +279,7 @@ def run_test_LlamaModel_end_to_end(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(240000)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "prefill_length, generation_length, expected_compile_time, expected_inference_time",
@@ -289,7 +290,7 @@ def run_test_LlamaModel_end_to_end(
     ),
     ids=["short-short", "short-long", "long-short"],
 )
-def test_llama_perf_host(
+def test_Llama_perf_host(
     prefill_length,
     generation_length,
     expected_compile_time,
@@ -332,7 +333,7 @@ def test_llama_perf_host(
     ((32, 1, 300000), (1, 128, 300000), (1, 2048, 300000)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
-def test_llama_perf_device(batch, seq_len, expected_perf):
+def test_Llama_perf_device(batch, seq_len, expected_perf):
     subdir = "llama2_70b"
     margin = 0.03  # 0.5
 
