@@ -73,6 +73,11 @@ inline void calculate_reciprocal()
         }
         v_endif;
 
+        v_if (dst_reg[0] == 0.0F) {
+            out = std::numeric_limits<float>::infinity();
+        }
+        v_endif;
+
         dst_reg[0] = out;
 
         dst_reg++;
