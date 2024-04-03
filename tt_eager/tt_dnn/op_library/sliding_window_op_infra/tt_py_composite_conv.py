@@ -41,7 +41,7 @@ def find_closest_common_largest_divisor(num1: int, num2: int, start_divisor: int
     return divisor
 
 
-def determine_largest_subblock_size(block_height, block_width):
+def determine_largest_subblock_size(block_height, block_width, fp32_accum=False):
     subblocks = [
         (2, 4),
         (4, 2),
@@ -65,6 +65,8 @@ def determine_largest_subblock_size(block_height, block_width):
         (1, 1),
     ]
     for subblock_height, subblock_width in subblocks:
+        if fp32_accum and subblock_height * subblock_width > 4:
+            continue
         if block_height % subblock_height == 0 and block_width % subblock_width == 0:
             if subblock_width != block_width and subblock_height != 1:
                 continue
@@ -208,6 +210,7 @@ def determine_per_core_block_config(
     use_shallow_conv_variant,
     padded_input_channels,
     config_override=None,
+    fp32_accum=False,
 ):
     if config_override is None:
         config_override = {}
@@ -239,7 +242,7 @@ def determine_per_core_block_config(
     assert out_block_h_ntiles % act_block_h_ntiles == 0, "act_block_h must evenly divide out_block_h"
     weight_block_w_ntiles = per_core_out_matrix_width_ntiles
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
-        act_block_h_ntiles, weight_block_w_ntiles
+        act_block_h_ntiles, weight_block_w_ntiles, fp32_accum
     )
     if use_shallow_conv_variant and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
         assert is_1d_systolic
@@ -361,6 +364,7 @@ class TTPyCompositeConv(TTPyOp):
         output_layout=ttl.tensor.Layout.TILE,
         use_dram_for_matmul=False,
     ):
+        fp32_accum = compute_kernel_config and compute_kernel_config.fp32_dest_acc_en
         self.use_dram_for_matmul = use_dram_for_matmul
 
         if padded_input_channels is None:
@@ -422,6 +426,7 @@ class TTPyCompositeConv(TTPyOp):
             use_shallow_conv_variant,
             self.padded_input_channels,
             config_override=conv_blocking_and_parallelization_config_override,
+            fp32_accum=fp32_accum,
         )
 
         if not is_1d_systolic:  # 2D conv
