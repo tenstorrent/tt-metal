@@ -53,7 +53,7 @@ class MambaPytorch(torch.nn.Module):
     ),
 )
 def test_mamba_model_inference(
-    device, use_program_cache, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool
+    device: ttnn.Device, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool
 ):
     torch.manual_seed(10)
 
@@ -67,6 +67,7 @@ def test_mamba_model_inference(
 
     if enable_cache:
         cache_path = f"/tmp/{model_version}"
+        ttnn.enable_program_cache(device)
     else:
         cache_path = None
 
