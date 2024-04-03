@@ -235,7 +235,7 @@ class SystemMemoryManager {
         cq_interface.issue_fifo_limit = (CQ_START + cq_interface.offset + issue_queue_size) >> 4;
     }
 
-    void set_bypass_mode(const bool enable, const bool clear=true) {
+    void set_bypass_mode(const bool enable, const bool clear) {
         this->bypass_enable = enable;
         if (clear) {
             this->bypass_buffer.clear();

@@ -708,13 +708,6 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         }
     }
 
-    log_info(
-        LogMetalTrace,
-        "DEBUG completion q blocking={}, expected={}, completed={}",
-        blocking,
-        this->num_entries_in_completion_q,
-        this->num_completed_completion_q_reads);
-
     if (blocking) {
         this->finish();
     } else {
@@ -1291,7 +1284,6 @@ void EndTrace(Trace& trace) {
 
 uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
     uint32_t trace_id = trace.instantiate(cq);
-    Finish(cq);
     return trace_id;
 }
 
