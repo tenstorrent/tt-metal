@@ -84,11 +84,6 @@ run_frequent_models_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
-
     # Please put model runs in here from now on - thank you
     ./tests/scripts/run_models.sh
 }
@@ -97,11 +92,6 @@ run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
-
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
 
     if [[ $dispatch_mode == "slow" ]]; then
         TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent

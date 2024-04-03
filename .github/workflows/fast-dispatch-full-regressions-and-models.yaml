@@ -7,7 +7,12 @@ on:
     - cron: "0 1,6 * * *"
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
   frequent-fast-dispatch:
+    needs: build-artifact
+    name: ${{ matrix.frequent-type }} ${{ matrix.arch }} tests
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -19,7 +24,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
-    environment: dev
+      LOGURU_LEVEL: INFO
     runs-on: model-runner-${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
@@ -31,8 +36,18 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - name: Build python env
+        run: |
+          make python_env/dev PYTHON_ENV=$HOME/python_env -B
       - name: Run frequent reg tests scripts
         timeout-minutes: 165
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
+        run: |
+          source $HOME/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
