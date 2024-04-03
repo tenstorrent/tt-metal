@@ -10,12 +10,15 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
-namespace tt::tt_metal {
+namespace {
+// Labels to make the code more readable
+static constexpr bool kBlocking = true;
+static constexpr bool kNonBlocking = false;
+static constexpr bool kEnableCQBypass = true;
+static constexpr bool kDisableCQBypass = false;
+}
 
-// List of supported commands for tracing
-// const unordered_set<EnqueueCommandType> trace_supported_commands = {
-//     EnqueueCommandType::ENQUEUE_PROGRAM,
-// };
+namespace tt::tt_metal {
 
 unordered_map<uint32_t, shared_ptr<Buffer>> Trace::buffer_pool;
 std::mutex Trace::pool_mutex;
@@ -41,11 +44,8 @@ void Trace::validate() {
         if (cmd.blocking.has_value()) {
             // The workload being traced needs to be self-contained and not require any host interaction
             // Blocking by definition yields control back to the host, consider breaking it into multiple traces
-            TT_FATAL(cmd.blocking.value() == false, "Blocking commands are not supported in traces");
+            TT_FATAL(cmd.blocking.value() == false, "Only non-blocking commands can be captured in Metal Trace!");
         }
-        // if (trace_supported_commands.find(cmd.type) == trace_supported_commands.end()) {
-        //     TT_THROW("Unsupported command type for tracing");
-        // }
     }
 }
 
@@ -62,13 +62,12 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
 
     // Record the captured Host API as commands via bypass mode
     SystemMemoryManager& cq_manager = cq.device()->sysmem_manager();
-    cq_manager.set_bypass_mode(kEnableCQBypass, kClearBuffer);
+    cq_manager.set_bypass_mode(kEnableCQBypass, true /*clear buffer*/);
     for (auto cmd : this->queue().worker_queue) {
-        log_debug(LogMetalTrace, "Trace::instantiate found command {}", cmd.type);
-        // cmd.blocking = kNonBlocking;  // skip the blocking check for bypass mode
         cq.run_command(cmd);
     }
     cq.wait_until_empty();
+    cq_manager.set_bypass_mode(kDisableCQBypass, false);
 
     // Extract the data from the bypass buffer and allocate it into a DRAM buffer
     SystemMemoryManager& manager = cq.hw_command_queue().manager;
@@ -76,23 +75,23 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     uint64_t data_size = data.size() * sizeof(uint32_t);
 
     // TODO: add CQ_PREFETCH_EXEC_BUF_END command and pad to the next page
-
     size_t numel_page = DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t);
     size_t numel_padding = numel_page - data.size() % numel_page;
     if (numel_padding > 0) {
-        data.resize(data.size() + numel_padding, 0);
+        data.resize(data.size() + numel_padding, 0/*padding value*/);
     }
-    log_debug(LogMetalTrace, "Trace buffer size = {}, padded size = {}, data = {}", data_size, data.size() * sizeof(uint32_t), data);
+    log_trace(LogMetalTrace, "Trace buffer size = {}, padded size = {}, data = {}", data_size, data.size() * sizeof(uint32_t), data);
 
-    // Commit the trace buffer to device DRAM in a blocking fashion before clearing the bypass mode and data
+    // Commit the trace buffer to device DRAM
     auto buffer = std::make_shared<Buffer>(
         cq.device(),
         data.size() * sizeof(uint32_t),
         DeviceCommand::PROGRAM_PAGE_SIZE,
         BufferType::DRAM,
         TensorMemoryLayout::INTERLEAVED);
-    cq_manager.set_bypass_mode(kDisableCQBypass, kClearBuffer);
+
     EnqueueWriteBuffer(cq, buffer, data, kBlocking);
+    Finish(cq);  // clear side effects flag
 
     // Pin the trace buffer in memory until explicitly released by the user
     this->add_instance(tid, buffer);
