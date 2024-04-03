@@ -427,7 +427,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
+    visualize(output, file_name=ttnn.CONFIG.reports_path / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
