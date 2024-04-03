@@ -88,7 +88,9 @@ class upblock_2d:
                 hidden_states = ttnn.clone(
                     hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
-            hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
+            hidden_states = ttnn.concat(
+                [hidden_states, on_dev_res_hidden_states], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,
