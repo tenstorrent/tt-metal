@@ -239,7 +239,7 @@ std::vector<Tensor> run_multi_device_operation(
     {
         std::vector<DeviceBuffer> buffers;
         std::vector<Shape> shapes;
-        for (Device *device : devices) {
+        for (Device* device : devices) {
             buffers.push_back(per_device_output_tensors[device][i].device_buffer());
             shapes.push_back(per_device_output_tensors[device][i].get_legacy_shape());
         }

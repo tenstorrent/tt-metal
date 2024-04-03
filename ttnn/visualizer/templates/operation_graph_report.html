@@ -11,19 +11,24 @@
         padding-right: 15px;
     }
 </style>
+
 <body>
     <div>
-        <h1>Operation Stack Trace</h1>
+        <h1>Operation Graph Report</h1>
         {%if previous_operation %}
-        <a href=" /operation_stack_trace/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
+        <a href=" /operation_graph_report/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
         {% endif %}
         {%if next_operation %}
-        <a href=" /operation_stack_trace/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
+        <a href=" /operation_graph_report/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
         <br>
         {% endif %}
         <h2>{{ operation.operation_id }}: {{ operation.name }}</h1> <br>
     </div>
-    <pre><code class="python">{{ stack_trace }}</code></pre>
+    <div>
+        {{ graph_svg | safe }}
+    </div>
 </body>
+
 </html>
+
 {% endblock %}

@@ -7,14 +7,20 @@
     tr:nth-child(even) {
         background-color: #D6EEEE;
     }
+    tr:nth-child(odd) {
+        background-color: #D0FFBC;
+    }
 
-    th {
+    #operation_header th {
         padding: 15px;
-        /* you could also change td instead th depending your html code */
-        background-color: white;
         position: sticky;
         z-index: 100;
         top: 20px;
+    }
+
+    th {
+        background-color: white;
+
     }
 
     td {
@@ -26,8 +32,8 @@
     <ul>
         <div>
             <table>
-                <tr>
-                    <th>Index</th>
+                <tr id="operation_header">
+                    <th>Id</th>
                     <th>Name</th>
                     <th>Duration</th>
                     <th>Matches Golden</th>
@@ -35,10 +41,11 @@
                     <th>Buffer Report</th>
                     <th>Operation Graph</th>
                     <th>Tensor Report</th>
+                    <th>Underlying Operations</th>
                 </tr>
                 {% for operation in operations %}
                 <tr>
-                    <td>{{loop.index0}}</td>
+                    <td>{{operation.operation_id}}</td>
                     <td>{{operation.name}}</td>
                     <td bgcolor={{duration_to_color(operation.duration)}}>{{duration_to_string(operation.duration)}}
                     </td>
@@ -51,8 +58,11 @@
                     {% endif %}
                     <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
                     <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
-                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a> </td>
                     <td><a href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
+                    <td>{{ load_underlying_operations(operation.operation_id) | safe
+                        }}
+                    </td>
                 </tr>
                 {% endfor %}
                 </table>

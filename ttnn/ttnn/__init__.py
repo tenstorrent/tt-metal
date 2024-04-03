@@ -29,6 +29,7 @@ class Config:
     delete_reports_on_start: bool = True
     reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
     sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
+    operation_history_csv_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "operation_history.csv"
 
 
 CONFIG = Config()

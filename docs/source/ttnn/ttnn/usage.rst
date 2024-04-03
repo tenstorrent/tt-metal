@@ -272,10 +272,10 @@ Set the following environment variables as needed
 
     export TTNN_CONFIG_OVERRIDES='{
         "enable_logging": true,
-        "enable_graph_report": true,
-        "enable_detailed_buffer_report": true,
-        "enable_tensor_report": true,
-        "enable_comparison_mode": true
+        "enable_graph_report": false,
+        "enable_detailed_buffer_report": false,
+        "enable_tensor_report": false,
+        "enable_comparison_mode": false
     }'
 
     # Or modify ~/.config/ttnn/config.json

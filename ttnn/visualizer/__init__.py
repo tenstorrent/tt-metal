@@ -11,6 +11,7 @@ from bokeh.palettes import Category20
 
 from flask import Flask, render_template
 import numpy as np
+import pandas as pd
 
 import ttnn
 
@@ -21,6 +22,8 @@ COLORS = Category20[20]
 
 
 def duration_to_string(duration):
+    if duration is None:
+        return ""
     if duration < 1e-6:
         return f"{duration * 1e9:.2f} ns"
     elif duration < 1e-3:
@@ -31,6 +34,8 @@ def duration_to_string(duration):
 
 
 def duration_to_color(duration):
+    if duration is None:
+        return ""
     if duration < 1e-6:
         return "green"
     elif duration < 1e-3:
@@ -60,16 +65,28 @@ def root():
 def operations():
     operations = list(ttnn.database.query_operations())
 
+    def load_underlying_operations(operation_id):
+        try:
+            operation_history = pd.read_csv(
+                ttnn.CONFIG.reports_path / "operation_history" / f"{operation_id}.csv", index_col=False
+            )
+            return operation_history.to_html(
+                columns=["operation_name", "operation_type"], index=False, justify="center"
+            )
+        except:
+            return ""
+
     return render_template(
         "operations.html",
         operations=operations,
         duration_to_string=duration_to_string,
         duration_to_color=duration_to_color,
+        load_underlying_operations=load_underlying_operations,
     )
 
 
-@app.route("/operations_with_l1_buffer_usage")
-def operations_with_l1_buffer_usage():
+@app.route("/operations_with_l1_buffer_report")
+def operations_with_l1_buffer_report():
     operations = list(ttnn.database.query_operations())
 
     l1_reports = {}
@@ -80,7 +97,7 @@ def operations_with_l1_buffer_usage():
         stack_traces[operation.operation_id] = shorten_stack_trace(stack_trace)
 
     return render_template(
-        "operations_with_l1_buffer_usage.html",
+        "operations_with_l1_buffer_report.html",
         operations=operations,
         duration_to_string=duration_to_string,
         duration_to_color=duration_to_color,
@@ -409,6 +426,10 @@ def operation_buffer_report(operation_id):
 
 @app.route("/operation_graph_report/<operation_id>")
 def operation_graph_report(operation_id):
+    operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
+        operation_id=operation_id
+    )
+
     # graph = ttnn.database.load_graph(operation_id)
 
     # import graphviz
@@ -427,8 +448,14 @@ def operation_graph_report(operation_id):
     if not svg_file.exists():
         return "Graph not found! Was TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' set?"
     with open(svg_file) as f:
-        content = f.read()
-    return content
+        graph_svg = f.read()
+    return render_template(
+        "operation_graph_report.html",
+        operation=operation,
+        previous_operation=previous_operation,
+        next_operation=next_operation,
+        graph_svg=graph_svg,
+    )
 
 
 @app.route("/operation_tensor_report/<operation_id>")
@@ -453,8 +480,17 @@ def operation_tensor_report(operation_id):
 
 @app.route("/operation_stack_trace/<operation_id>")
 def operation_stack_trace(operation_id):
+    operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
+        operation_id=operation_id
+    )
     stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
-    return render_template("operation_stack_trace.html", stack_trace=stack_trace)
+    return render_template(
+        "operation_stack_trace.html",
+        operation=operation,
+        previous_operation=previous_operation,
+        next_operation=next_operation,
+        stack_trace=stack_trace,
+    )
 
 
 if __name__ == "__main__":

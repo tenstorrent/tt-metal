@@ -660,3 +660,7 @@ using Operation = std::variant<HostOperation, DeviceOperation, ExternalOperation
 }  // namespace operation
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace ttnn {
+inline std::size_t OPERATION_ID = 0;
+}

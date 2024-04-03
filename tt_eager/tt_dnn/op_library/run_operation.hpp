@@ -169,6 +169,7 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
 
 template<typename OperationType>
 static void append_operation_to_operation_history(
+    const std::size_t ttnn_operation_id,
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
@@ -184,8 +185,11 @@ static void append_operation_to_operation_history(
             input_tensor_records.emplace_back(create_tensor_record(tensor.value()));
         }
     }
+
     operation_history::append(
         operation_history::OperationRecord{
+            ttnn_operation_id,
+            boost::core::demangle(typeid(OperationType).name()),
             operation.get_type_name(),
             operation.attributes(),
             input_tensor_records,
@@ -236,7 +240,7 @@ inline void log_operation(
     tt::log_debug(tt::LogOp, "");
 
     if (operation_history::enabled()) {
-        detail::append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
+        detail::append_operation_to_operation_history(ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
     }
 }
 #else

@@ -289,7 +289,7 @@ def from_torch(
             return ttl.tensor.Tensor(shards, dtype)
         return ttl.tensor.Tensor(tensor, dtype)
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype, mesh_mapper)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_torch")(tensor, dtype, mesh_mapper)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout)
@@ -358,7 +358,7 @@ def to_torch(
         def impl(tensor, layout):
             return tensor.to(layout)
 
-        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")
+        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")
         tensor = to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
     def impl(tensor):
@@ -383,7 +383,7 @@ def to_torch(
             tensor = tensor.squeeze()
         return tensor
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_torch")(tensor)
 
     return TorchTensor(tensor)
 
@@ -432,7 +432,7 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     if len(tensor.shape) < 4:
         tensor = ttnn.unsqueeze_to_4D(tensor)
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_device")(
         tensor, device, memory_config=memory_config
     )
     while len(tensor.shape) != original_rank:
@@ -474,7 +474,7 @@ def from_device(tensor):
     def impl(tensor):
         return tensor.cpu()
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)
+    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_device")(tensor)
 
 
 def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -511,7 +511,7 @@ def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
     def impl(tensor):
         tensor.deallocate(force=force)
 
-    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
+    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) deallocate")(tensor)
 
 
 def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -753,7 +753,7 @@ def to_layout(
                     output_tensor = input_tensor.unpad([0, 0, 0, 0], output_tensor_end)
                     return output_tensor
 
-                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(
+                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(
                     input_tensor
                 )
         else:
@@ -787,7 +787,7 @@ def to_layout(
             def impl(tensor):
                 return tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
 
-            tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(tensor)
+            tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(tensor)
 
         tensor = ttnn.reshape(
             tensor,
@@ -876,7 +876,7 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> ttnn.Tensor:
     def impl(file_name):
         return ttl.tensor.load_tensor(str(file_name))
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
+    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) load_tensor")(file_name)
 
 
 def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwargs):
@@ -898,7 +898,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
     def impl(file_name, tensor):
         ttl.tensor.dump_tensor(str(file_name), tensor)
 
-    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.dump_tensor")(file_name, tensor)
+    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) dump_tensor")(file_name, tensor)
 
 
 def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
