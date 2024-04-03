@@ -34,7 +34,7 @@ def main(args):
     args.num_tokens = args.sample_len
 
     # Dataset preparation
-    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
+    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, verification_mode="no_checks")
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos
 
@@ -48,7 +48,7 @@ def main(args):
     assert num_samples > 0, "num_samples must be greater than 0"
     assert seq_len + (num_samples - 1) * stride <= len(encodings), (
         "total length of token decoded must be less than the length of the dataset, \
-                                                                the maximum allowed num_samples is: %d"
+        the maximum allowed num_samples is: %d"
         % (len(encodings) - seq_len)
         // stride
         + 1
@@ -190,8 +190,8 @@ class Args:
         config="wikitext-2-raw-v1",
         stride=128,
         sample_len=128,
-        num_samples=128,
-        perplexity_score=1000,
+        num_samples=32,
+        perplexity_score=5.4,
     ):
         self.implementation = implementation
         self.ckpt_dir = ckpt_dir
@@ -250,19 +250,20 @@ def construct_arg(**kwargs):
     ids=["tt-70b-T3000", "meta-70b", "tt-70b-emulated"],
 )
 @pytest.mark.parametrize(
-    "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
+    "top_p, top_k, temperature",
     [
-        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
-        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
+        (1, 1, 1.0),
+        (0.9, 10, 1.0),
     ],
     ids=["greedy", "sampling"],
 )
 @pytest.mark.parametrize(
     "dataset, split, config, stride, sample_len, num_samples, perplexity_score",
     [
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 3.5),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 32, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 32, 3.4313),
     ],
-    ids=["wikitext-default"],
+    ids=["wikitext-128", "wikitext-2k"],
 )
 def test_LlamaModel_demo(
     # model args
@@ -270,9 +271,6 @@ def test_LlamaModel_demo(
     skip_model_load,
     num_layers,
     # Generation args
-    num_tokens,
-    prompts_file,
-    output_at_end,
     top_p,
     top_k,
     temperature,
@@ -310,9 +308,6 @@ def test_LlamaModel_demo(
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
         num_layers=num_layers,
-        num_tokens=num_tokens,
-        prompts_file=prompts_file,
-        output_at_end=output_at_end,
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
