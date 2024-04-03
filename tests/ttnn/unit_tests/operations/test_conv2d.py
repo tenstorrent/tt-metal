@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_
 import ttnn
 import tt_lib
 import math
+import os
 
 
 def prepare_conv_input_and_copy_to_device_interleaved(
@@ -1019,7 +1020,6 @@ def test_unet_conv(
     )
 
 
-@skip_for_wormhole_b0("Issue #6989: AttributeError: 'NoneType' object has no attribute 'enable_program_cache'")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -1071,8 +1071,8 @@ def test_unet_conv(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_unet_conv_wh(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -1092,6 +1092,8 @@ def test_unet_conv_wh(
     use_shallow_conv_variant,
     output_layout,
 ):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
