@@ -20,9 +20,11 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_RELAY_PAGED = 2,          // relay banked/paged data from src_noc to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE = 3,         // relay (inline) data from CmdDatQ to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 4, // same as above, but doesn't flush the page to dispatcher
-    CQ_PREFETCH_CMD_STALL = 5,                // drain pipe through dispatcher
-    CQ_PREFETCH_CMD_DEBUG = 6,                // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_TERMINATE = 7,            // quit
+    CQ_PREFETCH_CMD_EXEC_BUF = 5,             // execute commands from a buffer
+    CQ_PREFETCH_CMD_EXEC_BUF_END = 6,         // finish executing commands from a buffer (return)
+    CQ_PREFETCH_CMD_STALL = 7,                // drain pipe through dispatcher
+    CQ_PREFETCH_CMD_DEBUG = 8,                // log waypoint data to watcher, checksum
+    CQ_PREFETCH_CMD_TERMINATE = 9,            // quit
 };
 
 // Dispatcher CMD ID enums
@@ -82,12 +84,21 @@ struct CQPrefetchRelayInlineCmd {
     uint32_t stride;          // explicit stride saves a few insns on device
 } __attribute__((packed));
 
+struct CQPrefetchExecBufCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t base_addr;
+    uint32_t log_page_size;
+    uint32_t pages;
+} __attribute__((packed));
+
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
         CQPrefetchRelayLinearCmd relay_linear;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayInlineCmd relay_inline;
+        CQPrefetchExecBufCmd exec_buf;
         CQGenericDebugCmd debug;
     } __attribute__((packed));
 };
