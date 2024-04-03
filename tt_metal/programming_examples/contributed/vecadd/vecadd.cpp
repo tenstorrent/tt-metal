@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Martin Chang
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "common/core_coord.h"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
