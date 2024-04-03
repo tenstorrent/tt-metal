@@ -79,7 +79,7 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos, *args, **kwargs)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
-        logger.info(f"Decoding {start_pos}th tokens")
+        logger.info(f"Decoding {start_pos+1}th tokens")
 
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
 

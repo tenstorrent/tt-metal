@@ -339,12 +339,12 @@ def test_Llama_perf_device(batch, seq_len, expected_perf):
 
     dir_path = "generated/profiler/reports/" + subdir
     os.makedirs(dir_path, exist_ok=True)
-    print(f"Checking existence of directory: {dir_path}")
+    logger.trace(f"Checking existence of directory: {dir_path}")
     if not os.path.exists(dir_path):
-        print("Directory does not exist. Attempting to create.")
+        logger.trace("Directory does not exist. Attempting to create.")
         os.makedirs(dir_path, exist_ok=True)
     else:
-        print("Directory exists.")
+        logger.trace("Directory exists.")
 
     seq_len_str = "2k" if seq_len == 2048 else str(seq_len)
     llm_mode = "decode" if seq_len == 1 else f"prefill_{seq_len_str}"

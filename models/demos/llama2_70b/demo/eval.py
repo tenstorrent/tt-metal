@@ -58,7 +58,7 @@ def main(args):
         args, model, tokenizer, seq_len, max_length, stride, encodings, num_samples, max_batch_size
     )
 
-    print("Perplexity: %f" % perplexity)
+    logger.info("Perplexity: %f" % perplexity)
 
     return perplexity
 
@@ -109,8 +109,8 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
     loss = torch.stack(nlls).sum() / tokens_seen
     ppl = torch.exp(loss)
 
-    print(f"Evaluation execution time:\t{time() - start}")
-    print("Loss: %f" % loss)
+    logger.info(f"Evaluation execution time:\t{time() - start}")
+    logger.info("Loss: %f" % loss)
 
     return ppl
 
