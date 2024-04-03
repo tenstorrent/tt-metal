@@ -71,6 +71,4 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
       - name: Build tt-metal tests
-        # Does not work yet
-        if: ${{ matrix.config != 'release' }}
         run: make tests
