@@ -2824,7 +2824,3 @@ def zeros_like(
     )
 
     return ttnn_tensor_to_torch(t1)
-
-
-
-
