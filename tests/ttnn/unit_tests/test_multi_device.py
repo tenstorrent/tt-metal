@@ -242,8 +242,8 @@ def test_multi_device_data_parallel_matmul_op(device_mesh):
     """Multidevice API: Data Parallel on matmul"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
-    torch_input_a_tensor = torch.rand((4, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
-    torch_input_b_tensor = torch.rand((1, 1, 32 * device_mesh.get_num_devices(), 32), dtype=torch.bfloat16)
+    torch_input_a_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
+    torch_input_b_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     torch_output_golden = torch_input_a_tensor @ torch_input_b_tensor
 
     ttnn_input_a_tensor = ttnn.from_torch(
