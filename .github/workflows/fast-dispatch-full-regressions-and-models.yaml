@@ -19,7 +19,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
-    environment: dev
+      LOGURU_LEVEL: INFO
     runs-on: model-runner-${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
