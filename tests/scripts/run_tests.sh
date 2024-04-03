@@ -84,8 +84,6 @@ run_frequent_models_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    make tests
-
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
@@ -97,8 +95,6 @@ run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
-
-    make tests
 
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
