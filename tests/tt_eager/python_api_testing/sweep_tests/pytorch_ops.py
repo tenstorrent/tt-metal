@@ -1911,8 +1911,9 @@ def rotary_embedding(x, *args, **kwargs):
 
 def preprocessing_model_conv_conv(x, *args, **kwargs):
     torch.manual_seed(234)
+    num_channels = x.shape[1]
 
-    torch_model = TorchConvConv()
+    torch_model = TorchConvConv(num_input_channels=num_channels, num_output_channels=num_channels)
     torch_model.eval()
 
     torch_input_tensor = x.to(torch.float32)
@@ -1925,8 +1926,9 @@ def preprocessing_model_conv_conv(x, *args, **kwargs):
 def preprocessing_model_conv_relu_conv(x, *args, **kwargs):
     torch.manual_seed(234)
     torch_input_tensor = x.to(torch.float32)
+    num_channels = x.shape[1]
 
-    torch_model = TorchConvReluConv()
+    torch_model = TorchConvReluConv(num_input_channels=num_channels, num_output_channels=num_channels)
     torch_model.eval()
 
     output = torch_model(torch_input_tensor)
