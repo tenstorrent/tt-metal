@@ -172,10 +172,15 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
         input_data[i] = i;
     }
 
+    EnqueueWriteBuffer(command_queue, input, input_data.data(), kBlocking);
+    vector<uint32_t> input_readback(input_data.size());
+    EnqueueReadBuffer(command_queue, input, input_readback.data(), kBlocking);
+    EXPECT_EQ(input_data, input_readback);
+
     // Capture trace on a trace queue
     Trace trace;
     BeginTrace(trace);
-    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kBlocking);
+    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
     EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
     EndTrace(trace);
 
@@ -184,10 +189,25 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     // Instantiate a trace on a device bound command queue
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
     auto trace_buffer = Trace::get_instance(trace_id);
-    vector<uint32_t> trace_data;
-    EnqueueReadBuffer(command_queue, trace_buffer, trace_data.data(), kBlocking);
+    vector<uint32_t> data_fd, data_bd;
 
-    log_info(LogTest, "Instantiated trace id {} completed, trace buffer data = {}", trace_id, trace_data);
+    // Backdoor read the trace buffer
+    ::detail::ReadFromBuffer(trace_buffer, data_bd);
+
+    // Frontdoor reaad the trace buffer
+    data_fd.resize(trace_buffer->size() / sizeof(uint32_t));
+    EnqueueReadBuffer(command_queue, trace_buffer, data_fd.data(), kBlocking);
+    EXPECT_EQ(data_fd, data_bd);
+
+    // Check for content correctness in the trace buffer
+    CQPrefetchCmd* p_cmd = (CQPrefetchCmd*)(data_fd.data());
+    EXPECT_EQ(p_cmd->base.cmd_id, CQ_PREFETCH_CMD_RELAY_INLINE);
+    CQDispatchCmd* d_cmd = (CQDispatchCmd*)(data_fd.data() + (sizeof(CQPrefetchCmd) / sizeof(uint32_t)));
+    EXPECT_EQ(d_cmd->base.cmd_id, CQ_DISPATCH_CMD_WRITE_PAGED);
+    EXPECT_EQ(d_cmd->write_paged.is_dram, true);
+    EXPECT_EQ(d_cmd->write_paged.page_size, 2048);
+
+    log_trace(LogTest, "Trace buffer content: {}", data_fd);
     ReleaseTrace(trace_id);
 }
 
