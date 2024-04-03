@@ -1,4 +1,4 @@
-LOOPBACK_EXAMPLE_SRC = $(TT_METAL_HOME)/tt_metal/programming_examples/contrib/vecadd/vecadd.cpp
+LOOPBACK_EXAMPLE_SRC = $(TT_METAL_HOME)/tt_metal/programming_examples/contributed/vecadd/vecadd.cpp
 
 LOOPBACK_EXAMPLES_DEPS = $(PROGRAMMING_EXAMPLES_CONTRIB_OBJDIR)/vecadd.d
 

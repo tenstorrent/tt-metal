@@ -144,19 +144,19 @@ int main(int argc, char **argv)
     // a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the output buffer C.
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/contrib/vecadd/kernels/interleaved_tile_read.cpp",
+        "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
         DataMovementConfig {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/contrib/vecadd/kernels/tile_write.cpp",
+        "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
         core,
         DataMovementConfig {.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
     );
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/contrib/vecadd/kernels/add.cpp",
+        "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
         core,
         ComputeConfig{
             .math_approx_mode = false,
