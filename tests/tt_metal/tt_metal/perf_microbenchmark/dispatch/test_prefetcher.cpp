@@ -17,9 +17,12 @@
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;
 constexpr uint32_t WORKER_DATA_SIZE = 768 * 1024;
 constexpr uint32_t MAX_PAGE_SIZE = 64 * 1024;
-constexpr uint32_t MAX_DRAM_READ_SIZE = 256 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
+
+constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_BASE_ADDR = 0x1f400000; // magic, half of dram
+constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
+constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_PAGE_SIZE = 1 << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
 
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
@@ -54,7 +57,7 @@ bool warmup_g = false;
 bool debug_g;
 uint32_t max_prefetch_command_size_g;
 
-uint32_t dispatch_buffer_page_size_g = 4096;
+uint32_t dispatch_buffer_page_size_g = 1 << DISPATCH_BUFFER_LOG_PAGE_SIZE;
 uint32_t prefetch_q_entries_g;
 uint32_t hugepage_issue_buffer_size_g;
 void * host_hugepage_completion_buffer_base_g;
@@ -75,6 +78,8 @@ uint32_t dispatch_wait_addr_g;
 bool split_prefetcher_g;
 bool split_dispatcher_g;
 uint32_t prefetch_d_buffer_size_g;
+bool use_dram_exec_buf_g = false;
+uint32_t exec_buf_log_page_size_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -114,6 +119,8 @@ void init(int argc, char **argv) {
         log_info(LogTest, " -spre: split prefetcher into H and D variants (default not split)");
         log_info(LogTest, " -sdis: split dispatcher into H and the other thing variants (default not split)");
         log_info(LogTest, "  -c: use coherent data as payload (default false)");
+        log_info(LogTest, "  -x: execute commands from dram exec_buf (default 0)");
+        log_info(LogTest, "-xpls: execute buffer log dram page size (default {})", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
         log_info(LogTest, "  -s: seed for randomized tests (default 1)");
         exit(0);
     }
@@ -128,7 +135,6 @@ void init(int argc, char **argv) {
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
-    pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
     prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", PREFETCH_D_BUFFER_SIZE);
@@ -138,11 +144,18 @@ void init(int argc, char **argv) {
     all_workers_g.end.y = test_args::get_command_option_uint32(input_args, "-wy", all_workers_g.end.y);
     split_prefetcher_g = test_args::has_command_option(input_args, "-spre");
     split_dispatcher_g = test_args::has_command_option(input_args, "-sdis");
+    use_dram_exec_buf_g = test_args::has_command_option(input_args, "-x");
+    exec_buf_log_page_size_g = test_args::get_command_option_uint32(input_args, "-xpls", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
 
     uint32_t seed = test_args::get_command_option_uint32(input_args, "-s", 1);
     std::srand(seed);
     big_g = test_args::has_command_option(input_args, "-b");
     debug_g = test_args::has_command_option(input_args, "-d");
+
+    if (debug_g && use_dram_exec_buf_g) {
+        tt::log_fatal("Exec buf is not supported with debug commands");
+        exit(0);
+    }
 }
 
 void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
@@ -270,6 +283,63 @@ void add_prefetcher_linear_read_cmd(Device *device,
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
+void add_prefetcher_debug_prologue(vector<uint32_t>& cmds) {
+    if (debug_g) {
+        CQPrefetchCmd debug_cmd;
+        debug_cmd.base.cmd_id = CQ_PREFETCH_CMD_DEBUG;
+        add_bare_prefetcher_cmd(cmds, debug_cmd, true);
+    }
+}
+
+void add_prefetcher_debug_epilogue(vector<uint32_t>& cmds,
+                                   size_t prior_end) {
+    if (debug_g) {
+        CQPrefetchCmd* debug_cmd_ptr;
+        debug_cmd_ptr = (CQPrefetchCmd *)&cmds[prior_end];
+        debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQPrefetchCmd);
+        debug_cmd_ptr->debug.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+        uint32_t checksum = 0;
+        for (uint32_t i = prior_end + sizeof(CQPrefetchCmd) / sizeof(uint32_t); i < cmds.size(); i++) {
+            checksum += cmds[i];
+        }
+        debug_cmd_ptr->debug.checksum = checksum;
+    }
+}
+
+void add_prefetcher_cmd_to_hostq(vector<uint32_t>& cmds,
+                                 vector<uint16_t>& sizes,
+                                 const vector<uint32_t>& payload,
+                                 size_t prior_end) {
+    uint32_t cmd_size_bytes = (cmds.size() - prior_end) * sizeof(uint32_t);
+    for (int i = 0; i < payload.size(); i++) {
+        cmds.push_back(payload[i]);
+    }
+    uint32_t payload_length_bytes = payload.size() * sizeof(uint32_t);
+    uint32_t pad_size_bytes = round_cmd_size_up(cmd_size_bytes + payload_length_bytes) - payload_length_bytes - cmd_size_bytes;
+    for (int i = 0; i < pad_size_bytes / sizeof(uint32_t); i++) {
+        cmds.push_back(0);
+    }
+    uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
+}
+
+void add_prefetcher_cmd(vector<uint32_t>& cmds,
+                        vector<uint16_t>& sizes,
+                        CQPrefetchCmd cmd) {
+
+    vector<uint32_t> empty_payload;
+    vector<uint32_t> data;
+
+    auto prior_end = cmds.size();
+
+    add_prefetcher_debug_prologue(cmds);
+    add_bare_prefetcher_cmd(cmds, cmd);
+    add_prefetcher_cmd_to_hostq(cmds, sizes, empty_payload, prior_end);
+    add_prefetcher_debug_epilogue(cmds, prior_end);
+}
+
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
                         vector<uint16_t>& sizes,
                         CQPrefetchCmdId id,
@@ -279,11 +349,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 
     auto prior_end = cmds.size();
 
-    if (debug_g) {
-        CQPrefetchCmd debug_cmd;
-        debug_cmd.base.cmd_id = CQ_PREFETCH_CMD_DEBUG;
-        add_bare_prefetcher_cmd(cmds, debug_cmd, true);
-    }
+    add_prefetcher_debug_prologue(cmds);
 
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = id;
@@ -326,30 +392,8 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     }
 
     add_bare_prefetcher_cmd(cmds, cmd);
-    uint32_t cmd_size_bytes = (cmds.size() - prior_end) * sizeof(uint32_t);
-    for (int i = 0; i < payload.size(); i++) {
-        cmds.push_back(payload[i]);
-    }
-    uint32_t pad_size_bytes = round_cmd_size_up(cmd_size_bytes + payload_length_bytes) - payload_length_bytes - cmd_size_bytes;
-    for (int i = 0; i < pad_size_bytes / sizeof(uint32_t); i++) {
-        cmds.push_back(0);
-    }
-    uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
-    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
-    sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
-
-    if (debug_g) {
-        CQPrefetchCmd* debug_cmd_ptr;
-        debug_cmd_ptr = (CQPrefetchCmd *)&cmds[prior_end];
-        debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQPrefetchCmd);
-        debug_cmd_ptr->debug.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-        uint32_t checksum = 0;
-        for (uint32_t i = prior_end + sizeof(CQPrefetchCmd) / sizeof(uint32_t); i < cmds.size(); i++) {
-            checksum += cmds[i];
-        }
-        debug_cmd_ptr->debug.checksum = checksum;
-    }
+    add_prefetcher_cmd_to_hostq(cmds, sizes, payload, prior_end);
+    add_prefetcher_debug_epilogue(cmds, prior_end);
 }
 
 // Model a paged read by updating worker data with interleaved/paged DRAM data, for validation later.
@@ -768,10 +812,58 @@ void gen_rnd_test(Device *device,
         case CQ_PREFETCH_CMD_STALL:
             break;
         case CQ_PREFETCH_CMD_DEBUG:
-            gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, worker_data, dst_addr);
+            if (!use_dram_exec_buf_g) {
+                // Splitting debug cmds not implemented for exec_bufs (yet)
+                gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, worker_data, dst_addr);
+            }
             break;
         }
     }
+}
+
+void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
+                                                   vector<uint32_t>& prefetch_cmds,
+                                                   vector<uint32_t> buf_cmds,
+                                                   vector<uint16_t>& cmd_sizes) {
+
+    vector<uint32_t> empty_payload; // don't give me grief, it is just a test
+
+    // Add an end to the list of cmds to run from the buf
+    CQPrefetchCmd cmd;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
+    add_bare_prefetcher_cmd(buf_cmds, cmd);
+
+    // writes cmds to dram
+    num_dram_banks_g = device->num_banks(BufferType::DRAM);;
+
+    uint32_t page_size = 1 << exec_buf_log_page_size_g;
+
+    uint32_t length = buf_cmds.size() * sizeof(uint32_t);
+    length +=
+        (page_size - (length & (page_size - 1))) &
+        (page_size - 1); // rounded up to full pages
+
+    uint32_t pages = length / page_size;
+    uint32_t index = 0;
+    for (uint32_t page_id = 0; page_id < pages; page_id++) {
+        uint32_t bank_id = page_id % num_dram_banks_g;
+        auto offset = device->dram_bank_offset_from_bank_id(bank_id);
+        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto bank_core = device->core_from_dram_channel(dram_channel);
+
+        tt::Cluster::instance().write_core(static_cast<const void*>(&buf_cmds[index / sizeof(uint32_t)]),
+            page_size, tt_cxy_pair(device->id(), bank_core), DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + offset + (page_id / num_dram_banks_g) * page_size);
+
+        index += page_size;
+    }
+    tt::Cluster::instance().dram_barrier(device->id());
+
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+    cmd.exec_buf.base_addr = DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+    cmd.exec_buf.log_page_size = exec_buf_log_page_size_g;
+    cmd.exec_buf.pages = pages;
+
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, cmd);
 }
 
 void gen_smoke_test(Device *device,
@@ -785,11 +877,13 @@ void gen_smoke_test(Device *device,
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
 
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
+    if (!use_dram_exec_buf_g) {
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
-    vector<uint32_t> rnd_payload;
-    generate_random_payload(rnd_payload, 17);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
+        vector<uint32_t> rnd_payload;
+        generate_random_payload(rnd_payload, 17);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
+    }
 
     // Write to worker
     dispatch_cmds.resize(0);
@@ -995,11 +1089,20 @@ void write_prefetcher_cmds(uint32_t iterations,
                            uint32_t dev_hugepage_base,
                            uint32_t prefetch_q_base,
                            uint32_t prefetch_q_rd_ptr_addr,
-                           CoreCoord phys_prefetch_core) {
+                           CoreCoord phys_prefetch_core,
+                           bool is_control_only) {
 
     static uint32_t *host_mem_ptr;
     static uint32_t prefetch_q_dev_ptr;
     static uint32_t prefetch_q_dev_fence;
+
+    if (!is_control_only && use_dram_exec_buf_g) {
+        // Write cmds to DRAM, generate a new command to execute those commands
+        cmd_sizes.resize(0);
+        vector<uint32_t> buf_cmds = prefetch_cmds;
+        prefetch_cmds.resize(0);
+        gen_prefetcher_exec_buf_cmd_and_write_to_dram(device, prefetch_cmds, buf_cmds, cmd_sizes);
+    }
 
     if (initialize_device_g) {
         vector<uint32_t> prefetch_q(DEFAULT_PREFETCH_Q_ENTRIES, 0);
@@ -1035,7 +1138,7 @@ void write_prefetcher_cmds(uint32_t iterations,
 void populate_interleaved_dram(Device *device, unordered_map<uint32_t, vector<uint32_t>>& dram_data_map)
 {
 
-    num_dram_banks_g = device->num_banks(BufferType::DRAM);;
+    num_dram_banks_g = device->num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks_g; bank_id++) {
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
@@ -1092,8 +1195,8 @@ std::chrono::duration<double> run_test(uint32_t iterations,
     auto start = std::chrono::system_clock::now();
 
     std::thread t1 ([&]() {
-        write_prefetcher_cmds(iterations, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
-        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+        write_prefetcher_cmds(iterations, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, false);
+        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, true);
     });
     tt_metal::detail::LaunchProgram(device, program);
     t1.join();
@@ -1116,6 +1219,11 @@ int main(int argc, char **argv) {
     try {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+
+        if ((1 << exec_buf_log_page_size_g) * device->num_banks(BufferType::DRAM) > cmddat_q_size_g) {
+            log_fatal("Exec buffer must fit in cmddat_q, page size too large ({})", 1 << exec_buf_log_page_size_g);
+            exit(0);
+        }
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -1358,6 +1466,9 @@ int main(int argc, char **argv) {
             log_info(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
             log_info(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
         }
+        if (use_dram_exec_buf_g) {
+            log_info(LogTest, "Exec commands in DRAM exec_buf w/ page_size={}", 1 << exec_buf_log_page_size_g);
+        }
         if (debug_g) {
             log_info(LogTest, "Debug mode enabled");
         }
@@ -1367,8 +1478,8 @@ int main(int argc, char **argv) {
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
             std::thread t1 ([&]() {
-                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
-                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, false);
+                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, true);
             });
             tt_metal::detail::LaunchProgram(device, program);
             t1.join();
