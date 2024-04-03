@@ -39,13 +39,11 @@ jobs:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - name: Build python env
-        run: |
-          make python_env/dev PYTHON_ENV=$HOME/python_env -B
+      - uses: ./.github/actions/install-python-deps
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 15
         run: |
-          source $HOME/python_env/bin/activate
+          source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
