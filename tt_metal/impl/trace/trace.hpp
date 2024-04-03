@@ -42,13 +42,6 @@ class Trace {
     friend class EnqueueProgramCommand;
     friend void EnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
 
-    // Labels to make the code more readable
-    static constexpr bool kClearBuffer = true;
-    static constexpr bool kBlocking = true;
-    static constexpr bool kNonBlocking = false;
-    static constexpr bool kEnableCQBypass = true;
-    static constexpr bool kDisableCQBypass = false;
-
     TraceState state;
 
     // Trace queue used to capture commands
@@ -85,8 +78,6 @@ class Trace {
     void begin_capture();
     void end_capture();
     void validate();
-    bool captured() { return this->state != TraceState::EMPTY; }
-    bool instantiating() { return this->state == TraceState::INSTANTIATING; }
 
     // Thread-safe accessors to manage trace instances
     static bool has_instance(const uint32_t tid);
