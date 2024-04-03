@@ -88,8 +88,7 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
     pad_id = tokenizer.pad_id
     tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
     for k, t in enumerate(prompt_tokens):
-        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu")
-
+        tokens[k, : len(t)] = t.clone().detach()
     eos_reached = torch.tensor([False] * bsz, device="cpu")
     input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
     return tokens, input_text_mask
