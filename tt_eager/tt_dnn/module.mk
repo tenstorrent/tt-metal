@@ -103,11 +103,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp \
-	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h/moreh_sum_h.cpp \
-	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_w/moreh_sum_w.cpp \
-	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc/moreh_sum_nc.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/moreh_sum_h_impl.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/moreh_sum_w_impl.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/moreh_sum_nc_impl.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_op.cpp \
-	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_h/moreh_mean_h.cpp \
 	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_w/moreh_mean_w.cpp \

@@ -2,29 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
-
-template <typename T>
-inline T get_next_arg_val()
-{
-    static int arg_idx = 0;
-    return get_arg_val<T> (arg_idx++);
-}
-
+#include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 namespace NAMESPACE {
 void MAIN {
-    const auto num_output_tiles = get_next_arg_val<uint32_t>();
-    const auto n_need_bcast = get_next_arg_val<uint32_t>();
-    const auto c_need_bcast = get_next_arg_val<uint32_t>();
-    const auto ht_need_bcast = get_next_arg_val<uint32_t>();
-    const auto wt_need_bcast = get_next_arg_val<uint32_t>();
+    ArgFetcher arg_fetcher;
+    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto n_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto c_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto ht_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto wt_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
 
     constexpr auto cb_in0 = tt::CB::c_in0;  // input
     constexpr auto cb_in1 = tt::CB::c_in1;  // zero tile

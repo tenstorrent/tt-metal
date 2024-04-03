@@ -29,6 +29,17 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 namespace ckernel {
 
+class ArgFetcher {
+   private:
+    int arg_idx = 0;
+
+   public:
+    template <typename T>
+    T get_next_arg_val() {
+        return get_arg_val<T>(arg_idx++);
+    }
+};
+
 ALWI void mul_tiles_to_cb(
     uint32_t icb0,
     uint32_t icb1,

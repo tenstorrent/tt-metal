@@ -58,11 +58,11 @@ operation::ProgramWithCallbacks MorehSum::create_program(
     auto& output = inputs.at(1);
 
     if (dim == 0 || dim == 1) {
-        return moreh_sum_nc(input, output, dim);
+        return moreh_sum_nc_impl(input, output, dim);
     } else if (dim == 2) {
-        return moreh_sum_h(input, output);
+        return moreh_sum_h_impl(input, output);
     } else {
-        return moreh_sum_w(input, output);
+        return moreh_sum_w_impl(input, output);
     }
 }
 

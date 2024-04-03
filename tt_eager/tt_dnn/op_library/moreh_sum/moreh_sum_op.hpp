@@ -32,10 +32,10 @@ struct MorehSum {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->dim)); }
 };
 
-operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &output, int64_t dim);
+operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim);
 // revised from reduce_op
-operation::ProgramWithCallbacks moreh_sum_w(const Tensor &a, const Tensor &output);
-operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &output);
+operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output);
+operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output);
 
 Tensor moreh_sum_(
     const Tensor &input,
