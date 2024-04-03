@@ -39,7 +39,9 @@ class PytorchResidualBlock(torch.nn.Module):
         ),
     ),
 )
-def test_mamba_ssm_inference(model_version: MambaPretrainedModelName, batch, pcc: float, enable_cache: bool):
+def test_mamba_residual_block_inference(
+    device: ttnn.Device, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool
+):
     torch.manual_seed(0)
 
     LAYER_NUM = 0
@@ -55,14 +57,11 @@ def test_mamba_ssm_inference(model_version: MambaPretrainedModelName, batch, pcc
     residual_block = reference_model.layers[LAYER_NUM]
     assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
 
-    device = ttnn.open_device(device_id=0)
-
     if enable_cache:
         cache_path = f"/tmp/{model_version}"
         ttnn.enable_program_cache(device)
     else:
         cache_path = None
-        ttnn.disable_and_clear_program_cache(device)
 
     config = model_config.create_model_config(batch, d_model)
 
@@ -77,7 +76,6 @@ def test_mamba_ssm_inference(model_version: MambaPretrainedModelName, batch, pcc
     )
     tt_output = model(tt_input)
     tt_output = ttnn.to_torch(tt_output)
-    ttnn.close_device(device)
     tt_output = tt_output.view(batch, 1, -1)
     logger.info(comp_allclose(reference_output, tt_output))
 
