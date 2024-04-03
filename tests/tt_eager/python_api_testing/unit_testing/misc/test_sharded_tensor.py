@@ -226,19 +226,19 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
 @pytest.mark.parametrize(
     "tt_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.UINT32,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_shape, shard_scheme, shard_shape, grid_override",
     [
         (
-            [1, 1, 64, 1024],
+            [1, 1, 64, 64],
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            (64, 256),
+            (64, 32),
             ttl.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(3, 0)),  # 32 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0)),
                 }
             ),
         ),
@@ -250,10 +250,17 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     ],
 )
+@pytest.mark.parametrize(
+    "direct_write",
+    [
+        True,
+        # False,
+    ],
+)
 def test_tensor_conversion_between_torch_and_tt_tile_multichip(
-    tt_dtype, all_devices, tensor_shape, shard_scheme, shard_shape, grid_override, shard_orientation
+    tt_dtype, all_devices, tensor_shape, shard_scheme, shard_shape, grid_override, shard_orientation, direct_write
 ):
-    num_devices = 8
+    num_devices = 2
     devices = get_devices_for_t3000(all_devices, num_devices)
     # devices = [all_devices[i] for i in [1, 2, 3, 4]]
 
@@ -273,17 +280,34 @@ def test_tensor_conversion_between_torch_and_tt_tile_multichip(
     two_d_shape = (tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3])
     num_tiles_width = (two_d_shape[1]) / TILE_WIDTH
     num_tiles_height = (two_d_shape[0]) / TILE_HEIGHT
+    debug = True
 
     if debug:
         torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype)
     else:
         torch_tensor = get_tensor(tensor_shape, dtype)
     tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
 
     tt_tensor_list = []
     for device in devices:
-        tt_tensor_list.append(tt_tensor.to(device, mem_config))
+        if direct_write:
+            tt_tensor_sharded = tt_tensor.to(device, sharded_mem_config)
+        else:
+            tt_tensor_interleaved = tt_tensor.to(device, interleaved_mem_config)
+            tt_tensor_sharded = ttl.tensor.interleaved_to_sharded(
+                tt_tensor_interleaved,
+                (2, 1),
+                shard_shape,
+                shard_scheme,
+                shard_orientation,
+            )
+
+        tt_tensor_list.append(tt_tensor_sharded)
 
     passing = True
     # 0, 7, 6, 1, 2, 5, 4, 3

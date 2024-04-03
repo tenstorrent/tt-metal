@@ -144,6 +144,12 @@ DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, Device *devic
     }
     else {
         TT_ASSERT( memory_config.is_sharded() && "Incorrect Memory Layout");
+        std::cout << "ALLOCATE SHARDED BUFFER ON DEVICE " << std::endl;
+        std::cout << "buffer_size_bytes " << buffer_size_bytes << std::endl;
+        std::cout << "shape: [" << shape[0] << "," << shape[1] <<  "]" <<std::endl;
+        std::cout << "shard_spec_shape: [" << shard_spec.value().tensor_shard_spec.shape[0] << "," << shard_spec.value().tensor_shard_spec.shape[1] <<  "]" <<std::endl;
+        std::cout << "shard_spec_num_cores " << shard_spec.value().tensor_shard_spec.num_cores() << std::endl;
+        std::cout << "shard_spec_grid : [" << shard_spec.value().tensor_shard_spec.grid.str() << "," <<std::endl;
         return detail::allocate_sharded_buffer_on_device(buffer_size_bytes, device, shape, data_type, layout, shard_spec, memory_config);
     }
 }

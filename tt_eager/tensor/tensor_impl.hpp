@@ -227,6 +227,7 @@ inline void write_data_to_device_buffer(
         }
     }
     else {
+
         EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
     }
 }
@@ -238,6 +239,10 @@ inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer
     // And effectively get rid of any additional allocation
 
     auto uint32_data = pack_vec_into_uint32_vec<T>(host_buffer);
+    auto page_size_uin32 = 4096;
+    for(uint32_t index=0; index<uint32_data.size(); index+= page_size_uin32){
+        std::cout << "WRITING DATA TO DEVICE BUFFER PAGE " << index/page_size_uin32 << " = " << uint32_data[index] << std::endl;
+    }
     ::detail::WriteToBuffer(device_buffer, uint32_data);
 }
 
@@ -255,6 +260,21 @@ inline DeviceBuffer initialize_data_on_device(
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
+
+    if(shard_spec.has_value()) {
+        auto element_size = element_size_bytes<T>();
+        auto num_cores = shard_spec.value().tensor_shard_spec.num_cores();
+        auto shard_shape = shard_spec.value().tensor_shard_spec.shape;
+        uint32_t shard_size;
+        if(layout == Layout::TILE) {
+            auto buffer_size =  compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type);
+            shard_size = packed_buffer_size_bytes<T>(buffer_size);
+        }
+        else {
+            shard_size = shard_shape[0] * shard_shape[1] * element_size;
+        }
+        packed_size_in_bytes = shard_size * num_cores;
+    }
 
     auto device_buffer =
         allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
@@ -286,6 +306,13 @@ inline DeviceBuffer to_device_buffer(
             }
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 auto data_to_write = owned_buffer::get_as<T>(storage.buffer);
+
+                auto page_size = 1024;
+                std::cout << "IN TO DEVICE BUFFER " << std::endl;
+                for(uint32_t index=0; index<data_to_write.size(); index+=page_size){
+                    std::cout << "WRITING DATA TO DEVICE BUFFER PAGE " << index/page_size << " = " << data_to_write[index] << std::endl;
+                }
+
                 TT_ASSERT(
                     compute_buffer_size(shape, data_type) == data_to_write.size(),
                     fmt::format(
@@ -419,6 +446,10 @@ inline Tensor to_device(
             shape[0] * shape[1] * shape[2] / page_shape[0], shape[3] / page_shape[1]};
         shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
     }
+
+
+
+
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);

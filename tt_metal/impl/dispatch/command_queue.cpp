@@ -863,8 +863,18 @@ void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buff
 
     const uint32_t size_in_bytes = num_pages * page_size;
 
+
+    std::cout << "SIZE IN BYTES " << size_in_bytes << std::endl;
+    std::cout << "NUM PAGES " << num_pages << std::endl;
+    std::cout << "PAGE SIZE " << page_size << std::endl;
     void* temp = malloc(size_in_bytes);
     memcpy(temp, host, size_in_bytes);
+
+
+    for(uint32_t addr=0; addr<size_in_bytes; addr+=page_size){
+        uint32_t * ptr = (uint32_t*)((char *)temp + addr);
+        std::cout << "BEFORE SWAP PAGE " << addr/page_size << " has data " << ptr[0] << std::endl;
+    }
 
     const void* dst = host;
     std::set<uint32_t> pages_seen;
@@ -874,14 +884,22 @@ void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buff
             auto host_page_id = page_id;
             auto dev_page_id = buffer.get_dev_to_host_mapped_page_id(host_page_id);
             TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
+            std::cout << "0) Writing  PAGE " << host_page_id << " to " << dev_page_id << std::endl;
             memcpy((char*)dst + dev_page_id * page_size, (char*)temp + host_page_id * page_size, page_size);
         } else {
             auto dev_page_id = page_id;
             auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
             TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
+            std::cout << "1) Writing  PAGE " << dev_page_id << " to " << host_page_id << std::endl;
             memcpy((char*)dst + host_page_id * page_size, (char*)temp + dev_page_id * page_size, page_size);
         }
     }
+
+    for(uint32_t addr=0; addr<size_in_bytes; addr+=page_size){
+        uint32_t * ptr = (uint32_t*)((char *)dst + addr);
+        std::cout << "AFTER SWAP PAGE " << addr/page_size << " has data " << ptr[0] << std::endl;
+    }
+
     free(temp);
 }
 
