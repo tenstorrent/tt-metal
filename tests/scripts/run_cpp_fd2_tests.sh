@@ -20,18 +20,18 @@ fi
 #############################################
 echo "Running test_prefetcher tests now...";
 
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 3  # TrueSmoke Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 3  # Smoke Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 3  # Random Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 3  # PCIE Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 3  # Paged DRAM Read Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 3  # Paged DRAM Write + Read Test
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 3  # Host Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 3  # TrueSmoke Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 3  # Smoke Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 3  # Random Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 3  # PCIE Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 3  # Paged DRAM Read Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 3  # Paged DRAM Write + Read Test
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 3  # Host Test
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 224 -dpgr 256
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 224 -dpgr 256
 # Testcase: Paged Write Cmd to DRAM. 120 pages, 64b size.
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 64 -dpgr 120
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 64 -dpgr 120
 
 #############################################
 # TEST_DISPATCHER TESTS                     #
@@ -56,8 +56,8 @@ echo "Running test_dispatcher tests now...";
 # Testcase: Arbitrary non-even numbers. This caught some test issues with overflowing start_page one test implementation.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 5 -pbs 275 -np 13
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 5 -pbs 275 -np 13
-# 11.7 GB/s whb0 - DRAM.   Have to reduce number of pages to not exceed 1MB L1 for GS.
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -min 8192 -max 8192 -lps 13 -pbs 2 -np 100 -i 1000
+# 11.885 GB/s whb0 - DRAM.   Have to reduce number of pages to not exceed 1MB L1 for GS. Also, number of pages per block.
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -min 8192 -max 8192 -lps 13 -pbs 2 -np 100 -i 1 -pi 5000 -bs 24
 
 # Packed Write
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 256 -max 256
