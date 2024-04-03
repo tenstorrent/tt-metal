@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-logical_noti:
+  - stats-normalize_hw:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -13,18 +13,20 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low:  0
-          high: 100
+          low: -10
+          high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_logical_immediate_args
-      output-file: eltwise_logical_noti_sweep.csv
+      args-gen: gen_dtype_layout_device
+      output-file: stats_normalize_hw_sweep.csv
       args:
-        data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        inputs:
+          - input-1:
+            data-layout: ["TILE"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
+            buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-  - eltwise-logical_noti:
+  - stats-normalize_hw:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -37,14 +39,16 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low:  0
-          high: 100
+          low: -10
+          high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_logical_immediate_args
-      output-file: eltwise_logical_noti_sweep.csv
+      args-gen: gen_dtype_layout_device
+      output-file: stats_normalize_hw_sweep.csv
       args:
-        data-layout: ["ROW_MAJOR"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        inputs:
+          - input-1:
+            data-layout: ["ROW_MAJOR"]
+            data-type: ["BFLOAT16"]
+            buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]

@@ -20,9 +20,9 @@ test-list:
       args-gen: gen_geglu_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_geglu_sweep.csv
   - activation_geglu:
       shape:
@@ -45,6 +45,6 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_geglu_sweep.csv
