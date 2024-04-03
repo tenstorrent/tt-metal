@@ -242,6 +242,10 @@ class SystemMemoryManager {
         }
     }
 
+    bool get_bypass_mode() {
+        return this->bypass_enable;
+    }
+
     std::vector<uint32_t>& get_bypass_data() {
         return this->bypass_buffer;
     }
@@ -280,6 +284,8 @@ class SystemMemoryManager {
 
     // TODO: rename issue_queue_reserve?
     void issue_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) {
+        if (this->bypass_enable) return;
+
         uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
 
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
@@ -311,9 +317,8 @@ class SystemMemoryManager {
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         if (this->bypass_enable) {
-            TT_THROW(size_in_bytes % sizeof(uint32_t) == 0, "Data not padded to {} bytes", sizeof(uint32_t));
-            this->bypass_buffer.insert(
-                this->bypass_buffer.end(), (uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t));
+            TT_FATAL(size_in_bytes % sizeof(uint32_t) == 0, "Data size_in_bytes={} is not {}-byte aligned", size_in_bytes, sizeof(uint32_t));
+            this->bypass_buffer.insert(this->bypass_buffer.end(), (uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t));
         } else {
             memcpy(user_scratchspace, data, size_in_bytes);
         }
@@ -386,7 +391,8 @@ class SystemMemoryManager {
     }
 
     void fetch_queue_reserve_back(const uint8_t cq_id) {
-        if (this->bypass_enable) return;
+        if (this->bypass_enable)
+            return;
 
         // Wait for space in the FetchQ
         uint32_t fence;
