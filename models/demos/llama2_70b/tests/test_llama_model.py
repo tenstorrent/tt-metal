@@ -82,7 +82,7 @@ def run_test_LlamaModel_inference(
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    print(state_dict.keys())
+    logger.trace(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
 
@@ -134,14 +134,14 @@ def run_test_LlamaModel_inference(
             attn_mask,
         )
 
-        print(f"Syncronizing devices for token idx {start_pos}")
+        logger.trace(f"Syncronizing devices for token idx {start_pos}")
 
         for device in devices:
             tt_lib.device.Synchronize(device)
             if i % 8 == 0:
                 tt_lib.device.DumpDeviceProfiler(device)
 
-        print(f"Done synchronizing devices")
+        logger.trace(f"Done synchronizing devices")
 
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
