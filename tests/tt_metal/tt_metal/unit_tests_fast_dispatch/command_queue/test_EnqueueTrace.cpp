@@ -200,9 +200,26 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     EXPECT_EQ(data_fd, data_bd);
 
     // Check for content correctness in the trace buffer
-    CQPrefetchCmd* p_cmd = (CQPrefetchCmd*)(data_fd.data());
+    // The following commands are expected based on the trace capture
+    CQPrefetchCmd* p_cmd;
+    CQDispatchCmd* d_cmd;
+    size_t p_size = (sizeof(CQPrefetchCmd) / sizeof(uint32_t));
+    size_t d_size = (sizeof(CQDispatchCmd) / sizeof(uint32_t));
+    size_t offset = 0;
+    p_cmd = (CQPrefetchCmd*)(data_fd.data() + offset);
+    offset += p_size;
     EXPECT_EQ(p_cmd->base.cmd_id, CQ_PREFETCH_CMD_RELAY_INLINE);
-    CQDispatchCmd* d_cmd = (CQDispatchCmd*)(data_fd.data() + (sizeof(CQPrefetchCmd) / sizeof(uint32_t)));
+
+    d_cmd = (CQDispatchCmd*)(data_fd.data() + offset);
+    offset += d_size;
+    EXPECT_EQ(d_cmd->base.cmd_id, CQ_DISPATCH_CMD_WAIT);
+
+    p_cmd = (CQPrefetchCmd*)(data_fd.data() + offset);
+    offset += p_size;
+    EXPECT_EQ(p_cmd->base.cmd_id, CQ_PREFETCH_CMD_RELAY_INLINE);
+
+    d_cmd = (CQDispatchCmd*)(data_fd.data() + offset);
+    offset += d_size;
     EXPECT_EQ(d_cmd->base.cmd_id, CQ_DISPATCH_CMD_WRITE_PAGED);
     EXPECT_EQ(d_cmd->write_paged.is_dram, true);
     EXPECT_EQ(d_cmd->write_paged.page_size, 2048);
