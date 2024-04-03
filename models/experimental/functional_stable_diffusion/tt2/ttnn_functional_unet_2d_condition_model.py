@@ -411,10 +411,12 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
+        # TODO: Move to L1
         sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
         sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
         # sample in l1 interelaved and tiled and nhwc
+
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         sample = self.conv_in(sample)
         sample = ttnn.reallocate(sample)  # TODO: Test remove

@@ -158,3 +158,17 @@ def permute_conv_parameters(weight, bias):
     bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias = ttnn.to_torch(bias)
     return weight, bias
+
+
+def dealloc_input(fn, *args, **kwargs):
+    out = fn(*args, **kwargs)
+    for a in args:
+        if type(a) is list:
+            for e in a:
+                if type(a) is ttnn.Tensor:
+                    if a.is_allocated():
+                        ttnn.deallocate(a)
+        if type(a) is ttnn.Tensor:
+            if a.is_allocated():
+                ttnn.deallocate(a)
+    return out

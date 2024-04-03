@@ -276,7 +276,7 @@ def test_cross_attn_up_block_2d_512x512(
 
     hidden_state = ttnn.from_torch(hidden_state, ttnn.bfloat16)
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
-    hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     res0 = ttnn.from_torch(res0, ttnn.bfloat16)
     res0 = ttnn.to_layout(res0, ttnn.TILE_LAYOUT)

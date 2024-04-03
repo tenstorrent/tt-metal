@@ -228,7 +228,7 @@ class transformer_2d_model:
         if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
         residual = hidden_states
-        spilled_residual = residual.shape[-2] == 8192
+        spilled_residual = False
         if spilled_residual:
             residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
 
