@@ -67,7 +67,7 @@ def run_test_LlamaMLP_inference(
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    logger.trace(state_dict.keys())
+    logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
 
