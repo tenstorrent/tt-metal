@@ -178,19 +178,47 @@ class TtNeck:
         output_tensor = ttnn.concat([output_tensorp1, output_tensorp2, output_tensorp3, output_tensorc3], dim=3)
 
         output_tensor = self.c4(output_tensor)
-
-        output_tensor_c4 = output_tensor
         output_tensor = self.c5(output_tensor)
         output_tensor = self.c6(output_tensor)
-
-        output_tensor = output_tensor + output_tensor_c4
+        output_tensor_9m = output_tensor
         output_tensor = self.c7(output_tensor)
+        output_tensor = self.u(output_tensor)
 
-        output_tensor = tt_lib.tensor.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-        output_tensor = ttnn.concat([output_tensor, output_tensor_c3], dim=3)
+        # TODO add ttnn tensor here for testing
+        # outDownSample4 = torch.rand([1, 512, 20, 20])
+        # CBR block for conc2
+        outDownSample4_c7 = self.c7(outDownSample4)
+        outDownSample4_b7 = self.b7(outDownSample4_c7)
+        outDownSample4_r7 = self.relu(outDownSample4_b7)
+
+        #        output_tensor = tt_lib.tensor.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        #        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        output_tensor = ttnn.concat([output_tensor, outDownSample4_r7], dim=3)
+        output_tensor = self.c7(output_tensor)
+        output_tensor = self.c8(output_tensor)
+        output_tensor = self.c7(output_tensor)
+        output_tensor = self.c8(output_tensor)
+        output_tensor = self.c7(output_tensor)
+        output_tensor_16m = output_tensor
+        output_tensor = self.c9(output_tensor)
+        output_tensor = self.u(output_tensor)
+        # CBR block for conc3
+        # TODO add ttnn random tensor here
+        # outDownSample3 = torch.rand([1, 256, 40, 40])
+        outDownSample3_c9 = self.c9(outDownSample3)
+        outDownSample3_b9 = self.b9(outDownSample3_c9)
+        outDownSample3_r9 = self.relu(outDownSample3_b9)
+        output_tensor = ttnn.concat([output_tensor, outDownSample3_r9], dim=3)
+        output_tensor = self.c9(output_tensor)
+        output_tensor = self.c10(output_tensor)
+        output_tensor = self.c9(output_tensor)
+        output_tensor = self.c10(output_tensor)
+        output_tensor = self.c9(output_tensor)
+        #        output_tensor = tt_lib.tensor.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        #        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        #        output_tensor = ttnn.concat([output_tensor, output_tensor_c3], dim=3)
 
         output_tensor = tt_lib.tensor.interleaved_to_sharded(output_tensor, self.c8.conv.input_sharded_memory_config)
         output_tensor = self.c8(output_tensor)
 
-        return ttnn.from_device(output_tensor)
+        return ttnn.from_device(output_tensor), ttnn.from_device(output_tensor_9m), ttnn.from_device(output_tensor_16m)
