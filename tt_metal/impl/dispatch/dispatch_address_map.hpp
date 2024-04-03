@@ -22,7 +22,7 @@ constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = CQ_COMPLETION_16B_SCRATCH
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR_RESERVATION = 32;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = DISPATCH_MESSAGE_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION;
 
-constexpr static std::uint32_t DISPATCH_L1_UNRESERVED_BASE = (((DISPATCH_MESSAGE_REMOTE_SENDER_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION) - 1) | + (32 - 1)) + 1;
+constexpr static std::uint32_t DISPATCH_L1_UNRESERVED_BASE = (((DISPATCH_MESSAGE_REMOTE_SENDER_ADDR + DISPATCH_MESSAGE_ADDR_RESERVATION) - 1) | (32 - 1)) + 1;
 
 // Host addresses in hugepage for dispatch
 static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0; // this seems to be unused
