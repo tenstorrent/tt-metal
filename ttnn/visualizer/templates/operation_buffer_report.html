@@ -3,8 +3,6 @@
 
 <html>
 
-<script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.1.1.min.js"></script>
-
 {{ current_summarized_l1_report_script|safe }}
 {{ previous_summarized_l1_report_script|safe }}
 {{ current_detailed_l1_report_script|safe }}
@@ -47,14 +45,11 @@
         padding-right: 15px;
     }
 
-    .buffer_report_header {
-        text-align: left;
-    }
-
 </style>
 
 <body>
-    <div class="buffer_report_header">
+    <div>
+        <h1>Operation Buffer Report</h1>
         {%if previous_operation %}
         <a href=" /operation_buffer_report/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
         {% endif %}
@@ -62,7 +57,7 @@
         <a href=" /operation_buffer_report/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
         <br>
         {% endif %}
-        <h1>{{ operation.name }}</h1>
+        <h2>{{ operation.operation_id }}: {{ operation.name }}</h1>
         <br>
     </div>
     <div>

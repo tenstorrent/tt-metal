@@ -34,25 +34,21 @@ void write_row(std::ofstream& output_file_stream, const std::size_t num_columns,
 }
 
 std::size_t write_header(
-    std::ofstream& output_file_stream,
-    const std::size_t num_attributes,
-    const std::size_t num_input_tensors,
-    const std::size_t num_dimensions) {
-    auto column_names = std::vector<std::string>{"Opcode", "Composite Parent Names"};
+    std::ofstream& output_file_stream, const std::size_t num_attributes, const std::size_t num_input_tensors) {
+    auto column_names =
+        std::vector<std::string>{"ttnn_operation_id", "operation_type", "operation_name", "composite_parent_names"};
 
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
-        column_names.push_back(fmt::format("Attribute {} Name", attribute_index));
-        column_names.push_back(fmt::format("Attribute {} Value", attribute_index));
+        column_names.push_back(fmt::format("attribute_{}_name", attribute_index));
+        column_names.push_back(fmt::format("attribute_{}_value", attribute_index));
     }
 
     for (auto input_tensor_index = 0; input_tensor_index < num_input_tensors; input_tensor_index++) {
-        column_names.push_back(fmt::format("Input Tensor {} Storage Type", input_tensor_index));
-        for (auto dimension_index = 0; dimension_index < num_dimensions; dimension_index++) {
-            column_names.push_back(fmt::format("Input Tensor {} Shape {}", input_tensor_index, dimension_index));
-        }
-        column_names.push_back(fmt::format("Input Tensor {} Data Type", input_tensor_index));
-        column_names.push_back(fmt::format("Input Tensor {} Layout", input_tensor_index));
-        column_names.push_back(fmt::format("Input Tensor {} Memory Config", input_tensor_index));
+        column_names.push_back(fmt::format("input_tensor_{}_storage_type", input_tensor_index));
+        column_names.push_back(fmt::format("input_tensor_{}_shape", input_tensor_index));
+        column_names.push_back(fmt::format("input_tensor_{}_dtype", input_tensor_index));
+        column_names.push_back(fmt::format("input_tensor_{}_layout", input_tensor_index));
+        column_names.push_back(fmt::format("input_tensor_{}_memory_config", input_tensor_index));
     }
 
     write_row(output_file_stream, column_names.size(), column_names);
@@ -64,12 +60,13 @@ void write_record(
     const std::size_t num_columns,
     const OperationRecord& record,
     const std::size_t num_attributes,
-    const std::size_t num_input_tensors,
-    const std::size_t num_dimensions) {
+    const std::size_t num_input_tensors) {
     std::vector<std::string> row;
     row.reserve(num_columns);
 
-    row.push_back(record.opcode);
+    row.push_back(fmt::format("{}", record.ttnn_operation_id));
+    row.push_back(record.operation_type);
+    row.push_back(record.operation_name);
     row.push_back(fmt::format("{}", record.composite_parent_names));
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
         if (attribute_index < record.attributes.size()) {
@@ -85,21 +82,13 @@ void write_record(
         if (input_tensor_index < record.input_tensor_records.size()) {
             const auto& tensor_record = record.input_tensor_records.at(input_tensor_index);
             row.push_back(fmt::format("{}", tensor_record.storage_type));
-            for (auto dimension_index = 0; dimension_index < num_dimensions; dimension_index++) {
-                if (dimension_index < tensor_record.shape.rank()) {
-                    row.push_back(fmt::format("{}", tensor_record.shape[dimension_index]));
-                } else {
-                    row.push_back("");
-                }
-            }
+            row.push_back(fmt::format("{}", tensor_record.shape));
             row.push_back(fmt::format("{}", tensor_record.data_type));
             row.push_back(fmt::format("{}", tensor_record.layout));
             row.push_back(fmt::format("{}", tensor_record.memory_config));
         } else {
             row.push_back("");
-            for (auto dimension_index = 0; dimension_index < num_dimensions; dimension_index++) {
-                row.push_back("");
-            }
+            row.push_back("");
             row.push_back("");
             row.push_back("");
             row.push_back("");
@@ -120,19 +109,17 @@ void OperationHistory::dump_to_csv() {
     }
 
     std::size_t num_input_tensors = 0;
-    std::size_t num_dimensions = 0;
     for (const auto& record : this->records) {
         num_input_tensors = std::max(num_input_tensors, record.input_tensor_records.size());
-        for (const auto& input_tensor_record : record.input_tensor_records) {
-            num_dimensions = std::max(num_dimensions, input_tensor_record.shape.rank());
-        }
     }
 
-    auto num_columns = write_header(output_file_stream, num_attributes, num_input_tensors, num_dimensions);
+    auto num_columns = write_header(output_file_stream, num_attributes, num_input_tensors);
     for (const auto& record : this->records) {
-        write_record(output_file_stream, num_columns, record, num_attributes, num_input_tensors, num_dimensions);
+        write_record(output_file_stream, num_columns, record, num_attributes, num_input_tensors);
     }
 }
+
+void OperationHistory::clear() { this->records.clear(); }
 
 }  // namespace detail
 
@@ -143,6 +130,9 @@ const char* csv_file_name() {
 bool enabled() {
     return csv_file_name() != nullptr;
 }
+
+void dump_to_csv() { detail::OPERATION_HISTORY.dump_to_csv(); }
+void clear() { detail::OPERATION_HISTORY.clear(); }
 
 }  // namespace operation_history
 

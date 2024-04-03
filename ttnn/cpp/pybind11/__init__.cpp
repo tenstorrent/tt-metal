@@ -30,10 +30,13 @@ PYBIND11_MODULE(_ttnn, m_ttnn) {
 
     auto m_multi_device = m_ttnn.def_submodule("multi_device", "ttnn multi_device");
     ttnn::multi_device::py_module(m_multi_device);
-    
+
     auto m_reports = m_ttnn.def_submodule("reports", "ttnn reports");
     ttnn::reports::py_module(m_reports);
 
     auto m_operations = m_ttnn.def_submodule("operations", "ttnn Operations");
     ttnn::operations::py_module(m_operations);
+
+    m_ttnn.def("get_operation_id", []() { return ttnn::OPERATION_ID; }, "Get operation id");
+    m_ttnn.def("increment_operation_id", []() { ttnn::OPERATION_ID++; }, "Increment operation id");
 }

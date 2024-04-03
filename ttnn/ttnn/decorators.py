@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import dataclasses
 from functools import wraps
 import inspect
+import os
 import time
 import traceback
 
@@ -199,7 +200,6 @@ def query_operations(include_experimental=False):
         return ttnn_operations
 
 
-OPERATION_ID = 0
 OPERATION_CALL_STACK = []
 
 
@@ -278,7 +278,7 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                operation_id = OPERATION_ID
+                operation_id = ttnn._ttnn.get_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
                 if is_top_level_operation and ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
@@ -299,12 +299,16 @@ class Operation:
                             )
 
                 if is_top_level_operation and ttnn.CONFIG.enable_logging:
+                    original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
+                    os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.operation_history_csv_path)
                     devices = get_devices((function_args, function_kwargs))
                     for device in devices:
                         ttnn.synchronize_device(device)
 
                     start = time.time()
                     logger.debug(f"Started {self.name:50}")
+
+                    ttnn.database.insert_operation(operation_id, self, None, None, None, None)
 
                     input_tensors = get_tensors((function_args, function_kwargs))
                     ttnn.database.insert_input_tensors(operation_id, input_tensors)
@@ -335,13 +339,13 @@ class Operation:
                     duration = end - start
                     logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
 
-                    ttnn.database.insert_devices(devices)
-
                     output_tensors = get_tensors(output)
 
+                    ttnn.database.insert_devices(devices)
                     ttnn.database.insert_operation(
-                        self, operation_id, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
+                        operation_id, self, duration, matches_golden, ttnn.CONFIG.comparison_mode_pcc, actual_pcc
                     )
+                    ttnn.database.store_operation_history_records(operation_id)
                     ttnn.database.insert_stack_trace(operation_id, traceback.format_stack())
                     ttnn.database.insert_output_tensors(operation_id, output_tensors)
                     ttnn.database.insert_buffers(operation_id)
@@ -364,6 +368,8 @@ class Operation:
                                 ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}" / f"{index}.bin",
                                 ttnn.from_device(tensor),
                             )
+                    if original_operation_history_csv is not None:
+                        os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
 
                 if is_top_level_operation:
                     for hook in POST_OPERATION_HOOKS:
@@ -390,14 +396,13 @@ class Operation:
         # If fast runtime mode is enabled during runtime, then only run the original function
         if ttnn.CONFIG.enable_fast_runtime_mode:
             return self.function(*function_args, **function_kwargs)
-
-        global OPERATION_ID
         try:
             OPERATION_CALL_STACK.append(self.name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
-            OPERATION_ID += 1
+            if not OPERATION_CALL_STACK:
+                ttnn._ttnn.increment_operation_id()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)

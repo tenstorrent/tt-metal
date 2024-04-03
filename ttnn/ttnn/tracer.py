@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 import networkx as nx
 from pyrsistent import PClass, field
+import ttnn._ttnn
 
 logger.disable("torchtrail")
 
@@ -140,7 +141,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
     import torch
 
     def call_wrapper(*function_args, **function_kwargs):
-        operation_id = ttnn.decorators.OPERATION_ID
+        operation_id = ttnn._ttnn.get_operation_id()
 
         original_function_args = function_args
         original_function_kwargs = function_kwargs

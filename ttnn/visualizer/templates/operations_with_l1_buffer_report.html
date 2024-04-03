@@ -2,11 +2,30 @@
 {% block content %}
 
 <html>
-<script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.1.1.min.js"></script>
 
 <style>
-    tr:nth-child(3n+2) {
+    tr:nth-child(6n+2) {
         background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+3) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+4) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+5) {
+        background-color: #D0FFBC;
+    }
+
+    tr:nth-child(6n+6) {
+        background-color: #D0FFBC;
+    }
+
+    tr:nth-child(6n+7) {
+        background-color: #D0FFBC;
     }
 
     table,
@@ -17,7 +36,6 @@
 
     th {
         padding: 15px;
-        /* you could also change td instead th depending your html code */
         background-color: white;
         position: sticky;
         z-index: 100;
@@ -34,17 +52,19 @@
         <div>
             <table>
                 <tr>
-                    <th>Index</th>
+                    <th>Id</th>
                     <th>Name</th>
                     <th>Stack Trace</th>
                     <th>Buffer Report</th>
+                    <th>Graph Report</th>
                 </tr>
                 {% for operation in operations %}
-                <tr rowspan=3>
-                    <td>{{loop.index0}}</td>
+                <tr>
+                    <td>{{operation.operation_id}}</td>
                     <td>{{operation.name}}</td>
                     <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
                     <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a> </td>
                 </tr>
                 <tr>
                     <td colspan="100%">
@@ -52,9 +72,9 @@
                     </td>
                 </tr>
                 <tr>
-                <td colspan="100%"> {{ l1_reports[operation.operation_id][0]|safe }} {{
-                    l1_reports[operation.operation_id][1] | safe }}
-                </td>
+                    <td colspan="100%"> {{ l1_reports[operation.operation_id][0]|safe }} {{
+                        l1_reports[operation.operation_id][1] | safe }}
+                    </td>
                 </tr>
                 {% endfor %}
             </table>
