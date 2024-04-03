@@ -299,7 +299,7 @@ def from_torch(
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
 
-    if shape_with_padding is not None:
+    if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
         tensor = ttnn.reshape(tensor, shape_with_padding)
 
     return tensor
@@ -923,6 +923,7 @@ def as_tensor(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
     as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
@@ -936,6 +937,7 @@ def as_tensor(
         * :attr:`device`: the optional `ttnn` device.
         * :attr:`memory_config`: the optional `ttnn` memory configuration.
         * :attr:`cache_file_name`: the optional cache file name.
+        * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
 
     Example::
 
@@ -947,12 +949,17 @@ def as_tensor(
 
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
+    if device is not None and memory_config is None:
+        raise RuntimeError("memory_config must be specified when device is specified")
+
     if cache_file_name is None:
-        return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+        return ttnn.from_torch(
+            tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
+        )
     else:
 
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
-            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
@@ -960,7 +967,9 @@ def as_tensor(
             ttnn.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        storage_type = "_multi_device" if mesh_mapper else ""
+        cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+
         try:
             tensor = ttnn.load_tensor(cache_file_name)
             if tuple(tensor.shape) != tuple(tensor.shape):
