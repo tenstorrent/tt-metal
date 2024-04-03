@@ -233,12 +233,12 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
     "tensor_shape, shard_scheme, shard_shape, grid_override",
     [
         (
-            [1, 1, 64, 64],
+            [1, 1, 64, 1024],
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            (64, 32),
+            (64, 256),
             ttl.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0)),
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(3, 0)),
                 }
             ),
         ),
@@ -260,7 +260,7 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
 def test_tensor_conversion_between_torch_and_tt_tile_multichip(
     tt_dtype, all_devices, tensor_shape, shard_scheme, shard_shape, grid_override, shard_orientation, direct_write
 ):
-    num_devices = 2
+    num_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices)
     # devices = [all_devices[i] for i in [1, 2, 3, 4]]
 
