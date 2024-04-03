@@ -45,9 +45,9 @@ class Trace {
     // Labels to make the code more readable
     static constexpr bool kClearBuffer = true;
     static constexpr bool kBlocking = true;
-    static constexpr bool kNonblocking = false;
+    static constexpr bool kNonBlocking = false;
     static constexpr bool kEnableCQBypass = true;
-    static constexpr bool kDisableCQBypass = true;
+    static constexpr bool kDisableCQBypass = false;
 
     TraceState state;
 
