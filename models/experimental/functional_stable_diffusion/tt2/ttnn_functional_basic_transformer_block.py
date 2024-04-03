@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import tt_lib as ttl
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention import cross_attention
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import feedforward
-from models.utility_functions import comp_pcc
 import torch
 
 
 def compare(tensor, name, permute=False):
+    from models.utility_functions import comp_pcc
+
     tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
     tensor = ttnn.from_device(tensor)
     tensor = ttnn.to_torch(tensor)
@@ -63,16 +65,22 @@ class basic_transformer_block:
         elif use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        hidden_states = ttnn.to_memory_config(
-            hidden_states, ttnn.L1_MEMORY_CONFIG
-        )  # layernorm doesn't support block_sharding
+        sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
+        program_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            subblock_w=1,
+            block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,
+            block_w=sharded_mem_cfg.shard_spec.shape[1] // 32,
+            inplace=False,
+        )
+
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
             weight=self.parameters.norm1.weight,
             bias=self.parameters.norm1.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=sharded_mem_cfg,
+            program_config=program_config,
         )
 
         # 1. Self-Attention
@@ -92,10 +100,26 @@ class basic_transformer_block:
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttnn.add(attn_output, hidden_states)
+        if attn_output.memory_config() != hidden_states.memory_config():
+            if attn_output.memory_config().is_sharded():
+                attn_output = ttnn.experimental.tensor.reshard(attn_output, hidden_states.memory_config())
+            else:
+                attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
+        sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())
+        ttnn.deallocate(attn_output)
+        ttnn.deallocate(hidden_states)
+        if hidden_states.shape[-2] == 8192:
+            hidden_states = ttnn.reallocate(sum)
+        else:
+            hidden_states = sum
         if cross_attention_dim is not None:
             norm_hidden_states = ttnn.layer_norm(
-                hidden_states, epsilon=1e-05, weight=self.parameters.norm2.weight, bias=self.parameters.norm2.bias
+                hidden_states,
+                epsilon=1e-05,
+                weight=self.parameters.norm2.weight,
+                bias=self.parameters.norm2.bias,
+                memory_config=sharded_mem_cfg,
+                program_config=program_config,
             )
 
             # 2. Cross-Attention
@@ -108,21 +132,39 @@ class basic_transformer_block:
                 dim_head=attention_head_dim,
                 upcast_attention=upcast_attention,
             )
-
-            hidden_states = ttnn.add(attn_output, hidden_states)
+            if attn_output.memory_config() != hidden_states.memory_config():
+                if attn_output.memory_config().is_sharded():
+                    attn_output = ttnn.experimental.tensor.reshard(attn_output, hidden_states.memory_config())
+                else:
+                    attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
+            sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())
+            ttnn.deallocate(attn_output)
+            ttnn.deallocate(hidden_states)
+            if hidden_states.shape[-2] == 8192:
+                hidden_states = ttnn.reallocate(sum)
+            else:
+                hidden_states = sum
 
         # 3. Feed-forward
         norm_hidden_states = ttnn.layer_norm(
-            hidden_states, epsilon=1e-05, weight=self.parameters.norm3.weight, bias=self.parameters.norm3.bias
+            hidden_states,
+            epsilon=1e-05,
+            weight=self.parameters.norm3.weight,
+            bias=self.parameters.norm3.bias,
+            memory_config=sharded_mem_cfg,
+            program_config=program_config,
         )
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        norm_hidden_states = ttnn.clone(
-            norm_hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat16
-        )
-        ff_output = self.ff(config=config, hidden_states=norm_hidden_states)
+        mem_cfg = hidden_states.memory_config()
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        if hidden_states.shape[-2] == 8192:
+            hidden_states = ttnn.reallocate(hidden_states)
+        norm_hidden_states = self.ff(config=config, hidden_states=norm_hidden_states)
 
-        hidden_states = ttnn.add(ff_output, hidden_states)
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        norm_hidden_states = ttnn.to_memory_config(norm_hidden_states, mem_cfg)
+        hidden_states = ttnn.add(norm_hidden_states, hidden_states, memory_config=hidden_states.memory_config())
 
         return hidden_states

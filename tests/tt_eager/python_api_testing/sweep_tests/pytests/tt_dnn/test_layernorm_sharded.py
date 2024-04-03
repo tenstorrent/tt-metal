@@ -35,6 +35,7 @@ seq_lens = [32, 256, 384]
 per_core_ks = [32, 64, 128]
 
 
+@skip_for_grayskull("watcher error, see issue #7041")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "grid_size",
@@ -187,6 +188,7 @@ seq_lens = [32, 256, 384]
 per_core_ks = [32, 64, 128]
 
 
+@skip_for_grayskull("watcher error, see issue #7041")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "grid_size",

@@ -110,8 +110,8 @@ Basic Examples
 
     torch_input_tensor = torch.rand(32, 32, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.enable_comparison_mode():
-        with ttnn.override_pcc_of_comparison_mode(0.9998): # This is optional in case default value of 0.9999 is too high
+    with ttnn.manage_config_attribute("enable_comparison_mode", True):
+        with ttnn.manage_config_attribute("comparison_mode_pcc", 0.9998): # This is optional in case default value of 0.9999 is too high
             output_tensor = ttnn.exp(input_tensor)
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
@@ -265,10 +265,10 @@ Set the following environment variables as needed
 .. code-block:: bash
 
     # enable_logging - Synchronize main thread after every operation and log the operation start, end and duration
-    # enable_detailed_buffer_report (optional) - Enable it to visualize the detailed buffer report after every operation
-    # enable_graph_report (optional) - Enable it to visualize the graph after every operation
-    # enable_tensor_report (optional) - Enable it to visualize the input and output tensors of every operation
-    # enable_comparison_mode (optional) - Enable it to test the output of operations against their golden implementaiton
+    # enable_detailed_buffer_report (optional) - Enable to visualize the detailed buffer report after every operation
+    # enable_graph_report (optional) - Enable to visualize the graph after every operation
+    # enable_tensor_report (optional) - Enable to visualize the input and output tensors of every operation
+    # enable_comparison_mode (optional) - Enable to test the output of operations against their golden implementaiton
 
     export TTNN_CONFIG_OVERRIDES='{
         "enable_logging": true,
@@ -277,6 +277,9 @@ Set the following environment variables as needed
         "enable_tensor_report": true,
         "enable_comparison_mode": true
     }'
+
+    # Or modify ~/.config/ttnn/config.json
+    # Or set TTNN_CONFIG_PATH to a json file of your choice
 
 Run the code. i.e.:
 

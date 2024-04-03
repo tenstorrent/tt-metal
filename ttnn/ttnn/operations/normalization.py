@@ -33,6 +33,7 @@ def _compute_golden_layer_norm(
         weight = ttnn.to_torch(weight)
         if len(weight.shape) == 2:
             weight = weight[0]
+        weight = weight.to(input_tensor.dtype)
 
     if bias is not None:
         bias = ttnn.from_device(bias)
@@ -40,6 +41,7 @@ def _compute_golden_layer_norm(
         bias = ttnn.to_torch(bias)
         if len(bias.shape) == 2:
             bias = bias[0]
+        bias = bias.to(input_tensor.dtype)
 
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 

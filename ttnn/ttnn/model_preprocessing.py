@@ -20,6 +20,8 @@ from ttnn.tracer import trace, visualize
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
     weight = weight.T.contiguous()
+    while len(weight.shape) < 4:
+        weight = weight.unsqueeze(0)
     weight = ttnn.from_torch(weight, dtype=dtype, layout=layout)
     return weight
 
@@ -517,7 +519,7 @@ def _initialize_model_and_preprocess_parameters(
     return make_parameter_dict(parameters)
 
 
-def preprocess_model(
+def from_torch(
     *,
     model_name: Optional[str] = None,
     version: Optional[str] = None,
@@ -668,6 +670,52 @@ def preprocess_model(
     model = _convert_ttnn_module_args_to_modules(model)
 
     return model
+
+
+def preprocess_model(
+    *,
+    model_name: Optional[str] = None,
+    version: Optional[str] = None,
+    initialize_model: Optional[Callable[[], torch.nn.Module]] = None,
+    convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]] = None,
+    custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]] = None,
+    device: Optional[ttnn.Device] = None,
+    prefix: str = "",
+    run_model: Optional[Callable] = None,
+    reader_patterns_cache: Optional[dict] = None,
+) -> ParameterDict:
+    """
+
+    preprocess_model(initialize_model: Optional[Callable[[], torch.nn.Module]]=None, *, model_name: Optional[str]=None, version: Optional[str]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: Optional[str] = None, run_model: Optional[Callable], reader_patterns_cache: Optional[Dict]) -> ParameterDict
+
+    Preprocess modules and parameters of a given model.
+
+    Args:
+        * :attr:`model_name`: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        * :attr:`version`: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        * :attr:`initialize_model`: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        * :attr:`convert_to_ttnn`: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        * :attr:`custom_preprocessor`: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        * :attr:`device`: Device on which to put ttnn.Tensor parameters
+        * :attr:`prefix`: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        * :attr:`run_model`: Function for running the model. It's required for populating ttnn_module_args. If run_model is provided, the graph of the model will be dumped to /tmp/ttnn/model_graph.svg
+        * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
+    """
+
+    with ttnn.manage_config_attribute("enable_logging", False), ttnn.manage_config_attribute(
+        "enable_comparison_mode", False
+    ):
+        return from_torch(
+            model_name=model_name,
+            version=version,
+            initialize_model=initialize_model,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
+            prefix=prefix,
+            run_model=run_model,
+            reader_patterns_cache=reader_patterns_cache,
+        )
 
 
 def preprocess_model_parameters(

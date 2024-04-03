@@ -36,7 +36,7 @@ CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
 if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
-CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
 
 
 def load_config_from_dictionary(config):
@@ -45,19 +45,22 @@ def load_config_from_dictionary(config):
         if hasattr(CONFIG, key):
             setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
         else:
-            raise RuntimeError(f"Unknown configuration key: {key}")
+            logger.error(f"Unknown configuration key: {key}")
 
 
 def load_config_from_json_file(json_path):
     global CONFIG
-    with open(json_path, "r") as f:
-        config = json.load(f)
-    load_config_from_dictionary(config)
+    try:
+        with open(json_path, "r") as f:
+            config = json.load(f)
+        load_config_from_dictionary(config)
+    except:
+        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
 
 
 def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
-        normalized_config = dataclasses.asdict(Config())
+        normalized_config = dataclasses.asdict(CONFIG)
         for key, value in normalized_config.items():
             if isinstance(value, pathlib.Path):
                 value = str(value)
@@ -78,42 +81,18 @@ if CONFIG_OVERRIDES:
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
-def get_bool_env_var(name, default):
-    variable = os.environ.get(name, f"{default}")
-    if variable == "True":
-        return True
-    elif variable == "False":
-        return False
-    else:
-        raise RuntimeError(f'The value has to be either "True" or "False"')
-
-
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
 @contextlib.contextmanager
-def enable_fast_runtime_mode():
+def manage_config_attribute(name, value):
     global CONFIG
-    CONFIG.enable_fast_runtime_mode = True
+    original_value = getattr(CONFIG, name)
+    setattr(CONFIG, name, value)
+    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    CONFIG.enable_fast_runtime_mode = False
-
-
-@contextlib.contextmanager
-def enable_comparison_mode():
-    global CONFIG
-    CONFIG.enable_comparison_mode = True
-    yield
-    CONFIG.enable_comparison_mode = False
-
-
-@contextlib.contextmanager
-def override_pcc_of_comparison_mode(value):
-    global CONFIG
-    old_value = CONFIG.comparison_mode_pcc
-    CONFIG.comparison_mode_pcc = value
-    yield
-    CONFIG.comparison_mode_pcc = old_value
+    setattr(CONFIG, name, original_value)
+    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
 import tt_lib as _tt_lib
