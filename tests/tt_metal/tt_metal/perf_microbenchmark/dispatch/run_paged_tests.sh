@@ -141,6 +141,5 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microben
 # 9.600 GB/s whb0
 TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 4096 -max 4096 -lps 12 -pbs 2 -np 128 -c -i 1 -pi 10000 |& tee ${DIR}/perf_write_128_page_4096b_size_dispatch_buffer_4096b_pages_10000_iter_dram_pbs2.log
 
-# 11.7 GB/s whb0
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 1000 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 128 -c -i 1000 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_1000_iter_dram_pbs2.log
-# FIXME Hangs TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 128 -c -i 1 -pi 10000 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_10000_iter_dram_pbs2.log
+# 11.872 GB/s whb0 - reduced number of pages per block in half otherwise uses 1536 KB L1 (exceeds for GS, WH)
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TT_METAL_HOME}/build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -wx 0 -wy 1 -min 8192 -max 8192 -lps 13 -pbs 2 -np 128 -c -i 1 -pi 5000 -bs 24 |& tee ${DIR}/perf_write_128_page_8192b_size_dispatch_buffer_8192b_pages_10000_iter_dram_pbs2.log
