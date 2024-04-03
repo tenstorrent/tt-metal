@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Martin Chang
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <cstdint>
 
 void kernel_main()
