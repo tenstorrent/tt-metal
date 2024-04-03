@@ -7,8 +7,9 @@ import sqlite3
 import shutil
 from typing import Optional
 
-import networkx as nx
 from loguru import logger
+import networkx as nx
+import pandas as pd
 
 import ttnn
 
@@ -150,7 +151,7 @@ def get_or_create_sqlite_db():
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS operations
-                (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
+                (operation_id int UNIQUE, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS stack_traces
@@ -227,14 +228,32 @@ def optional_value(value):
     return value
 
 
-def insert_operation(operation, operation_id, duration, matches_golden, desired_pcc, actual_pcc):
+def insert_operation(operation_id, operation, duration, matches_golden, desired_pcc, actual_pcc):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db()
     cursor = sqlite_connection.cursor()
 
     cursor.execute(
-        f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}', {duration}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)})"
+        f"""INSERT INTO operations VALUES (
+            {operation_id}, '{operation.name}', {optional_value(duration)}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)}
+            )
+        ON CONFLICT (operation_id)
+        DO UPDATE
+        SET
+            duration=EXCLUDED.duration,
+            matches_golden=EXCLUDED.matches_golden,
+            desired_pcc=EXCLUDED.desired_pcc,
+            actual_pcc=EXCLUDED.actual_pcc;"""
     )
     sqlite_connection.commit()
+
+
+def store_operation_history_records(operation_id):
+    ttnn._tt_lib.operations.dump_operation_history_to_csv()
+    ttnn._tt_lib.operations.clear_operation_history()
+    (ttnn.CONFIG.reports_path / "operation_history").mkdir(parents=True, exist_ok=True)
+    shutil.copy(
+        ttnn.CONFIG.operation_history_csv_path, ttnn.CONFIG.reports_path / "operation_history" / f"{operation_id}.csv"
+    )
 
 
 def insert_stack_trace(operation_id, stack_trace):
