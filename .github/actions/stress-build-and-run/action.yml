@@ -32,4 +32,4 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: watcher-log-${{ arch }}-${{ machine }}
-        path: built/watcher.log
+        path: generated/watcher/watcher.log
