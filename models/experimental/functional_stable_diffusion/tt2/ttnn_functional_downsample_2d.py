@@ -48,7 +48,7 @@ class downsample_2d:
         batch_size,
         input_height,
         input_width,
-        compute_kernel_config=None,
+        compute_kernel_config,
     ):
         self.device = device
         self.parameters = parameters

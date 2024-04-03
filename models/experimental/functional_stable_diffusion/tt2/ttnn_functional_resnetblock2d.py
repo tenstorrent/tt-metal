@@ -69,7 +69,7 @@ class resnetBlock2D:
         batch_size,
         input_height,
         input_width,
-        compute_kernel_config=None,
+        compute_kernel_config,
         group_norm_on_device=True,
     ):
         self.batch_size = batch_size

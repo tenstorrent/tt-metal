@@ -392,6 +392,7 @@ def run_demo_inference_diffusiondb(
         for t in timesteps_bkp[0]:
             _t = constant_prop_time_embeddings(t, ttnn_latent_model_input, unet.time_proj)
             _t = _t.unsqueeze(0).unsqueeze(0)
+            _t = _t.permute(2, 0, 1, 3)
             _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             time_step_list.append(_t)
             step_index = (timesteps_bkp[0] == t).nonzero().item()
