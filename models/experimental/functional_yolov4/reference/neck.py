@@ -125,7 +125,7 @@ class Neck(nn.Module):
 
         # Next CBR block to be concatinated with output of u1
         # gets the output of downsample4 module which is dimensions: [1, 512, 20, 20] - make a random tensor with that shape for the purpose of running the neck unit test stand-alone
-        outDownSample4 = torch.rand([1, 512, 20, 20])
+        outDownSample4 = torch.ones([1, 512, 20, 20])
         # CBR block for conc2
         x11 = self.c7(outDownSample4)
         x11_b = self.b7(x11)
@@ -169,7 +169,7 @@ class Neck(nn.Module):
         u2 = self.u(x17_m)
 
         # CBR block for conc3
-        outDownSample3 = torch.rand([1, 256, 40, 40])
+        outDownSample3 = torch.ones([1, 256, 40, 40])
         x18 = self.c9(outDownSample3)
         x18_b = self.b9(x18)
         x18_m = self.relu(x18_b)
