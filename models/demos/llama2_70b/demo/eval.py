@@ -34,7 +34,7 @@ def main(args):
     args.num_tokens = args.sample_len
 
     # Dataset preparation
-    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split)
+    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos
 
@@ -59,6 +59,10 @@ def main(args):
     )
 
     logger.info("Perplexity: %f" % perplexity)
+    if perplexity < args.perplexity_score:
+        logger.info("Perplexity is less than the threshold")
+    else:
+        assert False, "Perplexity is greater than the threshold"
 
     return perplexity
 
@@ -187,6 +191,7 @@ class Args:
         stride=128,
         sample_len=128,
         num_samples=128,
+        perplexity_score=1000,
     ):
         self.implementation = implementation
         self.ckpt_dir = ckpt_dir
@@ -211,6 +216,7 @@ class Args:
         self.stride = stride
         self.sample_len = sample_len
         self.num_samples = num_samples
+        self.perplexity_score = perplexity_score
 
 
 def construct_arg(**kwargs):
@@ -252,9 +258,9 @@ def construct_arg(**kwargs):
     ids=["greedy", "sampling"],
 )
 @pytest.mark.parametrize(
-    "dataset, split, config, stride, sample_len, num_samples",
+    "dataset, split, config, stride, sample_len, num_samples, perplexity_score",
     [
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 3.5),
     ],
     ids=["wikitext-default"],
 )
@@ -281,6 +287,7 @@ def test_LlamaModel_demo(
     stride,
     sample_len,
     num_samples,
+    perplexity_score,
 ):
     ## Get model config
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
@@ -319,5 +326,6 @@ def test_LlamaModel_demo(
         stride=stride,
         sample_len=sample_len,
         num_samples=num_samples,
+        perplexity_score=perplexity_score,
     )
     main(args)
