@@ -668,8 +668,8 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     uint32_t dst_page_index = 0;
     uint32_t bank_base_address = buffer.address();
-    uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)); // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
     while (total_pages_to_write > 0) {
+        uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)); // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
         bool issue_wait = (dst_page_index == 0 and bank_base_address == buffer.address()); // only stall for the first write of the buffer
         if (issue_wait) {
             data_offset_bytes *= 2; // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
@@ -808,14 +808,21 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
                     uint32_t num_bytes_to_copy;
                     if (remaining_bytes_of_nonaligned_page > 0) {
                         // Case 1: Portion of the page was copied into user buffer on the previous completion queue pop.
-                        num_bytes_to_copy = remaining_bytes_of_nonaligned_page - pad_size_bytes;
-                        remaining_bytes_of_nonaligned_page = 0;
+                        if (remaining_bytes_of_nonaligned_page <= pad_size_bytes) {
+                            num_bytes_to_copy = page_size;
+                            src_offset += (remaining_bytes_of_nonaligned_page / sizeof(uint32_t));
+                        } else {
+                            num_bytes_to_copy = remaining_bytes_of_nonaligned_page - pad_size_bytes;
+                        }
                         src_offset_increment = (num_bytes_to_copy/sizeof(uint32_t)) + (pad_size_bytes/sizeof(uint32_t));
+
+                        remaining_bytes_of_nonaligned_page = 0;
+
                     } else if (src_offset + src_offset_increment >= completion_q_data.size()) {
                         // Case 2: Last page of data that was popped off the completion queue
                         uint32_t num_bytes_remaining = (completion_q_data.size() - src_offset) * sizeof(uint32_t);
                         num_bytes_to_copy = std::min(num_bytes_remaining, page_size);
-                        remaining_bytes_of_nonaligned_page = padded_page_size - num_bytes_to_copy;
+                        remaining_bytes_of_nonaligned_page = padded_page_size - (num_bytes_to_copy == page_size ? num_bytes_remaining : num_bytes_to_copy);
                     } else {
                         num_bytes_to_copy = page_size;
                     }

@@ -544,7 +544,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestBackToBackNon32BAlignedPageSize) {
+TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (Device *device : devices_) {
