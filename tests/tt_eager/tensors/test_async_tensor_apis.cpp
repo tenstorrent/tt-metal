@@ -29,7 +29,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
     // Ensure that tensor data is copied and owned as expected
     Device* device = this->devices_[0];
     Tensor host_tensor = tt::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor;
+    Tensor readback_tensor({}, 1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
         // Ensure that both the lambda and global scope have ownership to this tensor
@@ -55,7 +55,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         readback_tensor.set_shape(thread_local_tensor.get_shape());
         readback_tensor.set_dtype(thread_local_tensor.get_dtype());
         readback_tensor.set_layout(thread_local_tensor.get_layout());
-        readback_tensor.set_metadata_populated();
+        readback_tensor.set_populated();
         // Ensure that the readback buffer is owned inside and outside the lambda
         std::visit([](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
@@ -186,7 +186,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor;
+    Tensor readback_tensor({}, 1);;
     std::thread worker;
 
     {
@@ -223,7 +223,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
             readback_tensor.set_shape(thread_local_tensor.get_shape());
             readback_tensor.set_dtype(thread_local_tensor.get_dtype());
             readback_tensor.set_layout(thread_local_tensor.get_layout());
-            readback_tensor.set_metadata_populated();
+            readback_tensor.set_populated();
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
             // This is because we explictly pass in the buffer to a new tensor_attr object
             std::visit([](auto&& storage) {

@@ -30,37 +30,40 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     tensor_id{std::nullopt},
     tensor_attributes(std::make_shared<TensorAttributes>(storage, shape, dtype, layout)),
     deallocate_through_destructor(false) {
-    this->set_metadata_populated();
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                // do nothing
+                this->tensor_attributes->tensor_populated = {true};
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_ASSERT(storage.buffer->device() != nullptr);
-                workers = {device()};
+                workers = {storage.buffer->device()};
                 tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(), dtype, layout);
                 // Increment main thread ref count for all tensors on device
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+                this->tensor_attributes->tensor_populated = {true};
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                // do nothing
+                this->tensor_attributes->tensor_populated = {true};
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 workers.reserve(storage.buffers.size());
-                for (const auto& buffer : storage.buffers) {
+                for (const auto& device_buf_pair : storage.buffers) {
+                    auto [device_id, buffer] = device_buf_pair;
                     TT_ASSERT(buffer->device() != nullptr);
+                    TT_ASSERT(buffer->device()->id() == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), dtype, layout);
                     workers.push_back(buffer->device());
                 }
+                // Increment main thread ref count for all tensors on cluster
+                this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.buffers.size(), true);
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                // do nothing
-            }else {
+                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.buffers.size(), true);
+            } else {
                 raise_unsupported_storage<StorageType>();
             }
-        },
-        this->get_storage()
-    );
+        }, storage);
 }
 
 Tensor::Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout) :
@@ -81,9 +84,12 @@ void Tensor::deallocate(bool force) {
         // Check if the attributes didn't get moved to another tensor.
         // If not, we can deallocate this tensor.
         if (this->tensor_attributes->dynamic_storage) {
-            // Tensor was populated with autoformat. Storage type can
-            // change based on op behaviour. Wait for tensor populated.
-            this->wait_for_metadata_populated();
+            // Tensor was populated with autoformat. Storage type can change
+            // based on op behaviour. Wait for tensor metadata populated.
+            // This is a special case, where storage type cannot change for multi
+            // device tensors (see assert in launch_op). Hence, this only applies
+            // to the single device case, where metadata populated == tensor populated.
+            this->wait_for_tensor_metadata_populated();
         }
         std::visit(
                 [force, this](auto& storage) {
@@ -121,14 +127,23 @@ void Tensor::deallocate(bool force) {
                             TT_THROW("Cannot deallocate tensor with borrowed storage!");
                         }
                     } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                        for (auto& buffer : storage.buffers) {
-                            if (force or (this->tensor_attributes.use_count() == 1 and buffer.use_count() == 1)) {
-                                // Same logic as above for device buffers
-                                DeallocateBuffer(*buffer);
-                            }
-                            if (force or this->tensor_attributes.use_count() == 1) {
-                                // Same logic as above for host buffer copies
-                                buffer.reset();
+                        if (this->workers.at(0)->in_main_thread()) {
+                            uint32_t ref_count_to_use = (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS) ? this->tensor_attributes.use_count() : this->tensor_attributes->main_thread_ref_count;
+                            if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
+                                this->tensor_attributes->deallocated = true;
+                                for (auto worker : this->workers) {
+                                    worker->push_work([force, *this, worker] () mutable {
+                                        std::visit([force, worker] (auto&& s) {
+                                            using type = std::decay_t<decltype(s)>;
+                                            if constexpr (std::is_same_v<type, MultiDeviceStorage>) {
+                                                if (force or s.buffers.at(worker->id()).use_count() == 1) {
+                                                    DeallocateBuffer(*(s.buffers.at(worker->id())));
+                                                }
+                                                s.buffers.at(worker->id()).reset();
+                                            }
+                                        }, this->tensor_attributes->storage);
+                                    });
+                                }
                             }
                         }
                     } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
@@ -146,49 +161,72 @@ void Tensor::deallocate(bool force) {
     }
 }
 
-bool Tensor::metadata_populated() const {
-    // Make a list of boolens for storage
-    return (this->tensor_attributes->metadata_populated).load();
+// Main Thread - Wait for all workers in this tensor to populate the entire tensor
+void Tensor::wait_for_tensor_data_populated() const {
+    // Stall until all the workers for this tensor
+    // have populated the full tensor
+    for (int i = 0; i < this->tensor_attributes->tensor_populated.size(); i++) {
+        while (true) {
+            std::scoped_lock<std::mutex> lock(this->tensor_attributes->populated_mutex);
+            if (this->tensor_attributes->tensor_populated.at(i)) break;
+        }
+    }
 }
 
-void Tensor::set_metadata_populated() {
-    (this->tensor_attributes->metadata_populated).store(true);
+// Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
+void Tensor::wait_for_tensor_metadata_populated() const {
+    // First worker is responsible for updating all metadata fields
+    // Stall until this worker is done
+    while (true) {
+        std::scoped_lock<std::mutex> lock(this->tensor_attributes->populated_mutex);
+        if (this->tensor_attributes->tensor_populated.at(0)) break;
+    };
 }
 
-void Tensor::wait_for_metadata_populated() const {
-    while (not this->metadata_populated());
+// Worker Thread - Set populated flag to true, once worker has completed it's task for this tensor
+void Tensor::set_populated(Device* worker) {
+    // If worker is not specified, set entry for all workers to true
+    std::scoped_lock<std::mutex> lock(this->tensor_attributes->populated_mutex);
+    if (not worker) {
+        for (int i = 0; i < this->tensor_attributes->tensor_populated.size(); i++) {
+            this->tensor_attributes->tensor_populated.at(i) = true;
+        }
+    }
+    else {
+        this->tensor_attributes->tensor_populated.at(worker->id()) = true;
+    }
 }
 
 void Tensor::deepcopy(const Tensor& other) {
     // Wait until the tensor being copied is populated
-    other.wait_for_metadata_populated();
+    other.wait_for_tensor_data_populated();
     // Populate tensor metadata
     this->set_shape(other.get_shape());
     this->set_storage(other.get_storage());
     this->set_dtype(other.get_dtype());
     this->set_layout(other.get_layout());
     // Set metadata populated flag for getters
-    this->set_metadata_populated();
+    this->set_populated();
 }
 
 void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     // Similar to deepcopy, but to be applied on a tensor that has an empty storage
     // container initialized. Require tensor storage to be correctly initialized.
+    this->set_shape(other.get_shape());
+    this->set_dtype(other.get_dtype());
+    this->set_layout(other.get_layout());
     // Populate storage container with buffers + shapes
     std::visit([this] (auto&& storage) {
         using StorageType = std::decay_t<decltype(storage)>;
         if constexpr(std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, DeviceStorage>) {
             std::get<StorageType>(this->tensor_attributes->storage).buffer = storage.buffer;
+            this->tensor_attributes->tensor_populated = {true};
         } else if constexpr(std::is_same_v<StorageType, MultiDeviceHostStorage> or std::is_same_v<StorageType, MultiDeviceStorage>) {
             std::get<StorageType>(this->tensor_attributes->storage).buffers = storage.buffers;
             std::get<StorageType>(this->tensor_attributes->storage).shapes = storage.shapes;
+            this->tensor_attributes->tensor_populated = std::vector<bool>(storage.buffers.size(), true);
         }
     }, other.get_storage()); // Non blocking storage query, since this is done for tensors that get created inside the worker thread
-    // Populate remaining MD
-    this->set_shape(other.get_shape());
-    this->set_dtype(other.get_dtype());
-    this->set_layout(other.get_layout());
-    this->set_metadata_populated();
 }
 
 std::vector<Device*> Tensor::get_workers(bool blocking) const {
@@ -198,7 +236,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
     if (this->tensor_attributes->dynamic_storage) {
         // Tensor is populated by launch_with_autoformat
         // Storage type can change based on op behaviour, wait until tensor populated.
-        this->wait_for_metadata_populated();
+        this->wait_for_tensor_metadata_populated();
     }
 
     std::visit([this, blocking, &workers] (auto&& storage) {
@@ -209,7 +247,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
             TT_FATAL(blocking or (this->workers.size() == 1), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
             if (this->workers.size() != 1) {
                 // Not populated - sync.
-                this->wait_for_metadata_populated();
+                this->wait_for_tensor_data_populated();
                 workers = {this->device()};
             } else {
                 // Already populated.
@@ -217,14 +255,14 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
             }
         } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
             // Either explictly syncing or workers are pre-populated (this will happen for device tensors if using the correct APIs).
-            TT_FATAL(blocking or (this->workers.size() == storage.buffers.size()), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
-            if (this->workers.size() != storage.buffers.size()) {
+            TT_FATAL(blocking or (this->workers.size()), "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
+            if (not this->workers.size()) {
                 // Not populated - sync.
-                this->wait_for_metadata_populated();
+                this->wait_for_tensor_data_populated();
                 workers.reserve(storage.buffers.size());
-                for (const auto& buffer : storage.buffers) {
+                for (auto& device_buf_pair : storage.buffers) {
                     // Already populated.
-                    workers.push_back(buffer->device());
+                    workers.push_back(device_buf_pair.second->device());
                 }
             } else {
                 workers = this->workers;
@@ -235,28 +273,27 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-const Tensor::TensorAttributes& Tensor::get_attr() const {
-    this->wait_for_metadata_populated();
-    return *tensor_attributes;
-}
-
 const Shape& Tensor::get_legacy_shape() const {
-    return this->get_attr().shape.value();
+    this->wait_for_tensor_metadata_populated();
+    return this->tensor_attributes->shape.value();
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
-    return this->get_attr().shape;
+    this->wait_for_tensor_metadata_populated();
+    return this->tensor_attributes->shape;
 }
 const DataType& Tensor::get_dtype() const {
-    return this->get_attr().dtype;
+    this->wait_for_tensor_metadata_populated();
+    return this->tensor_attributes->dtype;
 }
 const Layout& Tensor::get_layout() const {
-    return this->get_attr().layout;
+    this->wait_for_tensor_metadata_populated();
+    return this->tensor_attributes->layout;
 }
 
 const Storage& Tensor::get_storage() const {
-    // Per device bool for storage population for multidevice
-    return this->get_attr().storage;
+    this->wait_for_tensor_data_populated();
+    return this->tensor_attributes->storage;
 }
 
 Tensor Tensor::to(CommandQueue & queue, const MemoryConfig & mem_config) const {
@@ -271,21 +308,22 @@ Tensor Tensor::to(CommandQueue & queue, const MemoryConfig & mem_config) const {
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     ZoneScoped;
+    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
+    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, *this);
     // Populate device storage outside of thread, so that downstream
     // functions running in main can get storage type without blocking
     Tensor device_tensor({target_device});
-    device_tensor.tensor_attributes->storage = DeviceStorage();
     // Record main thread ref count for tensors before pushing to queue.
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count =this->tensor_attributes->record_main_thread_ref_count();
-    target_device->push_work([*this, device_tensor, mem_config, target_device] () mutable {
-        if (this->storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(*this);
+    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
+    target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device] () mutable {
+        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
+            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
+            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
         }
         else {
-            tensor_impl::validate_on_device_dtype_and_layout(target_device, this->get_dtype(), this->get_layout());
-            auto local_tensor = tensor_impl::to_device_wrapper(*this, target_device, mem_config);
+            tensor_impl::validate_on_device_dtype_and_layout(target_device, async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
+            auto local_tensor = tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config);
             // Populate device tensor
             device_tensor.populate_buffers_and_metadata(local_tensor);
         }
@@ -293,36 +331,36 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
     // since both can be on device).
     device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    this->tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), original_tensor_ref_count);
+    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), original_tensor_ref_count);
     return device_tensor;
 }
 
 Tensor Tensor::to(DeviceMesh *device_mesh, const MemoryConfig &mem_config) const {
     ZoneScoped;
-    TT_FATAL(device_mesh->get_devices().at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS, "Async mode is not currently supported for multi-device tensors");
-    if (storage_type() == StorageType::MULTI_DEVICE_HOST) {
-        auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(this->get_storage());
-        std::vector<DeviceBuffer> device_buffers;
+    auto all_workers = device_mesh->get_devices();
+    auto workers = std::vector<Device*>(all_workers.begin(), all_workers.begin() + num_buffers_in_tensor(*this));
+    TT_FATAL(validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
+    Tensor multi_device_tensor = Tensor(workers);
+    uint32_t device_tensor_ref_count = multi_device_tensor.tensor_attributes->record_main_thread_ref_count();
 
-        for (int i = 0; i < host_storage.buffers.size(); ++i) {
-            Device& target_device = device_mesh->get_device(i);
-            auto shard = Tensor{OwnedStorage{host_storage.buffers[i]},  host_storage.shapes[i], this->get_dtype(), this->get_layout()};
-            shard = shard.to(&target_device, mem_config);
-            device_buffers.push_back(std::get<DeviceStorage>(shard.get_storage()).buffer);
-        }
-        Tensor multi_device_tensor = Tensor(
-            MultiDeviceStorage{std::move(device_buffers), host_storage.shapes},
-            this->get_shape(),
-            this->get_dtype(),
-            this->get_layout());
-        multi_device_tensor.workers = device_mesh->get_devices();
-        return multi_device_tensor;
-    } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(this->get_storage())) {
-        return *this; // already on device
+    for (auto& target_device : workers) {
+        target_device->push_work([*this, multi_device_tensor, mem_config, target_device] () mutable {
+            TT_ASSERT(this->storage_type() == StorageType::MULTI_DEVICE_HOST or this->storage_type() == StorageType::MULTI_DEVICE, "Tensor::to(...) requires the tensor the be multi-device tensor.");
+            auto shard = get_shard_for_device(*this, target_device);
+            if (this->storage_type() ==  StorageType::MULTI_DEVICE_HOST) {
+                shard = tensor_impl::to_device_wrapper(shard, target_device, mem_config);
+            }
+            insert_buffer_and_shape_for_device(target_device, shard, multi_device_tensor);
+            if (not (target_device->id())) {
+                multi_device_tensor.set_shape(this->get_shape());
+                multi_device_tensor.set_dtype(this->get_dtype());
+                multi_device_tensor.set_layout(this->get_layout());
+            }
+            multi_device_tensor.set_populated(target_device);
+        });
     }
-
-    TT_THROW("Tensor::to(...) requires the tensor the be multi-device tensor.");
-    return *this;
+    multi_device_tensor.tensor_attributes->update_main_thread_ref_count(multi_device_tensor.workers.at(0), device_tensor_ref_count);
+    return multi_device_tensor;
 }
 
 Tensor Tensor::cpu(bool blocking) const {
@@ -334,24 +372,28 @@ Tensor Tensor::cpu(bool blocking) const {
         // tensor accessors will stall until tensor is populated.
         return *this;
     }
-
-    Tensor host_tensor;
-    // Populate host storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    if (workers.size() == 1) {
-        host_tensor.tensor_attributes->storage = OwnedStorage();
-    } else {
-        host_tensor.tensor_attributes->storage = MultiDeviceHostStorage();
-    }
-    // Record main_thread_ref_count for tensor before pushing to queue.
+    TT_FATAL(validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
+    Tensor host_tensor({}, workers.size());
     uint32_t original_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
-    workers.at(0)->push_work([*this, host_tensor, blocking] () mutable {
-        TT_ASSERT(this->storage_type() == StorageType::DEVICE or this->storage_type() == StorageType::MULTI_DEVICE, "Can only use worker queue for cpu call if tensor is on device.");
-        auto local_tensor = tensor_impl::to_host_wrapper(*this, blocking);
-        // Populate host tensor
-        host_tensor.populate_buffers_and_metadata(local_tensor);
-    }, blocking);
-
+    for (auto target_device : workers) {
+        target_device->push_work([host_tensor, blocking, target_device, *this, workers] () mutable {
+            TT_ASSERT(this->storage_type() == StorageType::DEVICE or this->storage_type() == StorageType::MULTI_DEVICE, "Can only use worker queue for cpu call if tensor is on device.");
+            auto shard = get_shard_for_device(*this, target_device);
+            shard = tensor_impl::to_host_wrapper(shard, blocking);
+            insert_buffer_and_shape_for_device(target_device, shard, host_tensor);
+            if (not target_device->id() or workers.size() == 1) {
+                host_tensor.set_shape(this->get_shape());
+                host_tensor.set_dtype(this->get_dtype());
+                host_tensor.set_layout(this->get_layout());
+            }
+            if (workers.size() == 1) {
+                host_tensor.set_populated();
+            }
+            else {
+                host_tensor.set_populated(target_device);
+            }
+        }, blocking);
+    }
     // Update main_thread_ref_count for tensor after pushing to queue.
     this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
     return host_tensor;
@@ -485,7 +527,8 @@ bool Tensor::is_allocated() const {
             }
             else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 bool is_allocated = true;
-                for (const auto& buffer : storage.buffers) {
+                for (const auto& device_buf_pair : storage.buffers) {
+                    auto buffer = device_buf_pair.second;
                     is_allocated &= bool(buffer) and buffer->size() > 0;
                 }
                 return is_allocated;

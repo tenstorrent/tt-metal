@@ -33,9 +33,8 @@ inline void close_device_mesh(DeviceMesh &multi_device) {
 }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
-    std::vector<ttnn::Tensor> tensors;
-
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
+        std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
         for (int i = 0; i < host_storage.buffers.size(); ++i)
         {
@@ -44,9 +43,11 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
         auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        for (int i = 0; i < device_storage.buffers.size(); ++i)
+        std::vector<ttnn::Tensor> tensors = std::vector<ttnn::Tensor>(device_storage.buffers.size(), Tensor());
+        for (auto& device_buf_pair : device_storage.buffers)
         {
-            tensors.push_back(Tensor{DeviceStorage{device_storage.buffers[i]}, device_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()});
+            auto [device_id, buffer] = device_buf_pair;
+            tensors[device_id] = Tensor{DeviceStorage{buffer}, device_storage.shapes.at(device_id), tensor.get_dtype(), tensor.get_layout()};
         }
         return tensors;
     }
@@ -64,9 +65,9 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
 
     // Based whether the first tensor shard has OwnedBuffer or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
-    std::vector<tt::tt_metal::Shape> shapes;
     StorageType storage_type = tensor_shards.at(0).storage_type();
     if (storage_type == StorageType::OWNED) {
+        std::vector<tt::tt_metal::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
@@ -75,10 +76,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
         auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
-        std::vector<DeviceBuffer> device_buffers;
+        std::unordered_map<int, tt::tt_metal::Shape> shapes;
+        std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
-            device_buffers.push_back(std::get<DeviceStorage>(shard.get_storage()).buffer);
-            shapes.push_back(shard.get_legacy_shape());
+            Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
+            device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
+            shapes.insert({device->id(), shard.get_legacy_shape()});
         }
         auto storage = MultiDeviceStorage{std::move(device_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
