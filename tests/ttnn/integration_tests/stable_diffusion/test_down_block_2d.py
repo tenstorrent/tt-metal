@@ -132,6 +132,7 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
         ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device),
         layout=ttnn.TILE_LAYOUT,
     )
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_temb = ttnn.to_layout(
         ttnn.to_device(ttnn.from_torch(temb, dtype=ttnn.bfloat16), device),
         layout=ttnn.TILE_LAYOUT,

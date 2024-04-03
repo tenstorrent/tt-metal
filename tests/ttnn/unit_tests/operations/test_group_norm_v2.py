@@ -150,6 +150,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
 )
 def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups):
     torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=8, x=8)
 

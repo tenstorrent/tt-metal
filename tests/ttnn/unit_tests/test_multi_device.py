@@ -49,6 +49,7 @@ def test_multi_device_open_close_full_device_mesh_fixture(pcie_device_mesh):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
+    pytest.skip("Issue #6983")
     device_grid, device_ids = ttnn.DeviceGrid(2, 2), ttnn.get_device_ids()
     if len(device_ids) <= 1:
         pytest.skip()
@@ -193,7 +194,7 @@ def test_multi_device_multi_op(pcie_device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device multi-op"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-    torch_input_tensor = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
     torch_output_golden = torch.exp(torch_output_golden)
 

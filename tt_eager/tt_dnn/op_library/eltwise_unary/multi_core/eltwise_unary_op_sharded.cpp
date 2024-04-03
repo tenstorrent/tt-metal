@@ -17,7 +17,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en){
+operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en){
     Program program = CreateProgram();
     Device *device = input.device();
 
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, in_cb_id, out_cb_id](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, cb_src0, out_cb](
         const void* operation,
         Program &program,
         const std::vector<Tensor>& input_tensors,
@@ -123,9 +123,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core_height_or_block_sharded
 
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, in_cb_id, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb_id, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};

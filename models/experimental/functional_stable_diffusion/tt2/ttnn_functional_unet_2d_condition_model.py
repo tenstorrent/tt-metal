@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import tt_lib as ttl
 import torch.nn as nn
 import math
 import ttnn
@@ -413,6 +413,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
+            ttl.device.DumpDeviceProfiler(self.device)
             print(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -497,6 +498,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
+            ttl.device.DumpDeviceProfiler(self.device)
             print(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
@@ -573,7 +575,7 @@ class UNet2DConditionModel:
         # 6.post-process
 
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
             # sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
@@ -628,13 +630,13 @@ class UNet2DConditionModel:
                 self.conv_out.in_channels,
             ),
         )
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
         sample = ttnn.silu(sample)
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         sample = ttnn.reshape(
             sample,
             (
@@ -645,6 +647,6 @@ class UNet2DConditionModel:
             ),
         )
         sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
 
         return sample

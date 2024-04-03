@@ -39,20 +39,35 @@
     td {
         padding: 15px;
     }
+
+    .fa {
+
+        color: black;
+        font-size: 48px;
+        padding-right: 15px;
+    }
+
+    .buffer_report_header {
+        text-align: left;
+    }
+
 </style>
 
 <body>
-    <div>
-        <h1>Operation: {{ operation.name }}</h1>
+    <div class="buffer_report_header">
         {%if previous_operation %}
-        <a href=" /operation_buffer_report/{{previous_operation.operation_id}}">Buffer Report of the Previous
-            Operation</a>
-        <br>
+        <a href=" /operation_buffer_report/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
         {% endif %}
         {%if next_operation %}
-        <a href=" /operation_buffer_report/{{next_operation.operation_id}}">Buffer Report of the Next Operation</a>
+        <a href=" /operation_buffer_report/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
         <br>
         {% endif %}
+        <h1>{{ operation.name }}</h1>
+        <br>
+    </div>
+    <div>
+        <pre><code class="python">{{ stack_trace }}</code></pre>
+        <a href=" /operation_shortened_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a>
     </div>
     <div id="left">
         <div>

@@ -7,6 +7,7 @@ import sqlite3
 import shutil
 from typing import Optional
 
+import networkx as nx
 from loguru import logger
 
 import ttnn
@@ -125,26 +126,6 @@ def get_or_create_sqlite_db():
 
     cursor = SQLITE_CONNECTION.cursor()
     cursor.execute(
-        """CREATE TABLE IF NOT EXISTS operations
-                (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS input_tensors
-                (operation_id int, device_id int, address int, input_index int, buffer_type int)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS output_tensors
-                (operation_id int, device_id int, address int, output_index int, buffer_type int)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS buffers
-                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS buffer_pages
-                (operation_id int, device_id int, address int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
-    )
-    cursor.execute(
         """CREATE TABLE IF NOT EXISTS devices
                 (
                     device_id int,
@@ -166,6 +147,38 @@ def get_or_create_sqlite_db():
                     total_l1_for_sharded_buffers int,
                     cb_limit int
                 )"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS operations
+                (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS stack_traces
+                (operation_id int, stack_trace text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS input_tensors
+                (operation_id int, device_id int, address int, input_index int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS output_tensors
+                (operation_id int, device_id int, address int, output_index int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS buffers
+                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS buffer_pages
+                (operation_id int, device_id int, address int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS nodes
+                (operation_id int, unique_id int, node_operation_id int, name text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS edges
+                (operation_id int, source_unique_id int, sink_unique_id int, source_output_index int, sink_input_index int, key int)"""
     )
     SQLITE_CONNECTION.commit()
     return SQLITE_CONNECTION
@@ -221,6 +234,16 @@ def insert_operation(operation, operation_id, duration, matches_golden, desired_
     cursor.execute(
         f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}', {duration}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)})"
     )
+    sqlite_connection.commit()
+
+
+def insert_stack_trace(operation_id, stack_trace):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    cursor = sqlite_connection.cursor()
+
+    formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
+
+    cursor.execute(f"INSERT INTO stack_traces VALUES ({operation_id}, '{formatted_stack_trace}')")
     sqlite_connection.commit()
 
 
@@ -290,23 +313,84 @@ def insert_buffers(operation_id):
                 {buffer.buffer_type.value}
             )"""
         )
-    if ttnn.CONFIG.enable_detailed_buffer_report:
-        for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
-            cursor.execute(
-                f"""INSERT INTO buffer_pages VALUES (
-                    {operation_id},
-                    {buffer_page.device_id},
-                    {buffer_page.address},
-                    {buffer_page.core_y},
-                    {buffer_page.core_x},
-                    {buffer_page.bank_id},
-                    {buffer_page.page_index},
-                    {buffer_page.page_address},
-                    {buffer_page.page_size},
-                    {buffer_page.buffer_type.value}
-                )"""
-            )
     sqlite_connection.commit()
+
+
+def insert_buffer_pages(operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    cursor = sqlite_connection.cursor()
+    for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
+        cursor.execute(
+            f"""INSERT INTO buffer_pages VALUES (
+                {operation_id},
+                {buffer_page.device_id},
+                {buffer_page.address},
+                {buffer_page.core_y},
+                {buffer_page.core_x},
+                {buffer_page.bank_id},
+                {buffer_page.page_index},
+                {buffer_page.page_address},
+                {buffer_page.page_size},
+                {buffer_page.buffer_type.value}
+            )"""
+        )
+    sqlite_connection.commit()
+
+
+def store_graph(operation_id, graph):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    cursor = sqlite_connection.cursor()
+
+    for node in graph.nodes:
+        node_attributes = graph.nodes[node]
+        node_operation = node_attributes["operation"]
+        node_name = str(node_operation)
+        node_operation_id = node_attributes.get("operation_id", None)
+        cursor.execute(
+            f"""INSERT INTO nodes VALUES (
+                {operation_id},
+                {node.unique_id},
+                {optional_value(node_operation_id)},
+                '{node_name}'
+            )"""
+        )
+    for source_node, sink_node, key, data in graph.edges(keys=True, data=True):
+        cursor.execute(
+            f"""INSERT INTO edges VALUES (
+                {operation_id},
+                {source_node.unique_id},
+                {sink_node.unique_id},
+                {data['source_output_index']},
+                {data['sink_input_index']},
+                {key}
+            )"""
+        )
+
+    sqlite_connection.commit()
+
+
+def load_graph(operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    cursor = sqlite_connection.cursor()
+
+    graph = nx.MultiDiGraph()
+    cursor.execute("SELECT * FROM nodes WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, unique_id, node_operation_id, node_name = row
+        graph.add_node(unique_id, node_operation_id=node_operation_id, name=node_name)
+
+    cursor.execute("SELECT * FROM edges WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, source_unique_id, sink_unique_id, source_output_index, sink_input_index, key = row
+        graph.add_edge(
+            source_unique_id,
+            sink_unique_id,
+            source_output_index=source_output_index,
+            sink_input_index=sink_input_index,
+            key=key,
+        )
+
+    return graph
 
 
 def query_device_by_id(device_id):
@@ -370,6 +454,18 @@ def query_operations():
     for row in cursor.fetchall():
         operation = ttnn.database.Operation(*row)
         yield operation
+
+    sqlite_connection.close()
+
+
+def query_stack_trace(operation_id):
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, stack_trace = row
+        return stack_trace
 
     sqlite_connection.close()
 

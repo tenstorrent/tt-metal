@@ -103,7 +103,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
 
         output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
-        padded_output_shape = list(output.shape)[-input_rank:]
+        padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 
     raise NotImplementedError
@@ -684,11 +684,11 @@ def to_layout(
                 else:
                     return ttl.tensor.untilize(
                         tensor,
+                        use_multicore=use_multicore,
                         output_mem_config=ttnn.get_memory_config(tensor) if memory_config is None else memory_config,
                     )
             elif layout == ttnn.TILE_LAYOUT:
                 ## since the default of tilize is to use single core, set use_multicore if the input is sharded
-                use_multicore = False
                 if ttnn.is_sharded(tensor):
                     use_multicore = True
                     ## check if the shard shape is already tile sized, or needs padding

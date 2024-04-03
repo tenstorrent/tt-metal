@@ -85,6 +85,8 @@ def test_linear_with_core_grid(
     *,
     device,
 ):
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
     input_shape_a = (batch_size, 1, m_size, k_size)
     input_shape_b = (k_size, n_size)
 

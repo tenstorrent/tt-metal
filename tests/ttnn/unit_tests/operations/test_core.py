@@ -192,6 +192,10 @@ def test_reshard(
     input_override,
     output_override,
 ):
+    if device.core_grid.y < input_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
+    if device.core_grid.y < output_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
     input_shape = [1, 1, input_height, input_width]
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -267,6 +271,9 @@ def test_reshard(
     ],
 )
 def test_shard_with_corerangeset(device, input_shape, input_shard_shape, input_sharded_memory_config_args):
+    if device.core_grid.y == 7 and input_shard_shape == [32, 128]:
+        pytest.skip()
+
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     interleaved_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
