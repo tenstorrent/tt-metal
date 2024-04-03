@@ -33,12 +33,13 @@ def create_custom_preprocessor(device):
         print("ttnn_module_args: ", ttnn_module_args)
         if isinstance(model, Neck):
             ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
+            ttnn_module_args.c1["use_shallow_conv_variant"] = False  # (
             ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
             ttnn_module_args.c1["weights_dtype"] = ttnn.bfloat8_b
             ttnn_module_args.c1["activation"] = "relu"  # Fuse relu with conv1
             ttnn_module_args.c1["deallocate_activation"] = True
             ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = None
-
+            # ttnn_module_args.c1["use_1d_systolic_array"] = True
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.c1, model.b1)
             update_ttnn_module_args(ttnn_module_args.c1)
             parameters["c1"], c1_parallel_config = preprocess_conv2d(
@@ -364,8 +365,10 @@ def test_neck(reset_seeds, device):
     torch_model.eval()
 
     torch_input_tensor = torch.randn(1, 1024, 10, 10)  # Batch size of 1, 1024 input channels, 10x10 height and width
-    torch_output_tensor = torch_model(torch_input_tensor)
-
+    torch_output_tensors = torch_model(torch_input_tensor)
+    torch_output_tensor0 = torch_output_tensors[0]
+    torch_output_tensor1 = torch_output_tensors[1]
+    torch_output_tensor2 = torch_output_tensors[2]
     reader_patterns_cache = {}
     parameters = preprocess_model(
         initialize_model=lambda: torch_model,
@@ -375,26 +378,29 @@ def test_neck(reset_seeds, device):
         device=device,
     )
 
+    ttnn_model = TtNeck(parameters)
 
-#    ttnn_model = TtNeck(parameters)
-#
-#    # Tensor Preprocessing
-#    #
-#    input_shape = torch_input_tensor.shape
-#    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-#
-#    input_tensor = input_tensor.reshape(
-#        input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
-#    )
-#    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-#    output_tensor = ttnn_model(device, input_tensor)
-#
-#    #
-#    # Tensor Postprocessing
-#    #
-#    output_tensor = ttnn.to_torch(output_tensor)
-#    output_tensor = output_tensor.reshape(1, 160, 160, 64)
-#    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-#    output_tensor = output_tensor.to(torch_input_tensor.dtype)
-#
-#    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # Tensor Preprocessing
+    #
+    input_shape = torch_input_tensor.shape
+    input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+
+    input_tensor = input_tensor.reshape(
+        input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
+    )
+    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    output_tensors = ttnn_model(device, input_tensor)
+    output_tensor0 = output_tensors[0]
+    output_tensor1 = output_tensors[1]
+    output_tensor2 = output_tensors[2]
+    #
+    # Tensor Postprocessing
+    #
+    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = output_tensor.reshape(1, 160, 160, 64)
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+    output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+    assert_with_pcc(torch_output_tensor0, output_tensor0, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor0, output_tensor0, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor0, output_tensor0, pcc=0.99)
