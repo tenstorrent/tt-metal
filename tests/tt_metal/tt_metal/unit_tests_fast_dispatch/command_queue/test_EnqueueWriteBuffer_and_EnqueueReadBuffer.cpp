@@ -358,8 +358,10 @@ TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
+    if (this->arch_ == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Causes issues on Grayskull. See #7067";
+    }
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
-    GTEST_SKIP() << "Failing on Grayskull and N150";
 
     for (Device *device : devices_) {
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
@@ -367,6 +369,9 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
+    if (this->arch_ == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Causes issues on Grayskull. See #7067";
+    }
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
