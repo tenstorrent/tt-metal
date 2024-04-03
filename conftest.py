@@ -331,7 +331,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
 
     if num_devices_requested <= 1:
         pytest.skip("Requires multiple devices to run")
-    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, len(device_ids)), device_ids)
 
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
