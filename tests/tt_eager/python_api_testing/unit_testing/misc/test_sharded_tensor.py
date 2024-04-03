@@ -282,11 +282,6 @@ def test_tensor_conversion_between_torch_and_tt_tile_multichip(
     num_tiles_height = (two_d_shape[0]) / TILE_HEIGHT
     debug = True
 
-    if debug:
-        torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype)
-    else:
-        torch_tensor = get_tensor(tensor_shape, dtype)
-    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttl.tensor.BufferType.DRAM,
@@ -295,6 +290,11 @@ def test_tensor_conversion_between_torch_and_tt_tile_multichip(
 
     tt_tensor_list = []
     for device in devices:
+        if debug:
+            torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype)
+        else:
+            torch_tensor = get_tensor(tensor_shape, dtype)
+        tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
         if direct_write:
             tt_tensor_sharded = tt_tensor.to(device, sharded_mem_config)
         else:
