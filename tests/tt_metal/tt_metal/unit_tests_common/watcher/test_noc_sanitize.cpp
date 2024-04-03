@@ -17,7 +17,8 @@ using namespace tt::tt_metal;
 
 typedef enum sanitization_features {
     SanitizeAddress,
-    SanitizeAlignment
+    SanitizeAlignmentL1,
+    SanitizeAlignmentDRAM
 } watcher_features_t;
 
 void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature) {
@@ -87,9 +88,12 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             output_dram_noc_xy.x = 16;
             output_dram_noc_xy.y = 16;
             break;
-        case SanitizeAlignment:
+        case SanitizeAlignmentL1:
             l1_buffer_addr += 16; // This is illegal because reading DRAM->L1 needs DRAM alignment
                                   // requirements (32 byte aligned).
+            break;
+        case SanitizeAlignmentDRAM:
+            input_dram_buffer_addr++;
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -125,20 +129,31 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access core (16,16) L1[addr=0x{:08x},len=102400]",
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access Unknown core w/ physical coords {} [addr=0x{:08x},len=102400]",
                 device->id(),
                 (is_eth_core) ? "Ethnet" : "Worker",
                 core.str(), phys_core.str(),
-                (is_eth_core) ? "erisc" : "brisc", output_dram_buffer_addr
+                (is_eth_core) ? "erisc" : "brisc", output_dram_noc_xy.str(),
+                output_dram_buffer_addr
             );
             break;
-        case SanitizeAlignment:
+        case SanitizeAlignmentL1:
             expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 reading L1[addr=0x{:08x},len=102400]",
+                "Device {}, {} Core {}[physical {}]: {} using noc0 accesses local L1[addr=0x{:08x},len=102400]",
                 device->id(),
                 (is_eth_core) ? "Ethnet" : "Worker",
                 core.str(), phys_core.str(),
                 (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr
+            );
+            break;
+        case SanitizeAlignmentDRAM:
+            expected = fmt::format(
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", input_dram_noc_xy.str(),
+                input_dram_buffer_addr
             );
             break;
         default:
@@ -197,13 +212,25 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
     );
 }
 
-TEST_F(WatcherFixture, TestWatcherSanitizeAlignment) {
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, device, core, false, SanitizeAlignment);
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1);
+        },
+        this->devices_[0]
+    );
+}
+
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(
+        [](WatcherFixture *fixture, Device *device){
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignmentDRAM);
         },
         this->devices_[0]
     );
