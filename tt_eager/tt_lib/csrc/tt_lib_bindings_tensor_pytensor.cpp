@@ -318,7 +318,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
-    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_shapes};
+    auto storage = MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_shapes);
 
     return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
 }
