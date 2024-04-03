@@ -72,7 +72,7 @@ class TtLlamaModel_optimized(nn.Module):
         kv_unique_dir = str(int(time.time()))
         kv_cache_path = cache_path / kv_unique_dir
         # Ensure kv_cache_path exists
-        logger.trace("Creating Layers")
+        logger.info("Creating Layers")
         kv_cache_path.mkdir(parents=True, exist_ok=True)
         self.layers = [
             TtLlamaDecoder_optimized(
@@ -90,7 +90,7 @@ class TtLlamaModel_optimized(nn.Module):
             for i in tqdm(range(n_layers))
         ]
 
-        logger.trace("Done creating layers")
+        logger.info("Done creating layers")
 
         # Rotary Embedding
         if self.model_config["LLM_MODE"] == "prefill":
