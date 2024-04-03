@@ -34,7 +34,9 @@ config_override = {
 
 
 class upsample2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    ):
         self.input_height = input_height
         self.input_width = input_width
         self.device = device
@@ -77,6 +79,7 @@ class upsample2d:
             use_shallow_conv_variant=False,
             # enable_auto_formatting=True,
             deallocate_activation=True,
+            compute_kernel_config=compute_kernel_config,
         )
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width

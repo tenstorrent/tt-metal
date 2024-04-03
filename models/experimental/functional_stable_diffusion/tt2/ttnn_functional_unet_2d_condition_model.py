@@ -154,6 +154,7 @@ class UNet2DConditionModel:
                     batch_size,
                     input_height,
                     input_width,
+                    conv_compute_kernel_config,
                 )
             elif down_block_type == "DownBlock2D":
                 down_block = downblock2d(
@@ -175,7 +176,13 @@ class UNet2DConditionModel:
 
         assert mid_block_type == "UNetMidBlock2DCrossAttn"
         self.mid_block = unet_mid_block_2d_cross_attn(
-            device, parameters.mid_block, reader_patterns_cache, batch_size, input_height, input_width
+            device,
+            parameters.mid_block,
+            reader_patterns_cache,
+            batch_size,
+            input_height,
+            input_width,
+            conv_compute_kernel_config,
         )
         input_height = self.mid_block.output_height
         input_width = self.mid_block.output_width
@@ -186,11 +193,23 @@ class UNet2DConditionModel:
         for i, up_block_type in enumerate(up_block_types):
             if up_block_type == "CrossAttnUpBlock2D":
                 up_block = cross_attention_upblock2d(
-                    device, parameters.up_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.up_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    conv_compute_kernel_config,
                 )
             elif up_block_type == "UpBlock2D":
                 up_block = upblock_2d(
-                    device, parameters.up_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.up_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    conv_compute_kernel_config,
                 )
             else:
                 assert False
