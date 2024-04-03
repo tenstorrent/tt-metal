@@ -701,6 +701,13 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         }
     }
 
+    log_info(
+        LogMetalTrace,
+        "DEBUG completion q blocking={}, expected={}, completed={}",
+        blocking,
+        this->num_entries_in_completion_q,
+        this->num_completed_completion_q_reads);
+
     if (blocking) {
         this->finish();
     } else {
@@ -716,6 +723,12 @@ void HWCommandQueue::enqueue_program(
 
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
+
+    // FIXME: #7070 need special handling for bypass mode to allow tracing of events as well
+    if (this->manager.get_bypass_mode()) {
+        tt::log_debug(tt::LogDispatch, "Skipping enqueue_record_event for command queue {} in bypass mode", this->id);
+        return;
+    }
 
     // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
     // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
@@ -1270,6 +1283,7 @@ void EndTrace(Trace& trace) {
 
 uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
     uint32_t trace_id = trace.instantiate(cq);
+    Finish(cq);
     return trace_id;
 }
 
