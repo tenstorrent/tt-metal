@@ -111,6 +111,8 @@ void init(int argc, char **argv) {
     dispatch_buffer_block_size_pages_g = test_args::get_command_option_uint32(input_args, "-bs", DEFAULT_DISPATCH_BUFFER_BLOCK_SIZE_PAGES);
     dispatch_buffer_size_blocks_g = test_args::get_command_option_uint32(input_args, "-b", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
     dispatch_buffer_size_g = dispatch_buffer_page_size_g * dispatch_buffer_block_size_pages_g * dispatch_buffer_size_blocks_g;
+    log_debug(tt::LogTest, "Computed dispatch_buffer_size_g: {} from page_size: {} block_size_pages: {} blocks: {}",
+        dispatch_buffer_size_g, dispatch_buffer_page_size_g, dispatch_buffer_block_size_pages_g, dispatch_buffer_size_blocks_g);
 
     prefetcher_page_batch_size_g = test_args::get_command_option_uint32(input_args, "-ppbs", DEFAULT_PREFETCHER_PAGE_BATCH_SIZE);
 
@@ -119,6 +121,8 @@ void init(int argc, char **argv) {
     // divide the batch size evenlly, one page for terminate
     pbs_pages = pbs_pages / prefetcher_page_batch_size_g * prefetcher_page_batch_size_g + terminate_cmd_pages;
     prefetcher_buffer_size_g = pbs_pages * dispatch_buffer_page_size_g;
+    log_debug(tt::LogTest, "Computed prefetcher_buffer_size_g: {} from page_size: {} prefetch_buffer_pages: {}",
+        prefetcher_buffer_size_g, dispatch_buffer_page_size_g, pbs_pages);
 
     max_xfer_size_bytes_g = test_args::get_command_option_uint32(input_args, "-max", max_xfer_size_bytes_g);
     min_xfer_size_bytes_g = test_args::get_command_option_uint32(input_args, "-min", min_xfer_size_bytes_g);
@@ -364,8 +368,15 @@ int main(int argc, char **argv) {
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t l1_buf_base = align(DISPATCH_L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
-        if (prefetcher_buffer_size_g + l1_buf_base > 1024 * 1024) {
-            log_fatal(LogTest, "Error, prefetcher buffer size too large\n");
+
+        // Make sure user doesn't exceed available L1 space with cmd line arguments.
+        auto &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        if (prefetcher_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
+            log_fatal(LogTest, "Prefetcher buffer size too large. {} exceeds l1_worker_size: {}", dispatch_buffer_size_g, soc_desc.worker_l1_size);
+            exit(-1);
+        }
+        if (dispatch_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
+            log_fatal(LogTest, "Dispatcher buffer size too large. {} exceeds l1_worker_size: {}", dispatch_buffer_size_g, soc_desc.worker_l1_size);
             exit(-1);
         }
 
