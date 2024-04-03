@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks MorehSumBackward::create_program(
     auto& output_grad = inputs.at(0);
     auto& input_grad = inputs.at(1);
 
-    return moreh_sum_backward_program(output_grad, input_grad);
+    return moreh_sum_backward_impl(output_grad, input_grad);
 }
 
 std::vector<Tensor> MorehSumBackward::create_output_tensors(const std::vector<Tensor>& inputs) const {

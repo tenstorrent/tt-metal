@@ -9,15 +9,16 @@ inline uint32_t get_read_tile_id(uint32_t tile_id, uint32_t dim, uint32_t input_
 }
 
 void kernel_main() {
-    const auto input_addr = get_arg_val<uint32_t>(0);
-    const auto num_input_tiles = get_arg_val<uint32_t>(1);
-    const auto num_output_tiles = get_arg_val<uint32_t>(2);
-    const auto input_tile_offset = get_arg_val<uint32_t>(3);
-    const auto start_id = get_arg_val<uint32_t>(4);
-    const auto input_is_dram = (get_arg_val<uint32_t>(5) == 1);
-    const auto HtWt = get_arg_val<uint32_t>(6);
-    const auto CHtWt = get_arg_val<uint32_t>(7);
-    const auto dim = get_arg_val<uint32_t>(8);
+    ArgFetcher arg_fetcher;
+    const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_tile_offset = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_is_dram = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+    const auto HtWt = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto CHtWt = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto dim = arg_fetcher.get_next_arg_val<uint32_t>();
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
