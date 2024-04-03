@@ -676,26 +676,29 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         }
         uint32_t space_available_bytes = std::min(command_issue_limit - this->manager.get_issue_queue_write_ptr(this->id), MAX_PREFETCH_COMMAND_SIZE);
         int32_t num_pages_available = (int32_t(space_available_bytes) - int32_t(data_offset_bytes)) / int32_t(padded_page_size);
+        if (num_pages_available != 0) {
+            uint32_t pages_to_write = std::min(total_pages_to_write, (uint32_t)num_pages_available);
 
-        uint32_t pages_to_write = std::min(total_pages_to_write, (uint32_t)num_pages_available);
+            if (dst_page_index > 0xFFFF) {
+                // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
+                // To handle larger page offsets move bank base address up and update page offset to be relative to the new bank address
+                uint32_t residual = dst_page_index % num_banks;
+                uint32_t num_full_pages_written_per_bank = dst_page_index / num_banks;
+                bank_base_address += num_full_pages_written_per_bank * padded_page_size;
+                dst_page_index = residual;
+            }
 
-        if (dst_page_index > 0xFFFF) {
-            // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
-            // To handle larger page offsets move bank base address up and update page offset to be relative to the new bank address
-            uint32_t residual = dst_page_index % num_banks;
-            uint32_t num_full_pages_written_per_bank = dst_page_index / num_banks;
-            bank_base_address += num_full_pages_written_per_bank * padded_page_size;
-            dst_page_index = residual;
+            tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
+
+            auto command = EnqueueWriteInterleavedBufferCommand(
+                this->id, this->device, buffer, src, this->manager, issue_wait, this->expected_num_workers_completed, bank_base_address, dst_page_index, pages_to_write);
+            this->enqueue_command(command, false); // don't block until the entire src data is enqueued in the issue queue
+
+            total_pages_to_write -= pages_to_write;
+            dst_page_index += pages_to_write;
+        } else {
+            this->manager.wrap_issue_queue_wr_ptr(this->id);
         }
-
-        tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
-
-        auto command = EnqueueWriteInterleavedBufferCommand(
-            this->id, this->device, buffer, src, this->manager, issue_wait, this->expected_num_workers_completed, bank_base_address, dst_page_index, pages_to_write);
-        this->enqueue_command(command, false); // don't block until the entire src data is enqueued in the issue queue
-
-        total_pages_to_write -= pages_to_write;
-        dst_page_index += pages_to_write;
     }
 
     if (blocking) {

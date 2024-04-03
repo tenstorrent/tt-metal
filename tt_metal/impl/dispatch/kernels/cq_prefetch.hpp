@@ -60,7 +60,7 @@ void read_from_pcie(volatile tt_l1_ptr uint16_t *& prefetch_q_rd_ptr,
     }
 
     // Wrap pcie/hugepage
-    if (pcie_read_ptr + size > pcie_size) {
+    if (pcie_read_ptr + size > pcie_base + pcie_size) {
         pcie_read_ptr = pcie_base;
     }
 
