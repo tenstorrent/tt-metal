@@ -27,7 +27,7 @@ struct MorehSumBackward {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-operation::ProgramWithCallbacks moreh_sum_backward_program(const Tensor &output_grad, const Tensor &input_grad);
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad);
 
 Tensor moreh_sum_backward(const Tensor &output_grad, const Tensor &input_grad);
 
