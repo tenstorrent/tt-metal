@@ -19,7 +19,7 @@ Install [TT-Flash](https://github.com/tenstorrent/tt-flash) and the [firmware bl
 
 Install [TT-SMI](https://github.com/tenstorrent/tt-smi).
 
-Install [TT-Topology](https://github.com/tenstorrent/tt-smi) with `mesh` configuration if you're using a T3000.
+Install [TT-Topology](https://github.com/tenstorrent/tt-topology) with `mesh` configuration if you're using a T3000.
 
 Note the current compatability matrix:
 
