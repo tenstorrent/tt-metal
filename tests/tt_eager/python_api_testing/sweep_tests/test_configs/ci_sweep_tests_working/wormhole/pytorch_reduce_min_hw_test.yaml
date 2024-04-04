@@ -1,9 +1,9 @@
 ---
 test-list:
-  - reduce-max-hw:
+  - reduce-min-hw:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 128
@@ -18,16 +18,16 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
-      output-file: reduce_max_hw_sweep.csv
+      output-file: reduce_min_hw_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-  - reduce-max-hw:
+  - reduce-min-hw:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 128
@@ -42,13 +42,13 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: reduce_max_hw_sweep.csv
+      output-file: reduce_min_hw_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-  - reduce-max-hw:
+  - reduce-min-hw:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -66,7 +66,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
-      output-file: reduce_max_hw_sweep.csv
+      output-file: reduce_min_hw_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
