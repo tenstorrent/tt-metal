@@ -176,6 +176,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_concat_heads.cpp \
+	tt_eager/tt_dnn/op_library/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/rotate_half_op.cpp \
 	tt_eager/tt_dnn/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp \

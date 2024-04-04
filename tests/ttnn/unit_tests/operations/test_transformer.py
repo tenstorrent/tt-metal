@@ -295,7 +295,7 @@ def test_sharded_split_query_key_value_and_split_heads(
     torch.manual_seed(0)
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
-
+    # needs to be shuffled
     input_memory_config = ttnn.create_sharded_memory_config(
         input_shape, core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK
     )
