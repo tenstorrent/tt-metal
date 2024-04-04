@@ -27,6 +27,10 @@ def update_ttnn_module_args(ttnn_module_args):
     ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
 
 
+def update_ttnn_module_argsc3(ttnn_module_args):
+    ttnn_module_args["use_1d_systolic_array"] = True
+
+
 def create_custom_preprocessor(device):
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
@@ -71,13 +75,32 @@ def create_custom_preprocessor(device):
             ttnn_module_args.c3["activation"] = "relu"  # Fuse relu with conv1
             ttnn_module_args.c3["deallocate_activation"] = True
             ttnn_module_args.c3["conv_blocking_and_parallelization_config_override"] = None
-
+            update_ttnn_module_argsc3(ttnn_module_args.c3)
+            print("\n\n\n\nchecking here!: ", ttnn_module_args.c3["use_1d_systolic_array"])
             conv3_weight, conv3_bias = fold_batch_norm2d_into_conv2d(model.c3, model.b3)
             update_ttnn_module_args(ttnn_module_args.c3)
             parameters["c3"], c3_parallel_config = preprocess_conv2d(
                 conv3_weight, conv3_bias, ttnn_module_args.c3, return_parallel_config=True
             )
 
+            ttnn_module_args.p1["deallocate_activation"] = False
+            parameters["p1"] = {}
+            ttnn_module_args.p1["parallel_config_override"] = {
+                "grid_size": (c3_parallel_config.grid_size.x, c3_parallel_config.grid_size.y),
+                "num_cores_nhw": c3_parallel_config.num_cores_nhw,
+            }
+            ttnn_module_args.p2["deallocate_activation"] = False
+            parameters["p2"] = {}
+            ttnn_module_args.p2["parallel_config_override"] = {
+                "grid_size": (c3_parallel_config.grid_size.x, c3_parallel_config.grid_size.y),
+                "num_cores_nhw": c3_parallel_config.num_cores_nhw,
+            }
+            ttnn_module_args.p3["deallocate_activation"] = False
+            parameters["p3"] = {}
+            ttnn_module_args.p3["parallel_config_override"] = {
+                "grid_size": (c3_parallel_config.grid_size.x, c3_parallel_config.grid_size.y),
+                "num_cores_nhw": c3_parallel_config.num_cores_nhw,
+            }
             ttnn_module_args.c4["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c4["use_shallow_conv_variant"] = False  # (
             #                False if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 else True
