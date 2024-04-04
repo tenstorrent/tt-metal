@@ -34,7 +34,7 @@ def main(args):
     args.num_tokens = args.sample_len
 
     # Dataset preparation
-    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, verification_mode="no_checks")
+    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos
 
