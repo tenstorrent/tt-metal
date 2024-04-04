@@ -27,7 +27,7 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("conj_bw", &tt::tt_metal::conj_bw,
+    m_tensor.def("conj_bw", py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&conj_bw),
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs backward operations for conjugate for complex tensor ``input`` with given ``grad``
 
@@ -1961,7 +1961,7 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("imag_bw", &tt::tt_metal::imag_bw,
+    m_tensor.def("imag_bw", py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&imag_bw),
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs backward operations for imaginary part of complex tensor ``input`` with given ``grad``
 
@@ -1977,7 +1977,7 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("real_bw", &tt::tt_metal::real_bw,
+    m_tensor.def("real_bw", py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&real_bw),
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs backward operations for real part of complex tensor ``input`` with given ``grad``
 
@@ -2005,8 +2005,8 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "grad", "Gradient tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "input_a", "absolute value of the complex tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
-                "input_b", "angle of the complex tensor", "Tensor", "Tensor of complex shape [W, Z, Y, X]", "Yes"
+                "input_a", "absolute value of the complex tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "angle of the complex tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

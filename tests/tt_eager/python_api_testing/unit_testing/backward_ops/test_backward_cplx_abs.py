@@ -39,11 +39,11 @@ def test_bw_abs_cplx1(input_shapes, device):
         tt_lib.tensor.Tensor(in_data_cplx, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )
 
-    tt_output_tensor_on_device = tt_lib.tensor.angle_bw(grad_tensor, input_tensor, True)
+    tt_output_tensor_on_device = tt_lib.tensor.complex_abs_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
-    pyt_y = torch.angle(in_data)
+    pyt_y = torch.abs(in_data)
 
     pyt_y.backward(gradient=grad_data)
 
@@ -75,11 +75,11 @@ def test_bw_complex_abs_zero_inp(input_shapes, device):
         tt_lib.tensor.Tensor(in_data_cplx, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )
 
-    tt_output_tensor_on_device = tt_lib.tensor.angle_bw(grad_tensor, input_tensor)
+    tt_output_tensor_on_device = tt_lib.tensor.complex_abs_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
-    pyt_y = torch.angle(in_data)
+    pyt_y = torch.abs(in_data)
 
     pyt_y.backward(gradient=grad_data)
 
