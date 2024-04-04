@@ -113,6 +113,7 @@ from ttnn.types import (
     MathFidelity,
     MemoryConfig,
     BufferType,
+    TensorMemoryLayout,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,

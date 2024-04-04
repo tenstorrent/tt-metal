@@ -242,7 +242,7 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     else:
         grid_size = [num_cores_nhw, num_cores_channels]
     shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
-    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COLUMN_MAJOR
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COL_MAJOR
     return ttnn.create_sharded_memory_config(
         (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
         ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
