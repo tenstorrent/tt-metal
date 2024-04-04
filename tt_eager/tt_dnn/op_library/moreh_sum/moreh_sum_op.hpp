@@ -22,14 +22,19 @@ using namespace tt_metal;
 
 struct MorehSum {
     int64_t dim;
-    void validate(const std::vector<Tensor> &inputs) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
+    MemoryConfig output_mem_config;
+    void validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
     stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->dim)); }
+    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
+    }
 };
 
 operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim);
@@ -37,17 +42,11 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
 operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output);
 operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output);
 
-Tensor moreh_sum_(
-    const Tensor &input,
-    std::optional<std::reference_wrapper<const Tensor>> output,
-    const int64_t &dim,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 Tensor moreh_sum(
     const Tensor &input,
-    const Tensor &output,
     std::vector<int64_t> &dims,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const std::optional<const Tensor> output = std::nullopt,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 

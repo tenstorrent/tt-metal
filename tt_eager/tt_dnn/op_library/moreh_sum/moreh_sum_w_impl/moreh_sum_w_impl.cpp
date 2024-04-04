@@ -192,9 +192,9 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         auto src_dram_buffer = input_buffers.at(0);
-
-        auto dst_dram_buffer = input_buffers.at(1);
+        auto dst_dram_buffer = output_buffers.at(0);
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
