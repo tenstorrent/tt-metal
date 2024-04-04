@@ -896,7 +896,8 @@ tt_metal::Program create_program_single_core (
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
         1,                        // batch
-        Mt*Nt
+        Mt*Nt,
+        0
     };
 
     vector<uint32_t> reader_kernel_args = {
