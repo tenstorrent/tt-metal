@@ -16,6 +16,16 @@ static constexpr bool kBlocking = true;
 static constexpr bool kNonBlocking = false;
 static constexpr bool kEnableCQBypass = true;
 static constexpr bool kDisableCQBypass = false;
+
+size_t interleaved_page_size(
+    const uint32_t total_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
+    // TODO #7110: Add logic to automatically figure out the trace buffer page size
+    // Calculate the page size for interleaved buffer that
+    // - is a power - of - 2 number (prefetch constraint),
+    // - AND is evenly distributed across the banks (start_page = 0)
+    // - AND falls inside min and max size constraints (optimal noc util),
+    return DeviceCommand::PROGRAM_PAGE_SIZE;
+}
 }
 
 namespace tt::tt_metal {
@@ -75,7 +85,8 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     uint64_t data_size = data.size() * sizeof(uint32_t);
 
     // TODO: add CQ_PREFETCH_EXEC_BUF_END command and pad to the next page
-    size_t numel_page = DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t);
+    size_t page_size = interleaved_page_size(data_size, cq.device()->num_banks(BufferType::DRAM), 0, 0);
+    size_t numel_page = page_size / sizeof(uint32_t);
     size_t numel_padding = numel_page - data.size() % numel_page;
     if (numel_padding > 0) {
         data.resize(data.size() + numel_padding, 0/*padding value*/);
@@ -84,11 +95,7 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
 
     // Commit the trace buffer to device DRAM
     auto buffer = std::make_shared<Buffer>(
-        cq.device(),
-        data.size() * sizeof(uint32_t),
-        DeviceCommand::PROGRAM_PAGE_SIZE,
-        BufferType::DRAM,
-        TensorMemoryLayout::INTERLEAVED);
+        cq.device(), data.size() * sizeof(uint32_t), page_size, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED);
 
     EnqueueWriteBuffer(cq, buffer, data, kBlocking);
     Finish(cq);  // clear side effects flag
