@@ -201,8 +201,9 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = input_tensors.at(1).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
