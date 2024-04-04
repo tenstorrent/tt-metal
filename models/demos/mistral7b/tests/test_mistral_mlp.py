@@ -17,7 +17,7 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_mistral_mlp_inference(device, use_program_cache):
+def test_mistral_mlp_inference(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(device=device)
     state_dict = torch.load(model_args.consolidated_weights_path)

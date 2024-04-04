@@ -25,7 +25,7 @@ from models.utility_functions import skip_for_grayskull
     "iterations",
     ((1),),
 )
-def test_mistral_decoder_inference(device, iterations, use_program_cache):
+def test_mistral_decoder_inference(device, iterations, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(device)
