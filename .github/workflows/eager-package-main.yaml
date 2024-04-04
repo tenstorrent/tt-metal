@@ -1,5 +1,5 @@
 ---
-name: "[post-commit] eager - Package on main"
+name: "[post-commit] Python wheel build and test"
 
 on:
   workflow_dispatch:

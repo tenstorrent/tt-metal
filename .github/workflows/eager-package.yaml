@@ -1,4 +1,4 @@
-name: "[internal] eager - Package on main impl"
+name: "[internal] Python wheel build and test impl"
 
 on:
   workflow_call:
