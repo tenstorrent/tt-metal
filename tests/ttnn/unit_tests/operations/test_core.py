@@ -298,11 +298,11 @@ def test_shard_with_corerangeset(device, input_shape, input_shard_shape, input_s
         ([1, 1, 1024, 1024], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
         ([1, 1, 1024, 1024], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
         ([1, 1, 1024, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
-        ([1, 1, 1024, 1024], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.COLUMN_MAJOR, ttnn.CoreGrid(y=2, x=2)),
-        ([1, 1, 1024, 1024], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.COLUMN_MAJOR, ttnn.CoreGrid(y=2, x=2)),
-        ([1, 1, 1024, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COLUMN_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1024, 1024], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1024, 1024], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1024, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
         ([1, 1, 128, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=4)),
-        ([1, 1, 1024, 128], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COLUMN_MAJOR, ttnn.CoreGrid(y=4, x=2)),
+        ([1, 1, 1024, 128], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=4, x=2)),
     ],
 )
 def test_create_sharded_memory_config(device, shape, strategy, orientation, core_grid):

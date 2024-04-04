@@ -316,7 +316,7 @@ def bert(
             embeddings.shape,
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
+            orientation=ttnn.ShardOrientation.COL_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )

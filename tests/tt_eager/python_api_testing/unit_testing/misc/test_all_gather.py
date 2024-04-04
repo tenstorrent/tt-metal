@@ -458,7 +458,7 @@ def test_all_gather_on_t3000_nightly(
 )
 @pytest.mark.parametrize(
     "orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR]
-)  # , ttl.tensor.ShardOrientation.COLUMN_MAJOR])
+)  # , ttl.tensor.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
