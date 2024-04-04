@@ -9,14 +9,15 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 #include "device_data.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "tt_metal/third_party/umd/device/util.hpp"
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 
 #ifdef ARCH_GRAYSKULL
 static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
@@ -91,8 +92,32 @@ void Cluster::detect_arch_and_target() {
     TT_FATAL(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
 }
 
+std::filesystem::path get_cluster_desc_yaml() {
+    namespace fs = std::filesystem;
+
+    // RK: We eventually need to take out the create-ethernet-map binary and use it
+    // as a binary in the environment
+    const fs::path tt_metal_dir = fs::path(tt::llrt::OptionsG.get_root_dir()) / "tt_metal";
+    const fs::path umd_path = tt_metal_dir / ".umd";
+    fs::create_directory(umd_path);
+    const fs::path cluster_desc_path = umd_path / "cluster_desc.yaml";
+    if (!fs::exists(cluster_desc_path)) {
+        auto val = system ( ("touch " + cluster_desc_path.string()).c_str());
+        if(val != 0) throw std::runtime_error("YAML Cluster folder and file before create-ethernet-map failed!");
+    }
+
+    // Generates the cluster descriptor in the CWD
+
+    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/wormhole/create-ethernet-map";
+    std::string cmd = eth_fpath.string() + " " + cluster_desc_path.string();
+    int val = system(cmd.c_str());
+    if(val != 0) throw std::runtime_error("Cluster Generation with create-ethernet-map Failed!");
+
+    return fs::absolute(cluster_desc_path);
+}
+
 void Cluster::generate_cluster_descriptor() {
-    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
+    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0) ? get_cluster_desc_yaml().string() : "";
 
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
