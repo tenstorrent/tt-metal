@@ -129,6 +129,7 @@ Pointwise Unary
    ttnn/relu6
    ttnn/rsqrt
    ttnn/sigmoid
+   ttnn/sigmoid_accurate
    ttnn/sign
    ttnn/silu
    ttnn/sin
