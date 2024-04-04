@@ -48,6 +48,13 @@ run_perf_models_llm_javelin() {
     env python models/perf/merge_perf_results.py
 }
 
+run_perf_models_llm_javelin_multi_device() {
+    local tt_arch=$1
+    local test_marker=$2
+
+    # Add tests here
+}
+
 run_perf_models_cnn_javelin() {
     local tt_arch=$1
     local test_marker=$2
@@ -60,6 +67,13 @@ run_perf_models_cnn_javelin() {
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
+}
+
+run_perf_models_cnn_javelin_multi_device() {
+    local tt_arch=$1
+    local test_marker=$2
+
+    # Add tests here
 }
 
 run_device_perf_models() {
@@ -129,25 +143,32 @@ main() {
       exit 1
     fi
 
-    if [[ "$pipeline_type" == *"_virtual_machine" ]]; then
+    if [[ "$pipeline_type" == *"_virtual_machine"* ]]; then
         test_marker="models_performance_virtual_machine"
-    elif [[ "$pipeline_type" == *"device_performance_bare_metal" ]]; then
+    elif [[ "$pipeline_type" == *"device_performance_bare_metal"* ]]; then
         test_marker="models_device_performance_bare_metal"
-    elif [[ "$pipeline_type" == *"_bare_metal" ]]; then
+    elif [[ "$pipeline_type" == *"_bare_metal_multi_device"* ]]; then
+        test_marker="models_device_performance_bare_metal_multi_device"
+    elif [[ "$pipeline_type" == *"_bare_metal"* ]]; then
         test_marker="models_performance_bare_metal"
     else
         echo "$pipeline_type is using an unrecognized platform (suffix, ex. bare_metal, virtual_machine)" 2>&1
         exit 1
     fi
 
+
     if [[ "$pipeline_type" == *"device_performance"* ]]; then
         run_device_perf_models "$test_marker"
         run_device_perf_ops "$test_marker"
+    elif [[ "$pipeline_type" == "llm_javelin_models_performance_bare_metal_multi_device" ]]; then
+        run_perf_models_llm_javelin_multi_device "$tt_arch" "$test_marker"
     elif [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then
         run_perf_models_llm_javelin "$tt_arch" "$test_marker"
+    elif [[ "$pipeline_type" == "cnn_javelin_models_performance_bare_metal_multi_device" ]]; then
+        run_perf_models_cnn_javelin_multi_device "$tt_arch" "$test_marker"
     elif [[ "$pipeline_type" == "cnn_javelin_models_performance"* ]]; then
         run_perf_models_cnn_javelin "$tt_arch" "$test_marker"
-    elif [[ "$pipeline_type" == "other_models_performance"* ]]; then
+    elif [[ "$pipeline_type" == *"other_models_performance"* ]]; then
         run_perf_models_other "$tt_arch" "$test_marker"
     else
         echo "$pipeline_type is not recoognized performance pipeline" 2>&1
