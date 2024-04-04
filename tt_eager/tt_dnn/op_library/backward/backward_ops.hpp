@@ -10,7 +10,6 @@
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/complex/complex_ops.hpp"
 
 
 

@@ -1773,7 +1773,8 @@ std::vector<Tensor> unary_remainder_bw(const Tensor& grad, const Tensor& input, 
   /* TT_ASSERT( input.shape()[0] == 1, "tensor should have batch size 1"); */ \
   } while(0);
 
-//complex conj
+// complex conj
+// self: grad.conj()
 std::vector<Tensor> _conj_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     CHECK_FOR_COMPLEX(grad);
@@ -1800,7 +1801,7 @@ std::vector<Tensor> _complex_recip_bw(const Tensor& grad, const Tensor& input, c
     input_i.deallocate();
     Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
     condition_nan.deallocate();
-    Tensor grad_result = where(nan_flag, full_like(input, std::nanf(""), output_mem_config), complex_mul(neg(grad, output_mem_config), conj(complex_mul(complex_recip(input, output_mem_config), complex_recip(input, output_mem_config), output_mem_config), output_mem_config), output_mem_config)) ;
+    Tensor grad_result = where(nan_flag, full_like(input, std::nanf(""), output_mem_config), complex_mul(neg(grad, output_mem_config), conj(complex_mul(complex_recip(input, output_mem_config), complex_recip(input, output_mem_config), output_mem_config), output_mem_config), output_mem_config), output_mem_config) ;
     nan_flag.deallocate();
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
