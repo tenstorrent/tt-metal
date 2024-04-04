@@ -154,18 +154,25 @@ run_stress_post_commit_pipeline_tests() {
     local dispatch_mode=$3
 
     # Run for 23.5h to allow next run to kick off
-    RUNTIME_MAX=84600
-    suite_duration=4500
-    max_duration=$((RUNTIME_MAX-suite_duration))
+    max_duration=84600
     iter=1
-    while [ $SECONDS -lt $max_duration ]; do
+    cur_duration=0
+    expected_duration=0
+    while [ $expected_duration -lt $max_duration ]; do
         echo "Info: [stress] Doing iteration $iter"
+        start_time=$(date +%s%N) # capture nanoseconds
         if [[ $dispatch_mode == "slow" ]]; then
             ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
         else
             ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
         fi
+        end_time=$(date +%s%N)
+        elapsed=$((end_time - start_time))/1000000000
+        cur_duration=$((cur_duration + elapsed))
+        avg_duration=$((cur_duration / iter))
+        expected_duration=$((cur_duration + avg_duration))
         iter=$((iter+1))
+        echo "Info: [stress] expected elapsed time $expected_duration, elapsed time $cur_duration, avg iteration time $avg_duration"
     done
 }
 
