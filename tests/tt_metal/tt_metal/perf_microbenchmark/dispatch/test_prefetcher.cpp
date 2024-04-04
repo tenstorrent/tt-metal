@@ -173,6 +173,10 @@ bool validate_host_results(
     while (cmd_index < cmds.size()) {
         CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index + sizeof(CQPrefetchCmd) / sizeof(uint32_t)];
         cmd_index += (sizeof(CQPrefetchCmd)) / sizeof(uint32_t);
+
+        // Validate only works for packed write linear host commands
+        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_HOST);
+
         uint32_t length = cmd->write_linear_host.length;
         for (int i = 0; i < length / sizeof(uint32_t); i++) {
             if (cmds[cmd_index] != results[host_data_index] && fail_count < 20) {
@@ -191,7 +195,8 @@ bool validate_host_results(
             cmd_index++;
         }
 
-        cmd_index += (4 - (cmd_index & 3)) & 3; // L1 alignment in words;
+        constexpr uint32_t align_cmd_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
+        cmd_index += (align_cmd_words - (cmd_index & (align_cmd_words - 1))) & (align_cmd_words - 1); // L1 alignment in words;
         uint32_t dbps_words = dispatch_buffer_page_size_g / sizeof(uint32_t);
         host_data_index += (dbps_words - (host_data_index & (dbps_words - 1))) & (dbps_words - 1);
     }
