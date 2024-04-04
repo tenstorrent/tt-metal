@@ -562,6 +562,14 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,
     },
+    "eltwise-sigmoid_accurate": {
+        "tt_lib_op": tt_lib_ops.eltwise_sigmoid_accurate,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
+    "ttnn-eltwise-sigmoid_accurate": {
+        "tt_lib_op": ttnn_ops.eltwise_sigmoid_accurate,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
     "eltwise-log_sigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_log_sigmoid,
         "pytorch_op": pytorch_ops.log_sigmoid,

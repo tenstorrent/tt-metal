@@ -371,6 +371,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.sigmoid
 
+.. autofunction:: tt_lib.tensor.sigmoid_accurate
+
 .. autofunction:: tt_lib.tensor.hardsigmoid
 
 .. autofunction:: tt_lib.tensor.swish

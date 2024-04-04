@@ -363,6 +363,15 @@ inline Tensor log_sigmoid(
         {UnaryWithParam{.op_type = UnaryOpType::SIGMOID}, UnaryWithParam{.op_type = UnaryOpType::LOG}},
         output_mem_config);
 }
+
+inline Tensor sigmoid_accurate(
+    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return run_eltwise_unary(
+        input_tensor,
+        {UnaryWithParam{.op_type = UnaryOpType::NEG}, UnaryWithParam{.op_type = UnaryOpType::EXP, .param = 1.0f}, UnaryWithParam{.op_type = UnaryOpType::ADD_UNARY_SFPU, .param = 1.0f}, UnaryWithParam{.op_type = UnaryOpType::RECIP}},
+        output_mem_config);
+}
+
 inline Tensor unary_chain(
     const Tensor& input_tensor,
     std::vector<UnaryWithParam> ops_chain,
