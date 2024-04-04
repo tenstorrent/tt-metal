@@ -260,7 +260,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             dict(
                 core_grid=ttnn.CoreGrid(y=7, x=5),
                 strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
             ),
             None,
         ),  # mcast 2d transposed

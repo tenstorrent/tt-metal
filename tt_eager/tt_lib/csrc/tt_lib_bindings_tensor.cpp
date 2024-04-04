@@ -279,24 +279,18 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     pyShardSpec
-        .def(
-            py::init<>(
-                [](const CoreRangeSet & core_sets,
-                    const std::array<uint32_t,2> & shard_shape,
-                    const ShardOrientation & shard_orientation,
-                    const bool & halo
-                     ) {
-                    return ShardSpec(core_sets, shard_shape, shard_orientation, halo);
-                }
-            )
-        )
+        .def(py::init<>([](const CoreRangeSet& core_sets,
+                           const std::array<uint32_t, 2>& shard_shape,
+                           const ShardOrientation& shard_orientation,
+                           const bool& halo) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo); }))
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        ;
+        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
+    ;
 
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());

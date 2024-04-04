@@ -280,9 +280,9 @@ Buffer::~Buffer() {
 
 tt::stl::reflection::Attributes ShardSpec::attributes() const {
     return {
-        {"shard_grid", this->grid.str()},
-        {"shard_shape", this->shape},
-        {"shard_orientation", this->orientation},
+        {"grid", this->grid.str()},
+        {"shape", this->shape},
+        {"orientation", this->orientation},
         {"halo", this->halo},
     };
 }
