@@ -29,4 +29,7 @@ void watcher_clear_log();
 // Helper function to get the current watcher log file name/path
 string watcher_get_log_file_name();
 
+// Helper function to get the current watcher dump count
+int watcher_get_dump_count();
+
 } // namespace tt
