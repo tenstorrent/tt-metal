@@ -30,7 +30,10 @@ run_profiling_test() {
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_noc -k $ARCH_NAME
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_dram -k $ARCH_NAME
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_l1 -k $ARCH_NAME
+
+  if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_single_core_sharded -k $ARCH_NAME
+  fi
 }
 
 run_profiling_test
