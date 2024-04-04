@@ -306,7 +306,9 @@ static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
     }
 
     uint64_t noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-    if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
+    if (downstream_data_ptr == downstream_cb_end) {
+        downstream_data_ptr = downstream_cb_base;
+    } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
         downstream_data_ptr = downstream_cb_base;
