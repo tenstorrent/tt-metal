@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import std_hw as tt_std_hw
 
 
-def run_normalize_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_std_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
     x = torch.Tensor(size=input_shape).uniform_(-10, 10)
