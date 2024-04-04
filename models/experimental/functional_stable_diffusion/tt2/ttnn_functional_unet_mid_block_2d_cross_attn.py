@@ -7,15 +7,21 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transfo
 
 
 class unet_mid_block_2d_cross_attn:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    ):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
+            resnetBlock2D(
+                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+            )
             for resnet in parameters.resnets
         ]
         self.attentions = [
-            transformer_2d_model(device, attention, reader_patterns_cache, batch_size, input_height, input_width)
+            transformer_2d_model(
+                device, attention, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+            )
             for attention in parameters.attentions
         ]
 

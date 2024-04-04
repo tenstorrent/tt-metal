@@ -69,7 +69,7 @@ class resnetBlock2D:
         batch_size,
         input_height,
         input_width,
-        compute_kernel_config=None,
+        compute_kernel_config,
         group_norm_on_device=True,
     ):
         self.batch_size = batch_size
@@ -358,13 +358,6 @@ class resnetBlock2D:
         out_channels = in_channels if out_channels is None else out_channels
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
 
-        input_tensor_in_dram = ttnn.get_memory_config(input_tensor) == ttnn.DRAM_MEMORY_CONFIG
-        if not input_tensor_in_dram:
-            input_tensor_dram = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            del input_tensor
-        else:
-            input_tensor_dram = input_tensor
-
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             hidden_states = ttnn.reshape(
                 hidden_states, (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, in_channels)
@@ -456,7 +449,7 @@ class resnetBlock2D:
             split_hidden_states = []
 
         if temb is not None:
-            temb = nonlinearity(temb)
+            temb = nonlinearity(temb, memory_config=ttnn.L1_MEMORY_CONFIG)
             if temb_channels is not None:
                 if time_embedding_norm == "default":
                     time_emb_proj_out_channels = out_channels
@@ -483,6 +476,7 @@ class resnetBlock2D:
             )
             hidden_states = hidden_states + temb
 
+        # TODO: Reshape happening twice
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         hidden_states = ttnn.reshape(
             hidden_states,
@@ -530,11 +524,6 @@ class resnetBlock2D:
         hidden_states = self.conv2(hidden_states)
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
 
-        if not input_tensor_in_dram:
-            input_tensor = ttnn.to_memory_config(input_tensor_dram, memory_config=ttnn.L1_MEMORY_CONFIG)
-        else:
-            input_tensor = input_tensor_dram
-
         if use_in_shortcut:
             if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
                 if ttnn.is_sharded(input_tensor):
@@ -557,6 +546,6 @@ class resnetBlock2D:
             output_sc_recip = ttnn.to_device(output_sc_recip, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
             output_tensor = ttnn.mul(output_tensor, output_sc_recip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        ttnn.deallocate(input_tensor)
         ttnn.deallocate(hidden_states)
+        output_tensor = ttnn.reallocate(output_tensor)
         return output_tensor

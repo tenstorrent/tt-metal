@@ -8,6 +8,7 @@ from typing import Optional, Dict
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d import upsample2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import transformer_2d_model
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import dealloc_input
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -18,15 +19,21 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
 
 
 class cross_attention_upblock2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    ):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
+            resnetBlock2D(
+                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+            )
             for resnet in parameters.resnets
         ]
         self.attentions = [
-            transformer_2d_model(device, attention, reader_patterns_cache, batch_size, input_height, input_width)
+            transformer_2d_model(
+                device, attention, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+            )
             for attention in parameters.attentions
         ]
 
@@ -35,7 +42,13 @@ class cross_attention_upblock2d:
 
         if "upsamplers" in parameters:
             self.upsample_2d = upsample2d(
-                device, parameters.upsamplers[0], reader_patterns_cache, batch_size, input_height, input_width
+                device,
+                parameters.upsamplers[0],
+                reader_patterns_cache,
+                batch_size,
+                input_height,
+                input_width,
+                compute_kernel_config,
             )
 
             self.output_height = self.upsample_2d.output_height
@@ -98,11 +111,15 @@ class cross_attention_upblock2d:
                 )
 
             if ttnn.is_sharded(hidden_states) and hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
-                hidden_states = ttnn.to_layout(
-                    hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+                hidden_states = dealloc_input(
+                    ttnn.to_layout,
+                    hidden_states,
+                    ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    use_multicore=True,
                 )
             elif ttnn.is_sharded(hidden_states):
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                hidden_states = dealloc_input(ttnn.to_memory_config, hidden_states, ttnn.L1_MEMORY_CONFIG)
             if ttnn.is_sharded(on_dev_res_hidden_states) and on_dev_res_hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
                 on_dev_res_hidden_states = ttnn.to_layout(
                     on_dev_res_hidden_states,
@@ -113,10 +130,10 @@ class cross_attention_upblock2d:
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
             if hidden_states.dtype != ttnn.bfloat8_b:
-                hidden_states = ttnn.clone(
-                    hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
+                hidden_states = dealloc_input(
+                    ttnn.clone, hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
-            hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
+            hidden_states = dealloc_input(ttnn.concat, [hidden_states, on_dev_res_hidden_states], dim=3)
             # breakpoint()
             ttnn.deallocate(on_dev_res_hidden_states)
             # breakpoint()
