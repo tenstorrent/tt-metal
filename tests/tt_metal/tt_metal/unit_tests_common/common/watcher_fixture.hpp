@@ -18,8 +18,11 @@ public:
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         CommonFixture::RunProgram(device, program);
-        // Wait for a watcher interval to make sure that we get a reading after program finish.
-        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+
+        // Wait for watcher to run a full dump before finishing, need to wait for dump count to
+        // increase because we'll likely check in the middle of a dump.
+        int curr_count = tt::watcher_get_dump_count();
+        while (tt::watcher_get_dump_count() < curr_count + 2) {;}
     }
 
 protected:

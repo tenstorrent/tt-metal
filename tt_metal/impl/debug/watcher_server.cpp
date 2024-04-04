@@ -35,8 +35,9 @@ constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8  = 0xda;
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
+static std::atomic<int> dump_count = 0;
 static std::mutex watch_mutex;
-static std::unordered_set<Device *> devices;
+static std::set<Device *> devices;
 static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
@@ -707,7 +708,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
 static void watcher_loop(int sleep_usecs) {
     TT_ASSERT(watcher::server_running == false);
     watcher::server_running = true;
-    int count = 0;
+    watcher::dump_count = 1;
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
@@ -732,7 +733,6 @@ static void watcher_loop(int sleep_usecs) {
                 break;
             usleep(1);
         }
-        count++;
         last_elapsed_time = watcher::get_elapsed_secs();
 
         {
@@ -744,7 +744,7 @@ static void watcher_loop(int sleep_usecs) {
                 break;
 
             fprintf(logfile, "-----\n");
-            fprintf(logfile, "Dump #%d at %.3lfs\n", count, watcher::get_elapsed_secs());
+            fprintf(logfile, "Dump #%d at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
 
             if (devices.size() == 0) {
                 fprintf(logfile, "No active devices\n");
@@ -763,8 +763,10 @@ static void watcher_loop(int sleep_usecs) {
                 }
             }
 
-            fprintf(logfile, "Dump #%d completed at %.3lfs\n", count, watcher::get_elapsed_secs());
+            fprintf(logfile, "Dump #%d completed at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
         }
+        fflush(logfile);
+        watcher::dump_count++;
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
@@ -952,6 +954,10 @@ void watcher_clear_log() {
 
 string watcher_get_log_file_name() {
     return tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path + watcher::logfile_name;
+}
+
+int watcher_get_dump_count() {
+    return watcher::dump_count;
 }
 
 } // namespace tt
