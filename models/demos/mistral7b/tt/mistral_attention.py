@@ -139,6 +139,17 @@ class TtMistralAttention(nn.Module):
             self.wo_list.append(wo)
             self.layer_past_list.append(layer_past)
 
+        # Pre-scaled head dimension (for softmax) to avoid fallbacking to host
+        self.head_dims = [
+            ttnn.from_torch(
+                torch.ones(1, self.n_heads, self.max_batch_size, self.head_dim) * (self.head_dim**-0.5),  # [seqlen, n_heads, bsz, head_dim] [1,32,32,128]
+                device=self.devices[i],
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+            for i in range(self.num_devices)
+        ]
+
     def forward(
         self,
         xs: List[ttnn.Tensor],
@@ -163,6 +174,8 @@ class TtMistralAttention(nn.Module):
             wqkv = self.wqkv_list[i]
             wo = self.wo_list[i]
             layer_past = self.layer_past_list[i]
+            head_dim = self.head_dims[i]
+
 
             ###
             # QKV matmuls
@@ -277,6 +290,7 @@ class TtMistralAttention(nn.Module):
                 ),
             )
             """
+            q_heads = q_heads * head_dim  # Scale q_heads instead of QK before softmax
 
             attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                 q_heads,
@@ -288,7 +302,7 @@ class TtMistralAttention(nn.Module):
 
             layer_slice = min((self.start_pos + 1), self.sliding_window)
             attn = attn[:, :, :, :layer_slice]
-            attn = ttnn.softmax(attn * (self.head_dim**-0.5), dim=-1)
+            attn = ttnn.softmax(attn, dim=-1)  # (attn * (self.head_dim**-0.5))
             """
             attn = ttnn.to_memory_config(attn, memory_config=ttnn.create_sharded_memory_config(
                 (32, padded_layer_past_len),

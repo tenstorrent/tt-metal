@@ -38,7 +38,7 @@ class Emb(torch.nn.Module):
     ((32, 12, 15, 0.16),),
 )
 def test_mistral_model_perf(
-    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache
+    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
     dtype = ttnn.bfloat8_b
 
@@ -213,7 +213,7 @@ def test_mistral_model_perf(
     "batch, iterations, expected_perf",
     ((32, 17, 0.16),),
 )
-def test_mistral_perf_device(batch, iterations, expected_perf):
+def test_mistral_perf_device(batch, iterations, expected_perf, reset_seeds):
     subdir = "ttnn_mistral7b"
     margin = 0.03
     command = f"pytest models/demos/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
@@ -229,5 +229,4 @@ def test_mistral_perf_device(batch, iterations, expected_perf):
         batch_size=batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
-        comments=test.replace("/", "_"),
     )

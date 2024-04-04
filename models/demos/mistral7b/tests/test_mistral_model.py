@@ -44,7 +44,7 @@ class Emb(torch.nn.Module):
     "iterations",
     (17,),
 )
-def test_mistral_model_inference(device, iterations, version, use_program_cache):
+def test_mistral_model_inference(device, iterations, version, use_program_cache, reset_seeds):
     if version == "generative":
         instruct = False
     elif version == "instruct":
