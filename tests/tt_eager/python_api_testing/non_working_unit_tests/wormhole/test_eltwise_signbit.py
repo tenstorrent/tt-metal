@@ -6,15 +6,15 @@ from loguru import logger
 import pytest
 import torch
 import tt_lib as ttl
+import random
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_rsqrt as tt_eltwise_rsqrt
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_signbit as tt_eltwise_signbit
 
 
-def run_eltwise_rsqrt_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, fast_and_approx, data_seed, device
-):
+def run_eltwise_signbit_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    random.seed(0)
     torch.manual_seed(data_seed)
 
     if in_mem_config == "SYSTEM_MEMORY":
@@ -24,11 +24,10 @@ def run_eltwise_rsqrt_tests(
     x_ref = x.detach().clone()
 
     # get ref result
-    ref_value = pytorch_ops.rsqrt(x_ref)
+    ref_value = pytorch_ops.signbit(x_ref)
 
-    tt_result = tt_eltwise_rsqrt(
+    tt_result = tt_eltwise_signbit(
         x=x,
-        fast_and_approx=fast_and_approx,
         device=device,
         dtype=[dtype],
         layout=[dlayout],
@@ -45,24 +44,19 @@ def run_eltwise_rsqrt_tests(
 
 test_sweep_args = [
     (
-        (4, 7, 32, 96),
+        (1, 10, 224, 96),
         ttl.tensor.DataType.BFLOAT8_B,
         ttl.tensor.Layout.TILE,
+        "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        True,
-        19575052,
+        11079580,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, fast_and_approx, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_rsqrt_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, fast_and_approx, data_seed, device
-):
-    run_eltwise_rsqrt_tests(
-        input_shape, dtype, dlayout, in_mem_config, out_mem_config, fast_and_approx, data_seed, device
-    )
+def test_eltwise_signbit_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    run_eltwise_signbit_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)

@@ -18,7 +18,6 @@ def run_eltwise_signbit_tests(input_shape, dtype, dlayout, in_mem_config, out_me
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
 
-    # x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
     x_ref = x.detach().clone()
 
@@ -40,8 +39,6 @@ def run_eltwise_signbit_tests(input_shape, dtype, dlayout, in_mem_config, out_me
 
     assert success
 
-
-# ",15991940,(),completed,"Max ATOL Delta: 1.0, Max RTOL Delta: nan, PCC: 0.9895452620617458, PCC check failed",fail
 
 test_sweep_args = [
     (
