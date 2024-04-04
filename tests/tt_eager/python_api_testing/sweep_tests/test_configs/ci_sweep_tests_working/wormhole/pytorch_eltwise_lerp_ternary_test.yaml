@@ -7,6 +7,8 @@ test-list:
         interval: [1, 1, 32, 32]
         num-shapes: 3
         num-samples: 64
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
@@ -16,13 +18,11 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_lerp_ternary_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - eltwise-lerp_ternary:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -30,6 +30,8 @@ test-list:
         interval: [1, 1, 2, 2]
         num-shapes: 3
         num-samples: 64
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
@@ -39,10 +41,8 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_lerp_ternary_sweep.csv
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
