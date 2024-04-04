@@ -71,7 +71,8 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     ),
     ids=["0", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1", "1,2", "1,2,3", "1,3", "2", "2,3", "3"],
 )
-def test_moreh_sum_dims(input_shape, dims, device):
+@pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
+def test_moreh_sum(input_shape, dims, use_provide_output, device):
     torch.manual_seed(2023)
     output_shape = input_shape.copy()
 
@@ -80,11 +81,14 @@ def test_moreh_sum_dims(input_shape, dims, device):
 
     (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
 
+    if not use_provide_output:
+        tt_output = None
+
     torch_output = torch.sum(torch_input, dims, True)
 
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
-        ttl.operations.primary.moreh_sum(tt_input, tt_output, dims=dims)
+        ttl.operations.primary.moreh_sum(tt_input, dims=dims, output=tt_output)
         .cpu()
         .to(cpu_layout)
         .unpad_from_tile(output_shape)
@@ -144,7 +148,6 @@ def test_moreh_sum_backward(input_shape, dims, use_provide_input_grad, device):
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(output_shape, input_shape, device)
 
     if not use_provide_input_grad:
-        logger.debug("use_provide not")
         tt_input_grad = None
 
     torch_output = torch.sum(torch_input, dims, True)

@@ -182,20 +182,19 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto *output_grad_buffer = input_tensors.at(0).buffer();
-        const auto *input_grad_buffer = input_tensors.at(1).buffer();
+        const auto *input_grad_buffer = output_tensors.at(0).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = output_grad_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = input_grad_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };
