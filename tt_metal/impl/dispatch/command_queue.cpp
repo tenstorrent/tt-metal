@@ -1195,7 +1195,8 @@ void EnqueueWaitForEventCommand::process() {
 }
 
 // HWCommandQueue section
-HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) : manager(device->sysmem_manager()), completion_queue_thread{} {
+HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
+    manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
     this->id = id;
