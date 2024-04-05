@@ -7,7 +7,7 @@
 
 
 void kernel_main() {
-    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 256;
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
     // This writer is for output tensor in tile format
 
