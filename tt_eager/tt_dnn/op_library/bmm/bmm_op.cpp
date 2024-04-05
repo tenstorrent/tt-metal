@@ -284,9 +284,9 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     }
 }
 
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool out_sharded) {
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool out_sharded, std::optional<CoreCoord> compute_with_storage_grid_size) {
     auto device = input_tensor_a.device();
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] : input_tensor_a.get_legacy_shape()[-2];
     uint32_t K = input_tensor_a.get_legacy_shape()[-1];
     uint32_t N = input_tensor_b.get_legacy_shape()[-1];
@@ -742,22 +742,34 @@ Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &i
 
 }
 
+CoreCoord get_falcon_matmul_grid_size(Device *device){
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    // TODO: Remove this once there are no more hangs on 8x8 (Issue #6795)
+    if (device->arch() == ARCH::WORMHOLE_B0 and grid_size.y >= 8){
+        grid_size.y = 7;
+    }
+    return grid_size;
+}
+
 /**
  * Falcon matmuls using operations::primary::matmul + program_config
  */
 Tensor falcon_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
+    CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
     return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
 Tensor falcon_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
+    CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
     return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
 Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<bool> packer_l1_acc) {
+    CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
     auto program_config = bmm_op_utils::get_mcast_1d_config(
-        input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
+        input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
     std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
     auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true, false, packer_l1_acc.value_or(false));
     return operations::primary::matmul_1d(
@@ -782,7 +794,8 @@ Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &i
         TT_FATAL(!fused_activation.has_value());
         return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}).at(0);
     } else {
-        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded());
+        CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded(), grid_size);
         std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
         auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
         return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
@@ -800,7 +813,8 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
         TT_FATAL((input_tensor_b.get_legacy_shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
         return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
     } else {
-        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
+        CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
         std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
         auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
         return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
