@@ -233,9 +233,7 @@ class Buffer {
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
-            auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = div_up(num_pages, this->shard_spec().size());
-            return shards_for_compute;
+            return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
 

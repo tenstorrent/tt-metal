@@ -607,7 +607,7 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, bool pad_to_same_shard_size) {
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.shard_spec.has_value());
@@ -649,22 +649,8 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
     uint32_t packed_size_in_bytes;
 
-    // Investigate if this padding is correct for other shard orientations
-    // Falcon40B was showing that this didn't work for Width Sharding
-    // Currently need this as interleaved_to_sharded needs this padding
-    // #6029: looks at either updating interleaved_to_sharded s.t we can remove this padding, or update padding for other shard orientations
-    if(pad_to_same_shard_size){
-        uint32_t shard_size;
-        if(layout == Layout::TILE)
-            shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
-        else{
-            shard_size = shard_shape[0] * shard_shape[1] * element_size;
-        }
-        packed_size_in_bytes = shard_size * num_cores;
-    }
-    else {
-        packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
-    }
+
+    packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
                                                             data_type, layout, memory_config,
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)

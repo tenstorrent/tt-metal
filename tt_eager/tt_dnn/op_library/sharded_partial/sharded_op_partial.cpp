@@ -78,8 +78,7 @@ std::vector<Tensor> ShardedPartial::create_output_tensors(const std::vector<Tens
             this->output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config,
-            true
+            mem_config
             )};
     } else {
         // Don't create anything, we already passed in output tensor
