@@ -107,7 +107,7 @@ namespace tt {
 namespace tt_metal {
 
 
-void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
+void EltwiseBinary::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(input_tensor_a.get_legacy_shape() == input_tensor_b.get_legacy_shape(), "Input shapes must be the same!");
@@ -157,6 +157,18 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     }
+    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+        // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
+        return;
+    }
+    const auto output_shape_required = this->compute_output_shapes(input_tensors);
+    const auto& op_tensor = output_tensors.at(0).value();
+    const auto& actual_shape = op_tensor.get_legacy_shape();
+    bool shape_ok = output_shape_required.at(0).rank() == actual_shape.rank();
+    for(size_t i=0; i < std::min(actual_shape.rank(),output_shape_required.at(0).rank()) ; i++){
+        shape_ok &= output_shape_required.at(0)[i] == actual_shape[i];
+    }
+    TT_ASSERT(shape_ok, fmt::format("The input tensors need a shape of {}, however the output tensor is only {}",output_shape_required,  actual_shape));
 }
 
 std::vector<Shape> EltwiseBinary::compute_output_shapes(
@@ -166,9 +178,12 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(
 }
 
 std::vector<Tensor> EltwiseBinary::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
     if (this->in_place) {
         return {};
     }
@@ -194,8 +209,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
     return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
+operation::ProgramWithOptionalOutputTensors EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const {    const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& output_tensor = this->in_place ? input_tensor_a : output_tensors.at(0);
 
