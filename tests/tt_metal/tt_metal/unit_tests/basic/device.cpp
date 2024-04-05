@@ -13,6 +13,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -276,4 +277,42 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
         }
         EXPECT_EQ(channels.size(), device_group.size());
     }
+}
+
+// Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
+TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    Device *device = this->devices_.at(0);
+    EXPECT_TRUE(device->is_mmio_capable());
+    CoreCoord logical_core(0, 0);
+
+    uint32_t base_l1_src_address = L1_UNRESERVED_BASE + L1_ALIGNMENT;
+    uint32_t base_pcie_dst_address = CQ_START + L1_ALIGNMENT;
+
+    uint32_t size_bytes = 2048 * 128;
+    std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
+    EXPECT_EQ(L1_ALIGNMENT, 16);
+    uint32_t num_16b_writes = size_bytes / L1_ALIGNMENT;
+
+    tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
+
+    auto pcie_writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}
+        }
+    );
+
+    tt_metal::detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> result(size_bytes/sizeof(uint32_t));
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    tt::Cluster::instance().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
+
+    EXPECT_EQ(src, result);
 }
