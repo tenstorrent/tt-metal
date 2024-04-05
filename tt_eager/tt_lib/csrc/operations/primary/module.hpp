@@ -557,16 +557,20 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_bmm_backward operation.
     )doc");
+
     m_primary.def(
         "moreh_linear",
         &moreh_linear,
         py::arg("input").noconvert(),
         py::arg("weight").noconvert(),
+        py::kw_only(),
         py::arg("bias").noconvert() = std::nullopt,
+        py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_linear operation.
     )doc");
+
     m_primary.def(
         "moreh_linear_backward",
         &moreh_linear_backward,
