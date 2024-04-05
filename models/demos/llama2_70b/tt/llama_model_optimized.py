@@ -202,10 +202,10 @@ class TtLlamaModel_optimized(nn.Module):
             for i in range(self.num_devices)
         ]
 
-        xs = self.tt_embd(x)  # [batch, seq, hidden]
+        xs = self.tt_embd(x)  # [batch, seq, hidden_dim // num_devices]
 
-        assert len(x[0].shape) == 3
-        assert x[0].shape[2] == self.hidden_size // self.num_devices
+        assert len(xs[0].shape) == 3
+        assert xs[0].shape[2] == self.hidden_size // self.num_devices
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
