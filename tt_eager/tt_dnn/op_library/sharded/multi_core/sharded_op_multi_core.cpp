@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
 
     tt_metal::KernelHandle unary_reader_kernel_id;
     if (input.get_layout() == Layout::TILE) {
-        std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram};
+        std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores()};
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
