@@ -50,6 +50,7 @@ class Kernel : public JitBuildSettings {
     void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
+    std::vector<uint32_t> & common_runtime_args();
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -65,9 +66,13 @@ class Kernel : public JitBuildSettings {
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
+    uint32_t get_common_runtime_args_offset();
+    void set_common_runtime_args_offset();
     virtual void read_binaries(Device *device) = 0;
 
+    void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+    void set_common_runtime_args(const std::vector<uint32_t> &runtime_args);
 
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
@@ -90,7 +95,10 @@ class Kernel : public JitBuildSettings {
     uint16_t binary_size16_;
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
+    std::vector<uint32_t> common_runtime_args_;
     std::unordered_set<CoreCoord> core_with_runtime_args_;
+    std::size_t max_runtime_args_per_core_;             // For validation
+    CoreCoord core_with_max_runtime_args_;              // For validation
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
