@@ -10,12 +10,8 @@ import tt_lib as ttl
 import ttnn
 
 
-def _compute_golden_std(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.std(input_tensor, dim=dim, keepdim=keepdim)
 
@@ -35,7 +31,7 @@ def _std_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.std",
     validate_input_tensors=_std_validate_input_tensors,
-    compute_golden=_compute_golden_std,
+    golden_function=_golden_function,
 )
 def std(
     input_tensor: ttnn.Tensor,
@@ -90,12 +86,8 @@ def std(
     return output_tensor
 
 
-def _compute_golden_var(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.var(input_tensor, dim=dim, keepdim=keepdim)
 
@@ -115,7 +107,7 @@ def _var_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.var",
     validate_input_tensors=_var_validate_input_tensors,
-    compute_golden=_compute_golden_var,
+    golden_function=_golden_function,
 )
 def var(
     input_tensor: ttnn.Tensor,
@@ -169,12 +161,8 @@ def var(
     return output_tensor
 
 
-def _compute_golden_max(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     if dim == None:
         return torch.max(input_tensor)
@@ -197,7 +185,7 @@ def _max_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.max",
     validate_input_tensors=_max_validate_input_tensors,
-    compute_golden=_compute_golden_max,
+    golden_function=_golden_function,
 )
 def max(
     input_tensor: ttnn.Tensor,
@@ -252,12 +240,8 @@ def max(
     return output_tensor
 
 
-def _compute_golden_min(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     if dim == None:
         return torch.min(input_tensor)
@@ -280,7 +264,7 @@ def _min_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.min",
     validate_input_tensors=_min_validate_input_tensors,
-    compute_golden=_compute_golden_min,
+    golden_function=_golden_function,
 )
 def min(
     input_tensor: ttnn.Tensor,
@@ -335,12 +319,9 @@ def min(
     return output_tensor
 
 
-def _compute_golden_sum(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int], None] = None, keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int], None] = None, keepdim=False, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
     if dim == None:
         return torch.sum(input_tensor)
     else:
@@ -362,7 +343,7 @@ def _sum_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.sum",
     validate_input_tensors=_sum_validate_input_tensors,
-    compute_golden=_compute_golden_sum,
+    golden_function=_golden_function,
 )
 def sum(
     input_tensor: ttnn.Tensor,

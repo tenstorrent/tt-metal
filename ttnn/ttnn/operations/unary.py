@@ -15,10 +15,10 @@ __all__ = []
 
 
 def register_ttl_unary_function(name, ttl_unary_function):
-    def _compute_golden_unary(input_tensor: ttnn.Tensor, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
         import torch
 
-        name_to_compute_golden_function = {
+        name_to_golden_function_function = {
             "exp": torch.exp,
             "tanh": torch.tanh,
             "gelu": torch.nn.functional.gelu,
@@ -40,8 +40,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "logical_not": torch.logical_not,
             "signbit": torch.signbit,
         }
-        torch_function = name_to_compute_golden_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
+        torch_function = name_to_golden_function_function[name]
         return torch_function(input_tensor)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -58,7 +57,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_unary_validate_input_tensors,
-        compute_golden=_compute_golden_unary,
+        golden_function=_golden_function,
     )
     def unary_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -131,15 +130,13 @@ def _is_scalar(value):
 
 
 def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, param):
-    def _compute_golden_unary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
-        name_to_compute_golden_function = {
+        name_to_golden_function_function = {
             "logit": torch.logit,
         }
-        torch_function = name_to_compute_golden_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
-
+        torch_function = name_to_golden_function_function[name]
         return torch_function(input_tensor, parameter)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -156,7 +153,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_unary_validate_input_tensors,
-        compute_golden=_compute_golden_unary,
+        golden_function=_golden_function,
     )
     def unary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG

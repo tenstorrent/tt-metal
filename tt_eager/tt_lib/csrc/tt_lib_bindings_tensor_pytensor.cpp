@@ -1428,6 +1428,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         reshaped_tensor = tt_tensor.reshape((4, 3, 32))
-                )doc");
+                )doc")
+            .def_property(
+                "tensor_id",
+                [](const Tensor &self) { return self.tensor_id; },
+                [](Tensor &self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
     }
     }  // namespace tt::tt_metal::detail

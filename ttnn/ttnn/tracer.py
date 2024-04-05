@@ -21,6 +21,7 @@ import torchtrail
 
 import ttnn
 
+TracedTensor = torchtrail.tracer.TracedTensor
 TracedTorchTensor = torchtrail.tracer.TracedTorchTensor
 
 TorchTensor = torchtrail.tracer.TorchTensor

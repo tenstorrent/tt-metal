@@ -7,20 +7,16 @@ from typing import Tuple, Union, List
 import tt_lib as ttl
 
 import ttnn
+import ttnn.decorators
 
 
-def _compute_golden_pad(input_tensor: ttnn.Tensor, padding, value):
-    import torch
+def _preprocess_golden_function_inputs(args, kwargs):
+    input_tensor, *args = args
+    if len(args) > 1:
+        padding = args[1]
+    else:
+        padding = kwargs["padding"]
 
-    input_tensor = ttnn.to_torch(input_tensor)
-    torch_padding = []
-    for dimension in reversed(padding):
-        torch_padding.append(dimension[0])
-        torch_padding.append(dimension[1])
-    return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
-
-
-def _fallback_pad(input_tensor: ttnn.Tensor, padding, value, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     if len(padding) != len(input_tensor.shape):
         raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
 
@@ -44,15 +40,23 @@ def _fallback_pad(input_tensor: ttnn.Tensor, padding, value, *, memory_config=tt
                 "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
             )
 
-    output_tensor = _compute_golden_pad(input_tensor, padding, value)
-    output_tensor = ttnn.from_torch(
-        output_tensor,
-        dtype=input_tensor.dtype,
-        device=input_tensor.device(),
-        layout=input_tensor.layout,
-        memory_config=memory_config,
-    )
+    input_tensor = ttnn.to_torch(input_tensor)
 
+    return (input_tensor, *args), kwargs
+
+
+def _golden_function(input_tensor: ttnn.Tensor, padding, value):
+    import torch
+
+    torch_padding = []
+    for dimension in reversed(padding):
+        torch_padding.append(dimension[0])
+        torch_padding.append(dimension[1])
+    return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
+
+
+def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
+    output_tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output_tensor, args, kwargs)
     # Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
     output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
     return output_tensor
@@ -73,8 +77,10 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.pad",
     validate_input_tensors=_pad_validate_input_tensors,
-    compute_golden=_compute_golden_pad,
-    fallback=_fallback_pad,
+    golden_function=_golden_function,
+    preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
+    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def pad(
     input_tensor: ttnn.Tensor,
@@ -144,30 +150,13 @@ def pad(
     return output_tensor
 
 
-def _compute_golden_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
-    import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
-
-    return torch.permute(input_tensor, order).contiguous().clone()
-
-
-def _fallback_permute(input_tensor, order):
+def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     if len(input_tensor.shape) != len(order):
         raise RuntimeError(
             "The number of dimensions in the tensor input does not match the length of the desired ordering"
         )
 
-    device = input_tensor.device()
-    layout = input_tensor.layout
-    dtype = input_tensor.dtype
-
-    tensor = ttnn.to_torch(input_tensor)
-    tensor = tensor.permute(order).contiguous().clone()
-    tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
-    return tensor
+    return input_tensor.permute(order).contiguous().clone()
 
 
 def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -185,8 +174,8 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 @ttnn.register_operation(
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
-    compute_golden=_compute_golden_permute,
-    fallback=_fallback_permute,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     r"""
@@ -245,19 +234,10 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         raise NotImplementedError
 
 
-def _compute_golden_concat(tensors, dim=0, **_):
+def _golden_function(tensors, dim=0, **_):
     import torch
 
-    torch_tensors = [ttnn.to_torch(tensor) for tensor in tensors]
-    return torch.concat(torch_tensors, dim)
-
-
-def _fallback_concat(tensors, dim=0, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    dtype = tensors[0].dtype
-    device = tensors[0].device()
-    layout = tensors[0].layout
-    output_tensor = _compute_golden_concat(tensors, dim=dim)
-    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout, memory_config=memory_config)
+    return torch.concat(tensors, dim)
 
 
 def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs):
@@ -276,8 +256,8 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
 @ttnn.register_operation(
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
-    compute_golden=_compute_golden_concat,
-    fallback=_fallback_concat,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def concat(
     tensors: List[ttnn.Tensor],
@@ -357,22 +337,10 @@ def concat(
         raise NotImplementedError
 
 
-def _compute_golden_split(input_tensor: ttnn.Tensor, split_size, dim):
+def _golden_function(input_tensor, split_size, dim):
     import torch
 
-    input_tensor = ttnn.to_torch(input_tensor)
     return torch.split(input_tensor, split_size, dim=dim)
-
-
-def _fallback_split(input_tensor, split_size, dim):
-    output_tensors = _compute_golden_split(input_tensor, split_size, dim)
-    output_tensors = tuple(
-        ttnn.from_torch(
-            output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
-        )
-        for output_tensor in output_tensors
-    )
-    return output_tensors
 
 
 def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -390,8 +358,8 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
 @ttnn.register_operation(
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
-    compute_golden=_compute_golden_split,
-    fallback=_fallback_split,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
@@ -407,19 +375,10 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     raise NotImplementedError
 
 
-def _compute_golden_repeat_interleave(tensor, repeats, dim=0, **_):
+def _golden_function(tensor, repeats, dim=0, **_):
     import torch
 
-    if isinstance(repeats, ttnn.Tensor):
-        repeats = ttnn.to_torch(repeats)
-    return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
-
-
-def _fallback_repeat_interleave(input_tensor, repeats, dim):
-    output_tensor = _compute_golden_repeat_interleave(input_tensor, repeats, dim)
-    return ttnn.from_torch(
-        output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
-    )
+    return torch.repeat_interleave(tensor, repeats, dim=dim)
 
 
 def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -437,8 +396,8 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
 @ttnn.register_operation(
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
-    compute_golden=_compute_golden_repeat_interleave,
-    fallback=_fallback_repeat_interleave,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
@@ -501,15 +460,8 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         raise NotImplementedError
 
 
-def _compute_golden_repeat(tensor, shape, **_):
+def _golden_function(tensor, shape, **_):
     return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
-
-
-def _fallback_repeat(input_tensor, shape):
-    output_tensor = _compute_golden_repeat(input_tensor, shape)
-    return ttnn.from_torch(
-        output_tensor, device=input_tensor.device(), dtype=input_tensor.dtype, layout=input_tensor.layout
-    )
 
 
 def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -527,8 +479,8 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
 @ttnn.register_operation(
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
-    compute_golden=_compute_golden_repeat,
-    fallback=_fallback_repeat,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def repeat(
     input_tensor: ttnn.Tensor,

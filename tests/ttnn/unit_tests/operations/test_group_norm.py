@@ -357,11 +357,8 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
         is_height_sharded=False,
     )
     input_tensor = ttnn.reshape(input_tensor, (1, 1, N * H * W, C))
-    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # breakpoint()
     # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)

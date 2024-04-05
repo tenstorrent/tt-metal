@@ -8,41 +8,22 @@ from bokeh.embed import components
 from bokeh.models import Plot, ColumnDataSource, LinearAxis, CustomJSTickFormatter, NumeralTickFormatter, Rect, Range1d
 from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool, ZoomInTool, ZoomOutTool, HoverTool
 from bokeh.palettes import Category20
-
+from bokeh.plotting import figure
 from flask import Flask, render_template
+from loguru import logger
 import numpy as np
 import pandas as pd
 
 import ttnn
+import ttnn.database
 
+ttnn.CONFIG.enable_logging = False
 ttnn.CONFIG.delete_reports_on_start = False
+
+logger.info(f"Visualizer ttnn.CONFIG {ttnn.CONFIG}")
 
 BUFFER_TO_COLOR_INDEX = {}
 COLORS = Category20[20]
-
-
-def duration_to_string(duration):
-    if duration is None:
-        return ""
-    if duration < 1e-6:
-        return f"{duration * 1e9:.2f} ns"
-    elif duration < 1e-3:
-        return f"{duration * 1e6:.2f} us"
-    elif duration < 1:
-        return f"{duration * 1e3:.2f} ms"
-    return f"{duration:.2f} s"
-
-
-def duration_to_color(duration):
-    if duration is None:
-        return ""
-    if duration < 1e-6:
-        return "green"
-    elif duration < 1e-3:
-        return "yellow"
-    elif duration < 1:
-        return "orange"
-    return "red"
 
 
 def shorten_stack_trace(stack_trace, num_lines=12):
@@ -51,6 +32,47 @@ def shorten_stack_trace(stack_trace, num_lines=12):
     stack_trace = stack_trace.split("\n")[:num_lines]
     stack_trace = "\n".join(stack_trace)
     return stack_trace
+
+
+def red_to_green_spectrum(percentage):
+    percentage_difference = 1.0 - percentage
+    red_color = int(min(255, percentage_difference * 2 * 255))
+    green_color = int(min(255, percentage * 2 * 255))
+    color = f"#{red_color:02X}{green_color:02X}{0:02X}"
+    return color
+
+
+def tensor_comparison_record_to_percentage(record):
+    if record.matches:
+        percentage = 1
+    elif record.actual_pcc < 0:
+        percentage = 0
+    else:
+        percentage = record.actual_pcc * 0.5 / record.desired_pcc
+    return percentage
+
+
+def comparison_color(table_name, operation_id):
+    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
+
+    if not output_tensor_records:
+        return red_to_green_spectrum(1.0)
+
+    percentages = []
+    for output_tensor_record in output_tensor_records:
+        tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
+            table_name, tensor_id=output_tensor_record.tensor_id
+        )
+        if tensor_comparison_record is None:
+            continue
+        percentages.append(tensor_comparison_record_to_percentage(tensor_comparison_record))
+
+    if not percentages:
+        return "grey"
+
+    percentage = sum(percentages) / len(percentages)
+    return red_to_green_spectrum(percentage)
 
 
 app = Flask(__name__)
@@ -79,8 +101,7 @@ def operations():
     return render_template(
         "operations.html",
         operations=operations,
-        duration_to_string=duration_to_string,
-        duration_to_color=duration_to_color,
+        comparison_color=comparison_color,
         load_underlying_operations=load_underlying_operations,
     )
 
@@ -99,8 +120,6 @@ def operations_with_l1_buffer_report():
     return render_template(
         "operations_with_l1_buffer_report.html",
         operations=operations,
-        duration_to_string=duration_to_string,
-        duration_to_color=duration_to_color,
         l1_reports=l1_reports,
         stack_traces=stack_traces,
     )
@@ -400,8 +419,13 @@ def operation_buffer_report(operation_id):
         color_index = BUFFER_TO_COLOR_INDEX[(tensor.device_id, tensor.address, tensor.buffer_type)] % len(COLORS)
         return COLORS[color_index]
 
-    input_tensors = list(ttnn.database.query_input_tensors(operation_id))
-    output_tensors = list(ttnn.database.query_output_tensors(operation_id))
+    input_tensor_records = ttnn.database.query_input_tensors(operation_id=operation_id)
+    input_tensor_records = sorted(input_tensor_records, key=lambda tensor: tensor.input_index)
+    input_tensors = [ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id) for tensor in input_tensor_records]
+
+    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
+    output_tensors = [ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id) for tensor in output_tensor_records]
 
     stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
     stack_trace = shorten_stack_trace(stack_trace)
@@ -460,21 +484,105 @@ def operation_graph_report(operation_id):
 
 @app.route("/operation_tensor_report/<operation_id>")
 def operation_tensor_report(operation_id):
-    operation = ttnn.database.query_operation_by_id(operation_id=operation_id)
+    operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
+        operation_id=operation_id
+    )
 
-    input_tensors_path = ttnn.CONFIG.reports_path / "input_tensors" / f"{operation_id}"
-    output_tensors_path = ttnn.CONFIG.reports_path / "output_tensors" / f"{operation_id}"
+    operation_arguments = list(ttnn.database.query_operation_arguments(operation_id=operation_id))
 
-    input_tensors = []
-    for tensor_path in input_tensors_path.glob("*.bin"):
-        input_tensors.append(ttnn.load_tensor(tensor_path))
+    input_tensor_records = ttnn.database.query_input_tensors(operation_id=operation_id)
+    input_tensor_records = sorted(input_tensor_records, key=lambda tensor: tensor.input_index)
+    input_tensors = [
+        (
+            ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id),
+            ttnn.database.load_tensor_by_id(tensor.tensor_id),
+        )
+        for tensor in input_tensor_records
+    ]
 
-    output_tensors = []
-    for tensor_path in output_tensors_path.glob("*.bin"):
-        output_tensors.append(ttnn.load_tensor(tensor_path))
+    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
+    output_tensors = [
+        (
+            ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id),
+            ttnn.database.load_tensor_by_id(tensor.tensor_id),
+        )
+        for tensor in output_tensor_records
+    ]
+
+    def load_golden_tensors(table_name):
+        golden_tensors = {}
+        for output_tensor_record in output_tensor_records:
+            tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
+                table_name, tensor_id=output_tensor_record.tensor_id
+            )
+
+            if tensor_comparison_record is None:
+                continue
+            tensor_record = ttnn.database.query_tensor_by_id(tensor_id=tensor_comparison_record.golden_tensor_id)
+            golden_tensor = ttnn.database.load_tensor_by_id(tensor_id=tensor_comparison_record.golden_tensor_id)
+            golden_tensors[output_tensor_record.output_index] = tensor_record, tensor_comparison_record, golden_tensor
+        return golden_tensors
+
+    local_golden_tensors = load_golden_tensors("local_tensor_comparison_records")
+    global_golden_tensors = load_golden_tensors("global_tensor_comparison_records")
+
+    def display_tensor_comparison_record(record):
+        percentage = tensor_comparison_record_to_percentage(record)
+        bgcolor = red_to_green_spectrum(percentage)
+        return f"""
+            <td bgcolor="{bgcolor}">
+                Desired PCC = {record.desired_pcc}<br>Actual PCC = {record.actual_pcc}
+            </td>
+        """
+
+    def plot_tensor(tensor):
+        import torch
+
+        if tensor is None:
+            return "", ""
+
+        if isinstance(tensor, ttnn.Tensor):
+            tensor = ttnn.to_torch(tensor)
+
+        if tensor.dtype == torch.bfloat16:
+            tensor = tensor.float()
+
+        tensor = tensor.numpy()
+
+        if tensor.ndim == 1:
+            tensor = tensor.reshape(1, -1)
+        elif tensor.ndim == 2:
+            tensor = tensor
+        elif tensor.ndim == 3:
+            tensor = tensor[0]
+        elif tensor.ndim == 4:
+            tensor = tensor[0, 0]
+        else:
+            raise ValueError(f"Unsupported tensor shape {tensor.shape}")
+
+        tensor = tensor[:1024, :1024]
+
+        plot = figure(tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")], height=400, width=400)
+        plot.x_range.range_padding = plot.y_range.range_padding = 0
+
+        # must give a vector of image data for image parameter
+        plot.image(image=[tensor], x=0, y=0, dw=tensor.shape[-1], dh=tensor.shape[-2], palette="Viridis10")
+
+        return components(plot)
 
     return render_template(
-        "operation_tensor_report.html", operation=operation, input_tensors=input_tensors, output_tensors=output_tensors
+        "operation_tensor_report.html",
+        operation=operation,
+        previous_operation=previous_operation,
+        next_operation=next_operation,
+        operation_arguments=operation_arguments,
+        input_tensors=input_tensors,
+        output_tensors=output_tensors,
+        local_golden_tensors=local_golden_tensors,
+        global_golden_tensors=global_golden_tensors,
+        display_tensor_comparison_record=display_tensor_comparison_record,
+        plot_tensor=plot_tensor,
     )
 
 
