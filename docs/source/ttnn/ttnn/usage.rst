@@ -309,7 +309,7 @@ Open the visualizer by running the following command:
 
 .. code-block:: bash
 
-    flask --app ttnn/visualizer run
+    python ttnn/visualizer/app.py
 
 
 

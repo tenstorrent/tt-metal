@@ -166,12 +166,26 @@ namespace op_profiler {
         return ret;
     }
 
+    static inline vector<json> get_tensors_json(const vector<std::optional<Tensor>>& tensors)
+    {
+        ZoneScoped;
+        vector<json> ret;
+        for(auto& tensor : tensors)
+        {
+            if (tensor.has_value())
+            {
+                ret.push_back(get_tensor_json(tensor.value()));
+            }
+        }
+        return ret;
+    }
+
     template <bool IsExternal = false, typename Operation>
     inline json get_base_json(
             uint32_t opID,
             const Operation& op,
             const std::vector<Tensor>& input_tensors,
-            std::optional<std::reference_wrapper<std::vector<Tensor>>> output_tensors = std::nullopt)
+            std::optional<std::reference_wrapper<typename Operation::OutputTensors>> output_tensors = std::nullopt)
     {
         ZoneScoped;
         json j;
@@ -235,11 +249,12 @@ namespace op_profiler {
         return fmt::format("`TT_DNN_FALL_BACK_OP:{}\n{}`",j["op_code"], ser);
     }
 
+    template<typename OutputTensors, template<typename> typename HostOperationType>
     inline std::string op_meta_data_serialized_json(
             uint32_t opID,
-            const tt::tt_metal::operation::HostOperation& op,
+            const HostOperationType<OutputTensors>& op,
             const std::vector<Tensor>& input_tensors,
-            std::vector<Tensor>& output_tensors)
+            OutputTensors& output_tensors)
     {
         auto j = get_base_json(opID, op, input_tensors, output_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_cpu);
@@ -247,14 +262,15 @@ namespace op_profiler {
         return fmt::format("`TT_DNN_HOST_OP:{}\n{}`",j["op_code"], ser);
     }
 
+    template<typename OutputTensors, template<typename> typename DeviceOperationType>
     inline std::string op_meta_data_serialized_json(
             uint32_t opID,
             uint32_t device_id,
-            const tt::tt_metal::operation::DeviceOperation& op,
+            const DeviceOperationType<OutputTensors>& op,
             const std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-            std::vector<Tensor>& output_tensors)
+            OutputTensors& output_tensors)
     {
         ZoneScoped;
 
