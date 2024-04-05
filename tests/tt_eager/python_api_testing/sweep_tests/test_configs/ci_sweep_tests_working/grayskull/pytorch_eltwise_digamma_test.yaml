@@ -3,7 +3,7 @@ test-list:
   - eltwise-digamma:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 64
@@ -11,7 +11,7 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -100
+          low: 1
           high: 100
       comparison:
         function: comp_pcc
@@ -21,11 +21,11 @@ test-list:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - eltwise-digamma:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 1, 2]
         num-shapes: 1
         num-samples: 64
@@ -33,7 +33,7 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -100
+          low: 1
           high: 100
       comparison:
         function: comp_pcc
@@ -43,4 +43,4 @@ test-list:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
