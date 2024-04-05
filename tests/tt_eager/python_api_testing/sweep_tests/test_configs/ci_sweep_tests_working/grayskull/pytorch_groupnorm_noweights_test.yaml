@@ -21,6 +21,6 @@ test-list:
       output-file: groupnorm_noweights_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
