@@ -39,8 +39,23 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define NOC_MULTICAST_WRITE_VC 4
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
 
+
+// JIT Build flow will set this as needed.
+#ifndef COMMON_RT_ARGS_OFFSET
+    #define COMMON_RT_ARGS_OFFSET 0
+#endif
+
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
+/**
+ * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via SetRuntimeArgs() API.
+ *
+ * Return value: Associated L1 address of given unique runtime argument index
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
+ */
 constexpr static uint32_t get_arg_addr(int arg_idx) {
     // args are 4B in size
     #if defined(COMPILE_FOR_ERISC)
@@ -51,13 +66,28 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
 }
 
 /**
- * Returns the value of an argument from kernel_args array provided during
- * kernel creation using CreateKernel calls.
+ * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via SetCommonRuntimeArgs() API.
  *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 255    | True     |
- * | T (template argument) | Data type of the returned argument | Any 4-byte sized type | N/A         | True     |
+ * Return value: Associated L1 address of given common runtime argument index
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
+ */
+constexpr static uint32_t get_common_arg_addr(int arg_idx) {
+    // args are 4B in size
+    return TRISC_L1_ARG_BASE + COMMON_RT_ARGS_OFFSET + (arg_idx << 2);
+}
+
+/**
+ * Returns the value at a given runtime argument index for unique (per-core) runtime arguments set via SetRuntimeArgs() API.
+ *
+ * Return value: The value associated with the unique runtime argument index
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range               | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|---------------------------|----------|
+ * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255                  | True     |
+ * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A                       | True     |
  */
 template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
@@ -65,6 +95,24 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((volatile tt_l1_ptr T*)(get_arg_addr(arg_idx)));
 }
+
+/**
+ * Returns the value at a given runtime argument index for common (all cores) runtime arguments set via SetCommonRuntimeArgs() API.
+ *
+ * Return value: The value associated with the common runtime argument index
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range               | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|---------------------------|----------|
+ * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255                  | True     |
+ * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A                       | True     |
+ */
+template <typename T>
+FORCE_INLINE T get_common_arg_val(int arg_idx) {
+    // only 4B args are supported (eg int32, uint32)
+    static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
+    return *((volatile tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
+}
+
 
 /**
  * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
