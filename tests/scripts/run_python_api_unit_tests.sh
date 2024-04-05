@@ -18,6 +18,4 @@ env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/
 # Execute python model tests here
 ./tests/scripts/run_python_model_tests.sh
 
-if [ "$ARCH_NAME" != "wormhole_b0" ]; then
-    env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
-fi
+env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
