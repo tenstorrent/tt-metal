@@ -464,9 +464,10 @@ EnqueueProgramCommand::EnqueueProgramCommand(
         // Runtime Args Cmd
         for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
             std::uint32_t num_packed_cmds = transfer_info.size();
-            flush.relay_inline.stride =
+            flush.relay_inline.stride = align(
                 sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
-                align(num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), sizeof(CQDispatchCmd));
+                    num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
+                L1_ALIGNMENT);
             for (int i = 0; i < num_packed_cmds; i++) {
                 TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
                 flush.relay_inline.stride += transfer_info[i].data.size() * sizeof(uint32_t);
@@ -711,7 +712,8 @@ EnqueueProgramCommand::EnqueueProgramCommand(
                     write_program_bins_cmd.write_linear.num_mcast_dests = dst_noc_info.second;
                     write_program_bins_cmd.write_linear.noc_xy_addr = dst_noc_info.first;
                     write_program_bins_cmd.write_linear.addr = kg_transfer_info.dst_base_addrs[kernel_idx];
-                    write_program_bins_cmd.write_linear.length = kg_transfer_info.lengths[kernel_idx];
+                    write_program_bins_cmd.write_linear.length =
+                        align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE);
                     uint32_t* write_program_bins_cmd_ptr = (uint32_t*)&write_program_bins_cmd;
                     for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
                         this->commands.push_back(*write_program_bins_cmd_ptr++);
