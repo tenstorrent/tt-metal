@@ -43,7 +43,7 @@ constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
-constexpr uint32_t dev_hugepage_base_g = 0;
+constexpr uint32_t dev_hugepage_base_g = 128; // HOST_CQ uses some at the start address
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -184,8 +184,8 @@ bool validate_host_results(
     int cmd_index = 0;
     int host_data_index = 0;
     while (cmd_index < cmds.size()) {
-        CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index + sizeof(CQPrefetchCmd) / sizeof(uint32_t)];
-        cmd_index += (sizeof(CQPrefetchCmd)) / sizeof(uint32_t);
+        cmd_index += sizeof(CQPrefetchCmd) / sizeof(uint32_t);
+        CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index];
 
         // Validate only works for packed write linear host commands
         TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_HOST);
@@ -253,6 +253,7 @@ void add_prefetcher_paged_read_cmd(vector<uint32_t>& cmds,
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
+    cmd.relay_paged.pad1 = 0;
     cmd.relay_paged.is_dram = is_dram;
     cmd.relay_paged.start_page = start_page;
     cmd.relay_paged.base_addr = base_addr;
@@ -276,6 +277,8 @@ void add_prefetcher_linear_read_cmd(Device *device,
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
+    cmd.relay_linear.pad1 = 0;
+    cmd.relay_linear.pad2 = 0;
     cmd.relay_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
     cmd.relay_linear.addr = addr;
     cmd.relay_linear.length = length;
@@ -352,6 +355,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     add_prefetcher_debug_prologue(cmds);
 
     CQPrefetchCmd cmd;
+    memset(&cmd, 0, sizeof(CQPrefetchCmd));
     cmd.base.cmd_id = id;
 
     uint32_t payload_length_bytes = payload.size() * sizeof(uint32_t);
@@ -859,6 +863,8 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
     tt::Cluster::instance().dram_barrier(device->id());
 
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+    cmd.exec_buf.pad1 = 0;
+    cmd.exec_buf.pad2 = 0;
     cmd.exec_buf.base_addr = DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
     cmd.exec_buf.log_page_size = exec_buf_log_page_size_g;
     cmd.exec_buf.pages = pages;
@@ -888,7 +894,7 @@ void gen_smoke_test(Device *device,
     // Write to worker
     dispatch_cmds.resize(0);
     reset_worker_data(worker_data);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 2048);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 32);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Write to worker
@@ -1083,7 +1089,7 @@ void write_prefetcher_cmd(Device *device,
 
 void write_prefetcher_cmds(uint32_t iterations,
                            Device *device,
-                           vector<uint32_t>& prefetch_cmds,
+                           vector<uint32_t> prefetch_cmds, // yes copy for dram_exec_buf
                            vector<uint16_t>& cmd_sizes,
                            void * host_hugepage_base,
                            uint32_t dev_hugepage_base,

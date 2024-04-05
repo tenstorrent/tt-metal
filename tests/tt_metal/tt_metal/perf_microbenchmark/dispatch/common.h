@@ -278,9 +278,10 @@ inline size_t debug_prologue(vector<uint32_t>& cmds) {
 
     if (debug_g) {
         CQDispatchCmd debug_cmd;
+        memset(&debug_cmd, 0, sizeof(CQDispatchCmd));
+
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
         // compiler compains w/o these filled in later fields
-        debug_cmd.debug.pad = 0;
         debug_cmd.debug.key = 0;
         debug_cmd.debug.checksum = 0;
         debug_cmd.debug.size = 0;
@@ -386,6 +387,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
                                                   uint32_t length) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
@@ -406,6 +408,7 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
                                              uint32_t length) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0; // No interleaved pages here.
@@ -427,6 +430,7 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
                                              uint32_t length) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start, CoreType::WORKER);
     CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end, CoreType::WORKER);
@@ -481,6 +485,7 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
     uint16_t start_page_cmd = start_page % num_banks;
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
     cmd.write_paged.is_dram = is_dram;
     cmd.write_paged.start_page = start_page_cmd;
@@ -503,6 +508,7 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
                                             uint32_t size_words) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
     cmd.write_packed.is_multicast = 0;
@@ -550,6 +556,8 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
 inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_HOST;
     // Include cmd in transfer
     cmd.write_linear_host.length = length + sizeof(CQDispatchCmd);
@@ -560,6 +568,8 @@ inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t lengt
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
     CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
     add_dispatcher_cmd(cmds, cmd, 0);
 }
