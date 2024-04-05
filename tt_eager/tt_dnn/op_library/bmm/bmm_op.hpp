@@ -388,7 +388,7 @@ tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t M
 CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
 
 // TODO: Remove get_mcast_1d_config and merge with general version?
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch = false, std::optional<UnaryWithParam> fused_activation = std::nullopt, bool mcast_in0 = true, bool out_sharded = false);
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch = false, std::optional<UnaryWithParam> fused_activation = std::nullopt, bool mcast_in0 = true, bool out_sharded = false, std::optional<CoreCoord> compute_with_storage_grid_size = std::nullopt);
 
 tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, const uint32_t per_core_N, const bool per_core_M_equals_subblock_h_constraint, bool per_core_N_equals_subblock_w_constraint);
 
