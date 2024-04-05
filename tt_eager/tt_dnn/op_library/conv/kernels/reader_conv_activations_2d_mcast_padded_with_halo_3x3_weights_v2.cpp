@@ -73,7 +73,15 @@ void kernel_main() {
 
     uint32_t reader_idx = 0;
 
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    // L1 array
+    constexpr uint32_t cb_l1_array = tt::CB::c_in5;
+    volatile tt_l1_ptr uint32_t* l1_array = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
+    // Set up local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
+    act_mcast_sender_semaphore_valid_addr_ptr[0] = 1; // Load const 1 to be used as semaphore valid value sent from sender to receivers
+    uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
+
+    // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
@@ -134,6 +142,8 @@ void kernel_main() {
                 noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
                 noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
+                noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+
                 // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                 cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
@@ -142,15 +152,17 @@ void kernel_main() {
 
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // num_dests will source, since we are copying to a different local CB as well
-                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1);
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1, false, false);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                 // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast(act_mcast_receiver_semaphore_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores);
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores + 1, false, false);
 
-                noc_async_write_barrier();
+                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+
+                //noc_async_write_barrier();
             } else {
                 // MCAST RECEIVER: receive entire tilized input from sender core
                 // Set act semaphore value to INVALID

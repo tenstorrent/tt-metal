@@ -1154,7 +1154,8 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
         NOC_UNICAST_WRITE_VC,
         false,
         false,
-        1);
+        1,
+        true);
     DEBUG_STATUS('N', 'A', 'W', 'D');
 }
 
@@ -1187,7 +1188,8 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
         NOC_UNICAST_WRITE_VC,
         false,
         false,
-        1);
+        1,
+        true);
     DEBUG_STATUS('N', 'S', 'S', 'D');
 }
 
@@ -1228,7 +1230,8 @@ void noc_async_write_multicast(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
     std::uint32_t num_dests,
-    bool linked = false) {
+    bool linked = false,
+    bool multicast_path_reserve = true) {
     DEBUG_STATUS('N', 'M', 'W', 'W');
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr,size);
     ncrisc_noc_fast_write_any_len(
@@ -1240,7 +1243,8 @@ void noc_async_write_multicast(
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
-        num_dests);
+        num_dests,
+        multicast_path_reserve);
     DEBUG_STATUS('N', 'M', 'W', 'D');
 }
 
@@ -1265,7 +1269,7 @@ void noc_async_write_multicast(
  */
 inline
 void noc_semaphore_set_multicast(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false, bool multicast_path_reserve = true) {
     DEBUG_STATUS('N', 'S', 'M', 'W');
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len(
@@ -1277,13 +1281,14 @@ void noc_semaphore_set_multicast(
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
-        num_dests);
+        num_dests,
+        multicast_path_reserve);
     DEBUG_STATUS('N', 'S', 'M', 'D');
 }
 
 inline
 void noc_semaphore_set_multicast_loopback_src(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false, bool multicast_path_reserve = true) {
     DEBUG_STATUS('N', 'S', 'M', 'W');
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len_loopback_src(
@@ -1295,7 +1300,8 @@ void noc_semaphore_set_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
-        num_dests);
+        num_dests,
+        multicast_path_reserve);
     DEBUG_STATUS('N', 'S', 'M', 'D');
 }
 
@@ -1305,7 +1311,8 @@ void noc_async_write_multicast_loopback_src(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
     std::uint32_t num_dests,
-    bool linked = false) {
+    bool linked = false,
+    bool multicast_path_reserve = true) {
     DEBUG_STATUS('N', 'M', 'L', 'W');
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src(
@@ -1317,7 +1324,8 @@ void noc_async_write_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
-        num_dests);
+        num_dests,
+        multicast_path_reserve);
     DEBUG_STATUS('N', 'M', 'L', 'D');
 }
 
