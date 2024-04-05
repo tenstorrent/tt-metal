@@ -10,6 +10,7 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32, profiler
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
+from models.demos.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     generate_rot_emb,
@@ -93,10 +94,12 @@ class TtLlamaModel_optimized(nn.Module):
         # Rotary Embedding
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
         self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
-
-        emb_str = "tok_embeddings.weight"
-        self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, self.hidden_size)
-        self.tok_embeddings.weight = torch.nn.Parameter(self.state_dict[emb_str])
+        # Embedding
+        self.tt_embd = TtLlamaEmbedding(
+            devices,
+            state_dict,
+            cache_path,
+        )
         self.load_weights()
 
     def set_model_config(self, model_config):
@@ -185,25 +188,50 @@ class TtLlamaModel_optimized(nn.Module):
         attn_masks: [(seq, n_local_heads, batch, max_seq_len)] * num_devices  for decode
                     [(1, n_local_heads, seq, seq)] * num_devices  for prefill
         """
-        x = self.tok_embeddings(inp_ids)  # [batch, seq, hidden]
-        assert x.size(2) == self.hidden_size
-        assert len(x.size()) == 3
+        batch = inp_ids.size(0)
+        seq_len = inp_ids.size(1)
 
-        batch = x.size(0)
-        seq_len = x.size(1)
+        x = [
+            ttnn.as_tensor(
+                inp_ids.clone(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.devices[i],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for i in range(self.num_devices)
+        ]
+
+        xs = self.tt_embd(x)  # [batch, seq, hidden]
+
+        assert len(x[0].shape) == 3
+        assert x[0].shape[2] == self.hidden_size // self.num_devices
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
-            x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
+
+            for i in range(self.num_devices):
+                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
+                xs[i] = ttnn.reshape(xs[i], (batch, 1, seq_len, self.hidden_size // self.num_devices))
+            # xs[0]: [batch, 1, seq_len, hidden_dim // num_devices]
+            assert xs[0].shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
+
             cos_gathered, sin_gathered = gather_cos_sin(
                 torch.arange(start_pos, start_pos + seq_len), self.cos, self.sin
             )
+            # cos_gathered: [1, 1, seq_len, head_dim]
+            # sin_gathered: [1, 1, seq_len, head_dim]
+            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
+            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
+
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
+            # attn_mask: [batch, self.n_heads, seq_len, seq_len]
+            assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
 
             as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
                 tensor,
@@ -213,29 +241,9 @@ class TtLlamaModel_optimized(nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_weight_cache_path(self.cache_path, name, device_id, self.num_devices),
             )
-            # expected shapes:
-            # x: [batch, 1, seq_len, hidden_dim]
-            # start_pos: int
-            # cos_gathered: [1, 1, seq_len, head_dim]
-            # sin_gathered: [1, 1, seq_len, head_dim]
-            # attn_mask: [batch, self.n_heads, seq_len, seq_len]
-            assert x.size() == (batch, 1, seq_len, self.hidden_size)
-            assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
-            assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
-            assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
 
-            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
+            cos_gathereds, sin_gathereds, attn_masks = [], [], []
             for i in range(self.num_devices):
-                xs.append(
-                    ttnn.as_tensor(
-                        x_fractured[i],
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.devices[i],
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                )
                 cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
                 sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
@@ -243,18 +251,13 @@ class TtLlamaModel_optimized(nn.Module):
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-            x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-            assert x.size() == (seq_len, 1, batch, self.hidden_size)
-            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            xs = []
+
             for i in range(self.num_devices):
-                xs.append(
-                    torch2tt_tensor(
-                        x_fractured[i],
-                        self.devices[i],
-                        tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-                    )
-                )
+                xs[i] = ttnn.reshape(xs[i], (seq_len, 1, batch, self.hidden_size // self.num_devices))
+                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
+            # xs[0]: [seq_len, 1, batch, hidden_dim // num_devices]
+            assert xs[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
+
             for i in range(self.num_devices):
                 xs[i] = tt_lib.tensor.interleaved_to_sharded(
                     xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
