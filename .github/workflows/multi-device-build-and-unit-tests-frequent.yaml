@@ -1,4 +1,4 @@
-name: "Frequent multi-nebula regression tests"
+name: "Nightly multi-chip tests"
 
 on:
   workflow_dispatch:
