@@ -13,6 +13,7 @@ from pathlib import Path
 from transformers import AutoTokenizer
 import os
 from tqdm import tqdm
+from models.utility_functions import is_wormhole_b0
 
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
@@ -91,8 +92,19 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
         logger.info(f"Output for user {user_id}:\n{output_prompt}")
 
 
+def update_model_config(model, model_config_str):
+    model.model_config.update(get_model_config(model_config_str))
+
+
 def run_falcon_demo_kv(
-    user_input, model_version, batch_size, num_layers, max_seq_len, model_config, model_location_generator, device
+    user_input,
+    model_version,
+    batch_size,
+    num_layers,
+    max_seq_len,
+    model_config_strs_prefill_decode,
+    model_location_generator,
+    device,
 ):
     torch.manual_seed(0)
 
@@ -141,7 +153,7 @@ def run_falcon_demo_kv(
         1,
         configuration,
         max_seq_len,
-        model_config,
+        get_model_config(model_config_strs_prefill_decode[0]),
         tt_cache_path,
     )  # single layer only used for compile
 
@@ -213,6 +225,10 @@ def run_falcon_demo_kv(
 
     ### First run decode stage with compile ###
     logger.info("Running 1st run decode stage with compile...")
+
+    # Update model config
+    update_model_config(tt_FalconCausalLM_singlelayer, model_config_strs_prefill_decode[1])
+
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
 
     for user_id, output_id in enumerate(output_ids):
@@ -278,7 +294,7 @@ def run_falcon_demo_kv(
         num_layers,
         configuration,
         max_seq_len,
-        model_config,
+        get_model_config(model_config_strs_prefill_decode[0]),
         tt_cache_path,
     )
 
@@ -332,6 +348,9 @@ def run_falcon_demo_kv(
 
     ### Inference run decode ###
     logger.info("Running inference decode stage...")
+
+    # Update model config
+    update_model_config(tt_FalconCausalLM, model_config_strs_prefill_decode[1])
 
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
     for user_id, output_id in enumerate(output_ids):
@@ -450,7 +469,9 @@ def test_demo(
         batch_size=32,
         num_layers=32,
         max_seq_len=1024,
-        model_config=get_model_config("BFLOAT16-L1_SHARDED"),
+        model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"]
+        if is_wormhole_b0()
+        else ["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
         model_location_generator=model_location_generator,
         device=device,
     )
