@@ -59,6 +59,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t num_src_endpoints = 4;
     constexpr uint32_t num_dest_endpoints = 4;
 
+    constexpr uint32_t default_test_device_id = 0;
+
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
@@ -86,6 +88,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+        log_info(LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id);
+
         return 0;
     }
 
@@ -118,17 +122,39 @@ int main(int argc, char **argv) {
     uint32_t tunneler_test_results_size = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
+    uint32_t test_device_id = test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id);
 
     bool pass = true;
     try {
-        int device_id = 0;
+
+        int num_devices = tt_metal::GetNumAvailableDevices();
+        if (test_device_id >= num_devices) {
+            log_info(LogTest,
+                "Device {} is not valid. Highest valid device id = {}.",
+                test_device_id, num_devices-1);
+            throw std::runtime_error("Invalid Device Id.");
+        }
+        int device_id = test_device_id;
 
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
-        CoreCoord tunneler_logical_core = device->get_ethernet_sockets(1)[0];
+        if (device_active_eth_cores.size() < 2) {
+            log_info(LogTest,
+                "Device {} does not have enough active cores. Need 2 active ethernet cores for this test.",
+                device_id);
+            tt_metal::CloseDevice(device);
+            throw std::runtime_error("Test cannot run on specified device.");
+        }
+
+        auto eth_core_iter = device_active_eth_cores.begin();
+        //CoreCoord tunneler_logical_core = device->get_ethernet_sockets(5)[0];
+        CoreCoord tunneler_logical_core = *eth_core_iter;
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
 
-        CoreCoord r_tunneler_logical_core = device->get_ethernet_sockets(1)[1];
+        //CoreCoord r_tunneler_logical_core = device->get_ethernet_sockets(5)[1];
+        eth_core_iter++;
+        CoreCoord r_tunneler_logical_core = *eth_core_iter;
         CoreCoord r_tunneler_phys_core = device->ethernet_core_from_logical_core(r_tunneler_logical_core);
 
 
