@@ -12,10 +12,10 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.helper_funcs import Linear
 from models.experimental.mamba.reference.args import ModelArgs
 from models.experimental.mamba.tt_opt.mamba_one_step_ssm import TtMambaSSM
-
+from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
 
 class TtMambaBlock(torch.nn.Module):
-    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
+    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable, transformer: MambaSsmBlockTransformer):
         super().__init__()
 
         self.device = device
@@ -77,7 +77,7 @@ class TtMambaBlock(torch.nn.Module):
                 )
             )
 
-        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
+        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn, transformer)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi3,

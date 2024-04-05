@@ -10,10 +10,11 @@ from typing import Callable
 
 from models.experimental.mamba.reference.args import ModelArgs
 from models.experimental.mamba.tt_opt.mamba_block import TtMambaBlock
+from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
 
 
 class TtResidualBlock(torch.nn.Module):
-    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
+    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable, transformer: MambaSsmBlockTransformer):
         super().__init__()
 
         self.device = device
@@ -22,7 +23,7 @@ class TtResidualBlock(torch.nn.Module):
         rms_norm_weight_name = "norm.weight"
         self.rms_norm_weights = load_fn(rms_norm_weight_name)
 
-        self.tt_mamba_block = TtMambaBlock(self.args, self.device, configs, load_fn)
+        self.tt_mamba_block = TtMambaBlock(self.args, self.device, configs, load_fn, transformer)
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba residual block expects inputs to be rank 4"
