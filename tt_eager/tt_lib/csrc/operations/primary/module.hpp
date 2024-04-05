@@ -129,7 +129,8 @@ void py_module(py::module& m_primary) {
         py::arg("fuse_batch").noconvert() = false,
         py::arg("fused_activation") = std::nullopt,
         py::arg("mcast_in0").noconvert() = true,
-        py::arg("out_sharded").noconvert() = false);
+        py::arg("out_sharded").noconvert() = false,
+        py::arg("compute_with_storage_grid_size") = std::nullopt);
 
     // TODO(arakhmati):
     // delete
