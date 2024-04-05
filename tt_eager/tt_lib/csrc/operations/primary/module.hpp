@@ -577,10 +577,15 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input").noconvert(),
         py::arg("weight").noconvert(),
+        py::kw_only(),
+        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
+        py::arg("bias").noconvert() = std::nullopt,
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("weight_grad").noconvert() = std::nullopt,
         py::arg("bias_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("weight_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("bias_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_linear_backward operation.
     )doc");

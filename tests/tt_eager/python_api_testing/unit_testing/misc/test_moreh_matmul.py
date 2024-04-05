@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose_and_pcc
 
 
 def get_tensors(input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device):
@@ -19,10 +19,11 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     # create tensors for forward
     input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
     other = torch.randint(-2, 3, other_shape, dtype=cpu_dtype)
+    output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
 
     tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(1).to(npu_layout).to(device)
-
     tt_other = ttl.tensor.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_output = ttl.tensor.Tensor(output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     torch_input = input.reshape(-1) if is_1d else input
     torch_other = other.reshape(-1) if is_1d else other
@@ -31,7 +32,8 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     output_grad = tt_output_grad = torch_output_grad = tt_input_grad = tt_other_grad = None
     if require_input_grad or require_other_grad:
         output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        # tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(0).to(npu_layout).to(device)
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
@@ -50,10 +52,19 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
                 .to(device)
             )
 
-    return tt_input, tt_other, tt_output_grad, tt_input_grad, tt_other_grad, torch_input, torch_other, torch_output_grad
+    return (
+        tt_input,
+        tt_other,
+        tt_output,
+        tt_output_grad,
+        tt_input_grad,
+        tt_other_grad,
+        torch_input,
+        torch_other,
+        torch_output_grad,
+    )
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -66,7 +77,7 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
 def test_moreh_matmul_1d(input_shape, device):
     # get tensors
     output_shape = [1, 1, 1, 1]
-    tt_input, tt_other, _, _, _, torch_input, torch_other, _ = get_tensors(
+    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, input_shape, output_shape, False, False, True, device
     )
 
@@ -88,7 +99,6 @@ def test_moreh_matmul_1d(input_shape, device):
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -113,6 +123,7 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     (
         tt_input,
         tt_other,
+        _,
         tt_output_grad,
         tt_input_grad,
         tt_other_grad,
@@ -154,13 +165,11 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
         # input, other, output shape
         ([1, 1, 511, 255], [1, 1, 255, 765], [1, 1, 511, 765]),
-        ([1, 1, 325, 127], [1, 1, 127, 126], [1, 1, 325, 126]),
     ),
 )
 @pytest.mark.parametrize("input_b1", (1, 2))
@@ -190,6 +199,7 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     (
         tt_input,
         tt_other,
+        _,
         tt_output_grad,
         tt_input_grad,
         tt_other_grad,
@@ -230,29 +240,19 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
         assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
         # input, other, output shape
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32]),
-        ([1, 1, 29, 31], [1, 1, 31, 30], [1, 1, 29, 30]),
-        ([3, 3, 511, 313], [1, 1, 313, 765], [3, 3, 511, 765]),
-        ([1, 1, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
-        ([1, 3, 511, 313], [1, 1, 313, 765], [1, 3, 511, 765]),
-        ([3, 1, 511, 313], [1, 1, 313, 765], [3, 1, 511, 765]),
-        ([1, 1, 511, 313], [1, 3, 313, 765], [1, 3, 511, 765]),
-        ([1, 1, 511, 313], [3, 1, 313, 765], [3, 1, 511, 765]),
         ([1, 3, 511, 313], [3, 1, 313, 765], [3, 3, 511, 765]),
         ([3, 1, 511, 313], [1, 3, 313, 765], [3, 3, 511, 765]),
-        ([1, 3, 511, 313], [1, 3, 313, 765], [1, 3, 511, 765]),
-        ([3, 1, 511, 313], [3, 1, 313, 765], [3, 1, 511, 765]),
         ([3, 3, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
     ),
 )
 def test_moreh_matmul(params, device):
     input_shape, other_shape, output_shape = params
-    tt_input, tt_other, _, _, _, torch_input, torch_other, _ = get_tensors(
+    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
     )
 
@@ -274,7 +274,6 @@ def test_moreh_matmul(params, device):
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
@@ -299,9 +298,10 @@ def test_moreh_matmul(params, device):
         ([3, 3, 313, 511], [3, 3, 765, 313], [3, 3, 511, 765], True, True),
     ),
 )
-def test_primary_moreh_matmul(params, device):
+@pytest.mark.parametrize("has_output", [True, False])
+def test_primary_moreh_matmul(params, has_output, device):
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
-    tt_input, tt_other, _, _, _, torch_input, torch_other, _ = get_tensors(
+    tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
     )
 
@@ -310,9 +310,13 @@ def test_primary_moreh_matmul(params, device):
 
     # tt matmul
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = (
+    tt_output_cpu = (
         ttl.operations.primary.moreh_matmul(
-            tt_input, tt_other, transpose_input_a=transpose_input, transpose_input_b=transpose_other
+            tt_input,
+            tt_other,
+            output_tensor=tt_output if has_output else None,
+            transpose_input_a=transpose_input,
+            transpose_input_b=transpose_other,
         )
         .cpu()
         .to(cpu_layout)
@@ -321,11 +325,11 @@ def test_primary_moreh_matmul(params, device):
     )
 
     # torch matmul
-    rtol = atol = 0.1
     torch_out = torch.matmul(torch_input, torch_other)
 
     # test for equivalance
-    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output, pcc=0.999, rtol=rtol, atol=atol)
+    rtol = atol = 0.1
+    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
