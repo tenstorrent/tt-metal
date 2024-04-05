@@ -74,20 +74,18 @@ operation::ProgramWithCallbacks scan_impl(const Tensor &input, ScanOpDirection d
     uint32_t tiles_per_col = input.shard_spec()->shape[0] / TILE_HEIGHT;
     uint32_t reshapes_per_row = input.shard_spec()->shape[1] / TILE_HW;
 
-    log_info(tt::LogOp, "total_tiles: {}", total_tiles);
-    log_info(
-        tt::LogOp,
-        "tiles per row: {}, tiles per col: {}, reshapes per row: {}",
-        tiles_per_row,
-        tiles_per_col,
-        reshapes_per_row);
+    float one = 1.;
+    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t *>(&one);
 
-    auto all_cbs = aggregate_arrays(
+    auto ct_args = aggregate_arrays(
         create_cb<2>(program, all_cores, tile_size, total_tiles, data_format, {CB::c_in0, CB::c_out0}, src_buffer),
-        create_cb<2>(program, all_cores, tile_size, 32, data_format, {CB::c_intermed0, CB::c_intermed1}),
-        create_cb(program, all_cores, tile_size, 8, data_format, {CB::c_intermed2}),
-        create_cb(program, all_cores, tile_size, 8, data_format, {CB::c_intermed3}),
-        create_cb(program, all_cores, tile_size, reshapes_per_row, data_format, {CB::c_intermed4}));
+        create_cb(program, all_cores, tile_size, 32, data_format, {CB::c_intermed0}),
+        create_cb<3>(
+            program, all_cores, tile_size, 32, data_format, {CB::c_intermed1, CB::c_intermed2, CB::c_intermed3}),
+        create_cb(program, all_cores, tile_size, 8, data_format, {CB::c_intermed4}),
+        create_cb(program, all_cores, tile_size, 8, data_format, {CB::c_intermed5}),
+        create_cb<2>(program, all_cores, tile_size, reshapes_per_row, data_format, {CB::c_intermed6, CB::c_intermed7}));
+    ct_args.push_back(bf16_one_u32);
 
     std::vector<uint32_t> runtime_args = {tiles_per_row, tiles_per_col, reshapes_per_row, total_tiles};
 
@@ -96,7 +94,7 @@ operation::ProgramWithCallbacks scan_impl(const Tensor &input, ScanOpDirection d
         program,
         "tt_eager/tt_dnn/op_library/scan/kernels/dataflow/reader_scan_sharded.cpp",
         all_cores,
-        WriterDataMovementConfig(all_cbs));
+        WriterDataMovementConfig(ct_args));
     SetRuntimeArgs(program, reader_kernel_id, all_cores, runtime_args);
 
     // Compute kernel
@@ -104,7 +102,7 @@ operation::ProgramWithCallbacks scan_impl(const Tensor &input, ScanOpDirection d
         program,
         "tt_eager/tt_dnn/op_library/scan/kernels/compute/untilize_scan_tilize.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = all_cbs});
+        tt_metal::ComputeConfig{.compile_args = ct_args});
     tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, runtime_args);
 
     auto override_runtime_args_callback = [](const void *operation,

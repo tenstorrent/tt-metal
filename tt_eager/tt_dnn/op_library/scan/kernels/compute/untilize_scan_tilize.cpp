@@ -12,10 +12,18 @@
 
 constexpr auto cb_src = get_compile_time_arg_val(0);
 constexpr auto cb_dst = get_compile_time_arg_val(1);
+
 constexpr auto cb_reshape = get_compile_time_arg_val(2);
+
 constexpr auto cb_scanned = get_compile_time_arg_val(3);
-constexpr auto cb_block = get_compile_time_arg_val(4);
-constexpr auto cb_block2 = get_compile_time_arg_val(5);
+constexpr auto cb_aux = get_compile_time_arg_val(4);
+constexpr auto cb_scanned2 = get_compile_time_arg_val(5);
+
+constexpr auto cb_block = get_compile_time_arg_val(6);
+constexpr auto cb_block2 = get_compile_time_arg_val(7);
+
+constexpr auto cb_factors = get_compile_time_arg_val(8);
+constexpr auto cb_factors2 = get_compile_time_arg_val(9);
 
 constexpr uint32_t tiles_per_block = 8;
 constexpr uint32_t blocks_per_full_reshape = 4;
@@ -58,18 +66,66 @@ void MAIN {
 
     pack_untilize_init<tiles_per_block>(cb_src, cb_block);
 
+    cb_push_back(cb_factors, reshapes_per_row);
+
     for (uint32_t row = 0; row < tiles_per_col; ++row) {
+        cb_wait_front(cb_factors, reshapes_per_row);
+        cb_reserve_back(cb_factors2, reshapes_per_row);
+
         for (uint32_t reshape = 0; reshape < reshapes_per_row; ++reshape) {
             untilize_from_src(cb_src, cb_block);
 
-            cb_reserve_back(cb_scanned, tiles_per_reshape);
             cb_wait_front(cb_reshape, tiles_per_reshape);
-            // math here
-            cb_pop_front(cb_reshape, tiles_per_reshape);
+            cb_reserve_back(cb_scanned, tiles_per_reshape);
+            cb_reserve_back(cb_aux, tiles_per_reshape);
+
+            // multiply the first tile of cb_reshape by the factor and push to cb_scanned
+            mul_tiles_init();
+            tile_regs_acquire();
+            mul_tiles(cb_factors, cb_reshape, 0, 0, 0);
+            cb_pop_front(cb_factors, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_aux);
+            tile_regs_release();
+            cb_push_back(cb_aux, 1);
+
+            for (uint32_t tile = 1; tile < tiles_per_reshape; ++tile) {
+                mul_tiles_init();
+                cb_wait_front(cb_aux, 1);
+                tile_regs_acquire();
+                mul_tiles(cb_aux, cb_reshape, 0, tile, 0);
+                cb_pop_front(cb_aux, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_aux);
+                tile_regs_release();
+                cb_push_back(cb_aux, 1);
+            }
+
             cb_push_back(cb_scanned, tiles_per_reshape);
 
+            // push this reshape to the destination
             tilize_to_dst(cb_block2, cb_dst);
+
+            cb_wait_front(cb_scanned2, tiles_per_reshape);  // we are blocked here - why?
+
+            // copy the last tile from cb_scanned back to cb_factors
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short(cb_scanned);
+            copy_tile(cb_scanned2, tiles_per_reshape - 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_factors2);
+            tile_regs_release();
+            cb_push_back(cb_factors2, 1);
+
+            cb_pop_front(cb_reshape, tiles_per_reshape);
+            cb_pop_front(cb_scanned2, tiles_per_reshape);
+            cb_pop_front(cb_aux, 1);
         }
+        cb_pop_front(cb_factors2, reshapes_per_row);
+        cb_push_back(cb_factors, reshapes_per_row);
     }
 }
 }  // namespace NAMESPACE
