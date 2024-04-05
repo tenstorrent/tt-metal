@@ -364,7 +364,11 @@ class TTPyCompositeConv(TTPyOp):
         output_layout=ttl.tensor.Layout.TILE,
         use_dram_for_matmul=False,
     ):
-        fp32_accum = compute_kernel_config and compute_kernel_config.fp32_dest_acc_en
+        fp32_accum = (
+            compute_kernel_config
+            and isinstance(compute_kernel_config, ttl.tensor.WormholeComputeKernelConfig)
+            and compute_kernel_config.fp32_dest_acc_en
+        )
         self.use_dram_for_matmul = use_dram_for_matmul
 
         if padded_input_channels is None:
