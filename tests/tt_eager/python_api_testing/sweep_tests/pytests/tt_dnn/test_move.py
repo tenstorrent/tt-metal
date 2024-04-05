@@ -35,6 +35,9 @@ def test_run_move_op(
     device,
     function_level_defaults,
 ):
+    if input_mem_config != ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1):
+        pytest.skip("Only inputs on L1 for move op currently supported")
+
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
