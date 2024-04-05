@@ -25,7 +25,7 @@ class AllGatherConfig {
 
         // enable_bidirectional - currently doesn't support batch dim and multi-link (some tests are flaky with those configs)
         erisc_handshake_address(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE),
-        enable_bidirectional(dim != 0 && dim != 1),
+        enable_bidirectional(false),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM)

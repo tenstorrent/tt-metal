@@ -178,7 +178,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])  # TODO: restore to 500
+@pytest.mark.parametrize("num_iters", [100])  # TODO: restore to 500
 def test_all_gather_on_t3000_post_commit_looping(
     all_devices,
     num_devices,
@@ -435,7 +435,7 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-# @pytest.mark.skip("Not ready for prime time")
+@pytest.mark.skip("Re-enable with FD 2.0 and most recent all-gather updates/bug-fixes")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
@@ -499,11 +499,6 @@ def test_all_gather_on_t3000_nightly(
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
         ),
         (
-            # 2048 wide works
-            # 3072 wide hangs -> maybe I'm exceeding some size limit... (add asserts on buffer sizes:
-            #  - eth buffer size
-            #  - shard buffer size
-            # )
             (1, 1, 32, 3072),
             (32, 128),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 2))}),
