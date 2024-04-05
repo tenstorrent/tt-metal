@@ -76,6 +76,7 @@ struct Tensor {
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
+    std::optional<std::size_t> tensor_id = std::nullopt;
     std::shared_ptr<TensorAttributes> tensor_attributes;
     // Tensor gets worker queue handle through the device
     std::vector<Device*> workers = {};
@@ -87,7 +88,8 @@ struct Tensor {
     Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout);
 
     // Default constructor to initialize empty tensor
-    Tensor(std::vector<Device*> workers = {}) : tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
+    Tensor(std::vector<Device *> workers = {}) :
+        tensor_id(std::nullopt), tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
         if (workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -96,6 +98,7 @@ struct Tensor {
     }
 
     Tensor(const Tensor &other) {
+        this->tensor_id = other.tensor_id;
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
         if (this->workers.size()) {
@@ -106,6 +109,7 @@ struct Tensor {
     }
 
     Tensor &operator=(const Tensor &other) {
+        this->tensor_id = other.tensor_id;
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
         if (this->workers.size()) {
@@ -116,7 +120,10 @@ struct Tensor {
         return *this;
     }
 
-    Tensor(Tensor &&other) noexcept : tensor_attributes(std::move(other.tensor_attributes)), workers(std::move(other.workers)) {};
+    Tensor(Tensor &&other) noexcept :
+        tensor_id(std::move(other.tensor_id)),
+        tensor_attributes(std::move(other.tensor_attributes)),
+        workers(std::move(other.workers)){};
     Tensor &operator=(Tensor &&other) = default;
 
     ~Tensor();

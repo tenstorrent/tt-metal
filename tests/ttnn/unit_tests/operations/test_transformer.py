@@ -34,7 +34,7 @@ def test_transformer_attention_softmax(
 
     input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
     torch_input_tensor = torch_random(input_shape, 0, 1.0, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
+    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
         torch_input_tensor,
         head_size=None,
         attention_mask=None,
@@ -72,7 +72,7 @@ def test_transformer_concatenate_heads(
 
     input_shape = (batch_size, num_heads, sequence_size, head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer._torch_concatenate_heads(torch_input_tensor)
+    torch_output_tensor = ttnn.transformer.concatenate_heads.golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -110,7 +110,7 @@ def test_transformer_split_query_key_value_and_split_heads(
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
         torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
     )
 
@@ -154,7 +154,7 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
         torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
     )
 
@@ -206,7 +206,7 @@ def test_falcon_split_query_key_value_and_split_heads(
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
         torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
     )
 
@@ -252,7 +252,7 @@ def test_sharded_split_query_key_value_and_split_heads(
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(torch_input_tensor, num_heads=num_heads)
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -297,7 +297,7 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
         torch_input_tensor,
         num_heads=num_heads,
     )
@@ -367,7 +367,7 @@ def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
 
     input_shape = (batch_size, num_heads, sequence_size, head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer._torch_concatenate_heads(torch_input_tensor)
+    torch_output_tensor = ttnn.transformer.concatenate_heads.golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
