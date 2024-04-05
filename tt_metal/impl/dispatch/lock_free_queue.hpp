@@ -61,6 +61,12 @@ class LockFreeQueue {
             return result;
         }
 
+        void clear() {
+            while (!empty()) {
+                void(pop());
+            }
+        }
+
         bool empty() const {
             return head.load() == tail.load();
         }

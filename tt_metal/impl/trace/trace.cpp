@@ -14,8 +14,6 @@ namespace {
 // Labels to make the code more readable
 static constexpr bool kBlocking = true;
 static constexpr bool kNonBlocking = false;
-static constexpr bool kEnableCQBypass = true;
-static constexpr bool kDisableCQBypass = false;
 
 size_t interleaved_page_size(
     const uint32_t total_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
@@ -30,7 +28,7 @@ size_t interleaved_page_size(
 
 namespace tt::tt_metal {
 
-unordered_map<uint32_t, shared_ptr<Buffer>> Trace::buffer_pool;
+unordered_map<uint32_t, TraceBuffer> Trace::buffer_pool;
 std::mutex Trace::pool_mutex;
 
 Trace::Trace() : state(TraceState::EMPTY) {
@@ -69,19 +67,17 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     this->state = TraceState::INSTANTIATING;
     uint32_t tid = next_id();
     TT_FATAL(this->has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
+    auto desc = std::make_shared<detail::TraceDescriptor>();
 
-    // Record the captured Host API as commands via bypass mode
-    SystemMemoryManager& cq_manager = cq.device()->sysmem_manager();
-    cq_manager.set_bypass_mode(kEnableCQBypass, true /*clear buffer*/);
-    for (auto cmd : this->queue().worker_queue) {
-        cq.run_command(cmd);
-    }
-    cq.wait_until_empty();
-    cq_manager.set_bypass_mode(kDisableCQBypass, false);
+    // Record the captured Host API as commands via trace_commands,
+    // extracted command data is returned as a vector of uint32_t
+    vector<uint32_t> data = cq.trace_commands(desc, [&]() {
+        for (auto cmd : this->queue().worker_queue) {
+            cq.run_command(cmd);
+        }
+        cq.wait_until_empty();
+    });
 
-    // Extract the data from the bypass buffer and allocate it into a DRAM buffer
-    SystemMemoryManager& manager = cq.hw_command_queue().manager;
-    std::vector<uint32_t>& data = cq_manager.get_bypass_data();
     uint64_t data_size = data.size() * sizeof(uint32_t);
 
     // TODO: add CQ_PREFETCH_EXEC_BUF_END command and pad to the next page
@@ -101,7 +97,7 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     Finish(cq);  // clear side effects flag
 
     // Pin the trace buffer in memory until explicitly released by the user
-    this->add_instance(tid, buffer);
+    this->add_instance(tid, {desc, buffer});
     this->state = TraceState::READY;
     return tid;
 }
@@ -112,10 +108,10 @@ bool Trace::has_instance(const uint32_t tid) {
     });
 }
 
-void Trace::add_instance(const uint32_t tid, shared_ptr<Buffer> buffer) {
+void Trace::add_instance(const uint32_t tid, TraceBuffer buf) {
     _safe_pool([&] {
         TT_FATAL(Trace::buffer_pool.find(tid) == Trace::buffer_pool.end());
-        Trace::buffer_pool.insert({tid, buffer});
+        Trace::buffer_pool.insert({tid, buf});
     });
 }
 
@@ -132,7 +128,7 @@ void Trace::release_all() {
     });
 }
 
-shared_ptr<Buffer> Trace::get_instance(const uint32_t tid) {
+TraceBuffer Trace::get_instance(const uint32_t tid) {
     return _safe_pool([&] {
         TT_FATAL(Trace::buffer_pool.find(tid) != Trace::buffer_pool.end());
         return Trace::buffer_pool[tid];

@@ -246,8 +246,8 @@ class SystemMemoryManager {
         return this->bypass_enable;
     }
 
-    std::vector<uint32_t>& get_bypass_data() {
-        return this->bypass_buffer;
+    std::vector<uint32_t> get_bypass_data() {
+        return std::move(this->bypass_buffer);
     }
 
     uint32_t get_issue_queue_size(const uint8_t cq_id) const {
