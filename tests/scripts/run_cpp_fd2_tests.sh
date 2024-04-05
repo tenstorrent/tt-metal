@@ -20,13 +20,39 @@ fi
 #############################################
 echo "Running test_prefetcher tests now...";
 
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 3  # TrueSmoke Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 3  # Smoke Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 3  # Random Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 3  # PCIE Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 3  # Paged DRAM Read Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 3  # Paged DRAM Write + Read Test
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 3  # Host Test
+run_test() {
+    echo $1
+    $1
+    echo
+};
+
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5"  # TrueSmoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5"  # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5"  # Random Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 5"  # PCIE Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 5"  # Paged DRAM Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 5"  # Paged DRAM Write + Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5"  # Host Test
+
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -rb"  # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -rb"  # Random Test
+
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis" # TrueSmoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis" # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -spre -sdis" # Random Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 5 -spre -sdis" # PCIE Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 5 -spre -sdis" # Paged DRAM Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 5 -spre -sdis" # Paged DRAM Write + Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -spre -sdis" # Host Test
+
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -x" # TrueSmoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x" # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -x" # Random Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 5 -x" # PCIE Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 5 -x" # Paged DRAM Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 5 -x" # Paged DRAM Write + Read Test
+#run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -x"  # Host Test not supported w/ exec_buf
+
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 224 -dpgr 256
