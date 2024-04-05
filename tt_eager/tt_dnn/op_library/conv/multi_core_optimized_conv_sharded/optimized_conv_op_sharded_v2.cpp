@@ -29,7 +29,7 @@ const uint32_t weight_cb                              = CB::c_in1;
 const uint32_t bias_cb                                = CB::c_in2;
 const uint32_t sharded_act_cb                         = CB::c_in3;
 const uint32_t cb_for_reader_indices                  = CB::c_in4;
-const uint32_t cb_for_reader_offsets                  = CB::c_in5;
+const uint32_t cb_for_l1_array                        = CB::c_in5;
 const uint32_t act_cb_row_major_bfloat16              = CB::c_in6;
 const uint32_t act_cb_second_reader                   = CB::c_in7;
 const uint32_t matmul_partials_cb                     = CB::c_intermed0;
@@ -722,11 +722,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
         auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
-        // Local L1 to store array for reader offsets
-        // TODO: this is not used in 2D-sys-conv, remove also from 1D-sys-conv
-        CircularBufferConfig cb_for_reader_offsets_config = CircularBufferConfig(weight_size_h * weight_size_w * 4, {{cb_for_reader_offsets, tt::DataFormat::Float16_b}})
-		    .set_page_size(cb_for_reader_offsets, 4);
-        auto cb_for_reader_offsets_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_offsets_config);
+        // Local L1 to store temp vars
+        CircularBufferConfig cb_for_l1_array_config = CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+		    .set_page_size(cb_for_l1_array, 32 * 2);
+        auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     } else {
         TT_ASSERT(false, "Sharded input not supported for this conv yet!");
     }
