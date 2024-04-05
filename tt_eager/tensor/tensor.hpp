@@ -89,7 +89,10 @@ struct Tensor {
 
     // Default constructor to initialize empty tensor
     Tensor(std::vector<Device *> workers = {}) :
-        tensor_id(std::nullopt), tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
+        tensor_id(std::nullopt),
+        tensor_attributes(std::make_shared<TensorAttributes>()),
+        workers(workers),
+        deallocate_through_destructor(false) {
         if (workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -97,10 +100,11 @@ struct Tensor {
         }
     }
 
-    Tensor(const Tensor &other) {
-        this->tensor_id = other.tensor_id;
-        this->workers = other.workers;
-        this->tensor_attributes = other.tensor_attributes;
+    Tensor(const Tensor &other) :
+        tensor_id(other.tensor_id),
+        workers(other.workers),
+        tensor_attributes(other.tensor_attributes),
+        deallocate_through_destructor(other.deallocate_through_destructor) {
         if (this->workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -112,6 +116,7 @@ struct Tensor {
         this->tensor_id = other.tensor_id;
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
+        this->deallocate_through_destructor = other.deallocate_through_destructor;
         if (this->workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -120,10 +125,7 @@ struct Tensor {
         return *this;
     }
 
-    Tensor(Tensor &&other) noexcept :
-        tensor_id(std::move(other.tensor_id)),
-        tensor_attributes(std::move(other.tensor_attributes)),
-        workers(std::move(other.workers)){};
+    Tensor(Tensor &&other) noexcept = default;
     Tensor &operator=(Tensor &&other) = default;
 
     ~Tensor();
