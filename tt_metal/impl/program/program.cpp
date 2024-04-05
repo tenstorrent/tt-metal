@@ -870,6 +870,7 @@ void Program::compile( Device * device )
         for (auto &[id, kernel]: kernels) {
             launch_build_step([kernel, device, this] {
                 JitBuildOptions build_options(device->build_env());
+                kernel->set_common_runtime_args_offset();
                 kernel->set_build_options(build_options);
                 this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
