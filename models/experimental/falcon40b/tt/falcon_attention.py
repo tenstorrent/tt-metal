@@ -317,11 +317,6 @@ class TtFalconAttention:
         q_len = hidden_states[0].get_legacy_shape()[2]
         assert layer_past is not None
 
-        # Reshard
-        hidden_states = convert_to_layout(
-            hidden_states, self.model_config["ATTN_INPUT_MEMCFG"], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
-        )
-
         # Fused query, key and value projection
         fused_query_key_value = []
         for i in range(len(hidden_states)):
@@ -336,12 +331,6 @@ class TtFalconAttention:
                     transpose_mcast=True,
                 )
             )
-
-        fused_query_key_value = convert_to_layout(
-            fused_query_key_value,
-            self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
-        )
 
         # Split query, key and value
         query_layer = []
@@ -480,19 +469,11 @@ class TtFalconAttention:
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
-        attn_output = convert_to_layout(
-            attn_output, self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
-        )
-
         attn_output = tt_lib.tensor.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-        )
-
-        attn_output = convert_to_layout(
-            attn_output, self.model_config["DEFAULT_MEMCFG"], self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
         )
         for i in range(len(attn_output)):
             attn_output[i] = falcon_prefill_matmul(

@@ -162,22 +162,12 @@ class TtFalconMLP:
                 )
             )
             x[i].deallocate(True)
-        if self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"] != self.model_config["DEFAULT_MEMCFG"]:
-            for i in range(len(hidden_states)):
-                hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
-                    hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-                )
         hidden_states = tt_lib.tensor.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        if self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"] != self.model_config["DEFAULT_MEMCFG"]:
-            for i in range(len(hidden_states)):
-                hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
-                    hidden_states[i], sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-                )
         for i in range(len(hidden_states)):
             hidden_states[i] = falcon_prefill_matmul(
                 hidden_states[i],
