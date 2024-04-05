@@ -19,6 +19,7 @@ Welcome to TT-NN documentation!
    ttnn/adding_new_ttnn_operation
    ttnn/profiling_ttnn_operations
    ttnn/dependencies/index.rst
+   ttnn/demos
 
 .. toctree::
    :caption: Models
