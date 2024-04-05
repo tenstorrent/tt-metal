@@ -68,7 +68,6 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
     uint32_t dst_page_index = 0;
 
     uint32_t num_cores = this->buffer.num_cores();
-    uint32_t shard_size = this->buffer.shard_spec().size();
 
     auto core_host_page_indices = this->buffer.core_host_page_indices();
     vector<uint32_t> num_pages_in_shards;
@@ -268,8 +267,6 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
     uint32_t src_page_index = 0;
 
     uint32_t num_cores = this->buffer.num_cores();
-    uint32_t shard_size = this->buffer.shard_spec().size();
-
     auto core_host_page_indices = this->buffer.core_host_page_indices();
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
@@ -867,19 +864,12 @@ void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& bu
 
     std::set<uint32_t> pages_seen;
     uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
-    for (uint32_t page_id = 0; page_id < num_pages;) {
+    for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
         uint32_t local_num_pages;
         auto dev_page_id = page_id;
         auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
         TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-        if(page_id + shard_width_in_pages < num_pages) {
-            local_num_pages = shard_width_in_pages;
-        }
-        else {
-            local_num_pages = num_pages - page_id;
-        }
-        memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size*local_num_pages);
-        page_id += local_num_pages;
+        memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size);
     }
     return swapped;
 }
@@ -1367,7 +1357,7 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
     Buffer* buffer = alloc_md.buffer;
     uint32_t allocated_addr;
     if(is_sharded(buffer->buffer_layout())) {
-        allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, buffer->num_cores());
+        allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, buffer->num_cores());
     }
     else {
         allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, std::nullopt);

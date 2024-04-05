@@ -58,8 +58,7 @@ std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& in
             this->output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config,
-            true
+            mem_config
             )};
     } else {
         return operation::generic_create_output_tensors(
@@ -126,8 +125,7 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
         input_tensor.device(),
-        mem_config,
-        true
+        mem_config
         )};
 }
 
@@ -138,7 +136,6 @@ const operation::Hash Reshard::compute_program_hash(
         this->output_mem_config,
         this->input_shape);
 }
-
 
 
 
