@@ -27,7 +27,9 @@ namespace tt {
 namespace tt_metal {
 
 Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) :
-    tensor_id{std::nullopt}, tensor_attributes(std::make_shared<TensorAttributes>(storage, shape, dtype, layout)) {
+    tensor_id{std::nullopt},
+    tensor_attributes(std::make_shared<TensorAttributes>(storage, shape, dtype, layout)),
+    deallocate_through_destructor(false) {
     this->set_metadata_populated();
     std::visit(
         [&] (auto&& storage) {
