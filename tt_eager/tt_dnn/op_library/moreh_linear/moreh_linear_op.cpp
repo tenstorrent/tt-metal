@@ -23,43 +23,59 @@ inline bool is_shape_scalar(const Shape& bias) {
 }
 
 inline void moreh_linear_validate(
-    const Tensor& input, const Tensor& weight, std::optional<std::reference_wrapper<const Tensor>> bias) {
+    const Tensor& input, const Tensor& weight, const std::optional<const Tensor>& bias, const std::optional<const Tensor>& output) {
     const auto& weight_shape = weight.get_legacy_shape().without_padding();
     TT_ASSERT(weight_shape[0] == 1 && weight_shape[1] == 1, "weight should be a 2D tensor");
-    if (bias) {
-        const auto& bias_tensor = bias->get();
+
+    if (bias.has_value()) {
+        const auto& bias_tensor = bias.value();
         const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
         TT_ASSERT(
             is_shape_out_features(bias_shape, weight_shape) || is_shape_scalar(bias_shape),
             "shape of bias should be [1, 1, 1, wieght_shape[2]] or [1, 1, 1, 1]");
     }
+
+    if (output.has_value()) {
+        const auto& output_tensor = output.value();
+        const auto& output_shape = output_tensor.get_legacy_shape().without_padding();
+        const auto& input_shape = input.get_legacy_shape().without_padding();
+        TT_ASSERT(
+            input_shape[0] == output_shape[0] &&
+            input_shape[1] == output_shape[1] &&
+            input_shape[2] == output_shape[2] &&
+            weight_shape[2] == output_shape[3],
+            "shape of output should be [input_shape[0], input_shape[1], input_shape[2], wieght_shape[2]]");
+    }
 }
 
-Tensor moreh_linear_(
+Tensor _moreh_linear(
     const Tensor& input,
     const Tensor& weight,
-    std::optional<std::reference_wrapper<const Tensor>> bias,
+    const std::optional<const Tensor>& bias,
+    std::optional<Tensor> output,
     const MemoryConfig& output_mem_config) {
-    moreh_linear_validate(input, weight, bias);
-    Tensor mm_output = moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
-    if (bias) {
-        const auto& bias_tensor = bias->get();
+    moreh_linear_validate(input, weight, bias, output);
+    output = moreh_matmul(input, weight, output, false, true, output_mem_config);
+
+    if (bias.has_value()) {
+        const auto& bias_tensor = bias.value();
         const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
         BcastOpDim bcast_dim = is_shape_scalar(bias_shape) ? BcastOpDim::HW : BcastOpDim::H;
-        return tt::tt_metal::bcast(mm_output, bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
+        output = tt::tt_metal::bcast(output.value(), bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
     }
-    return mm_output;
+    return output.value();
 }
 
 Tensor moreh_linear(
     const Tensor& input,
     const Tensor& weight,
-    std::optional<std::reference_wrapper<const Tensor>> bias,
+    std::optional<const Tensor> bias,
+    std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(
         input.storage_type() == StorageType::DEVICE && weight.storage_type() == StorageType::DEVICE,
         "input and weight tensors need to be on device");
-    return moreh_linear_(input, weight, bias, output_mem_config);
+    return _moreh_linear(input, weight, bias, output, output_mem_config);
 }
 
 }  // namespace primary

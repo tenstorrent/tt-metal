@@ -12,13 +12,12 @@ from loguru import logger
 
 # TODO: add this feature in get_tensors method
 def get_bias_tensors(bias_shape, require_bias_grad, device):
-    torch.manual_seed(2023)
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
 
-    bias = torch.randint(-2, 3, bias_shape, dtype=cpu_dtype)
+    bias = torch.randint(-10, 10, bias_shape, dtype=cpu_dtype)
     tt_bias = ttl.tensor.Tensor(bias, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     tt_bias_grad = None
@@ -50,18 +49,29 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
-def test_moreh_linear(shapes, has_bias, device):
+@pytest.mark.parametrize("has_output", [False, True])
+def test_moreh_linear(shapes, has_bias, has_output, device):
+    torch.manual_seed(3072)
     input_shape, weight_shape, bias_shape, output_shape = shapes
     tt_input, tt_weight, _, _, _, torch_input, torch_weight, _ = get_tensors(
         input_shape, weight_shape, output_shape, False, False, False, device
     )
 
+    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_layout = ttl.tensor.Layout.TILE
+    cpu_dtype = torch.bfloat16
+    torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+    tt_output = (
+        ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(1).to(npu_layout).to(device) if has_output else None
+    )
+
     if has_bias:
         tt_bias, torch_bias, _ = get_bias_tensors(bias_shape, False, device)
-        tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight, tt_bias)
     else:
-        torch_bias = None
-        tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight)
+        tt_bias, torch_bias = None, None
+
+    ## TT Op
+    tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight, bias=tt_bias, output=tt_output)
 
     ## reference
     torch_output = torch.nn.functional.linear(torch_input, torch_weight[0][0], torch_bias)

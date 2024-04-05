@@ -11,7 +11,6 @@ from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
 
 
 def get_tensors(input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device):
-    torch.manual_seed(2023)
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
