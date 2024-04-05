@@ -546,7 +546,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_EnqueueDummyProgramOnEthCore) {
+TEST_F(CommandQueueSingleCardFixture, EnqueueDummyProgramOnEthCore) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
@@ -554,7 +554,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_EnqueueDummyProgramOnEthCore) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_EthKernelsNocReadNoSend) {
+TEST_F(CommandQueueSingleCardFixture, EthKernelsNocReadNoSend) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
@@ -569,7 +569,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_EthKernelsNocReadNoSend) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_EthKernelsNocWriteNoReceive) {
+TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
@@ -586,7 +586,6 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_EthKernelsNocWriteNoReceive) {
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
@@ -638,7 +637,6 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -672,7 +670,6 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {

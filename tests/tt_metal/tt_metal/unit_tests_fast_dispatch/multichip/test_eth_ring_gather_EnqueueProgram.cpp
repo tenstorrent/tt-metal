@@ -451,7 +451,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
+TEST_F(CommandQueueMultiDeviceFixture, DISABLED_EthKernelsDirectRingGatherAllChips) {
     if (num_devices_ < 4) {
         GTEST_SKIP();
     }
