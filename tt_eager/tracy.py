@@ -30,6 +30,17 @@ from tt_metal.tools.profiler.common import (
 import tracy_state
 
 
+def signpost(header, message=None):
+    from tracy_tt_lib import tracy_message
+
+    if message:
+        tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")
+        logger.info(f"{header} : {message} ")
+    else:
+        tracy_message(f"`TT_SIGNPOST: {header}`")
+        logger.info(f"{header}")
+
+
 class Profiler:
     def __init__(self):
         from tracy_tt_lib import tracy_marker_func, tracy_marker_line, finish_all_zones

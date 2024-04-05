@@ -17,7 +17,8 @@ using namespace tt::tt_metal;
 
 typedef enum sanitization_features {
     SanitizeAddress,
-    SanitizeAlignment
+    SanitizeAlignmentL1,
+    SanitizeAlignmentDRAM
 } watcher_features_t;
 
 void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature) {
@@ -87,9 +88,12 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             output_dram_noc_xy.x = 16;
             output_dram_noc_xy.y = 16;
             break;
-        case SanitizeAlignment:
+        case SanitizeAlignmentL1:
             l1_buffer_addr += 16; // This is illegal because reading DRAM->L1 needs DRAM alignment
                                   // requirements (32 byte aligned).
+            break;
+        case SanitizeAlignmentDRAM:
+            input_dram_buffer_addr++;
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -121,28 +125,36 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    string expected, addr;
+    string expected;
     switch(feature) {
         case SanitizeAddress:
-            expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
-            expected[7] = '0' + device->id();
-            expected[18] = '0' + phys_core.x;
-            expected[22] = '0' + phys_core.y;
-            addr = fmt::format("{:08x}", output_dram_buffer_addr);
-            expected.replace(99, addr.length(), addr);
-            if (is_eth_core) {
-                expected[43] = 'e';
-            }
+            expected = fmt::format(
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access Unknown core w/ physical coords {} [addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", output_dram_noc_xy.str(),
+                output_dram_buffer_addr
+            );
             break;
-        case SanitizeAlignment:
-            expected = "Device x, Core (x=x,y=x):    NARW,*,*,*,*  brisc using noc0 reading L1[addr=0x********,len=102400]";
-            expected[7] = '0' + device->id();
-            expected[18] = '0' + phys_core.x;
-            expected[22] = '0' + phys_core.y;
-            addr = fmt::format("{:08x}", l1_buffer_addr);
-            expected.replace(78, addr.length(), addr);
-            if (is_eth_core)
-                expected[43] = 'e';
+        case SanitizeAlignmentL1:
+            expected = fmt::format(
+                "Device {}, {} Core {}[physical {}]: {} using noc0 accesses local L1[addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr
+            );
+            break;
+        case SanitizeAlignmentDRAM:
+            expected = fmt::format(
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400]",
+                device->id(),
+                (is_eth_core) ? "Ethnet" : "Worker",
+                core.str(), phys_core.str(),
+                (is_eth_core) ? "erisc" : "brisc", input_dram_noc_xy.str(),
+                input_dram_buffer_addr
+            );
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -150,12 +162,9 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             break;
     }
 
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            fixture->log_file_name,
-            {expected}
-        )
-    );
+    log_info(LogTest, "Expected error: {}", expected);
+    log_info(LogTest, "Reported error: {}", watcher_server_get_exception_message());
+    EXPECT_TRUE(watcher_server_get_exception_message() == expected);
 }
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {
@@ -203,13 +212,25 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
     );
 }
 
-TEST_F(WatcherFixture, TestWatcherSanitizeAlignment) {
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, device, core, false, SanitizeAlignment);
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1);
+        },
+        this->devices_[0]
+    );
+}
+
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(
+        [](WatcherFixture *fixture, Device *device){
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignmentDRAM);
         },
         this->devices_[0]
     );

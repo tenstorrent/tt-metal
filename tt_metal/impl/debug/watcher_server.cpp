@@ -35,8 +35,9 @@ constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8  = 0xda;
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
+static std::atomic<int> dump_count = 0;
 static std::mutex watch_mutex;
-static std::unordered_set<Device *> devices;
+static std::set<Device *> devices;
 static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
@@ -45,6 +46,9 @@ static std::vector<string> kernel_names;
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
+
+// Description of thrown exception from watcher server, used for testing purposes.
+static string watcher_exception_message = "";
 
 static double get_elapsed_secs() {
     std::chrono::time_point now_time = std::chrono::system_clock::now();
@@ -153,17 +157,21 @@ static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, c
     string out;
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
+        string risc_status;
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
             char v = ((char *)&debug_status[cpu])[byte];
             if (v == 0) break;
             if (isprint(v)) {
-                out += v;
+                risc_status += v;
             } else {
                 log_running_kernels(launch_msg);
                 TT_THROW("Watcher data corrupted, unexpected debug status on core {}, unprintable character {}",
                           core.str(), (int)v);
             }
         }
+        // Pad risc status to 4 chars for alignment
+        string pad(4 - risc_status.length(), ' ');
+        out += (pad + risc_status);
         if (cpu != num_riscv_per_core - 1) out += ',';
     }
 
@@ -177,103 +185,165 @@ static void log_waypoint(CoreCoord core, const launch_msg_t *launch_msg, const d
     log_info(out.c_str());
 }
 
+static string get_ring_buffer(Device *device, CoreCoord core) {
+    uint64_t buf_addr = RING_BUFFER_ADDR;
+    if (tt::llrt::is_ethernet_core(core, device->id()))
+        buf_addr = eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR;
+    auto from_dev = tt::llrt::read_hex_vec_from_core(
+        device->id(),
+        core,
+        buf_addr,
+        RING_BUFFER_SIZE
+    );
+    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(from_dev[0]));
+    if (ring_buf_data->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX)
+        return "";
+
+    // Latest written idx is one less than the index read out of L1.
+    string out = "\n\tdebug_ring_buffer=\n\t[";
+    int curr_idx = ring_buf_data->current_ptr;
+    for (int count = 1; count <= RING_BUFFER_ELEMENTS; count++) {
+        out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
+        if (count % 8 == 0) {
+            out += "\n\t ";
+        }
+        if (curr_idx == 0) {
+            if (ring_buf_data->wrapped == 0)
+                break; // No wrapping, so no extra data available
+            else
+                curr_idx = RING_BUFFER_ELEMENTS-1; // Loop
+        } else {
+            curr_idx--;
+        }
+    }
+    // Remove the last comma
+    out.pop_back();
+    out += "]";
+    return out;
+}
+
+static void log_ring_buffer(Device *device, CoreCoord core) {
+    string out = get_ring_buffer(device, core);
+    if (!out.empty()) {
+        out = string("Last ring buffer status: ") + out;
+        log_info(out.c_str());
+    }
+}
+
+static std::pair<string, string> get_core_and_mem_type(Device *device, CoreCoord &phys_core) {
+    CoreType core_type;
+    try {
+        core_type = device->core_type_from_physical_core(phys_core);
+    } catch (std::runtime_error& e) {
+        // We may not be able to get a core type if the physical coords are bad.
+        return {"Unknown", ""};
+    }
+    switch(core_type) {
+        case CoreType::DRAM:
+            return {"DRAM", "DRAM"};
+        case CoreType::ETH:
+            return {"Ethernet", "L1"};
+        case CoreType::PCIE:
+            return {"PCIe", "PCIE"};
+        case CoreType::WORKER:
+            return {"Tensix", "L1"};
+        default:
+            return {"Unknown", ""};
+    }
+}
+
 static void dump_noc_sanity_status(FILE *f,
+                                   Device *device,
                                    CoreCoord core,
+                                   const string &core_str,
                                    const launch_msg_t *launch_msg,
                                    int noc,
                                    const debug_sanitize_noc_addr_msg_t* san,
                                    const debug_status_msg_t *debug_status) {
 
-    char buf[256];
+    string error_msg;
+    string error_reason = "Watcher detected NOC error and stopped device: ";
 
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
         if (san->addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
-            san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            log_running_kernels(launch_msg);
-            log_waypoint(core, launch_msg, debug_status);
-            snprintf(buf,sizeof(buf),
-                     "Watcher unexpected noc debug state on core %s, reported valid got noc%d{0x%08lx, %d}",
-                     core.str().c_str(), san->which, san->addr, san->len);
-            TT_THROW(buf);
+            san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16
+        ) {
+            error_msg = fmt::format(
+                 "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
+                 core.str().c_str(), san->which, san->addr, san->len
+             );
+            error_reason += "corrupted noc sanitization state - sanitization memory overwritten.";
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_riscv_name(core, san->which), noc, san->addr, san->len);
-        fflush(f);
-        log_running_kernels(launch_msg);
-        log_warning("Watcher stopped the device due to bad NOC L1/reg address");
-        log_waypoint(core, launch_msg, debug_status);
-        snprintf(buf, sizeof(buf), "On core %s: %s using noc%d reading L1[addr=0x%08lx,len=%d]",
-                 core.str().c_str(), get_riscv_name(core, san->which), noc, san->addr, san->len);
-        TT_THROW(buf);
+        error_msg = fmt::format(
+            "{} using noc{} accesses local L1[addr=0x{:08x},len={}]",
+            get_riscv_name(core, san->which), noc, san->addr, san->len
+        );
+        error_reason += "bad NOC L1/reg address.";
         break;
     case DebugSanitizeNocInvalidUnicast:
-        fprintf(f, "%s using noc%d tried to access core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_riscv_name(core, san->which),
-                noc,
-                NOC_UNICAST_ADDR_X(san->addr),
-                NOC_UNICAST_ADDR_Y(san->addr),
-                NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
-        fflush(f);
-        log_warning("Watcher stopped the device due to bad NOC unicast transaction");
-        log_running_kernels(launch_msg);
-        log_waypoint(core, launch_msg, debug_status);
-        snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to accesss core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]",
-                 core.str().c_str(),
-                 get_riscv_name(core, san->which),
-                 noc,
-                 NOC_UNICAST_ADDR_X(san->addr),
-                 NOC_UNICAST_ADDR_Y(san->addr),
-                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
-        TT_THROW(buf);
+        {
+        CoreCoord target_phys_core = {NOC_UNICAST_ADDR_X(san->addr), NOC_UNICAST_ADDR_Y(san->addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_core);
+        error_msg = fmt::format(
+            "{} using noc{} tried to access {} core w/ physical coords {} {}[addr=0x{:08x},len={}]",
+            get_riscv_name(core, san->which),
+            noc,
+            type_and_mem.first,
+            target_phys_core.str(),
+            type_and_mem.second,
+            NOC_LOCAL_ADDR_OFFSET(san->addr), san->len
+        );
+        error_reason += "bad NOC unicast transaction.";
+        }
         break;
     case DebugSanitizeNocInvalidMulticast:
-        fprintf(f, "%s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_riscv_name(core, san->which),
-                noc,
-                NOC_MCAST_ADDR_START_X(san->addr),
-                NOC_MCAST_ADDR_START_Y(san->addr),
-                NOC_MCAST_ADDR_END_X(san->addr),
-                NOC_MCAST_ADDR_END_Y(san->addr),
-                NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
-        fflush(f);
-        log_warning("Watcher stopped the device due to bad NOC multicast transaction");
-        log_running_kernels(launch_msg);
-        log_waypoint(core, launch_msg, debug_status);
-        snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]}",
-                 core.str().c_str(),
-                 get_riscv_name(core, san->which),
-                 noc,
-                 NOC_MCAST_ADDR_START_X(san->addr),
-                 NOC_MCAST_ADDR_START_Y(san->addr),
-                 NOC_MCAST_ADDR_END_X(san->addr),
-                 NOC_MCAST_ADDR_END_Y(san->addr),
-                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
-        TT_THROW(buf);
+        {
+        CoreCoord target_phys_core_start = {NOC_MCAST_ADDR_START_X(san->addr), NOC_MCAST_ADDR_START_Y(san->addr)};
+        CoreCoord target_phys_core_end = {NOC_MCAST_ADDR_END_X(san->addr), NOC_MCAST_ADDR_END_Y(san->addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_core_start);
+        error_msg = fmt::format(
+            "{} using noc{} tried to access {} core range w/ physical coords {}-{} {}[addr=0x{:08x},len={}]",
+            get_riscv_name(core, san->which),
+            noc,
+            type_and_mem.first,
+            target_phys_core_start.str(),
+            target_phys_core_end.str(),
+            type_and_mem.second,
+            NOC_LOCAL_ADDR_OFFSET(san->addr), san->len
+        );
+        error_reason += "bad NOC multicast transaction.";
+        }
         break;
     default:
-        log_running_kernels(launch_msg);
-        TT_THROW("Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}\n",
-                  core.str(), san->invalid);
+        error_msg = fmt::format(
+            "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
+            core.str(), san->invalid
+        );
+        error_reason += "corrupted noc sanitization state - unknown failure code.";
     }
-}
 
-static void dump_noc_sanity_status(FILE *f,
-                                   CoreCoord core,
-                                   const launch_msg_t *launch_msg,
-                                   const debug_sanitize_noc_addr_msg_t *san,
-                                   const debug_status_msg_t *debug_status) {
-
-    for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-        dump_noc_sanity_status(f, core, launch_msg, noc, &san[noc], debug_status);
+    // If we logged an error, print to stdout and throw.
+    if (!error_msg.empty()) {
+        log_warning(error_reason.c_str());
+        log_warning("{}: {}", core_str, error_msg);
+        log_waypoint(core, launch_msg, debug_status);
+        log_ring_buffer(device, core);
+        log_running_kernels(launch_msg);
+        // Save the error string for checking later in unit tests.
+        watcher::watcher_exception_message = fmt::format("{}: {}", core_str, error_msg);
+        TT_THROW(error_reason);
     }
 }
 
 static void dump_assert_status(
     FILE *f,
+    Device *device,
     CoreCoord core,
+    const string &core_str,
     const launch_msg_t *launch_msg,
     const debug_assert_msg_t *assert_status,
     const debug_status_msg_t *debug_status
@@ -282,25 +352,21 @@ static void dump_assert_status(
         case DebugAssertTripped: {
             // TODO: Get rid of this once #6098 is implemented.
             std::string line_num_warning = "Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
-            fprintf(
-                f, "%s tripped assert on line %d. Current kernel: %s. %s",
+            string error_msg = fmt::format(
+                "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
+                core_str,
                 get_riscv_name(core, assert_status->which),
                 assert_status->line_num,
                 get_kernel_name(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str()
             );
-            fflush(f);
-            log_running_kernels(launch_msg);
+            log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
+            log_warning(error_msg.c_str());
             log_waypoint(core, launch_msg, debug_status);
-            log_info(LogLLRuntime, "Watcher stopped the device due to tripped assert.");
-            TT_THROW(
-                "Watcher detected an assert: core {}, riscv {}, line {}. Current kernel: {}. {}",
-                core.str(),
-                get_riscv_name(core, assert_status->which),
-                assert_status->line_num,
-                get_kernel_name(core, launch_msg, assert_status->which),
-                line_num_warning
-            );
+            log_ring_buffer(device, core);
+            log_running_kernels(launch_msg);
+            watcher::watcher_exception_message = error_msg;
+            TT_THROW("Watcher detected tripped assert and stopped device.");
             break;
         }
         case DebugAssertOK:
@@ -344,39 +410,7 @@ static void dump_pause_status(
 }
 
 static void dump_ring_buffer(FILE *f, Device *device, CoreCoord core) {
-    uint64_t buf_addr = RING_BUFFER_ADDR;
-    if (tt::llrt::is_ethernet_core(core, device->id()))
-        buf_addr = eth_l1_mem::address_map::ERISC_RING_BUFFER_ADDR;
-    auto from_dev = tt::llrt::read_hex_vec_from_core(
-        device->id(),
-        core,
-        buf_addr,
-        RING_BUFFER_SIZE
-    );
-    DebugRingBufMemLayout *ring_buf_data = reinterpret_cast<DebugRingBufMemLayout *>(&(from_dev[0]));
-    if (ring_buf_data->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX)
-        return;
-
-    // Latest written idx is one less than the index read out of L1.
-    string out = "\n\tdebug_ring_buffer=\n\t[";
-    int curr_idx = ring_buf_data->current_ptr;
-    for (int count = 1; count <= RING_BUFFER_ELEMENTS; count++) {
-        out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
-        if (count % 8 == 0) {
-            out += "\n\t ";
-        }
-        if (curr_idx == 0) {
-            if (ring_buf_data->wrapped == 0)
-                break; // No wrapping, so no extra data available
-            else
-                curr_idx = RING_BUFFER_ELEMENTS-1; // Loop
-        } else {
-            curr_idx--;
-        }
-    }
-    // Remove the last comma
-    out.pop_back();
-    out += "]";
+    string out = get_ring_buffer(device, core);
     fprintf(f, "%s", out.c_str());
 }
 
@@ -468,7 +502,6 @@ static void dump_run_mailboxes(FILE *f,
 }
 
 static void dump_debug_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
-
     string out = get_debug_status(core, launch_msg, debug_status);
     fprintf(f, "%s ", out.c_str());
 }
@@ -524,17 +557,24 @@ static void dump_core(
     FILE *f,
     std::map<int, bool>& used_kernel_names,
     Device *device,
-    CoreCoord core,
+    CoreDescriptor logical_core,
     bool dump_all,
     std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores
 ) {
+    // Watcher only treats ethernet + worker cores.
+    bool is_eth_core = (logical_core.type == CoreType::ETH);
+    CoreCoord core = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
 
+    // Print device id, core coords (logical)
+    string core_type = is_eth_core ? "Ethnet Core" : "Worker Core";
+    string core_str = fmt::format(
+        "Device {}, {} {}[physical {}]",
+        device->id(), core_type, logical_core.coord, core.str()
+    );
     string pad(11 - core.str().length(), ' ');
-    fprintf(f, "Device %i, ", device->id());
-    fprintf(f, "Core %s:%s  ", core.str().c_str(), pad.c_str());
+    fprintf(f, "%s:%s ", core_str.c_str(), pad.c_str());
 
     // Ethernet cores have a different mailbox base addr
-    bool is_eth_core = tt::llrt::is_ethernet_core(core, device->id());
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;
     if (is_eth_core) {
         mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
@@ -555,10 +595,13 @@ static void dump_core(
         // magic value.
         if (!is_eth_core)
             dump_l1_status(f, device, core,  &mbox_data->launch);
-        if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled())
-            dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
+        if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
+            for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+                dump_noc_sanity_status(f, device, core, core_str, &mbox_data->launch, noc, &mbox_data->sanitize_noc[noc], mbox_data->debug_status);
+            }
+        }
         if (!tt::llrt::OptionsG.watcher_assert_disabled())
-            dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
+            dump_assert_status(f, device, core, core_str, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
         if (!tt::llrt::OptionsG.watcher_pause_disabled())
             dump_pause_status(core, &mbox_data->pause_status, paused_cores);
     }
@@ -607,17 +650,17 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
         CoreCoord grid_size = device->logical_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
-                CoreCoord logical_core(x, y);
-                CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-                if (device->storage_only_cores().find(logical_core) == device->storage_only_cores().end()) {
-                    dump_core(f, used_kernel_names, device, worker_core, dump_all, paused_cores);
+                CoreDescriptor logical_core = {{x, y}, CoreType::WORKER};
+                if (device->storage_only_cores().find(logical_core.coord) == device->storage_only_cores().end()) {
+                    dump_core(f, used_kernel_names, device, logical_core, dump_all, paused_cores);
                 }
             }
         }
 
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+            CoreDescriptor logical_core = {eth_core, CoreType::ETH};
             CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-            dump_core(f, used_kernel_names, device, physical_core, dump_all, paused_cores);
+            dump_core(f, used_kernel_names, device, logical_core, dump_all, paused_cores);
         }
 
         for (auto k_id : used_kernel_names) {
@@ -665,7 +708,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
 static void watcher_loop(int sleep_usecs) {
     TT_ASSERT(watcher::server_running == false);
     watcher::server_running = true;
-    int count = 0;
+    watcher::dump_count = 1;
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
@@ -690,7 +733,6 @@ static void watcher_loop(int sleep_usecs) {
                 break;
             usleep(1);
         }
-        count++;
         last_elapsed_time = watcher::get_elapsed_secs();
 
         {
@@ -702,7 +744,7 @@ static void watcher_loop(int sleep_usecs) {
                 break;
 
             fprintf(logfile, "-----\n");
-            fprintf(logfile, "Dump #%d at %.3lfs\n", count, watcher::get_elapsed_secs());
+            fprintf(logfile, "Dump #%d at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
 
             if (devices.size() == 0) {
                 fprintf(logfile, "No active devices\n");
@@ -721,8 +763,10 @@ static void watcher_loop(int sleep_usecs) {
                 }
             }
 
-            fprintf(logfile, "Dump #%d completed at %.3lfs\n", count, watcher::get_elapsed_secs());
+            fprintf(logfile, "Dump #%d completed at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
         }
+        fflush(logfile);
+        watcher::dump_count++;
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
@@ -833,6 +877,7 @@ void watcher_attach(Device *device) {
 
         watcher::logfile = watcher::create_file();
         watcher::watcher_killed_due_to_error = false;
+        watcher::watcher_exception_message = "";
 
         watcher::kernel_names.clear();
         watcher::kernel_names.push_back("blank");
@@ -899,12 +944,20 @@ void watcher_server_set_error_flag(bool val) {
     watcher::watcher_killed_due_to_error = val;
 }
 
+string watcher_server_get_exception_message() {
+    return watcher::watcher_exception_message;
+}
+
 void watcher_clear_log() {
     watcher::logfile = watcher::create_file();
 }
 
 string watcher_get_log_file_name() {
     return tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path + watcher::logfile_name;
+}
+
+int watcher_get_dump_count() {
+    return watcher::dump_count;
 }
 
 } // namespace tt

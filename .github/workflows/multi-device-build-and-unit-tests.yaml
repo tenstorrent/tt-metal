@@ -1,4 +1,4 @@
-name: "Multi-Nebula unit tests"
+name: "Multi-chip unit tests"
 
 on:
   workflow_dispatch:

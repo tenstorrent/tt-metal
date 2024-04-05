@@ -74,9 +74,6 @@ jobs:
       environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
-  release-run-frequent-slow-dispatch:
-    uses: ./.github/workflows/full-regressions-and-models.yaml
-    secrets: inherit
   release-run-frequent-fast-dispatch:
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models.yaml
     secrets: inherit

@@ -232,7 +232,7 @@ namespace op_profiler {
         auto j = get_base_json<true>(opID, op, input_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::python_fallback);
         std::string ser = j.dump(4);
-        return fmt::format("TT_DNN_FALL_BACK_OP:{}\n{}",j["op_code"], ser);
+        return fmt::format("`TT_DNN_FALL_BACK_OP:{}\n{}`",j["op_code"], ser);
     }
 
     inline std::string op_meta_data_serialized_json(
@@ -244,7 +244,7 @@ namespace op_profiler {
         auto j = get_base_json(opID, op, input_tensors, output_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_cpu);
         std::string ser = j.dump(4);
-        return fmt::format("TT_DNN_HOST_OP:{}\n{}",j["op_code"], ser);
+        return fmt::format("`TT_DNN_HOST_OP:{}\n{}`",j["op_code"], ser);
     }
 
     inline std::string op_meta_data_serialized_json(
@@ -284,7 +284,7 @@ namespace op_profiler {
         j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
         std::string ser = j.dump(4);
-        return fmt::format("TT_DNN_DEVICE_OP:{}\n{}",j["op_code"], ser);
+        return fmt::format("`TT_DNN_DEVICE_OP:{}\n{}`",j["op_code"], ser);
     }
 
 #define TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)\
