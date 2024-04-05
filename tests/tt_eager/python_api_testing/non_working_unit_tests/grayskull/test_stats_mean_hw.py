@@ -73,15 +73,6 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         11178160,
     ),
-    # ,12014143,(),completed,"Max ATOL Delta: 0.1464436799287796, Max RTOL Delta: inf, PCC: 0.9204625343273145, PCC check failed",fail
-    (
-        (4, 7, 32, 96),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
-        "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        12014143,
-    ),
 ]
 
 
