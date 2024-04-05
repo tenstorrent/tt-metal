@@ -102,11 +102,13 @@ void kernel_main() {
 
         bool packet_available = false;
         while (!packet_available) {
-            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-            if (cycles_since_progress > timeout_cycles) {
-                test_results[PQ_TEST_MISC_INDEX] = 0xff000006;
-                timeout = true;
-                break;
+            if (timeout_cycles > 0) {
+                uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
+                if (cycles_since_progress > timeout_cycles) {
+                    test_results[PQ_TEST_MISC_INDEX] = 0xff000006;
+                    timeout = true;
+                    break;
+                }
             }
             uint32_t num_words_available;
             packet_available = input_queue->input_queue_full_packet_available_to_send(num_words_available);
