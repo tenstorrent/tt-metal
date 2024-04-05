@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
+from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
 
 
 class TtTensorLoader:
@@ -76,8 +77,11 @@ class MambaTT(torch.nn.Module):
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
 
+        transformer = MambaSsmBlockTransformer(self.device, self.args.d_inner, self.args.d_state)
+
         self.layers = [
-            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i)) for i in range(self.num_layers)
+            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i), transformer)
+            for i in range(self.num_layers)
         ]
 
         self.norm_f = reference_model.norm_f

@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.experimental.mamba.tt_opt.full_model import TtTensorLoader
+from models.experimental.mamba.tt_opt.full_model import TtTensorLoader, MambaSsmBlockTransformer
 from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.experimental.mamba.tt_opt.mamba_block import TtMambaBlock
 from models.experimental.mamba.tt_opt import model_config
@@ -66,8 +66,9 @@ def test_mamba_block_inference(
     config = model_config.create_model_config(batch, d_model)
 
     loader = TtTensorLoader(reference_model.state_dict(), device, tt_cache_path=cache_path)
+    transformer = MambaSsmBlockTransformer(device, reference_model.args.d_inner, reference_model.args.d_state)
 
-    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
+    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM), transformer)
     tt_input = input.view(1, 1, batch, d_model)
     tt_input = ttnn.to_device(
         ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
