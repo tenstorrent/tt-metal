@@ -817,7 +817,13 @@ Tensor _addcdiv(
     t_div.deallocate();
     t_value.deallocate();
     Tensor result = add(input_a, t_factor, std::nullopt, output_mem_config);
-    return result;
+    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
+    return where(eqz(input_c, output_mem_config),
+                ( value == 0 ) ? t_nan : where(eqz(input_b, output_mem_config),
+                                            t_nan ,
+                                            mul(t_inf, sign(input_b, output_mem_config), std::nullopt, output_mem_config), output_mem_config) ,
+                result, output_mem_config);
 }
 Tensor addcdiv(
     const Tensor& input_a,
