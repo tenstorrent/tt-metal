@@ -522,6 +522,47 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         DumpDeviceProfileResults(device, program);
     }
 
+    void LaunchProgramNoWait(Device *device, Program &program) {
+        detail::DispatchStateCheck( false );
+        detail::CompileProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program);
+        detail::ConfigureDeviceWithProgram(device, program);
+        auto device_id = device->id();
+        std::cout<<"Launching on Device "<<(uint32_t) device->id()<<std::endl;
+        tt::Cluster::instance().dram_barrier(device_id);
+
+        // Note: the l1_barrier below is needed to be sure writes to cores that
+        // don't get the GO mailbox (eg, storage cores) have all landed
+        tt::Cluster::instance().l1_barrier(device->id());
+
+        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+            for (const auto &logical_core : logical_cores) {
+                launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
+                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                std::cout<<"Writing Launch Message to  "<<physical_core.str()<<std::endl;
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
+            }
+        }
+    }
+
+    void WaitProgramDone(Device *device, Program &program) {
+        auto device_id = device->id();
+        std::cout<<"Waiting for Program on Device "<<(uint32_t) device->id()<<std::endl;
+        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+        std::unordered_set<CoreCoord> not_done_cores;
+        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+            for (const auto &logical_core : logical_cores) {
+                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                not_done_cores.insert(physical_core);
+            }
+        }
+        // Wait for all cores to be done
+        llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+        DumpDeviceProfileResults(device, program);
+
+    }
+
     bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootloader_mode) {
         ZoneScoped;
         bool pass = true;
