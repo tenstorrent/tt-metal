@@ -162,6 +162,7 @@ class TtFalconAttention:
         self.devices = devices
         self.state_dict = state_dict
         self.model_config = model_config
+        self.num_heads_per_device = self.num_heads // len(devices)
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -321,9 +322,7 @@ class TtFalconAttention:
             hidden_states, self.model_config["ATTN_INPUT_MEMCFG"], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
         )
 
-        #################
-        ### FUSED QKV ###
-        #################
+        # Fused query, key and value projection
         fused_query_key_value = []
         for i in range(len(hidden_states)):
             fused_query_key_value.append(
@@ -338,16 +337,13 @@ class TtFalconAttention:
                 )
             )
 
-        ###########
-        ### TMs ###
-        ###########
-        # TODO: Need to uplift nlp_create_qkv_heads to support HEIGHT > 32 for sharded; otherwise, need to spill to interleaved for prefill
         fused_query_key_value = convert_to_layout(
             fused_query_key_value,
             self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
         )
 
+        # Split query, key and value
         query_layer = []
         key_layer = []
         value_layer = []
@@ -364,24 +360,25 @@ class TtFalconAttention:
             key_layer.append(k_layer)
             value_layer.append(v_layer)
 
-        #########################
-        ### ROTARY EMBEDDINGS ###
-        #########################
+        # Rotary embeddings
         query_layer = self.rotary_embedding(query_layer)
         key_layer = self.rotary_embedding(key_layer)
 
-        ######################
-        ### K CACHE UPDATE ###
-        ######################
+        # K Cache update
         for i in range(len(layer_past[0])):
             tt_lib.tensor.fill_cache(
                 layer_past[0][i], tt_lib.tensor.typecast(key_layer[i], self.model_config["KV_CACHE_DTYPE"]), user_id
             )
 
-        ######################
-        ### PRE-SOFTMAX MM ###
-        ######################
-        # TODO: Sharded transpose could be in place???
+        # V Cache update
+        for i in range(len(layer_past[1])):
+            tt_lib.tensor.fill_cache(
+                layer_past[1][i],
+                tt_lib.tensor.typecast(value_layer[i], self.model_config["KV_CACHE_DTYPE"]),
+                user_id,
+            )
+
+        # KˆT
         key_layer_transposed = []
         for i in range(len(key_layer)):
             key_layer_transposed.append(
@@ -394,69 +391,111 @@ class TtFalconAttention:
             )
             key_layer[i].deallocate(True)
 
-        key_layer_transposed = convert_to_layout(
-            key_layer_transposed,
-            self.model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"],
-            self.model_config["DEFAULT_MEMCFG"],
-        )
-        attn_weights = []
+        # Partially sliced and sharded attention
+
+        slice_size = 128
+        num_slices = q_len // slice_size
+
+        attn_output = []  # this is the output we write to. Initiate as empty tensors
         for i in range(len(query_layer)):
-            attn_weights.append(
-                tt_lib.tensor.matmul(
-                    query_layer[i],
-                    key_layer_transposed[i],
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            attn_output.append(
+                torch2tt_tensor(
+                    torch.zeros([1, self.num_heads_per_device, q_len, self.head_dim]),
+                    self.devices[i],
+                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                    tt_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
                 )
             )
+
+        for slice_i in range(num_slices):
+            # Partially slice and convert activations to sharded
+            q_slices = []
+            attn_mask_slices = []
+            for i in range(len(query_layer)):
+                q_slices.append(
+                    tt_lib.tensor.interleaved_to_sharded_partial(
+                        query_layer[i],
+                        (8, 4),
+                        [64, self.head_dim],  # each slice is [1,16,128,64], we use 32 cores
+                        num_slices,  # num_slices
+                        slice_i,  # slice_index
+                        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    )
+                )
+                attn_mask_slices.append(
+                    tt_lib.tensor.interleaved_to_sharded_partial(
+                        attention_mask[i],
+                        (8, 4),
+                        [64, q_len],  # each slice is [1,16,128,128], we use 32 cores
+                        num_slices,  # num_slices
+                        slice_i,  # slice_index
+                        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    )
+                )
+
+            # Q * KˆT
+            attn_weights = []
+            for i in range(len(q_slices)):
+                attn_weights.append(
+                    # tt_lib.tensor.matmul(
+                    tt_lib.operations.primary.matmul(
+                        q_slices[i],
+                        key_layer_transposed[i],
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                        output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                        program_config=self.model_config["ATTENTION_MM_PROGCFG"],
+                        output_dtype=self.model_config["ATTENTION_DTYPE"],
+                    )
+                )
+
+            # Softmax
+            softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
+            softmax_progcfg.block_w = q_len // 32
+            for i in range(len(attn_weights)):
+                attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+                    attn_weights[i],
+                    self.scalar,
+                    attn_mask_slices[i],
+                    program_config=softmax_progcfg,
+                    is_causal_mask=True,
+                )
+
+            # Attention score * V
+            attn_output_slice = []
+            for i in range(len(attn_weights)):
+                attn_output_slice.append(
+                    # tt_lib.tensor.matmul(
+                    tt_lib.operations.primary.matmul(
+                        attn_weights[i],
+                        value_layer[i],
+                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                        output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                        program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
+                        output_dtype=self.model_config["ATTENTION_DTYPE"],
+                    )
+                )
+                attn_weights[i].deallocate(True)
+
+            # write output slices to attn_output
+            for i in range(len(attn_output_slice)):
+                tt_lib.tensor.sharded_to_interleaved_partial(
+                    attn_output_slice[i],
+                    attn_output[i],
+                    num_slices,
+                    slice_i,
+                    self.model_config["DRAM_MEMCFG"],
+                )
+                attn_output_slice[i].deallocate(True)
+
+        # Deallocate query, key, value
+        for i in range(len(query_layer)):
             query_layer[i].deallocate(True)
             key_layer_transposed[i].deallocate(True)
-
-        ###############
-        ### SOFTMAX ###
-        ###############
-        for i in range(len(attn_weights)):
-            attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights[i],
-                self.scalar,
-                attention_mask[i],
-                program_config=tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
-                is_causal_mask=True,
-            )
-
-        ######################
-        ### V CACHE UPDATE ###
-        ######################
-        for i in range(len(layer_past[1])):
-            tt_lib.tensor.fill_cache(
-                layer_past[1][i],
-                tt_lib.tensor.typecast(value_layer[i], self.model_config["KV_CACHE_DTYPE"]),
-                user_id,
-            )
-
-        layer_present = layer_past if use_cache else None
-
-        ########################
-        ### POST-SOFTMAX MM ###
-        ########################
-
-        attn_output = []
-        value_layer = convert_to_layout(
-            value_layer, self.model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
-        )
-        for i in range(len(attn_weights)):
-            attn_output.append(
-                tt_lib.tensor.matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                )
-            )
-            attn_weights[i].deallocate(True)
             value_layer[i].deallocate(True)
 
-        #########################
-        ### ATTENTION SELFOUT ###
-        #########################
+        # Output projection
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.nlp_concat_heads(
                 attn_output[i],
@@ -488,6 +527,7 @@ class TtFalconAttention:
                 overwrite_subblock_h=1,
             )
 
+        layer_present = layer_past if use_cache else None
         return attn_output, layer_present
 
     def fwd_decode(

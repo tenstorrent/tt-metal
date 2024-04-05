@@ -804,6 +804,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ),
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "L1_MEMCFG": L1_MEMCFG,
+        "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
@@ -838,6 +839,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     layernorm_max_num_cores_y = 7
 
     layernorm_slice_size = 512
+    attetnion_slice_size = 128
 
     (
         layernorm_block_sharded_mem_config,
@@ -861,6 +863,37 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     # Specify program configs
 
+    # Attention
+    model_config["ATTENTION_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=head_dim // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
+        per_core_N=row_height // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+    model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        subblock_w=1,
+        block_h=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
+        block_w=1,  # Dynamic
+    )
+    model_config["ATTENTION_MM_2_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=row_height // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
+        per_core_N=head_dim // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+    model_config["ATTENTION_DTYPE"] = dtype
+
     # QKV Projection
     model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 4),
@@ -871,14 +904,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         per_core_N=1152 // 32 // 4,  # 9
         fused_activation=None,
         transpose_mcast=True,
-    )
-
-    # Softmax
-    model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(8, 2),
-        subblock_w=1,
-        block_h=row_height // 32,
-        block_w=1,  # Dynamic
     )
 
     # Dense Out
