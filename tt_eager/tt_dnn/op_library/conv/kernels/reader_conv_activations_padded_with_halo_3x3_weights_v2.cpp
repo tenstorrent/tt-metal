@@ -47,8 +47,6 @@ void kernel_main() {
      * - Read conv_act_c_read_bytes / X each time
      * - Update l1_write_addr_act by conv_act_c_read_bytes
      */
-    constexpr uint32_t cb_reader_offsets = tt::CB::c_in5;
-    //volatile tt_l1_ptr uint32_t* reader_offsets_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_offsets));
     uint32_t reader_offsets[weight_size_w*weight_size_h];
     uint32_t reader_offset = 0; // Constant offset for each pixel within filter window
     uint32_t reader_offset_idx = 0;
