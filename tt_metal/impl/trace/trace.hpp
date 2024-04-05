@@ -6,28 +6,58 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <utility>
+#include <variant>
 
-#include "impl/buffers/buffer.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/lock_free_queue.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
 namespace tt::tt_metal {
 
-using std::pair;
-using std::reference_wrapper;
-using std::set;
 using std::shared_ptr;
-using std::tuple;
 using std::unique_ptr;
 using std::unordered_map;
-using std::unordered_set;
 using std::vector;
-using std::weak_ptr;
 
 class CommandQueue;
-enum class EnqueueCommandType;
+
+namespace detail {
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+typedef LockFreeQueue<std::variant<ReadBufferDescriptor, ReadEventDescriptor>> CompletionReaderQueue;
+
+struct TraceDescriptor {
+    uint32_t num_events;
+    std::optional<uint32_t> initial_event_id;
+    CompletionReaderQueue issued_completion_q_reads;
+
+    TraceDescriptor() { this->reset(); }
+
+    void reset() {
+        this->num_events = 0;
+        this->initial_event_id.reset();
+        this->issued_completion_q_reads.clear();
+    }
+
+    // Calculate relative offset to the initial event ID of the trace
+    uint32_t trace_event_id(uint32_t event_id) {
+        if (not this->initial_event_id.has_value()) {
+            initial_event_id = event_id;
+        }
+        TT_FATAL(event_id >= initial_event_id.value(), "Traced event ID must be greater or equal to initial event ID");
+        return event_id - initial_event_id.value();
+    }
+};
+}
+
+struct TraceBuffer {
+    shared_ptr<detail::TraceDescriptor> desc;
+    shared_ptr<Buffer> buffer;
+};
 
 enum class TraceState {
     EMPTY,
@@ -49,7 +79,7 @@ class Trace {
 
     // Trace instance id to buffer mapping mananged via instantiate and release calls
     // a static map keeps trace buffers alive until explicitly released by the user
-    static unordered_map<uint32_t, shared_ptr<Buffer>> buffer_pool;
+    static unordered_map<uint32_t, TraceBuffer> buffer_pool;
 
     // Thread safe accessor to trace::buffer_pool
     static std::mutex pool_mutex;
@@ -81,10 +111,10 @@ class Trace {
 
     // Thread-safe accessors to manage trace instances
     static bool has_instance(const uint32_t tid);
-    static void add_instance(const uint32_t tid, shared_ptr<Buffer> buffer);
+    static void add_instance(const uint32_t tid, TraceBuffer buf);
     static void remove_instance(const uint32_t tid);
     static void release_all();  // note all instances across all devices are released
-    static shared_ptr<Buffer> get_instance(const uint32_t tid);
+    static TraceBuffer get_instance(const uint32_t tid);
 };
 
 }  // namespace tt::tt_metal
