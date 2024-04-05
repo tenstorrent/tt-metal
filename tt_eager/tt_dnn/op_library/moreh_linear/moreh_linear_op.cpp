@@ -44,7 +44,7 @@ inline void moreh_linear_validate(
             input_shape[1] == output_shape[1] &&
             input_shape[2] == output_shape[2] &&
             weight_shape[2] == output_shape[3],
-            "shape of output should be [input_shape[0], input_shape[1], input_shape[2], wieght_shape[2]]");
+            "shape of output should be [input_shape[0], input_shape[1], input_shape[2], weight_shape[2]]");
     }
 }
 

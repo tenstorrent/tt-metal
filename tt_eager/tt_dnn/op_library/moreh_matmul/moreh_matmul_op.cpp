@@ -26,25 +26,9 @@ namespace primary {
 ////////////////////////////////////////////////////////////////////////////
 //                         Util
 ////////////////////////////////////////////////////////////////////////////
+namespace {
 inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
-}
-
-operation::ProgramWithCallbacks MorehMatmul::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& other_tensor = input_tensors.at(1);
-    const auto& output_tensor = output_tensors.at(0);
-    // TODO: add optimized matmul
-    return moreh_matmul_multi_core(
-        input_tensor,
-        other_tensor,
-        output_tensor,
-        this->transpose_input,
-        this->transpose_other,
-        this->input_start_tile_id,
-        this->other_start_tile_id,
-        this->output_start_tile_id);
 }
 
 inline void moreh_matmul_validate(
@@ -67,6 +51,25 @@ inline void moreh_matmul_validate(
     TT_ASSERT(input_k == other_k && "Dimension K must match for A and B in matmul op");
 }
 
+}  // namespace
+
+operation::ProgramWithCallbacks MorehMatmul::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& other_tensor = input_tensors.at(1);
+    const auto& output_tensor = output_tensors.at(0);
+    // TODO: add optimized matmul
+    return moreh_matmul_multi_core(
+        input_tensor,
+        other_tensor,
+        output_tensor,
+        this->transpose_input,
+        this->transpose_other,
+        this->input_start_tile_id,
+        this->other_start_tile_id,
+        this->output_start_tile_id);
+}
+
 inline Shape compute_output_shape(
     const Shape& input_shape, const Shape& other_shape, bool transpose_input, bool transpose_other) {
     const auto& input_shape_wo_padding = input_shape.without_padding();
@@ -87,20 +90,27 @@ inline Shape compute_output_shape(
 
 // Must be provided in the case where an optional output tensor was not provided
 std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {compute_output_shape(input_tensors.at(0).get_legacy_shape(), input_tensors.at(1).get_legacy_shape(), this->transpose_input, this->transpose_other)};
+    return {compute_output_shape(
+        input_tensors.at(0).get_legacy_shape(),
+        input_tensors.at(1).get_legacy_shape(),
+        this->transpose_input,
+        this->transpose_other)};
 }
 
-std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+std::vector<Tensor> MorehMatmul::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
     const auto& output_shapes = this->compute_output_shapes(input_tensors);
     const auto& output_shape = output_shapes.at(0);
 
-    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
+    return {operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
 }
 
-void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+void MorehMatmul::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
     TT_ASSERT(
@@ -118,20 +128,45 @@ void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_
         input_tensor.buffer() != nullptr and other_tensor.buffer() != nullptr,
         "Operands to matmul need to be allocated in buffers on device!");
 
+    moreh_matmul_validate(input_tensor, other_tensor, this->transpose_input, this->transpose_other);
 
-    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+    if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
     const auto& input_shape = input_tensor.get_legacy_shape();
     const auto& other_shape = other_tensor.get_legacy_shape();
-    const auto output_shape_required = compute_output_shape(input_shape, other_shape, this->transpose_input, this->transpose_other);
+    const auto output_shape_required =
+        compute_output_shape(input_shape, other_shape, this->transpose_input, this->transpose_other);
     const auto& actual_shape = output_tensors.at(0).value().get_legacy_shape();
     bool shape_ok = output_shape_required.rank() == actual_shape.rank();
-    for(size_t i=0; i < std::min(actual_shape.rank(),output_shape_required.rank()) ; i++){
+    for (size_t i = 0; i < std::min(actual_shape.rank(), output_shape_required.rank()); i++) {
         shape_ok &= output_shape_required[i] <= actual_shape[i];
     }
-    TT_ASSERT(shape_ok, fmt::format("The input tensors need a shape of {}, however the output tensor is only {}",output_shape_required,  actual_shape));
+    TT_ASSERT(
+        shape_ok,
+        fmt::format(
+            "The input tensors need a shape of {}, however the output tensor is only {}",
+            output_shape_required,
+            actual_shape));
+}
+
+const operation::Hash MorehMatmul::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& other_tensor = input_tensors.at(1);
+
+    operation::Hash hash = tt::stl::hash::hash_objects(
+        0,
+        typeid(*this).hash_code(),
+        input_tensor,
+        other_tensor,
+        this->transpose_input,
+        this->transpose_other,
+        this->input_start_tile_id,
+        this->other_start_tile_id,
+        this->output_start_tile_id);
+    return hash;
 }
 
 Tensor moreh_matmul_(
@@ -141,7 +176,6 @@ Tensor moreh_matmul_(
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
-
     const auto& input_shape = input_tensor.get_legacy_shape();
     const auto& other_shape = other_tensor.get_legacy_shape();
     const auto& output_shape = compute_output_shape(input_shape, other_shape, transpose_input, transpose_other);
@@ -158,17 +192,28 @@ Tensor moreh_matmul_(
         uint32_t other_start_tile_id = other_other1_index * other_other2KtNt / TILE_HW;
         uint32_t output_start_tile_id = b1 * output_other2MtNt / TILE_HW;
 
+        log_debug(
+            LogOp,
+            "{}:{} run matmul {} {} {} {} {}]]",
+            __func__,
+            __LINE__,
+            transpose_input,
+            transpose_other,
+            input_start_tile_id,
+            other_start_tile_id,
+            output_start_tile_id);
         output_tensor = operation::run(
-            MorehMatmul{
-                .output_mem_config = mem_config,
-                .transpose_input = transpose_input,
-                .transpose_other = transpose_other,
-                .input_start_tile_id = input_start_tile_id,
-                .other_start_tile_id = other_start_tile_id,
-                .output_start_tile_id = output_start_tile_id},
-            {input_tensor, other_tensor}, {}, {output_tensor}).at(0);
-
-
+                            MorehMatmul{
+                                .output_mem_config = mem_config,
+                                .transpose_input = transpose_input,
+                                .transpose_other = transpose_other,
+                                .input_start_tile_id = input_start_tile_id,
+                                .other_start_tile_id = other_start_tile_id,
+                                .output_start_tile_id = output_start_tile_id},
+                            {input_tensor, other_tensor},
+                            {},
+                            {output_tensor})
+                            .at(0);
     }
 
     return output_tensor.value();
