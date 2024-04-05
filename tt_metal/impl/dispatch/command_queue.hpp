@@ -379,11 +379,14 @@ class HWCommandQueue {
     CoreCoord completion_queue_writer_core;
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
+    void set_trace_context(std::shared_ptr<detail::TraceDescriptor> trace_ctx) {
+        this->trace_ctx = trace_ctx;
+    }
 
    private:
     uint32_t id;
     uint32_t size_B;
-    std::optional<uint32_t> last_event_id;
+    std::shared_ptr<detail::TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
@@ -429,7 +432,7 @@ class HWCommandQueue {
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, std::shared_ptr<Event> event);
     friend void FinishImpl(CommandQueue & cq);
     friend void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
-    friend class Trace;
+    friend class CommandQueue;
 };
 
 // Common interface for all command queue types
@@ -501,6 +504,17 @@ class CommandQueue {
     }
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
+
+    template <typename Func>
+    inline std::vector<uint32_t> trace_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
+        auto& hwcq = hw_command_queue();
+        hwcq.set_trace_context(ctx);
+        hwcq.manager.set_bypass_mode(true /* enable bypass */, true /*clear buffer*/);
+        run_commands();
+        hwcq.set_trace_context(nullptr);
+        hwcq.manager.set_bypass_mode(false /* disable bypass */, false);
+        return std::move(hwcq.manager.get_bypass_data());
+    }
 
    private:
     // Command queue constructor
