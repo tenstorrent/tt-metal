@@ -840,7 +840,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     # Layernorm is an exception that are sharded also here, because the interleaved OP does not fit in L1 for 40b hidden size
     layernorm_num_cores_x = 8
-    layernorm_max_num_cores_y = 7
+    layernorm_max_num_cores_y = 8
 
     layernorm_slice_size = 512
     attetnion_slice_size = min(128, row_height)
@@ -898,7 +898,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["layernorm_params"] = layernorm_params
 
     # Specify program configs
-
     attetnion_mm_M = (
         attetnion_slice_size * 16 // attention_num_cores // 32
     )  # attetnion_slice_size * 16 qheads // attention_num_cores // TILE_SIZE
@@ -1022,14 +1021,14 @@ def get_sharded_layernorm_specs_for_seqlen(
     )
 
     layernorm_block_sharded_prg_config = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
         subblock_w=8,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
         inplace=False,
     )
     layernorm_block_sharded_prg_config_inplace = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_max_num_cores_y],
+        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
         subblock_w=8,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
