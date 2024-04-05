@@ -41,16 +41,23 @@ struct MorehMatmul {
     uint32_t input_start_tile_id = 0;
     uint32_t other_start_tile_id = 0;
     uint32_t output_start_tile_id = 0;
-    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    void validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names =
-        std::make_tuple("transpose_input", "transpose_other");
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    static constexpr auto attribute_names = std::make_tuple(
+        "transpose_input", "transpose_other", "input_start_tile_id", "other_start_tile_id", "output_start_tile_id");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->transpose_input), std::cref(this->transpose_other));
+            std::cref(this->transpose_input),
+            std::cref(this->transpose_other),
+            std::cref(this->input_start_tile_id),
+            std::cref(this->other_start_tile_id),
+            std::cref(this->output_start_tile_id));
     }
 };
 

@@ -182,8 +182,9 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto &output_grad = input_tensors.at(0);
-        const auto &bias_grad = input_tensors.at(1);
+        const auto &bias_grad = output_tensors.at(0);
 
         Buffer *src_buffer = output_grad.buffer();
         Buffer *dst_buffer = bias_grad.buffer();
@@ -191,15 +192,13 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };
