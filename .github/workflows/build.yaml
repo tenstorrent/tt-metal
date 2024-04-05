@@ -26,10 +26,10 @@ jobs:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/install-metal-deps
         with:
-          os: ubuntu-20.04
+          os: ${{ matrix.os }}
       - uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ubuntu-20.04
+          os: ${{ matrix.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -59,9 +59,15 @@ jobs:
       CONFIG: ${{ matrix.config }}
       # So we can get all the makefile output we want
       SILENT: 0
-    runs-on: build
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ matrix.os }}
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ matrix.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
