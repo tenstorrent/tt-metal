@@ -602,7 +602,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         auto device_id = device->id();
         detail::DispatchStateCheck( false );
 
-        auto get_l1_arg_base_addr = [](const RISCV &riscv) {
+        auto get_l1_arg_base_addr = [](const RISCV &riscv, std::shared_ptr<Kernel> kernel) {
             uint32_t l1_arg_base = 0;
             switch (riscv) {
                 case RISCV::BRISC: {
@@ -612,7 +612,12 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     l1_arg_base = NCRISC_L1_ARG_BASE;
                 } break;
                 case RISCV::ERISC: {
-                    l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+                    auto config = std::get<EthernetConfig>(kernel->config());
+                    if (config.eth_mode == Eth::IDLE) {
+                        l1_arg_base = IDLE_ERISC_L1_ARG_BASE;
+                    } else {
+                        l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+                    }
                 } break;
                 case RISCV::COMPUTE: {
                     l1_arg_base = TRISC_L1_ARG_BASE;
@@ -626,17 +631,33 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             const auto kernel = detail::GetKernel(program, kernel_id);
             auto processor = kernel->processor();
+            auto args_base_addr = get_l1_arg_base_addr(processor, kernel);
+
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
                 auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
                 const auto & rt_args = kernel->runtime_args(logical_core);
-                auto arg_addr = get_l1_arg_base_addr(processor);
-                if (processor == RISCV::ERISC) {
-                    auto config = std::get<EthernetConfig>(kernel->config());
-                    if (config.eth_mode == Eth::IDLE) {
-                        arg_addr = IDLE_ERISC_L1_ARG_BASE;
+                log_trace(tt::LogMetal, "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                    __FUNCTION__, rt_args.size(), logical_core.str(), physical_core.str(), args_base_addr, rt_args);
+                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, args_base_addr);
+            }
+
+            // Unicast common runtime args to all cores for kernel. Fast-Dispatch will multicast as perf opt.
+            const auto &common_rt_args = kernel->common_runtime_args();
+            auto common_rt_args_offset = kernel->get_common_runtime_args_offset();
+
+            if (common_rt_args.size() > 0) {
+                for (auto &core_range : kernel->logical_coreranges()) {
+                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                            CoreCoord logical_core({x, y});
+                            auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
+                            const auto common_args_addr = args_base_addr + common_rt_args_offset;  // Common args are placed after unique args per core.
+                            log_trace(tt::LogMetal, "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                                __FUNCTION__, common_rt_args.size(), logical_core.str(), physical_core.str(), common_args_addr, common_rt_args);
+                            tt::llrt::write_hex_vec_to_core(device_id, physical_core, common_rt_args, common_args_addr);
+                        }
                     }
                 }
-                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, arg_addr);
             }
         }
     }
@@ -852,6 +873,15 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
     detail::DispatchStateCheck(not device->using_slow_dispatch());
     SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
+
+
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+    ZoneScoped;
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetCommonRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
+    auto k = detail::GetKernel(program, kernel_id);
+    k->set_common_runtime_args(runtime_args);
+}
+
 
 std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");

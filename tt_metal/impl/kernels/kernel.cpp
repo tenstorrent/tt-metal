@@ -24,6 +24,8 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),
     binary_size16_(0),
+    max_runtime_args_per_core_(0),
+    core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args), defines_(defines) {
     size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
@@ -155,6 +157,10 @@ std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+std::vector<uint32_t>& Kernel::common_runtime_args() {
+    return this->common_runtime_args_;
+}
+
 std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
     std::pair<uint64_t, uint64_t> arg_base_to_result_base;
     switch (this->config_.processor) {
@@ -188,24 +194,46 @@ std::pair<uint64_t, uint64_t> ComputeKernel::get_runtime_args_range() const {
     return arg_base_to_result_base;
 }
 
+void Kernel::validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
+
+    uint32_t total_rt_args_size = (num_unique_rt_args + num_common_rt_args) * sizeof(uint32_t);
+    auto[l1_arg_base, result_base] = this->get_runtime_args_range();
+
+    if (l1_arg_base + total_rt_args_size > result_base) {
+        TT_THROW(std::to_string(total_rt_args_size / 1024) + "KB unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() + " are too large.\
+ Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
+    }
+}
+
 void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
-    auto validate_runtime_args_size = [&]() {
-        uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
-        auto[l1_arg_base, result_base] = this->get_runtime_args_range();
-        if (l1_arg_base + runtime_args_size > result_base) {
-            TT_THROW(std::to_string(runtime_args_size / 1024) + "KB runtime args targeting kernel " + this->name() + " on " + logical_core.str() + " are too large.\
-                Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
-        }
-    };
 
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
     //                  Should this check only be enabled in debug mode?
     // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
-    validate_runtime_args_size();
+
+    // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
+    if (runtime_args.size() > max_runtime_args_per_core_) {
+        max_runtime_args_per_core_ = runtime_args.size();
+        core_with_max_runtime_args_ = logical_core;
+    }
+
+    this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
     auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
     set_rt_args = runtime_args;
     this->core_with_runtime_args_.insert( logical_core );
+}
+
+void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime_args) {
+
+    // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
+    //                  Should this check only be enabled in debug mode?
+    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+
+    this->validate_runtime_args_size(max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
+    auto &set_rt_args = this->common_runtime_args_;
+    TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
+    set_rt_args = common_runtime_args;
 }
 
 void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {
@@ -256,6 +284,26 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions& build_opt
     jit_build_genfiles_triscs_src(device->build_env(), *this, this->kernel_path_file_name_);
     JitBuildStateSubset build_states = device->build_kernel_states(JitBuildProcessorType::COMPUTE);
     jit_build_subset(build_states, this, this->kernel_path_file_name_);
+}
+
+// Calculate offset to reach common runtime args from core with most unique runtime args.
+uint32_t Kernel::get_common_runtime_args_offset() {
+    uint32_t max_unique_rt_args = 0;
+    for (const auto &logical_core : this->cores_with_runtime_args()) {
+        auto rt_args = this->runtime_args(logical_core);
+        max_unique_rt_args = rt_args.size() > max_unique_rt_args ? rt_args.size() : max_unique_rt_args;
+    }
+
+    uint32_t common_rt_args_offset = max_unique_rt_args * sizeof(uint32_t);
+    return common_rt_args_offset;
+}
+
+// Validate that all cores have same number of unique-runtime-args, and then calculate and set
+// define for offset to reach common-runtime-args per core.
+void Kernel::set_common_runtime_args_offset(){
+    auto offset = get_common_runtime_args_offset();
+    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_OFFSET: {} for kernel: {}", offset, this->name());
+    this->defines_["COMMON_RT_ARGS_OFFSET"] = std::to_string(offset);
 }
 
 void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
