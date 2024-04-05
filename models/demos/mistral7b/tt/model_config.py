@@ -23,7 +23,7 @@ class TtModelArgs:
     # Parameters for our use
     max_batch_size = 32
     max_seq_len = 4096
-    kv_seq_len = 512  # TODO Update the initial cache size when scaling up (Should be window_size == 4096)
+    kv_seq_len = 1024  # TODO Update the initial cache size when scaling up (Should be window_size == 4096)
 
     OP_KEYS = (
         # Embedding

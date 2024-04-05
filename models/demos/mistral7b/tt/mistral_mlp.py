@@ -40,6 +40,28 @@ class TtMistralMLP(torch.nn.Module):
         self.w2 = as_tensor("w2")
         self.w3 = as_tensor("w3")
 
+        x_shape = ttnn.Shape([1, 1, args.max_batch_size, args.dim])
+        h_shape = ttnn.Shape([1, 1, args.max_batch_size, args.hidden_dim])
+        self.w1_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
+            input_shape_a=x_shape,
+            input_shape_b=self.w1.shape,
+            core_grid=self.args.max_grid_size,
+            activation="silu",
+            fp32_dst=self.args.get_compute_kernel_config().fp32_dest_acc_en,
+        )
+        self.w2_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
+            input_shape_a=h_shape,
+            input_shape_b=self.w2.shape,
+            core_grid=self.args.max_grid_size,
+            fp32_dst=self.args.get_compute_kernel_config().fp32_dest_acc_en,
+        )
+        self.w3_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
+            input_shape_a=x_shape,
+            input_shape_b=self.w3.shape,
+            core_grid=self.args.max_grid_size,
+            fp32_dst=self.args.get_compute_kernel_config().fp32_dest_acc_en,
+        )
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -51,17 +73,15 @@ class TtMistralMLP(torch.nn.Module):
             x,
             self.w1,
             activation="silu",
-            core_grid=self.args.max_grid_size,
-            use_1d_systolic_array=True,
             memory_config=self.model_config["FF1_OUTPUT_MEMCFG"],
+            program_config=self.w1_program_config,
             compute_kernel_config=self.args.get_compute_kernel_config(),
         )
         w3_out = ttnn.linear(
             x,
             self.w3,
-            core_grid=self.args.max_grid_size,
-            use_1d_systolic_array=True,
             memory_config=self.model_config["FF3_OUTPUT_MEMCFG"],
+            program_config=self.w3_program_config,
             compute_kernel_config=self.args.get_compute_kernel_config(),
         )
         w2_in = ttnn.mul(
@@ -72,9 +92,8 @@ class TtMistralMLP(torch.nn.Module):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            core_grid=self.args.max_grid_size,
-            use_1d_systolic_array=True,
             memory_config=self.model_config["FF2_OUTPUT_MEMCFG"],
+            program_config=self.w2_program_config,
             compute_kernel_config=self.args.get_compute_kernel_config(),
         )
 
