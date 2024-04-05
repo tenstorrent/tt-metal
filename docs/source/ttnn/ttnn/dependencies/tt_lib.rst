@@ -95,8 +95,8 @@ and create_output_tensors with the additional parameter for the output_tensors.
     struct <NewOperation> {
         void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+        std::vector<std::optional<Tensor>> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+        operation::ProgramWithOptionalOutputTensors create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
 
         static constexpr auto attribute_names = std::make_tuple();
         const auto attribute_values() const {

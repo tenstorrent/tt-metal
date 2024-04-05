@@ -8,13 +8,11 @@
 #include <vector>
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 namespace tt::tt_metal {
 
 class Event;
-namespace operation{
-   class DeviceOperation;
-}
 
 void EnqueueHostToDeviceTransfer(
     CommandQueue&, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
@@ -31,12 +29,13 @@ void EnqueueWaitForEvent(CommandQueue&, std::shared_ptr<Event>);
 void EventSynchronize(std::shared_ptr<Event>);
 void QueueSynchronize(CommandQueue&);
 
-std::vector<Tensor> EnqueueOperation(
+template<class OutputTensors=tt_metal::operation::Tensors>
+OutputTensors EnqueueOperation(
     CommandQueue&,
-    operation::DeviceOperation&,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+    operation::DeviceOperation<OutputTensors>&,
+    const tt_metal::operation::Tensors& input_tensors,
+    const tt_metal::operation::OptionalConstTensors& optional_input_tensors = {},
+    const tt_metal::operation::Tensors& optional_output_tensors = {});
 }
 
 // Future APIs to be added later
