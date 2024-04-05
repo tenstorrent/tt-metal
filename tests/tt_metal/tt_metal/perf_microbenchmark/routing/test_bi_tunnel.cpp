@@ -59,6 +59,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t num_src_endpoints = 4;
     constexpr uint32_t num_dest_endpoints = 4;
 
+    constexpr uint32_t default_test_device_id = 0;
+
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
@@ -86,6 +88,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+        log_info(LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id);
         return 0;
     }
 
@@ -118,25 +121,51 @@ int main(int argc, char **argv) {
     uint32_t tunneler_test_results_size = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
+    uint32_t test_device_id = test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id);
 
     bool pass = true;
     try {
-        int device_id_l = 0;
-        int device_id_r = 1;
+        int num_devices = tt_metal::GetNumAvailableDevices();
+        if (test_device_id >= num_devices) {
+            log_info(LogTest,
+                "Device {} is not valid. Highest valid device id = {}.",
+                test_device_id, num_devices-1);
+            throw std::runtime_error("Invalid Device Id.");
+        }
+        int device_id_l = test_device_id;
 
         tt_metal::Device *device = tt_metal::CreateDevice(device_id_l);
+        auto const& device_active_eth_cores = device->get_active_ethernet_cores();
+
+        if (device_active_eth_cores.size() == 0) {
+            log_info(LogTest,
+                "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
+                device_id_l);
+            tt_metal::CloseDevice(device);
+            throw std::runtime_error("Test cannot run on specified device.");
+        }
+
+        auto eth_core_iter = device_active_eth_cores.begin();
+        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+
         tt_metal::Device *device_r = tt_metal::CreateDevice(device_id_r);
 
-        CoreCoord tunneler_logical_core = device->get_ethernet_sockets(1)[0];
+        CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
 
-        CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(0)[0];
+        CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(device_id_l)[0];
         CoreCoord r_tunneler_phys_core = device_r->ethernet_core_from_logical_core(r_tunneler_logical_core);
 
+        log_info(LogTest,
+            "Tx/Rx Device {}. Tunneling Ethernet core = {}.",
+            device_id_l, tunneler_logical_core.str());
 
+        log_info(LogTest,
+            "Loopback Device {}. Tunneling Ethernet core = {}.",
+            device_id_r, r_tunneler_logical_core.str());
 
-        std::cout<<"Left Tunneler = "<<tunneler_logical_core.str()<<std::endl;
-        std::cout<<"Right Tunneler = "<<r_tunneler_logical_core.str()<<std::endl;
+        //std::cout<<"Left Tunneler = "<<tunneler_logical_core.str()<<std::endl;
+        //std::cout<<"Right Tunneler = "<<r_tunneler_logical_core.str()<<std::endl;
 
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::Program program_r = tt_metal::CreateProgram();
@@ -469,10 +498,10 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
-
-        tt_metal::detail::LaunchProgram(device, program);
-        tt_metal::detail::LaunchProgram(device_r, program_r);
-
+        tt_metal::detail::LaunchProgramNoWait(device, program);
+        tt_metal::detail::LaunchProgramNoWait(device_r, program_r);
+        tt_metal::detail::WaitProgramDone(device, program);
+        tt_metal::detail::WaitProgramDone(device_r, program_r);
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

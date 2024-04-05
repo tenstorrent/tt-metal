@@ -47,8 +47,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
 
-    constexpr uint32_t default_tunneler_test_results_addr = 0x29000;
-    constexpr uint32_t default_tunneler_test_results_size = 0x8000;
+    constexpr uint32_t default_tunneler_test_results_addr = 0x39000;
+    constexpr uint32_t default_tunneler_test_results_size = 0x7000;
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
@@ -56,10 +56,12 @@ int main(int argc, char **argv) {
     constexpr uint32_t src_endpoint_start_id = 0xaa;
     constexpr uint32_t dest_endpoint_start_id = 0xbb;
 
-    constexpr uint32_t num_src_endpoints = 4;
-    constexpr uint32_t num_dest_endpoints = 4;
+    constexpr uint32_t num_src_endpoints = 1;
+    constexpr uint32_t num_dest_endpoints = 1;
 
     constexpr uint32_t default_test_device_id = 0;
+
+    constexpr uint32_t default_tunnel_mode = 0;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -89,6 +91,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
         log_info(LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id);
+        log_info(LogTest, "  --tunnel_mode: 0: Bidirectional. 1 L->R, 2 R->L, default = {}", default_tunnel_mode);
+
         return 0;
     }
 
@@ -122,8 +126,11 @@ int main(int argc, char **argv) {
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
     uint32_t test_device_id = test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id);
+    uint32_t tunnel_mode = test_args::get_command_option_uint32(input_args, "--tunnel_mode", default_tunnel_mode);
 
     bool pass = true;
+    bool l_to_r = tunnel_mode == 1 || tunnel_mode == 0;
+    bool r_to_l = tunnel_mode == 2 || tunnel_mode == 0;
     try {
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id >= num_devices) {
@@ -170,10 +177,11 @@ int main(int argc, char **argv) {
         CoreCoord demux_core = {demux_x, demux_y};
         CoreCoord demux_phys_core = device_r->worker_core_from_logical_core(demux_core);
 
-        std::vector<CoreCoord> tx_phys_core;
+        //tx on left chip
+        std::vector<CoreCoord> l_tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x+i, tx_y};
-            tx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            l_tx_phys_core.push_back(device->worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     src_endpoint_start_id + i, // 0: src_endpoint_id
@@ -195,44 +203,78 @@ int main(int argc, char **argv) {
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
                 };
-
-            log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
-            auto kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp",
-                {core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_args,
-                    .defines = {}
-                }
-            );
+            if (l_to_r) {
+                log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
+                auto kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp",
+                    {core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = compile_args,
+                        .defines = {}
+                    }
+                );
+            }
         }
 
-        // Mux
-        std::vector<uint32_t> mux_compile_args =
+        //tx on right chip
+        std::vector<CoreCoord> r_tx_phys_core;
+        for (uint32_t i = 0; i < num_src_endpoints; i++) {
+            CoreCoord core = {tx_x+i, tx_y};
+            r_tx_phys_core.push_back(device_r->worker_core_from_logical_core(core));
+            std::vector<uint32_t> compile_args =
+                {
+                    src_endpoint_start_id + i, // 0: src_endpoint_id
+                    num_dest_endpoints, // 1: num_dest_endpoints
+                    (tx_queue_start_addr >> 4), // 2: queue_start_addr_words
+                    (tx_queue_size_bytes >> 4), // 3: queue_size_words
+                    ((mux_queue_start_addr + i*mux_queue_size_bytes) >> 4), // 4: remote_rx_queue_start_addr_words
+                    (mux_queue_size_bytes >> 4), // 5: remote_rx_queue_size_words
+                    (uint32_t)mux_phys_core.x, // 6: remote_rx_x
+                    (uint32_t)mux_phys_core.y, // 7: remote_rx_y
+                    i, // 8: remote_rx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 9: tx_network_type
+                    test_results_addr, // 10: test_results_addr
+                    test_results_size, // 11: test_results_size
+                    prng_seed, // 12: prng_seed
+                    data_kb_per_tx, // 13: total_data_kb
+                    max_packet_size_words, // 14: max_packet_size_words
+                    src_endpoint_start_id, // 15: src_endpoint_start_id
+                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
+                    timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
+                };
+            if (r_to_l) {
+                log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
+                auto kernel = tt_metal::CreateKernel(
+                    program_r,
+                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp",
+                    {core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = compile_args,
+                        .defines = {}
+                    }
+                );
+            }
+        }
+
+        // Mux Left
+        std::vector<uint32_t> l_mux_compile_args =
             {
                 0, // 0: reserved
                 (mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
                 (mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
                 num_src_endpoints, // 3: mux_fan_in
-                packet_switch_4B_pack((uint32_t)tx_phys_core[0].x,
-                                      (uint32_t)tx_phys_core[0].y,
+                packet_switch_4B_pack((uint32_t)l_tx_phys_core[0].x,
+                                      (uint32_t)l_tx_phys_core[0].y,
                                       1,
                                       (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: src 0 info
-                packet_switch_4B_pack((uint32_t)tx_phys_core[1].x,
-                                      (uint32_t)tx_phys_core[1].y,
-                                      1,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 5: src 1 info
-                packet_switch_4B_pack((uint32_t)tx_phys_core[2].x,
-                                      (uint32_t)tx_phys_core[2].y,
-                                      1,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 6: src 2 info
-                packet_switch_4B_pack((uint32_t)tx_phys_core[3].x,
-                                      (uint32_t)tx_phys_core[3].y,
-                                      1,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: src 3 info
+                0, // 5: src 1 info
+                0, // 6: src 2 info
+                0, // 7: src 3 info
                 (tunneler_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words
                 (tunneler_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)tunneler_phys_core.x, // 10: remote_tx_x
@@ -243,41 +285,97 @@ int main(int argc, char **argv) {
                 test_results_size, // 15: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 16: timeout_cycles
             };
+        if (l_to_r) {
+            log_info(LogTest, "run mux at x={},y={}", mux_core.x, mux_core.y);
+            auto l_mux_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
+                {mux_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = l_mux_compile_args,
+                    .defines = {}
+                }
+            );
+        }
+        // Mux Right
+        std::vector<uint32_t> r_mux_compile_args =
+            {
+                0, // 0: reserved
+                (mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                (mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                num_src_endpoints, // 3: mux_fan_in
+                packet_switch_4B_pack((uint32_t)r_tx_phys_core[0].x,
+                                      (uint32_t)r_tx_phys_core[0].y,
+                                      1,
+                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: src 0 info
+                0, // 5: src 1 info
+                0, // 6: src 2 info
+                0, // 7: src 3 info
+                l_to_r ? ((tunneler_queue_start_addr + tunneler_queue_size_bytes) >> 4)
+                       : (tunneler_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words
+                (tunneler_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
+                (uint32_t)r_tunneler_phys_core.x, // 10: remote_tx_x
+                (uint32_t)r_tunneler_phys_core.y, // 11: remote_tx_y
+                l_to_r ? (uint32_t)1 : (uint32_t)0, // 12: remote_tx_queue_id
+                (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
+                test_results_addr, // 14: test_results_addr
+                test_results_size, // 15: test_results_size
+                timeout_mcycles * 1000 * 1000 * 4, // 16: timeout_cycles
+            };
+        if (r_to_l) {
+            log_info(LogTest, "run mux at x={},y={}", mux_core.x, mux_core.y);
+            auto r_mux_kernel = tt_metal::CreateKernel(
+                program_r,
+                "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
+                {mux_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = r_mux_compile_args,
+                    .defines = {}
+                }
+            );
+        }
 
-        log_info(LogTest, "run mux at x={},y={}", mux_core.x, mux_core.y);
-        auto mux_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
-            {mux_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_compile_args,
-                .defines = {}
-            }
-        );
+        uint32_t tunnel_receiver_eth = packet_switch_4B_pack(r_tunneler_phys_core.x,
+                                                             r_tunneler_phys_core.y,
+                                                             0,
+                                                             (uint32_t)DispatchRemoteNetworkType::ETH);
+        uint32_t receiver_eth_q_addr = tunneler_queue_start_addr >> 4;
+        uint32_t receiver_eth_q_size = tunneler_queue_size_bytes >> 4;
+
+        uint32_t tunnel_receiver_noc = packet_switch_4B_pack(demux_phys_core.x,
+                                                             demux_phys_core.y,
+                                                             num_dest_endpoints,
+                                                             (uint32_t)DispatchRemoteNetworkType::NOC0);
+        uint32_t receiver_noc_q_addr =  demux_queue_start_addr >> 4;
+        uint32_t receiver_noc_q_size =  demux_queue_size_bytes >> 4;
+
+        uint32_t tunnel_sender_noc =  packet_switch_4B_pack(mux_phys_core.x,
+                                                            mux_phys_core.y,
+                                                            num_dest_endpoints,
+                                                            (uint32_t)DispatchRemoteNetworkType::NOC0);
+        uint32_t tunnel_sender_eth =  packet_switch_4B_pack(r_tunneler_phys_core.x,
+                                                            r_tunneler_phys_core.y,
+                                                            l_to_r ? (uint32_t)3 : (uint32_t)2,
+                                                            (uint32_t)DispatchRemoteNetworkType::ETH);
 
         std::vector<uint32_t> tunneler_l_compile_args =
             {
                 dest_endpoint_start_id, // 0: endpoint_id_start_index
-                1, // 1: tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
+                l_to_r && r_to_l ? (uint32_t)2 : (uint32_t)1, // 1: tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
                 (tunneler_queue_start_addr >> 4), // 2: rx_queue_start_addr_words
                 (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
-                packet_switch_4B_pack(r_tunneler_phys_core.x,
-                                      r_tunneler_phys_core.y,
-                                      0,
-                                      (uint32_t)DispatchRemoteNetworkType::ETH), // 4: remote_receiver_0_info
-                0, // 5: remote_receiver_1_info
-                (tunneler_queue_start_addr >> 4), // 6: remote_receiver_queue_start_addr_words 0
-                (tunneler_queue_size_bytes >> 4), // 7: remote_receiver_queue_size_words 0
-                0, // 8: remote_receiver_queue_start_addr_words 1
-                2, // 9: remote_receiver_queue_size_words 1.
-                   // Unused. Setting to 2 to get around size check assertion that does not allow 0.
-                packet_switch_4B_pack(mux_phys_core.x,
-                                      mux_phys_core.y,
-                                      num_dest_endpoints,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 10: remote_sender_0_info
-                0, // 11: remote_sender_1_info
+                l_to_r ? tunnel_receiver_eth : tunnel_receiver_noc, // 4: remote_receiver_0_info
+                tunnel_receiver_noc, // 5: remote_receiver_1_info
+                l_to_r ? receiver_eth_q_addr : receiver_noc_q_addr, // 6: remote_receiver_queue_start_addr_words 0
+                l_to_r ? receiver_eth_q_size : receiver_noc_q_size, // 7: remote_receiver_queue_size_words 0
+                receiver_noc_q_addr, // 8: remote_receiver_queue_start_addr_words 1
+                receiver_noc_q_size, // 9: remote_receiver_queue_size_words 1
+                l_to_r ? tunnel_sender_noc : tunnel_sender_eth, // 10: remote_sender_0_info
+                tunnel_sender_eth, // 11: remote_sender_1_info
                 tunneler_test_results_addr, // 12: test_results_addr
                 tunneler_test_results_size, // 13: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 14: timeout_cycles
@@ -294,27 +392,31 @@ int main(int argc, char **argv) {
         );
 
 
+
+        tunnel_receiver_eth = packet_switch_4B_pack(tunneler_phys_core.x,
+                                                             tunneler_phys_core.y,
+                                                             l_to_r ? 1 : 0,
+                                                             (uint32_t)DispatchRemoteNetworkType::ETH);
+        receiver_eth_q_addr = l_to_r ? ((tunneler_queue_start_addr + tunneler_queue_size_bytes) >> 4) : tunneler_queue_start_addr >> 4;
+
+        tunnel_sender_eth =  packet_switch_4B_pack(tunneler_phys_core.x,
+                                                            tunneler_phys_core.y,
+                                                            2,
+                                                            (uint32_t)DispatchRemoteNetworkType::ETH);
         std::vector<uint32_t> tunneler_r_compile_args =
             {
                 dest_endpoint_start_id, // 0: endpoint_id_start_index
-                1,  // 1: tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
+                l_to_r && r_to_l ? (uint32_t)2 : (uint32_t)1,  // 1: tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
                 (tunneler_queue_start_addr >> 4), // 2: rx_queue_start_addr_words
                 (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
-                packet_switch_4B_pack(demux_phys_core.x,
-                                      demux_phys_core.y,
-                                      num_dest_endpoints,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: remote_receiver_0_info
-                0, // 5: remote_receiver_1_info
-                (demux_queue_start_addr >> 4), // 6: remote_receiver_queue_start_addr_words 0
-                (demux_queue_size_bytes >> 4), // 7: remote_receiver_queue_size_words 0
-                0, // 8: remote_receiver_queue_start_addr_words 1
-                2, // 9: remote_receiver_queue_size_words 1
-                   // Unused. Setting to 2 to get around size check assertion that does not allow 0.
-                packet_switch_4B_pack(tunneler_phys_core.x,
-                                      tunneler_phys_core.y,
-                                      2,
-                                      (uint32_t)DispatchRemoteNetworkType::ETH), // 10: remote_sender_0_info
-                0, // 11: remote_sender_1_info
+                l_to_r ? tunnel_receiver_noc : tunnel_receiver_eth, // 4: remote_receiver_0_info
+                tunnel_receiver_eth, // 5: remote_receiver_1_info
+                l_to_r ? receiver_noc_q_addr : receiver_eth_q_addr, // 6: remote_receiver_queue_start_addr_words 0
+                l_to_r ? receiver_noc_q_size : receiver_eth_q_size, // 7: remote_receiver_queue_size_words 0
+                receiver_eth_q_addr, // 8: remote_receiver_queue_start_addr_words 1
+                receiver_eth_q_size, // 9: remote_receiver_queue_size_words 1
+                l_to_r ? tunnel_sender_eth : tunnel_sender_noc, // 10: remote_sender_0_info
+                tunnel_sender_noc, // 11: remote_sender_1_info
                 tunneler_test_results_addr, // 12: test_results_addr
                 tunneler_test_results_size, // 13: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 14: timeout_cycles
@@ -330,10 +432,11 @@ int main(int argc, char **argv) {
             }
         );
 
-        std::vector<CoreCoord> rx_phys_core;
+        // Rx Right
+        std::vector<CoreCoord> r_rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
             CoreCoord core = {rx_x+i, rx_y};
-            rx_phys_core.push_back(device_r->worker_core_from_logical_core(core));
+            r_rx_phys_core.push_back(device_r->worker_core_from_logical_core(core));
             std::vector<uint32_t> compile_args =
                 {
                     dest_endpoint_start_id + i, // 0: dest_endpoint_id
@@ -355,46 +458,81 @@ int main(int argc, char **argv) {
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
                 };
-
-            log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
-            auto kernel = tt_metal::CreateKernel(
-                program_r,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
-                {core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_args,
-                    .defines = {}
-                }
-            );
+            if (l_to_r) {
+                log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
+                auto kernel = tt_metal::CreateKernel(
+                    program_r,
+                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
+                    {core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = compile_args,
+                        .defines = {}
+                    }
+                );
+            }
         }
 
-        // Demux
+        // Rx Left
+        std::vector<CoreCoord> l_rx_phys_core;
+        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+            CoreCoord core = {rx_x+i, rx_y};
+            l_rx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            std::vector<uint32_t> compile_args =
+                {
+                    dest_endpoint_start_id + i, // 0: dest_endpoint_id
+                    num_src_endpoints, // 1: num_src_endpoints
+                    num_dest_endpoints, // 2: num_dest_endpoints
+                    (rx_queue_start_addr >> 4), // 3: queue_start_addr_words
+                    (rx_queue_size_bytes >> 4), // 4: queue_size_words
+                    (uint32_t)demux_phys_core.x, // 5: remote_tx_x
+                    (uint32_t)demux_phys_core.y, // 6: remote_tx_y
+                    i, // 7: remote_tx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
+                    test_results_addr, // 9: test_results_addr
+                    test_results_size, // 10: test_results_size
+                    prng_seed, // 11: prng_seed
+                    0, // 12: reserved
+                    max_packet_size_words, // 13: max_packet_size_words
+                    rx_disable_data_check, // 14: disable data check
+                    src_endpoint_start_id, // 15: src_endpoint_start_id
+                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
+                    timeout_mcycles * 1000 * 1000 * 4, // 17: timeout_cycles
+                };
+            if (r_to_l) {
+                log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
+                auto kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
+                    {core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = compile_args,
+                        .defines = {}
+                    }
+                );
+            }
+        }
+
+
+        // Demux Right
         uint32_t dest_map_array[4] = {0, 1, 2, 3};
         uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-        std::vector<uint32_t> demux_compile_args =
+        std::vector<uint32_t> r_demux_compile_args =
             {
                 dest_endpoint_start_id, // 0: endpoint_id_start_index
                 (demux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
                 (demux_queue_size_bytes >> 4), // 2: rx_queue_size_words
                 num_dest_endpoints, // 3: demux_fan_out
-                packet_switch_4B_pack(rx_phys_core[0].x,
-                                      rx_phys_core[0].y,
+                packet_switch_4B_pack(r_rx_phys_core[0].x,
+                                      r_rx_phys_core[0].y,
                                       0,
                                       (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: remote_tx_0_info
-                packet_switch_4B_pack(rx_phys_core[1].x,
-                                      rx_phys_core[1].y,
-                                      0,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 5: remote_tx_1_info
-                packet_switch_4B_pack(rx_phys_core[2].x,
-                                      rx_phys_core[2].y,
-                                      0,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 6: remote_tx_2_info
-                packet_switch_4B_pack(rx_phys_core[3].x,
-                                      rx_phys_core[3].y,
-                                      0,
-                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: remote_tx_3_info
+                0, // 5: remote_tx_1_info
+                0, // 6: remote_tx_2_info
+                0, // 7: remote_tx_3_info
                 (rx_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words 0
                 (rx_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words 0
                 (rx_queue_start_addr >> 4), // 10: remote_tx_queue_start_addr_words 1
@@ -413,19 +551,66 @@ int main(int argc, char **argv) {
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 24: timeout_cycles
             };
-
-        log_info(LogTest, "run demux at x={},y={}", demux_core.x, demux_core.y);
-        auto demux_kernel = tt_metal::CreateKernel(
-            program_r,
-            "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
-            {demux_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = demux_compile_args,
-                .defines = {}
-            }
-        );
+        if (l_to_r) {
+            log_info(LogTest, "run demux at x={},y={}", demux_core.x, demux_core.y);
+            auto r_demux_kernel = tt_metal::CreateKernel(
+                program_r,
+                "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
+                {demux_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = r_demux_compile_args,
+                    .defines = {}
+                }
+            );
+        }
+        // Demux Left
+        std::vector<uint32_t> l_demux_compile_args =
+            {
+                dest_endpoint_start_id, // 0: endpoint_id_start_index
+                (demux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                (demux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                num_dest_endpoints, // 3: demux_fan_out
+                packet_switch_4B_pack(l_rx_phys_core[0].x,
+                                      l_rx_phys_core[0].y,
+                                      0,
+                                      (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: remote_tx_0_info
+                0, // 5: remote_tx_1_info
+                0, // 6: remote_tx_2_info
+                0, // 7: remote_tx_3_info
+                (rx_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words 0
+                (rx_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words 0
+                (rx_queue_start_addr >> 4), // 10: remote_tx_queue_start_addr_words 1
+                (rx_queue_size_bytes >> 4), // 11: remote_tx_queue_size_words 1
+                (rx_queue_start_addr >> 4), // 12: remote_tx_queue_start_addr_words 2
+                (rx_queue_size_bytes >> 4), // 13: remote_tx_queue_size_words 2
+                (rx_queue_start_addr >> 4), // 14: remote_tx_queue_start_addr_words 3
+                (rx_queue_size_bytes >> 4), // 15: remote_tx_queue_size_words 3
+                (uint32_t)tunneler_phys_core.x, // 16: remote_rx_x
+                (uint32_t)tunneler_phys_core.y, // 17: remote_rx_y
+                l_to_r ? (uint32_t)3 : (uint32_t)2, // 18: remote_rx_queue_id
+                (uint32_t)DispatchRemoteNetworkType::NOC0, // 19: tx_network_type
+                (uint32_t)(dest_endpoint_output_map >> 32), // 20: dest_endpoint_output_map_hi
+                (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF), // 21: dest_endpoint_output_map_lo
+                test_results_addr, // 22: test_results_addr
+                test_results_size, // 23: test_results_size
+                timeout_mcycles * 1000 * 1000 * 4, // 24: timeout_cycles
+            };
+        if (r_to_l) {
+            log_info(LogTest, "run demux at x={},y={}", demux_core.x, demux_core.y);
+            auto l_demux_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
+                {demux_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = l_demux_compile_args,
+                    .defines = {}
+                }
+            );
+        }
 
         log_info(LogTest, "Starting test...");
 
@@ -439,48 +624,88 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        vector<vector<uint32_t>> tx_results;
-        vector<vector<uint32_t>> rx_results;
+        vector<vector<uint32_t>> l_tx_results;
+        vector<vector<uint32_t>> l_rx_results;
+        vector<uint32_t> l_mux_results;
+        vector<uint32_t> l_demux_results;
+        vector<vector<uint32_t>> r_tx_results;
+        vector<vector<uint32_t>> r_rx_results;
+        vector<uint32_t> r_mux_results;
+        vector<uint32_t> r_demux_results;
 
-        for (uint32_t i = 0; i < num_src_endpoints; i++) {
-            tx_results.push_back(
+        if (l_to_r) {
+            for (uint32_t i = 0; i < num_src_endpoints; i++) {
+                l_tx_results.push_back(
+                    tt::llrt::read_hex_vec_from_core(
+                        device->id(), l_tx_phys_core[i], test_results_addr, test_results_size));
+                log_info(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(l_tx_results[i][PQ_TEST_STATUS_INDEX]));
+                pass &= (l_tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            }
+
+            for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+                r_rx_results.push_back(
+                    tt::llrt::read_hex_vec_from_core(
+                        device_r->id(), r_rx_phys_core[i], test_results_addr, test_results_size));
+                log_info(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(r_rx_results[i][PQ_TEST_STATUS_INDEX]));
+                pass &= (r_rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            }
+
+            l_mux_results =
                 tt::llrt::read_hex_vec_from_core(
-                    device->id(), tx_phys_core[i], test_results_addr, test_results_size));
-            log_info(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
-            pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+                    device->id(), mux_phys_core, test_results_addr, test_results_size);
+            log_info(LogTest, "MUX status = {}", packet_queue_test_status_to_string(l_mux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (l_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+
+            r_demux_results =
+                tt::llrt::read_hex_vec_from_core(
+                    device_r->id(), demux_phys_core, test_results_addr, test_results_size);
+            log_info(LogTest, "DEMUX status = {}", packet_queue_test_status_to_string(r_demux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (r_demux_results[0] == PACKET_QUEUE_TEST_PASS);
         }
 
-        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
-            rx_results.push_back(
+        if (r_to_l) {
+            for (uint32_t i = 0; i < num_src_endpoints; i++) {
+                r_tx_results.push_back(
+                    tt::llrt::read_hex_vec_from_core(
+                        device_r->id(), r_tx_phys_core[i], test_results_addr, test_results_size));
+                log_info(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(r_tx_results[i][PQ_TEST_STATUS_INDEX]));
+                pass &= (r_tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            }
+
+            for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+                l_rx_results.push_back(
+                    tt::llrt::read_hex_vec_from_core(
+                        device->id(), l_rx_phys_core[i], test_results_addr, test_results_size));
+                log_info(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(l_rx_results[i][PQ_TEST_STATUS_INDEX]));
+                pass &= (l_rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            }
+
+            r_mux_results =
                 tt::llrt::read_hex_vec_from_core(
-                    device_r->id(), rx_phys_core[i], test_results_addr, test_results_size));
-            log_info(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(rx_results[i][PQ_TEST_STATUS_INDEX]));
-            pass &= (rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+                    device_r->id(), mux_phys_core, test_results_addr, test_results_size);
+            log_info(LogTest, "MUX status = {}", packet_queue_test_status_to_string(r_mux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (r_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+
+            l_demux_results =
+                tt::llrt::read_hex_vec_from_core(
+                    device->id(), demux_phys_core, test_results_addr, test_results_size);
+            log_info(LogTest, "DEMUX status = {}", packet_queue_test_status_to_string(l_demux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (l_demux_results[0] == PACKET_QUEUE_TEST_PASS);
         }
 
-        vector<uint32_t> mux_results =
-            tt::llrt::read_hex_vec_from_core(
-                device->id(), mux_phys_core, test_results_addr, test_results_size);
-        log_info(LogTest, "MUX status = {}", packet_queue_test_status_to_string(mux_results[PQ_TEST_STATUS_INDEX]));
-        pass &= (mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
-        vector<uint32_t> demux_results =
-            tt::llrt::read_hex_vec_from_core(
-                device_r->id(), demux_phys_core, test_results_addr, test_results_size);
-        log_info(LogTest, "DEMUX status = {}", packet_queue_test_status_to_string(demux_results[PQ_TEST_STATUS_INDEX]));
-        pass &= (demux_results[0] == PACKET_QUEUE_TEST_PASS);
 
         pass &= tt_metal::CloseDevice(device);
         pass &= tt_metal::CloseDevice(device_r);
 
-        if (pass) {
+        if (pass && l_to_r) {
             double total_tx_bw = 0.0;
             uint64_t total_tx_words_sent = 0;
             uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
-                uint64_t tx_words_sent = get_64b_result(tx_results[i], PQ_TEST_WORD_CNT_INDEX);
+                uint64_t tx_words_sent = get_64b_result(l_tx_results[i], PQ_TEST_WORD_CNT_INDEX);
                 total_tx_words_sent += tx_words_sent;
-                uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
+                uint64_t tx_elapsed_cycles = get_64b_result(l_tx_results[i], PQ_TEST_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
                 log_info(LogTest,
                          "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
@@ -490,9 +715,9 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
             double total_rx_bw = 0.0;
             for (uint32_t i = 0; i < num_dest_endpoints; i++) {
-                uint64_t rx_words_checked = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
+                uint64_t rx_words_checked = get_64b_result(r_rx_results[i], PQ_TEST_WORD_CNT_INDEX);
                 total_rx_words_checked += rx_words_checked;
-                uint64_t rx_elapsed_cycles = get_64b_result(rx_results[i], PQ_TEST_CYCLES_INDEX);
+                uint64_t rx_elapsed_cycles = get_64b_result(r_rx_results[i], PQ_TEST_CYCLES_INDEX);
                 double rx_bw = ((double)rx_words_checked) * PACKET_WORD_SIZE_BYTES / rx_elapsed_cycles;
                 log_info(LogTest,
                          "RX {} words checked = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
@@ -506,9 +731,9 @@ int main(int argc, char **argv) {
             } else {
                 log_info(LogTest, "Total TX words sent = {} == Total RX words checked = {} -> OK", total_tx_words_sent, total_rx_words_checked);
             }
-            uint64_t mux_words_sent = get_64b_result(mux_results, PQ_TEST_WORD_CNT_INDEX);
-            uint64_t mux_elapsed_cycles = get_64b_result(mux_results, PQ_TEST_CYCLES_INDEX);
-            uint64_t mux_iter = get_64b_result(mux_results, PQ_TEST_ITER_INDEX);
+            uint64_t mux_words_sent = get_64b_result(l_mux_results, PQ_TEST_WORD_CNT_INDEX);
+            uint64_t mux_elapsed_cycles = get_64b_result(l_mux_results, PQ_TEST_CYCLES_INDEX);
+            uint64_t mux_iter = get_64b_result(l_mux_results, PQ_TEST_ITER_INDEX);
             double mux_bw = ((double)mux_words_sent) * PACKET_WORD_SIZE_BYTES / mux_elapsed_cycles;
             double mux_cycles_per_iter = ((double)mux_elapsed_cycles) / mux_iter;
             log_info(LogTest,
@@ -524,10 +749,10 @@ int main(int argc, char **argv) {
                 log_info(LogTest, "MUX words sent = {} == Total RX words checked = {} -> OK", mux_words_sent, total_rx_words_checked);
             }
 
-            uint64_t demux_words_sent = get_64b_result(demux_results, PQ_TEST_WORD_CNT_INDEX);
-            uint64_t demux_elapsed_cycles = get_64b_result(demux_results, PQ_TEST_CYCLES_INDEX);
+            uint64_t demux_words_sent = get_64b_result(r_demux_results, PQ_TEST_WORD_CNT_INDEX);
+            uint64_t demux_elapsed_cycles = get_64b_result(r_demux_results, PQ_TEST_CYCLES_INDEX);
             double demux_bw = ((double)demux_words_sent) * PACKET_WORD_SIZE_BYTES / demux_elapsed_cycles;
-            uint64_t demux_iter = get_64b_result(demux_results, PQ_TEST_ITER_INDEX);
+            uint64_t demux_iter = get_64b_result(r_demux_results, PQ_TEST_ITER_INDEX);
             double demux_cycles_per_iter = ((double)demux_elapsed_cycles) / demux_iter;
             log_info(LogTest,
                      "DEMUX words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",

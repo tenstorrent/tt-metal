@@ -96,7 +96,7 @@ constexpr uint32_t timeout_cycles = get_compile_time_arg_val(14);
 void kernel_main() {
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
-    noc_init(0xF);
+    noc_init();
 
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
@@ -116,11 +116,11 @@ void kernel_main() {
                             &input_queues[i], 1);
     }
 
-    wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles);
+    bool timeout = !wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles);
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
-    bool timeout = false;
+
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;

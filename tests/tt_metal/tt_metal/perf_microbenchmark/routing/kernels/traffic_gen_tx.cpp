@@ -159,10 +159,12 @@ void kernel_main() {
 
     while (true) {
         iter++;
-        uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-        if (cycles_since_progress > timeout_cycles) {
-            timeout = true;
-            break;
+        if (timeout_cycles > 0) {
+            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
+            if (cycles_since_progress > timeout_cycles) {
+                timeout = true;
+                break;
+            }
         }
         bool all_packets_initialized = input_queue_handler();
         if (input_queue_ptr->get_curr_packet_valid()) {
@@ -189,10 +191,12 @@ void kernel_main() {
         test_results[PQ_TEST_MISC_INDEX] = 0xff00003;
         progress_timestamp = get_timestamp_32b();
         while (!output_queue_ptr->is_remote_finished()) {
-            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-            if (cycles_since_progress > timeout_cycles) {
-                timeout = true;
-                break;
+            if (timeout_cycles > 0) {
+                uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
+                if (cycles_since_progress > timeout_cycles) {
+                    timeout = true;
+                    break;
+                }
             }
         }
     }
