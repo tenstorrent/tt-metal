@@ -2461,3 +2461,94 @@ def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation
 
     passing, output = comp_equal(result, golden)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.FLOAT32,
+        ttl.tensor.DataType.BFLOAT4_B,
+    ],
+)
+@pytest.mark.parametrize("y", [256, 512, 1024, 2048])
+def test_interleaved_2_sharded_L1(device, dtype, y):
+    input_dtype = dtype
+    shard_scheme = ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 7))})
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if 64 > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {64} cores to run this test but core grid is {compute_grid_size}")
+
+    if y == 2048 and dtype == ttl.tensor.DataType.FLOAT32 and not is_wormhole_b0():
+        pytest.skip(f"Can fit this case on GS")
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    x = torch.randn((1, 1, y, 144 * 32)).bfloat16().float()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            input_dtype,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    yt = ttl.tensor.interleaved_to_sharded(
+        xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttl.tensor.ShardOrientation.ROW_MAJOR
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.FLOAT32,
+        ttl.tensor.DataType.BFLOAT4_B,
+    ],
+)
+@pytest.mark.parametrize("y", [256, 512, 1024, 2048])
+def test_interleaved_2_sharded_DRAM(device, dtype, y):
+    input_dtype = dtype
+    shard_scheme = ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 7))})
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if 64 > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {64} cores to run this test but core grid is {compute_grid_size}")
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    x = torch.randn((1, 1, y, 144 * 32)).bfloat16().float()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            input_dtype,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    yt = ttl.tensor.interleaved_to_sharded(
+        xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttl.tensor.ShardOrientation.ROW_MAJOR
+    )
