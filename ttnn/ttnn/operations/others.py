@@ -10,17 +10,10 @@ import tt_lib as ttl
 import ttnn
 
 
-def _compute_golden_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
+def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_torch(input_tensor)
-
-    weight = ttnn.from_device(weight)
-    weight = ttnn.to_torch(weight)
-
     output_tensor = torch.nn.functional.embedding(input_tensor, weight)
-
     return output_tensor
 
 
@@ -48,7 +41,7 @@ def _embedding_validate_input_tensors(operation_name, input_tensor, weight, *arg
 @ttnn.register_operation(
     name="ttnn.embedding",
     validate_input_tensors=_embedding_validate_input_tensors,
-    compute_golden=_compute_golden_embedding,
+    golden_function=_golden_function,
 )
 def embedding(
     input_tensor: ttnn.Tensor,
@@ -116,12 +109,8 @@ def embedding(
     return embeddings
 
 
-def _compute_golden_softmax(input_tensor: ttnn.Tensor, dim: int, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.softmax(input_tensor, dim)
 
@@ -141,7 +130,7 @@ def _softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 @ttnn.register_operation(
     name="ttnn.softmax",
     validate_input_tensors=_softmax_validate_input_tensors,
-    compute_golden=_compute_golden_softmax,
+    golden_function=_golden_function,
 )
 def softmax(
     input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -182,12 +171,8 @@ def softmax(
     return output_tensor
 
 
-def _compute_golden_mean(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
 
@@ -207,7 +192,7 @@ def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.mean",
     validate_input_tensors=_mean_validate_input_tensors,
-    compute_golden=_compute_golden_mean,
+    golden_function=_golden_function,
 )
 def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
     """
@@ -339,12 +324,8 @@ def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwar
     )
 
 
-def _compute_golden_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_):
+def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
 
@@ -352,7 +333,7 @@ def _compute_golden_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, fl
 @ttnn.register_operation(
     name="ttnn.upsample",
     validate_input_tensors=_upsample_validate_input_tensors,
-    compute_golden=_compute_golden_upsample,
+    golden_function=_golden_function,
 )
 def upsample(
     input_tensor: ttnn.Tensor,

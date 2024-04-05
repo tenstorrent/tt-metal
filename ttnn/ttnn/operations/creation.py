@@ -20,17 +20,16 @@ def _zeros_like_validate_input_tensors(operation_name, input_tensor, *args, **kw
     )
 
 
-def _compute_golden_zeros_like(input_tensor: ttnn.Tensor, **_):
+def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 
-    input_tensor = ttnn.to_torch(input_tensor)
     return torch.zeros_like(input_tensor)
 
 
 @ttnn.register_operation(
     name="ttnn.zeros_like",
     validate_input_tensors=_zeros_like_validate_input_tensors,
-    compute_golden=_compute_golden_zeros_like,
+    golden_function=_golden_function,
 )
 def zeros_like(
     input_tensor: ttnn.Tensor,
@@ -68,17 +67,16 @@ def _ones_like_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     )
 
 
-def _compute_golden_ones_like(input_tensor: ttnn.Tensor, **_):
+def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 
-    input_tensor = ttnn.to_torch(input_tensor)
     return torch.ones_like(input_tensor)
 
 
 @ttnn.register_operation(
     name="ttnn.ones_like",
     validate_input_tensors=_ones_like_validate_input_tensors,
-    compute_golden=_compute_golden_ones_like,
+    golden_function=_golden_function,
 )
 def ones_like(
     input_tensor: ttnn.Tensor,
@@ -116,17 +114,16 @@ def _full_like_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     )
 
 
-def _compute_golden_full_like(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
+def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     import torch
 
-    input_tensor = ttnn.to_torch(input_tensor)
     return torch.full_like(input_tensor, fill_value)
 
 
 @ttnn.register_operation(
     name="ttnn.full_like",
     validate_input_tensors=_full_like_validate_input_tensors,
-    compute_golden=_compute_golden_full_like,
+    golden_function=_golden_function,
 )
 def full_like(
     input_tensor: ttnn.Tensor,
@@ -155,10 +152,9 @@ def full_like(
     return output_tensor
 
 
-def _compute_golden_zeros(input_shape: ttnn.Shape, **_):
+def _golden_function(input_shape: ttnn.Shape, **_):
     import torch
 
-    input_shape = ttnn.to_torch(input_shape)
     return torch.zeros(input_shape)
 
 
@@ -169,7 +165,7 @@ def _zeros_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.zeros",
     validate_input_tensors=_zeros_validate_input_tensors,
-    compute_golden=_compute_golden_zeros,
+    golden_function=_golden_function,
 )
 def zeros(
     input_shape: ttnn.Shape,
@@ -200,10 +196,9 @@ def zeros(
     return output_tensor
 
 
-def _compute_golden_ones(input_shape: ttnn.Shape, **_):
+def _golden_function(input_shape: ttnn.Shape, **_):
     import torch
 
-    input_shape = ttnn.to_torch(input_shape)
     return torch.ones(input_shape)
 
 
@@ -214,7 +209,7 @@ def _ones_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.ones",
     validate_input_tensors=_ones_validate_input_tensors,
-    compute_golden=_compute_golden_ones,
+    golden_function=_golden_function,
 )
 def ones(
     input_shape: ttnn.Shape,
@@ -246,10 +241,9 @@ def ones(
     return output_tensor
 
 
-def _compute_golden_full(input_shape: ttnn.Shape, fill_value: float, **_):
+def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
     import torch
 
-    input_shape = ttnn.to_torch(input_shape)
     return torch.full(input_shape, fill_value=fill_value)
 
 
@@ -260,7 +254,7 @@ def _full_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.full",
     validate_input_tensors=_full_validate_input_tensors,
-    compute_golden=_compute_golden_full,
+    golden_function=_golden_function,
 )
 def full(
     input_shape: ttnn.Shape,
@@ -304,20 +298,20 @@ def _is_int(value):
     return isinstance(value, (int))
 
 
-def _compute_golden_arange(start: int, end: int, step: int, **_):
+def _golden_function(start: int, end: int, step: int, **_):
     import torch
 
     return torch.arange(start, end, step)
 
 
 def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    return True
+    ...
 
 
 @ttnn.register_operation(
     name="ttnn.arange",
     validate_input_tensors=_arange_validate_input_tensors,
-    compute_golden=_compute_golden_arange,
+    golden_function=_golden_function,
 )
 def arange(
     start: int,
@@ -345,12 +339,8 @@ def arange(
     return output_tensor
 
 
-def _compute_golden_empty(input_shape: ttnn.Shape, **_):
+def _golden_function(input_shape: ttnn.Shape, **_):
     import torch
-
-    input_shape = ttnn.from_device(input_shape)
-    input_shape = ttnn.to_layout(input_shape, ttnn.ROW_MAJOR_LAYOUT)
-    input_shape = ttnn.to_torch(input_shape)
 
     return torch.empty(input_shape)
 
@@ -362,7 +352,7 @@ def _empty_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 @ttnn.register_operation(
     name="ttnn.empty",
     validate_input_tensors=_empty_validate_input_tensors,
-    compute_golden=_compute_golden_empty,
+    golden_function=_golden_function,
 )
 def empty(
     input_shape: ttnn.Shape,

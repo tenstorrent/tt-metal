@@ -35,31 +35,24 @@
                 <tr id="operation_header">
                     <th>Id</th>
                     <th>Name</th>
-                    <th>Duration</th>
-                    <th>Matches Golden</th>
                     <th>Stack Trace</th>
                     <th>Buffer Report</th>
                     <th>Operation Graph</th>
-                    <th>Tensor Report</th>
+                    <th>Matches Golden Locally</th>
+                    <th>Matches Golden Globally</th>
                     <th>Underlying Operations</th>
                 </tr>
                 {% for operation in operations %}
                 <tr>
                     <td>{{operation.operation_id}}</td>
                     <td>{{operation.name}}</td>
-                    <td bgcolor={{duration_to_color(operation.duration)}}>{{duration_to_string(operation.duration)}}
-                    </td>
-
-                    {% if operation.matches_golden is none %}
-                    <td bgcolor="gray"></td> {% else %}
-                    <td {% if operation.matches_golden==True %} bgcolor="green" {% else %} bgcolor="red" {% endif %}>
-                        Desired PCC = {{operation.desired_pcc}}<br>Actual PCC = {{operation.actual_pcc}}
-                    </td>
-                    {% endif %}
                     <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
                     <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
                     <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a> </td>
-                    <td><a href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
+                    <td bgcolor="{{comparison_color(" local_tensor_comparison_records", operation.operation_id)}}"> <a
+                            href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
+                    <td bgcolor="{{comparison_color(" global_tensor_comparison_records", operation.operation_id)}}"> <a
+                            href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> </td>
                     <td>{{ load_underlying_operations(operation.operation_id) | safe
                         }}
                     </td>
