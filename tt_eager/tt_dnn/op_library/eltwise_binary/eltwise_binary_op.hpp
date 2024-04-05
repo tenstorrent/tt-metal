@@ -58,12 +58,13 @@ struct EltwiseBinary {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     const bool in_place;
+    // std::optional<Tensor> opt_output_tensor;
 
     BinaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::OpPerformanceModel create_op_performance_model(
@@ -91,13 +92,16 @@ struct EltwiseBinary {
     }
     static constexpr auto attribute_names =
         std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype");
+        // std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype", "opt_output_tensor");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->op_type),
             std::cref(this->fused_activations),
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
-            std::cref(this->in_place));
+            std::cref(this->in_place)
+            // std::cref(this->opt_output_tensor)
+            );
     }
 
     const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
@@ -110,10 +114,48 @@ struct make_eltwise_binary {
         const Tensor &input_tensor_b,
         std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt,
         const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        std::optional<const DataType> output_dtype = std::nullopt) const {
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-        operation::launch_with_autoformat(
+        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<std::vector<Tensor>> opt_output_tensor = std::nullopt) const {
+        // std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+        if(opt_output_tensor.has_value() && !(opt_output_tensor.value()).empty()){
+            opt_output_tensor.value() = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+            operation::launch_with_autoformat(
             [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                Tensor in_a = input_tensors.at(0);
+                Tensor in_b = input_tensors.at(1);
+                Shape shape_a = in_a.get_legacy_shape();
+                Shape shape_b = in_b.get_legacy_shape();
+                if (shape_a[0] != shape_b[0])
+                {
+                    if (shape_a[0] > shape_b[0])
+                    {
+                        Shape shape ({shape_a[0],1,1,1});
+                        in_b = repeat(in_b, shape, output_mem_config);
+                    }
+                    else
+                    {
+                        Shape shape ({shape_b[0],1,1,1});
+                        in_a = repeat(in_a, shape, output_mem_config);
+                    }
+                }
+                TT_FATAL(
+                    in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
+                return operation::run_with_autoformat(
+                        EltwiseBinary{
+                            binary_op_type,
+                            fused_activations,
+                            output_mem_config,
+                            output_dtype.value_or(in_a.get_dtype()),
+                            false},
+                        {in_a, in_b});
+            },
+        {input_tensor_a, input_tensor_b}, opt_output_tensor.value());
+        return (opt_output_tensor.value()).at(0);
+        }
+        else {
+            std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+             operation::launch_with_autoformat(
+            [fused_activations, output_mem_config, output_dtype ] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
                 Tensor in_a = input_tensors.at(0);
                 Tensor in_b = input_tensors.at(1);
                 Shape shape_a = in_a.get_legacy_shape();
@@ -144,6 +186,8 @@ struct make_eltwise_binary {
             },
         {input_tensor_a, input_tensor_b}, output_tensors);
         return output_tensors.at(0);
+        }
+
     }
 };
 
@@ -180,7 +224,8 @@ inline Tensor add(
     std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt,
-    bool in_place = false) {
+    bool in_place = false,
+    std::optional<std::vector<Tensor>> opt_output_tensor = std::nullopt) {
     Shape shape_a = input_tensor_a.get_legacy_shape();
     Shape shape_b = input_tensor_b.get_legacy_shape();
     Tensor in_a = input_tensor_a;
