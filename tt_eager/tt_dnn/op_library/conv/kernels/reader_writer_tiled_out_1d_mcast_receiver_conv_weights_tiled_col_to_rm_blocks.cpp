@@ -8,7 +8,7 @@
 
 void kernel_main() {
     // This writer is for output tensor in tile format
-    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 256;
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
 
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
