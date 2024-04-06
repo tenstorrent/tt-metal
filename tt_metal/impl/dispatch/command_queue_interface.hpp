@@ -15,6 +15,7 @@
 
 using namespace tt::tt_metal;
 
+typedef uint32_t prefetch_q_entry_type;
 static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 static constexpr uint32_t PREFETCH_Q_ENTRIES = 128;
 static constexpr uint32_t MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
@@ -194,7 +195,7 @@ class SystemMemoryManager {
             this->cq_to_event.push_back(0);
             this->cq_to_last_completed_event.push_back(0);
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-            this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(uint16_t);
+            this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
         }
         vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
@@ -409,7 +410,7 @@ class SystemMemoryManager {
 
         // Wrap FetchQ if possible
         uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-        uint32_t prefetch_q_limit = prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(uint16_t);
+        uint32_t prefetch_q_limit = prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
         if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
 
@@ -422,9 +423,9 @@ class SystemMemoryManager {
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) return;
-        uint16_t command_size_16B = command_size_B >> PREFETCH_Q_LOG_MINSIZE;
-        tt::Cluster::instance().write_core((void *)&command_size_16B, sizeof(uint16_t), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id], true);
-        this->prefetch_q_dev_ptrs[cq_id] += sizeof(uint16_t);
+        uint32_t command_size_16B = command_size_B >> PREFETCH_Q_LOG_MINSIZE;
+        tt::Cluster::instance().write_reg(&command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+        this->prefetch_q_dev_ptrs[cq_id] += sizeof(prefetch_q_entry_type);
         tt_driver_atomics::sfence();
     }
 };
