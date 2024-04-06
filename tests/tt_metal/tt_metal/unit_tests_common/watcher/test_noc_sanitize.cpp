@@ -138,22 +138,15 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             );
             break;
         case SanitizeAlignmentL1:
-            expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 accesses local L1[addr=0x{:08x},len=102400]",
-                device->id(),
-                (is_eth_core) ? "Ethnet" : "Worker",
-                core.str(), phys_core.str(),
-                (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr
-            );
-            break;
         case SanitizeAlignmentDRAM:
             expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400]",
+                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
                 device->id(),
                 (is_eth_core) ? "Ethnet" : "Worker",
                 core.str(), phys_core.str(),
                 (is_eth_core) ? "erisc" : "brisc", input_dram_noc_xy.str(),
-                input_dram_buffer_addr
+                input_dram_buffer_addr,
+                l1_buffer_addr
             );
             break;
         default:
