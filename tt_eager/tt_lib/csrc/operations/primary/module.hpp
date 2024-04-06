@@ -884,7 +884,7 @@ void py_module(py::module& m_primary) {
         py::arg("param_in").noconvert(),
         py::arg("grad").noconvert(),
         py::arg("momentum_buffer_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert(),
+        py::arg("param_out").noconvert() = std::nullopt,
         py::arg("momentum_buffer_out").noconvert() = std::nullopt,
         py::arg("lr").noconvert(),
         py::arg("momentum").noconvert(),
@@ -892,6 +892,8 @@ void py_module(py::module& m_primary) {
         py::arg("weight_decay").noconvert(),
         py::arg("nesterov").noconvert(),
         py::arg("momentum_initialized").noconvert(),
+        py::arg("param_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("momentum_buffer_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a SGD operation.");
 
     py::class_<GroupNormShardedMultiCoreProgramConfig>(m_primary, "GroupNormShardedMultiCoreProgramConfig")

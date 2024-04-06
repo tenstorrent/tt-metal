@@ -38,18 +38,22 @@ struct MorehSGD {
     bool nesterov;
     bool momentum_initialized;
     const CoreRange core_range;  // unused for now
+    MemoryConfig param_out_mem_config;
+    MemoryConfig momentum_buffer_out_mem_config;
 
-    void validate(
+    void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
     static constexpr auto attribute_names =
-        std::make_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov", "momentum_initialized");
+        std::make_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov", "momentum_initialized", "param_out_mem_config", "momentum_buffer_out_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->lr),
@@ -57,22 +61,26 @@ struct MorehSGD {
             std::cref(this->dampening),
             std::cref(this->weight_decay),
             std::cref(this->nesterov),
-            std::cref(this->momentum_initialized));
+            std::cref(this->momentum_initialized),
+            std::cref(this->param_out_mem_config),
+            std::cref(this->momentum_buffer_out_mem_config));
     }
 };
 
-void moreh_sgd(
+std::vector<std::optional<Tensor>> moreh_sgd(
     const Tensor &param_in,
     const Tensor &grad,
     std::optional<const Tensor> momentum_buffer_in,
-    const Tensor &param_out,
+    std::optional<const Tensor> param_out,
     std::optional<const Tensor> momentum_buffer_out,
     float lr,
     float momentum,
     float dampening,
     float weight_decay,
     bool nesterov,
-    bool momentum_initialized);
+    bool momentum_initialized,
+    const MemoryConfig &param_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig &momentum_buffer_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 }  // namespace operations

@@ -183,12 +183,12 @@ operation::ProgramWithCallbacks moreh_sgd_(
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
         ) {
-        TT_ASSERT(input_tensors.size() == 3);
-        TT_ASSERT(optional_input_tensors.size() == 0 || optional_input_tensors.size() == 2);
+        TT_ASSERT(input_tensors.size() == 2);
+        TT_ASSERT(optional_input_tensors.size() == 0 || optional_input_tensors.size() == 1);
 
         auto param_in_address = input_tensors.at(0).buffer()->address();
         auto grad_address = input_tensors.at(1).buffer()->address();
-        auto param_out_address = input_tensors.at(2).buffer()->address();
+        auto param_out_address = output_tensors.at(0).buffer()->address();
 
         for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
             CoreCoord core = {core_i / core_h, core_i % core_h};
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                 runtime_args[0] = param_out_address;
 
                 if (has_momentum_buffer) {
-                    auto momentum_buffer_out = optional_input_tensors.at(1).value().buffer();
+                    auto momentum_buffer_out = output_tensors.at(1).buffer();
                     TT_ASSERT(momentum_buffer_out != nullptr);
                     runtime_args[1] = momentum_buffer_out->address();
                 }

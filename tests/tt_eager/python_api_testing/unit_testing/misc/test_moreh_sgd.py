@@ -42,7 +42,8 @@ def create_tt_tensor(tensor, device):
 @pytest.mark.parametrize(
     "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
 )
-def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momentum_initialized, device):
+@pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
+def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momentum_initialized, has_param_out, device):
     if nesterov and (momentum <= 0 or dampening != 0):
         pytest.skip()
 
@@ -110,11 +111,11 @@ def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momen
 
         dev_momentum_buffer_out = create_tt_tensor(cpu_param_in, device)
 
-    ttl.operations.primary.moreh_sgd(
+    dev_param_out, dev_momentum_buffer_out = ttl.operations.primary.moreh_sgd(
         dev_param_in,
         dev_grad,
         dev_momentum_buffer_in,
-        dev_param_out,
+        dev_param_out if has_param_out else None,
         dev_momentum_buffer_out,
         lr,
         momentum,
