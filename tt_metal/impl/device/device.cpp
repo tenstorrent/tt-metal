@@ -328,7 +328,7 @@ void Device::compile_command_queue_programs() {
     constexpr uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t dispatch_buffer_base = get_dispatch_buffer_base();
     constexpr uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-    constexpr uint32_t prefetch_q_size = PREFETCH_Q_ENTRIES * sizeof(uint16_t);
+    constexpr uint32_t prefetch_q_size = PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
     constexpr uint32_t noc_read_alignment = 32;
     constexpr uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
     constexpr uint32_t scratch_db_base = cmddat_q_base + ((CMDDAT_Q_SIZE + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
@@ -394,7 +394,7 @@ void Device::compile_command_queue_programs() {
                     CQ_START,
                     issue_queue_size,
                     prefetch_q_base,
-                    PREFETCH_Q_ENTRIES * (uint32_t)sizeof(uint16_t),
+                    PREFETCH_Q_ENTRIES * (uint32_t)sizeof(prefetch_q_entry_type),
                     CQ_PREFETCH_Q_RD_PTR,
                     cmddat_q_base,
                     CMDDAT_Q_SIZE,
@@ -522,7 +522,7 @@ void Device::configure_command_queue_programs() {
                 // Initialize the FetchQ
                 std::vector<uint32_t> prefetch_q(PREFETCH_Q_ENTRIES, 0);
                 std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
-                    (uint32_t)(prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(uint16_t))
+                    (uint32_t)(prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type))
                 };
                 detail::WriteToDeviceL1(this, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data);
                 detail::WriteToDeviceL1(this, prefetch_location, prefetch_q_base, prefetch_q);
