@@ -108,7 +108,7 @@ void write_downstream(uint32_t& data_ptr,
 
 template<uint32_t preamble_size>
 FORCE_INLINE
-void read_from_pcie(volatile tt_l1_ptr uint16_t *& prefetch_q_rd_ptr,
+void read_from_pcie(volatile tt_l1_ptr uint32_t *& prefetch_q_rd_ptr,
                     uint32_t& pending_read_size,
                     uint32_t& fence,
                     uint32_t& pcie_read_ptr,
@@ -145,7 +145,7 @@ void read_from_pcie(volatile tt_l1_ptr uint16_t *& prefetch_q_rd_ptr,
 
     // Wrap prefetch_q
     if ((uint32_t)prefetch_q_rd_ptr == prefetch_q_end) {
-        prefetch_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)prefetch_q_base;
+        prefetch_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)prefetch_q_base;
     }
 }
 
@@ -173,7 +173,7 @@ template<uint32_t preamble_size>
 void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_ptr) {
 
     static uint32_t pending_read_size = 0;
-    static volatile tt_l1_ptr uint16_t* prefetch_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)prefetch_q_base;
+    static volatile tt_l1_ptr uint32_t* prefetch_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)prefetch_q_base;
 
     DPRINT << "fetch_q_get_cmds: " << cmd_ptr << " " << fence << ENDL();
     if (fence < cmd_ptr) {
