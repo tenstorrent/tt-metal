@@ -697,9 +697,9 @@ void Program::populate_dispatch_data(Device* device) {
             uint32_t sub_kernel_index = 0;
             const auto& binaries = kernel->binaries(device->id());
 
-            std::vector<uint32_t> dst_base_addrs(binaries.size());
-            std::vector<uint32_t> page_offsets(binaries.size());
-            std::vector<uint32_t> lengths(binaries.size());
+            std::vector<uint32_t> dst_base_addrs;
+            std::vector<uint32_t> page_offsets;
+            std::vector<uint32_t> lengths;
             vector<uint32_t> binaries_data;
             for (size_t j = 0; j < binaries.size(); j++) {
                 const ll_api::memory& kernel_bin = binaries[j];
@@ -711,34 +711,34 @@ void Program::populate_dispatch_data(Device* device) {
                     uint64_t relo_addr =
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
-                    dst_base_addrs[j] = (uint32_t)relo_addr;
-                    page_offsets[j] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
-                    lengths[j] = len * sizeof(uint32_t);
+                    dst_base_addrs.push_back((uint32_t)relo_addr);
+                    page_offsets.push_back(binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE);
+                    lengths.push_back(len * sizeof(uint32_t));
 
                     binaries_data.resize(binaries_data.size() + len);
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
                     binaries_data.resize(
                         align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
 
+                    kernel_bins_transfer_info kernel_bins_transfer_info = {
+                        .dst_base_addrs = dst_base_addrs,
+                        .page_offsets = page_offsets,
+                        .lengths = lengths,
+                        .dst_noc_info = dst_noc_multicast_info,
+                        .linked = false,
+                        .data = binaries_data};
+                    this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
+
+                    this->kg_buffers.push_back(std::make_unique<Buffer>(
+                        device,
+                        binaries_data.size() * sizeof(uint32_t),
+                        DeviceCommand::PROGRAM_PAGE_SIZE,
+                        BufferType::DRAM));
 
                     k++;
                 });
                 sub_kernel_index++;
             }
-            kernel_bins_transfer_info kernel_bins_transfer_info = {
-                .dst_base_addrs = dst_base_addrs,
-                .page_offsets = page_offsets,
-                .lengths = lengths,
-                .dst_noc_info = dst_noc_multicast_info,
-                .linked = false,
-                .data = binaries_data};
-            this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
-
-            this->kg_buffers.push_back(std::make_unique<Buffer>(
-                device,
-                binaries_data.size() * sizeof(uint32_t),
-                DeviceCommand::PROGRAM_PAGE_SIZE,
-                BufferType::DRAM));
         }
     }
     for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::ETH)) {
