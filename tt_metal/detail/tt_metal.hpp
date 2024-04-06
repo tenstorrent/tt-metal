@@ -82,9 +82,8 @@ namespace tt::tt_metal{
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
-        void LaunchProgram(Device *device, Program &program);
-        void LaunchProgram(Device *device, std::shared_ptr<Program> program);
-        void LaunchProgramNoWait(Device *device, Program &program);
+        void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true);
+        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true);
         void WaitProgramDone(Device *device, Program &program);
 
         /**

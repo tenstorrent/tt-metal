@@ -486,11 +486,11 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     }
 
-    void LaunchProgram(Device *device, std::shared_ptr<Program> program){
-        LaunchProgram(device, *program);
+    void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done){
+        LaunchProgram(device, *program, wait_until_cores_done);
     }
 
-    void LaunchProgram(Device *device, Program &program) {
+    void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done) {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
@@ -515,34 +515,13 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                 tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
             }
         }
-        // Wait for all cores to be done
-        llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-
+        if (wait_until_cores_done) {
+            // Wait for all cores to be done
+            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+        }
         }//Profiler scope end
-        DumpDeviceProfileResults(device, program);
-    }
-
-    void LaunchProgramNoWait(Device *device, Program &program) {
-        detail::DispatchStateCheck( false );
-        detail::CompileProgram(device, program);
-        detail::WriteRuntimeArgsToDevice(device, program);
-        detail::ConfigureDeviceWithProgram(device, program);
-        auto device_id = device->id();
-        std::cout<<"Launching on Device "<<(uint32_t) device->id()<<std::endl;
-        tt::Cluster::instance().dram_barrier(device_id);
-
-        // Note: the l1_barrier below is needed to be sure writes to cores that
-        // don't get the GO mailbox (eg, storage cores) have all landed
-        tt::Cluster::instance().l1_barrier(device->id());
-
-        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
-        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
-            for (const auto &logical_core : logical_cores) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
-                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-                std::cout<<"Writing Launch Message to  "<<physical_core.str()<<std::endl;
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
-            }
+        if (wait_until_cores_done) {
+            DumpDeviceProfileResults(device, program);
         }
     }
 

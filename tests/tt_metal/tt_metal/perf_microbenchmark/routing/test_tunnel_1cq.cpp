@@ -615,8 +615,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
-        tt_metal::detail::LaunchProgramNoWait(device, program);
-        tt_metal::detail::LaunchProgramNoWait(device_r, program_r);
+        tt_metal::detail::LaunchProgram(device, program, false);
+        tt_metal::detail::LaunchProgram(device_r, program_r, false);
         tt_metal::detail::WaitProgramDone(device, program);
         tt_metal::detail::WaitProgramDone(device_r, program_r);
         auto end = std::chrono::system_clock::now();
