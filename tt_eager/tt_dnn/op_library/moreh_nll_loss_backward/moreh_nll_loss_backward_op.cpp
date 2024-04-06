@@ -20,16 +20,17 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-void MorehNllLossBackward::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 4, "Must have 2 input tensors");
-    TT_ASSERT(optional_input_tensors.size() == 2, "Must have 1 optional input tensors");
+void MorehNllLossBackward::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors) const {
+    TT_ASSERT(input_tensors.size() == 3, "Must have 3 input tensors");
+    TT_ASSERT(optional_input_tensors.size() == 2, "Must have 2 optional input tensors");
 
     auto& input_tensor = input_tensors.at(0);
     auto& target_tensor = input_tensors.at(1);
     auto& output_grad_tensor = input_tensors.at(2);
-    auto& input_grad_tensor = input_tensors.at(3);
     auto& weight_tensor = optional_input_tensors.at(0);
     auto& divisor_tensor = optional_input_tensors.at(1);
+    auto& input_grad_tensor = output_tensors.at(0);
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
@@ -46,10 +47,12 @@ void MorehNllLossBackward::validate(const std::vector<Tensor> &input_tensors, co
     TT_ASSERT((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
     TT_ASSERT(output_grad_tensor.get_dtype() == DataType::BFLOAT16);
 
-    TT_ASSERT(input_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
-    TT_ASSERT(input_grad_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_grad_tensor.get_dtype() == DataType::BFLOAT16);
+    if (input_grad_tensor.has_value()) {
+        TT_ASSERT(input_grad_tensor.value().storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
+        TT_ASSERT(input_grad_tensor.value().buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
+        TT_ASSERT((input_grad_tensor.value().get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+        TT_ASSERT(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16);
+    }
 
     if (weight_tensor.has_value()) {
         TT_ASSERT(weight_tensor.value().storage_type() == StorageType::DEVICE, "weight_tensor to nll_loss need to be on device!");
@@ -67,20 +70,26 @@ void MorehNllLossBackward::validate(const std::vector<Tensor> &input_tensors, co
 }
 
 std::vector<Shape> MorehNllLossBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {};
+    return {input_tensors.at(0).get_legacy_shape()};
 }
 
-std::vector<Tensor> MorehNllLossBackward::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return {};
+std::vector<Tensor> MorehNllLossBackward::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0).value()};
+    }
+
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->input_grad_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehNllLossBackward::create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
     auto& input = input_tensors.at(0);
     auto& target = input_tensors.at(1);
     auto& output_grad = input_tensors.at(2);
-    auto& input_grad = input_tensors.at(3);
     auto& weight = optional_input_tensors.at(0);
     auto& divisor = optional_input_tensors.at(1);
+    auto& input_grad = output_tensors.at(0);
 
     return {moreh_nll_loss_backward_impl(input, target, weight, divisor, output_grad, input_grad, this->ignore_index, this->reduction_mean, this->core_range)};
 }
@@ -91,24 +100,24 @@ Tensor moreh_nll_loss_backward_(
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> divisor_tensor,
     const Tensor& output_grad_tensor,
-    const Tensor& input_grad_tensor,
+    const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
     const bool reduction_mean,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& input_grad_mem_config) {
 
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    operation::run(
+    return operation::run(
                MorehNllLossBackward{
                    .ignore_index = ignore_index,
                    .reduction_mean = reduction_mean,
-                   .output_mem_config = output_mem_config,
+                   .input_grad_mem_config = input_grad_mem_config,
                    .core_range = all_cores},
-               {input_tensor, target_tensor, output_grad_tensor, input_grad_tensor},
-               {weight_tensor, divisor_tensor});
-    return input_grad_tensor;
+               {input_tensor, target_tensor, output_grad_tensor},
+               {weight_tensor, divisor_tensor},
+               {input_grad_tensor}).at(0);
 }
 
 Tensor moreh_nll_loss_backward(
@@ -117,12 +126,12 @@ Tensor moreh_nll_loss_backward(
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> divisor_tensor,
     const Tensor& output_grad_tensor,
-    const Tensor& input_grad_tensor,
+    const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
     const bool reduction_mean,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& input_grad_mem_config) {
 
-    return moreh_nll_loss_backward_(input_tensor, target_tensor, weight_tensor, divisor_tensor, output_grad_tensor, input_grad_tensor, ignore_index, reduction_mean, output_mem_config);
+    return moreh_nll_loss_backward_(input_tensor, target_tensor, weight_tensor, divisor_tensor, output_grad_tensor, input_grad_tensor, ignore_index, reduction_mean, input_grad_mem_config);
 }
 
 }  // namespace primary
