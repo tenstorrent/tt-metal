@@ -634,8 +634,8 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_tensor").noconvert(),
         py::arg("ignore_index").noconvert(),
         py::arg("reduction_mean").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a nll_loss_backward operation. Returns an output tensor.");
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a nll_loss_backward operation. Returns an input_grad tensor.");
 
     // moreh_norm
     m_primary.def(
