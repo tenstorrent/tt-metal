@@ -179,7 +179,7 @@ Tensor moreh_nll_loss(
     const Tensor& target_tensor,
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> divisor_tensor,
-    const Tensor& output_tensor,
+    const std::optional<const Tensor> output_tensor,
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig& output_mem_config) {
@@ -194,14 +194,12 @@ Tensor moreh_nll_loss(
         const Tensor& step2_result = moreh_nll_loss_step2(input_tensor, target_tensor, weight_tensor, divisor_tensor, ignore_index, reduction_mean, output_mem_config);
         std::vector<int64_t> dims_step2;
 
-        moreh_sum(step2_result, dims_step2, output_tensor);
-        return output_tensor;
+        return moreh_sum(step2_result, dims_step2, output_tensor);
     } else {
         const Tensor& step2_result = moreh_nll_loss_step2(input_tensor, target_tensor, weight_tensor, std::nullopt, ignore_index, reduction_mean, output_mem_config);
 
         std::vector<int64_t> dims;
-        moreh_sum(step2_result, dims, output_tensor);
-        return output_tensor;
+        return moreh_sum(step2_result, dims, output_tensor);
     }
 }
 

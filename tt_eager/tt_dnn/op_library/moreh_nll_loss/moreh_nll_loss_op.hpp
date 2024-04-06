@@ -86,7 +86,7 @@ Tensor moreh_nll_loss(
     const Tensor& target_tensor,
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> divisor_tensor,
-    const Tensor& output_tensor,
+    const std::optional<const Tensor> output_tensor,
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
