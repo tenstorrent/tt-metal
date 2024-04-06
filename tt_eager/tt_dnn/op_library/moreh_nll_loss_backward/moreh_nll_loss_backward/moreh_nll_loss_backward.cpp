@@ -161,36 +161,44 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl(const Tensor &input
             writer_kernel_id=writer_kernel_id,
             num_cores,
             core_h
-        ]
-    (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
-    ) {
-        TT_ASSERT(input_buffers.size() == 1);
-        TT_ASSERT(output_buffers.size() == 1);
+        ] (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+        ) {
+        TT_ASSERT(input_tensors.size() == 3);
+        TT_ASSERT(optional_input_tensors.size() == 2);
+        TT_ASSERT(output_tensors.size() == 1);
 
-        auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto input_addr = input_tensors.at(0).buffer()->address();
+        auto target_addr = input_tensors.at(1).buffer()->address();
+        auto output_grad_addr = input_tensors.at(2).buffer()->address();
+        auto weight_addr = optional_input_tensors.at(0).has_value() ?  optional_input_tensors.at(0).value().buffer()->address() : 0;
+        auto divisor_addr = optional_input_tensors.at(1).has_value() ?  optional_input_tensors.at(1).value().buffer()->address() : 0;
+        auto input_grad_addr = output_tensors.at(0).buffer()->address();
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = input_addr;
+                runtime_args[1] = target_addr;
+                runtime_args[2] = weight_addr;
+                runtime_args[3] = divisor_addr;
+                runtime_args[4] = output_grad_addr;
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = input_grad_addr;
             }
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary
