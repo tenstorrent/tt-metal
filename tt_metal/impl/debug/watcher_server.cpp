@@ -252,6 +252,40 @@ static std::pair<string, string> get_core_and_mem_type(Device *device, CoreCoord
     }
 }
 
+static string get_noc_target_str(
+    Device *device,
+    CoreCoord &core,
+    int noc,
+    const debug_sanitize_noc_addr_msg_t* san
+) {
+    string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core, san->which), noc);
+
+    if (san->multicast) {
+        CoreCoord target_phys_core_start = {NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
+        CoreCoord target_phys_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_core_start);
+        out += fmt::format(
+            "{} core range w/ physical coords {}-{} {}",
+            type_and_mem.first,
+            target_phys_core_start.str(),
+            target_phys_core_end.str(),
+            type_and_mem.second
+        );
+    } else {
+        CoreCoord target_phys_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_core);
+        out += fmt::format(
+            "{} core w/ physical coords {} {}",
+            type_and_mem.first,
+            target_phys_core.str(),
+            type_and_mem.second
+        );
+    }
+
+    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR_OFFSET(san->noc_addr), san->len);
+    return out;
+}
+
 static void dump_noc_sanity_status(FILE *f,
                                    Device *device,
                                    CoreCoord core,
@@ -266,13 +300,15 @@ static void dump_noc_sanity_status(FILE *f,
 
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
-        if (san->addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
+        if (san->noc_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
+            san->l1_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
+            san->multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16
         ) {
             error_msg = fmt::format(
                  "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                 core.str().c_str(), san->which, san->addr, san->len
+                 core.str().c_str(), san->which, san->noc_addr, san->len
              );
             error_reason += "corrupted noc sanitization state - sanitization memory overwritten.";
         }
@@ -280,43 +316,25 @@ static void dump_noc_sanity_status(FILE *f,
     case DebugSanitizeNocInvalidL1:
         error_msg = fmt::format(
             "{} using noc{} accesses local L1[addr=0x{:08x},len={}]",
-            get_riscv_name(core, san->which), noc, san->addr, san->len
+            get_riscv_name(core, san->which), noc, san->l1_addr, san->len
         );
         error_reason += "bad NOC L1/reg address.";
         break;
     case DebugSanitizeNocInvalidUnicast:
-        {
-        CoreCoord target_phys_core = {NOC_UNICAST_ADDR_X(san->addr), NOC_UNICAST_ADDR_Y(san->addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_core);
-        error_msg = fmt::format(
-            "{} using noc{} tried to access {} core w/ physical coords {} {}[addr=0x{:08x},len={}]",
-            get_riscv_name(core, san->which),
-            noc,
-            type_and_mem.first,
-            target_phys_core.str(),
-            type_and_mem.second,
-            NOC_LOCAL_ADDR_OFFSET(san->addr), san->len
-        );
+        error_msg = get_noc_target_str(device, core, noc, san);
         error_reason += "bad NOC unicast transaction.";
-        }
         break;
     case DebugSanitizeNocInvalidMulticast:
-        {
-        CoreCoord target_phys_core_start = {NOC_MCAST_ADDR_START_X(san->addr), NOC_MCAST_ADDR_START_Y(san->addr)};
-        CoreCoord target_phys_core_end = {NOC_MCAST_ADDR_END_X(san->addr), NOC_MCAST_ADDR_END_Y(san->addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_core_start);
-        error_msg = fmt::format(
-            "{} using noc{} tried to access {} core range w/ physical coords {}-{} {}[addr=0x{:08x},len={}]",
-            get_riscv_name(core, san->which),
-            noc,
-            type_and_mem.first,
-            target_phys_core_start.str(),
-            target_phys_core_end.str(),
-            type_and_mem.second,
-            NOC_LOCAL_ADDR_OFFSET(san->addr), san->len
-        );
+        error_msg = get_noc_target_str(device, core, noc, san);
         error_reason += "bad NOC multicast transaction.";
-        }
+        break;
+    case DebugSanitizeNocInvalidAlignment:
+        error_msg = get_noc_target_str(device, core, noc, san);
+        error_msg += fmt::format(
+            ", misaligned with local L1[addr=0x{:08x}]",
+            san->l1_addr
+        );
+        error_reason += "bad alignment in NOC transaction.";
         break;
     default:
         error_msg = fmt::format(
@@ -786,9 +804,11 @@ void watcher_init(Device *device) {
     static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
     debug_sanitize_noc_addr_msg_t *data = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&(debug_sanity_init_val[0]));
     for (int i = 0; i < NUM_NOCS; i++) {
-        data[i].addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
+        data[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
+        data[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
         data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
         data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data[i].multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
         data[i].invalid = DebugSanitizeNocInvalidOK;
     }
 
