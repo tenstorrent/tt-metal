@@ -82,11 +82,15 @@ struct debug_status_msg_t {
     volatile uint8_t status[num_status_bytes_per_riscv];
 };
 
+// TODO: Clean up this struct with #6738
 struct debug_sanitize_noc_addr_msg_t {
-    volatile uint64_t addr;
+    volatile uint64_t noc_addr;
+    volatile uint32_t l1_addr;
     volatile uint32_t len;
     volatile uint16_t which;
     volatile uint16_t invalid;
+    volatile uint16_t multicast;
+    volatile uint16_t pad;
 };
 
 enum debug_sanitize_noc_invalid_enum {
@@ -95,6 +99,7 @@ enum debug_sanitize_noc_invalid_enum {
     DebugSanitizeNocInvalidL1         = 3,
     DebugSanitizeNocInvalidUnicast    = 4,
     DebugSanitizeNocInvalidMulticast  = 5,
+    DebugSanitizeNocInvalidAlignment  = 6,
 };
 
 struct debug_assert_msg_t {
