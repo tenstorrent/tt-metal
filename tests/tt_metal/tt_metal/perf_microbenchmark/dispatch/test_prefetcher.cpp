@@ -1045,7 +1045,7 @@ void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
 void write_prefetcher_cmd(Device *device,
                           vector<uint32_t>& cmds,
                           uint32_t& cmd_offset,
-                          uint16_t cmd_size16b,
+                          uint32_t cmd_size16b,
                           uint32_t*& host_mem_ptr,
                           uint32_t& prefetch_q_dev_ptr,
                           uint32_t& prefetch_q_dev_fence,
@@ -1073,7 +1073,7 @@ void write_prefetcher_cmd(Device *device,
     }
 
     // wrap
-    if (prefetch_q_dev_ptr == prefetch_q_base + prefetch_q_entries_g * sizeof(uint16_t)) {
+    if (prefetch_q_dev_ptr == prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type)) {
         prefetch_q_dev_ptr = prefetch_q_base;
 
         while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
@@ -1082,9 +1082,9 @@ void write_prefetcher_cmd(Device *device,
         }
     }
 
-    tt::Cluster::instance().write_core((void *)&cmd_size16b, sizeof(uint16_t), tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_dev_ptr, true);
+    tt::Cluster::instance().write_reg(&cmd_size16b, tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_dev_ptr);
 
-    prefetch_q_dev_ptr += sizeof(uint16_t);
+    prefetch_q_dev_ptr += sizeof(prefetch_q_entry_type);
 }
 
 void write_prefetcher_cmds(uint32_t iterations,
@@ -1114,13 +1114,13 @@ void write_prefetcher_cmds(uint32_t iterations,
         vector<uint32_t> prefetch_q(DEFAULT_PREFETCH_Q_ENTRIES, 0);
         vector<uint32_t> prefetch_q_rd_ptr_addr_data;
 
-        prefetch_q_rd_ptr_addr_data.push_back(prefetch_q_base + prefetch_q_entries_g * sizeof(uint16_t));
+        prefetch_q_rd_ptr_addr_data.push_back(prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type));
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, prefetch_q_rd_ptr_addr_data, prefetch_q_rd_ptr_addr);
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, prefetch_q, prefetch_q_base);
 
         host_mem_ptr = (uint32_t *)host_hugepage_base;
         prefetch_q_dev_ptr = prefetch_q_base;
-        prefetch_q_dev_fence = prefetch_q_base + prefetch_q_entries_g * sizeof(uint16_t);
+        prefetch_q_dev_fence = prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type);
         initialize_device_g = false;
     }
 
@@ -1257,7 +1257,7 @@ int main(int argc, char **argv) {
         vector<uint32_t>zero_data(0);
         llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
-        uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(uint16_t);
+        uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(prefetch_q_entry_type);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
@@ -1339,7 +1339,7 @@ int main(int argc, char **argv) {
             dev_hugepage_base_g,
             hugepage_issue_buffer_size_g,
             prefetch_q_base,
-            prefetch_q_entries_g * (uint32_t)sizeof(uint16_t),
+            prefetch_q_entries_g * (uint32_t)sizeof(prefetch_q_entry_type),
             prefetch_q_rd_ptr_addr,
             cmddat_q_base, // overridden for split below
             cmddat_q_size_g, // overridden for split below
