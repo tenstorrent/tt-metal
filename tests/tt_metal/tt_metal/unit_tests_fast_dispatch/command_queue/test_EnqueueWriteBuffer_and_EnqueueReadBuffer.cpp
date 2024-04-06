@@ -248,7 +248,6 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
 
                 vector<uint32_t> res;
                 res.resize(buf_size / sizeof(uint32_t));
-
                 if (cq_read) {
                     EnqueueReadBuffer(cq, buf, res.data(), true);
                 } else {
@@ -355,9 +354,6 @@ TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
-    if (this->arch_ == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Causes issues on Grayskull. See #7067";
-    }
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
@@ -366,9 +362,6 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
-    if (this->arch_ == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Causes issues on Grayskull. See #7067";
-    }
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
@@ -378,9 +371,6 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
 }
 
 TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();  // This test hanging on wormhole b0
-    }
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
@@ -610,9 +600,6 @@ TEST_F(CommandQueueSingleCardFixture, TestNonblockingReads) {
 namespace stress_tests {
 
 TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "ND fails on Wormhole.";
-    }
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
@@ -623,9 +610,6 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocki
 }
 
 TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "ND fails on Wormhole.";
-    }
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
@@ -639,9 +623,6 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
 
 // TODO: Split this into separate tests
 TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "ND fails on Wormhole.";
-    }
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
