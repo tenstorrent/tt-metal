@@ -13,6 +13,13 @@
 
 namespace ccl {
 
+enum EriscDataMoverBufferSharingMode: uint32_t {
+    NOT_SHARED = 0,
+    ROUND_ROBIN = 1,
+    SHARED = 2,
+    ROUND_ROBIN_AND_SHARED = 3
+};
+
 // TODO: let the kernel runtime args
 
 enum ShardType : uint8_t { Width = 0, Height = 1, Block = 2 };
@@ -37,6 +44,9 @@ struct WorkerXY {
         return !(*this == rhs);
     }
 };
+
+static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
+static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
 
 template <bool T>
 struct ArchDependentTypes;
