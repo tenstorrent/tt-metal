@@ -8,7 +8,6 @@
 #include "erisc.h"
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
-#include "tt_metal/impl/dispatch/device_command.hpp"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t *ptr = (volatile uint32_t *)(NOC_CFG(ROUTER_CFG_2));
@@ -48,13 +47,6 @@ tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::a
 extern uint32_t __erisc_jump_table;
 volatile uint32_t *RtosTable =
     (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
-
-// FD configs
-// Sempahore(0) syncing on src e.g. remote issue q reader, remote signaller
-// Sempahore(1) syncing on dst e.g. remote command processor, remote completion writer
-
-static constexpr uint32_t data_buffer_size = eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE -
-                                             (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t));
 
 namespace internal_ {
 
