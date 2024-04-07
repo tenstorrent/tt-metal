@@ -12,6 +12,7 @@
 #include <fstream>
 
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/base.hpp"
@@ -63,28 +64,28 @@ class CommandInterface;
 using WorkerQueue = LockFreeQueue<CommandInterface>;
 
 class Command {
-    EnqueueCommandType type_ = EnqueueCommandType::INVALID;
 
    public:
     Command() {}
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
-    virtual const void assemble_device_commands(uint32_t buffer_size) = 0;
+    virtual const DeviceCommand assemble_device_commands() = 0;
 };
 
 class EnqueueReadBufferCommand : public Command {
    private:
     SystemMemoryManager& manager;
     void* dst;
-    uint32_t pages_to_read;
     uint32_t command_queue_id;
     CoreType dispatch_core_type;
-    static std::vector<uint32_t> commands;
+
+    virtual void add_prefetch_relay(DeviceCommand &command) = 0;
 
    protected:
     Device* device;
     uint32_t expected_num_workers_completed;
     uint32_t src_page_index;
+    uint32_t pages_to_read;
    public:
     Buffer& buffer;
     EnqueueReadBufferCommand(
@@ -97,7 +98,7 @@ class EnqueueReadBufferCommand : public Command {
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt);
 
-    const void assemble_device_commands(uint32_t dst);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
@@ -107,6 +108,9 @@ class EnqueueReadBufferCommand : public Command {
 };
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
+   private:
+    void add_prefetch_relay(DeviceCommand &command) override;
+
    public:
     EnqueueReadInterleavedBufferCommand(
         uint32_t command_queue_id,
@@ -129,6 +133,9 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
+   private:
+    void add_prefetch_relay(DeviceCommand &command) override;
+
    public:
     EnqueueReadShardedBufferCommand(
         uint32_t command_queue_id,
@@ -153,12 +160,12 @@ class EnqueueWriteShardedBufferCommand;
 class EnqueueWriteInterleavedBufferCommand;
 class EnqueueWriteBufferCommand : public Command {
    private:
-
     SystemMemoryManager& manager;
     const void* src;
-    uint32_t pages_to_write;
     uint32_t command_queue_id;
     CoreType dispatch_core_type;
+
+    virtual void add_dispatch_write(DeviceCommand &command, void *data_to_write) = 0;
 
    protected:
     Device* device;
@@ -166,8 +173,9 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t expected_num_workers_completed;
     uint32_t bank_base_address;
     uint32_t dst_page_index;
+    uint32_t pages_to_write;
     bool issue_wait;
-    static std::vector<uint32_t> commands;
+
    public:
     EnqueueWriteBufferCommand(
         uint32_t command_queue_id,
@@ -181,7 +189,7 @@ class EnqueueWriteBufferCommand : public Command {
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt);
 
-    const void assemble_device_commands(uint32_t);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
@@ -191,6 +199,9 @@ class EnqueueWriteBufferCommand : public Command {
 };
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
+   private:
+    void add_dispatch_write(DeviceCommand &command, void *data_to_write) override;
+
    public:
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
@@ -214,12 +225,13 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
             bank_base_address,
             dst_page_index,
             pages_to_write){;}
-
-
 };
 
 
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
+   private:
+    void add_dispatch_write(DeviceCommand &command, void *data_to_write) override;
+
    public:
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
@@ -243,8 +255,6 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             bank_base_address,
             dst_page_index,
             pages_to_write){;}
-
-
 };
 
 class EnqueueProgramCommand : public Command {
@@ -254,13 +264,12 @@ class EnqueueProgramCommand : public Command {
     Program& program;
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
-    static std::vector<uint32_t> commands;
     uint32_t expected_num_workers_completed;
 
    public:
     EnqueueProgramCommand(uint32_t command_queue_id, Device* device, Program& program, SystemMemoryManager& manager, uint32_t expected_num_workers_completed);
 
-    const void assemble_device_commands(uint32_t src_address);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
@@ -276,12 +285,11 @@ class EnqueueRecordEventCommand : public Command {
     SystemMemoryManager& manager;
     uint32_t event_id;
     uint32_t expected_num_workers_completed;
-    static std::vector<uint32_t> commands;
 
    public:
     EnqueueRecordEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event_id, uint32_t expected_num_workers_completed);
 
-    const void assemble_device_commands(uint32_t);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
@@ -301,7 +309,7 @@ class EnqueueWaitForEventCommand : public Command {
    public:
     EnqueueWaitForEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, const Event& sync_event);
 
-    const void assemble_device_commands(uint32_t);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
@@ -316,12 +324,11 @@ class EnqueueTraceCommand : public Command {
     Buffer& buffer;
     Device* device;
     SystemMemoryManager& manager;
-    static std::vector<uint32_t> commands;
 
    public:
     EnqueueTraceCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, Buffer& buffer);
 
-    const void assemble_device_commands(uint32_t);
+    const DeviceCommand assemble_device_commands();
 
     void process();
 
