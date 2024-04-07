@@ -37,7 +37,7 @@ constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
 constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+constexpr uint32_t PCIE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
@@ -178,7 +178,7 @@ void init(int argc, char **argv) {
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
-    constexpr uint32_t align_mask = HUGEPAGE_ALIGNMENT - 1;
+    constexpr uint32_t align_mask = PCIE_ALIGNMENT - 1;
 
     return (size + align_mask) & ~align_mask;
 }
