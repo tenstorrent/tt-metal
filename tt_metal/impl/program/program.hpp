@@ -130,7 +130,6 @@ class Program {
     ProgramTransferInfo program_transfer_info;
 
     bool loaded_onto_device;
-    std::vector<uint32_t> cached_commands;
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 
