@@ -110,9 +110,6 @@ class ChannelBuffer final {
             uint64_t worker_semaphore_address =
                 get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
 
-            // TODO: Check for (!noc_cmd_buf_ready(noc, cmd_buf)) and exit early if not ready. Try to do other processing if
-            //       possible and come back to this at the next opportunity
-            //       So far no solid use case as it's always single worker per channel
             noc_semaphore_inc(worker_semaphore_address, 1);
         }
     }

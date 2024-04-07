@@ -4,11 +4,9 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 void kernel_main() {
-    DPRINT << "rws START\n";
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     // Different per worker receiver writer
     const uint32_t worker_sender_reader_noc_x = get_arg_val<uint32_t>(1);
@@ -38,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t sem_addr = get_compile_time_arg_val(20);
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(22);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(23);
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -85,7 +84,7 @@ void kernel_main() {
 
         if (is_clockwise_direction) {
             if (input_ring_idx == 0) {
-                input_ring_idx = num_transfers;
+                input_ring_idx = ring_size - 1;
                 if constexpr(output_addr_offset != 0) {
                     d.bank_base_address += last_output_addr_offset;
                 }
@@ -102,7 +101,7 @@ void kernel_main() {
                 }
             }
         } else {
-            if (input_ring_idx == num_transfers) {
+            if (input_ring_idx == ring_size - 1) {
                 input_ring_idx = 0;
                 if constexpr(output_addr_offset != 0) {
                     d.bank_base_address -= last_output_addr_offset;
@@ -125,7 +124,4 @@ void kernel_main() {
         col_idx = col_start_idx;
         row_idx = row_start_idx;
     }
-
-
-    DPRINT << "rws DONE\n";
 }
