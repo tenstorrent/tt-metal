@@ -35,6 +35,7 @@ void kernel_main() {
     constexpr uint32_t sem_addr = get_compile_time_arg_val(22);
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(24);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(25);
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -86,7 +87,7 @@ void kernel_main() {
     for (uint32_t i = 1; i < num_transfers; ++i) {
         if (is_clockwise_direction) {
             if (input_ring_idx == 0) {
-                input_ring_idx = num_transfers;
+                input_ring_idx = ring_size - 1;
                 if constexpr(output_addr_offset != 0) {
                     d.bank_base_address += last_output_addr_offset;
                 }
@@ -103,7 +104,7 @@ void kernel_main() {
                 }
             }
         } else {
-            if (input_ring_idx == num_transfers) {//0) {
+            if (input_ring_idx == ring_size - 1) {//0) {
                 input_ring_idx = 0;
                 if constexpr(output_addr_offset != 0) {
                     d.bank_base_address -= last_output_addr_offset;
@@ -142,5 +143,4 @@ void kernel_main() {
             push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
     }
-
 }

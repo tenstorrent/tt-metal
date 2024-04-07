@@ -30,11 +30,12 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0);
     TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
+    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value());
     if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
+        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&input_tensor.device()->get_ethernet_sockets(this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
@@ -71,7 +72,7 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id);
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
 }
 
 tt::stl::reflection::Attributes AllGather::attributes() const {
@@ -86,7 +87,7 @@ tt::stl::reflection::Attributes AllGather::attributes() const {
     };
 }
 
-std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> all_gather_impl(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config, const all_gather_op::Topology topology) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
@@ -94,13 +95,28 @@ std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const u
     output_tensors.reserve(input_tensors.size());
     std::vector<AllGather> ops;
     ops.reserve(input_tensors.size());
+    bool is_ring = topology == all_gather_op::Topology::Ring;
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-        chip_id_t receiver_device_id = input_tensors[(i + 1) % input_tensors.size()].device()->id();
-        chip_id_t sender_device_id = input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id();
-        ops.emplace_back(AllGather{dim, num_links, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config});
+        bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
+        bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
+
+        std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+            std::nullopt :
+            std::optional<chip_id_t>(input_tensors[(i + 1) % input_tensors.size()].device()->id());
+        std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+            std::nullopt :
+            std::optional<chip_id_t>(input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id());
+        ops.emplace_back(AllGather{dim, num_links, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config,topology});
         output_tensors.push_back(operation::run(ops[i], {input_tensors[i]}).at(0));
     }
     return output_tensors;
+}
+
+std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config) {
+    return all_gather_impl(input_tensors, dim, num_links, output_mem_config, all_gather_op::Topology::Ring);
+}
+std::vector<Tensor> line_all_gather(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config) {
+    return all_gather_impl(input_tensors, dim, num_links, output_mem_config, all_gather_op::Topology::Linear);
 }
 
 }  // namespace tt_metal
