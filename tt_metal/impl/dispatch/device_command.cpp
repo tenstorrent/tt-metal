@@ -9,211 +9,133 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 
-DeviceCommand::DeviceCommand() {
-    this->buffer_transfer_idx = 0;
-    this->program_transfer_idx =
-        DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS * DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
+DeviceCommand::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_write_idx(0) {
+    this->cmd_sequence.resize(cmd_sequence_sizeB / sizeof(uint32_t), 0);
 }
 
-void DeviceCommand::set_event(uint32_t event) { this->packet.header.event = event; }
+void DeviceCommand::add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count) {
+    TT_ASSERT(this->cmd_write_idx + (sizeof(CQPrefetchCmd) / sizeof(uint32_t)) < this->cmd_sequence.size()); // turn to api
 
-void DeviceCommand::set_issue_queue_size(uint32_t new_issue_queue_size) {
-    this->packet.header.new_issue_queue_size = new_issue_queue_size;
+    CQPrefetchCmd relay_wait;
+    relay_wait.base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
+    relay_wait.relay_inline.length = sizeof(CQDispatchCmd);
+    relay_wait.relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    this->write_to_cmd_sequence(&relay_wait, sizeof(CQPrefetchCmd));
+
+    CQDispatchCmd wait_cmd;
+    wait_cmd.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+    wait_cmd.wait.barrier = barrier;
+    wait_cmd.wait.notify_prefetch = false;
+    wait_cmd.wait.addr = address;
+    wait_cmd.wait.count = count;
+
+    this->write_to_cmd_sequence(&wait_cmd, sizeof(CQDispatchCmd));
 }
 
-void DeviceCommand::set_completion_queue_size(uint32_t new_completion_queue_size) {
-    this->packet.header.new_completion_queue_size = new_completion_queue_size;
+void DeviceCommand::add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count) {
+    this->add_dispatch_wait(barrier, address, count);
+
+    uint32_t dispatch_wait_idx = this->cmd_write_idx - (sizeof(CQDispatchCmd) / sizeof(uint32_t));
+    CQDispatchCmd *wait_cmd = (CQDispatchCmd*)(this->cmd_sequence.data() + dispatch_wait_idx);
+    wait_cmd->wait.notify_prefetch = true;
+
+    CQPrefetchCmd stall_cmd;
+    stall_cmd.base.cmd_id = CQ_PREFETCH_CMD_STALL;
+
+    this->write_to_cmd_sequence(&stall_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
 
-void DeviceCommand::set_wrap(WrapRegion wrap_region) { this->packet.header.wrap = (uint32_t)wrap_region; }
+void DeviceCommand::add_prefetch_relay_inline(bool flush, uint32_t lengthB) {
+    CQPrefetchCmd relay_write;
+    relay_write.base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
+    relay_write.relay_inline.length = lengthB;
+    relay_write.relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, PCIE_ALIGNMENT);
 
-void DeviceCommand::set_finish() { this->packet.header.finish = 1; }
-
-void DeviceCommand::set_num_workers(const uint32_t num_workers) { this->packet.header.num_workers = num_workers; }
-
-void DeviceCommand::set_is_program() { this->packet.header.is_program_buffer = 1; }
-
-void DeviceCommand::set_stall() { this->packet.header.stall = 1; }
-
-void DeviceCommand::set_page_size(const uint32_t page_size) { this->packet.header.page_size = page_size; }
-
-void DeviceCommand::set_pull_and_push_cb_size(const uint32_t cb_size) { this->packet.header.pull_and_push_cb_size = cb_size; }
-
-void DeviceCommand::set_producer_cb_size(const uint32_t cb_size) { this->packet.header.producer_cb_size = cb_size; }
-
-void DeviceCommand::set_consumer_cb_size(const uint32_t cb_size) { this->packet.header.consumer_cb_size = cb_size; }
-
-void DeviceCommand::set_router_cb_size(const uint32_t cb_size) { this->packet.header.router_cb_size = cb_size; }
-
-void DeviceCommand::set_pull_and_push_cb_num_pages(const uint32_t cb_num_pages) {
-    this->packet.header.pull_and_push_cb_num_pages = cb_num_pages;
+    this->write_to_cmd_sequence(&relay_write, sizeof(CQPrefetchCmd));
 }
 
-void DeviceCommand::set_producer_cb_num_pages(const uint32_t cb_num_pages) {
-    this->packet.header.producer_cb_num_pages = cb_num_pages;
+void DeviceCommand::add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr) {
+    CQPrefetchCmd relay_linear_cmd;
+    relay_linear_cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
+    relay_linear_cmd.relay_linear.noc_xy_addr = noc_xy_addr;
+    relay_linear_cmd.relay_linear.length = lengthB;
+    relay_linear_cmd.relay_linear.addr = addr;
+
+    this->write_to_cmd_sequence(&relay_linear_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
 
-void DeviceCommand::set_consumer_cb_num_pages(const uint32_t cb_num_pages) { this->packet.header.consumer_cb_num_pages = cb_num_pages; }
+void DeviceCommand::add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages) {
+    CQPrefetchCmd relay_paged_cmd;
+    relay_paged_cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
+    relay_paged_cmd.relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) | (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+    relay_paged_cmd.relay_paged.length_adjust = 0; // TODO: pass this in!
+    relay_paged_cmd.relay_paged.base_addr = base_addr;
+    relay_paged_cmd.relay_paged.page_size = page_size;
+    relay_paged_cmd.relay_paged.pages = pages;
 
-void DeviceCommand::set_router_cb_num_pages(const uint32_t cb_num_pages) { this->packet.header.router_cb_num_pages = cb_num_pages; }
-
-void DeviceCommand::set_num_pages(uint32_t num_pages) { this->packet.header.num_pages = num_pages; }
-
-void DeviceCommand::set_sharded_buffer_num_cores(uint32_t num_cores) {
-    this->packet.header.sharded_buffer_num_cores = num_cores;
+    this->write_to_cmd_sequence(&relay_paged_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
 
-void DeviceCommand::set_buffer_type(const DeviceCommand::BufferType buffer_type) {
-    this->packet.header.buffer_type = (uint32_t)buffer_type;
-}
+void DeviceCommand::add_dispatch_write_linear(bool flush_prefetch, uint8_t num_mcast_dests, uint32_t noc_xy_addr, uint32_t addr, uint32_t data_sizeB, const void *data) {
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-void DeviceCommand::set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages) {
-    switch (transfer_type) {
-        case DeviceCommand::TransferType::RUNTIME_ARGS: this->packet.header.num_runtime_arg_pages = num_pages; break;
-        case DeviceCommand::TransferType::CB_CONFIGS: this->packet.header.num_cb_config_pages = num_pages; break;
-        case DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES:
-            this->packet.header.num_program_multicast_pages = num_pages;
-            break;
-        case DeviceCommand::TransferType::PROGRAM_UNICAST_PAGES:
-            this->packet.header.num_program_unicast_pages = num_pages;
-            break;
-        case DeviceCommand::TransferType::GO_SIGNALS_MULTICAST:
-            this->packet.header.num_go_signal_multicast_pages = num_pages;
-            break;
-        case DeviceCommand::TransferType::GO_SIGNALS_UNICAST:
-            this->packet.header.num_go_signal_unicast_pages = num_pages;
-            break;
-        default: TT_ASSERT(false, "Invalid transfer type.");
+    CQDispatchCmd write_cmd;
+    write_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+    write_cmd.write_linear.num_mcast_dests = num_mcast_dests;
+    write_cmd.write_linear.noc_xy_addr = noc_xy_addr;
+    write_cmd.write_linear.addr = addr;
+    write_cmd.write_linear.length = data_sizeB;
+
+    this->write_to_cmd_sequence(&write_cmd, sizeof(CQDispatchCmd));
+
+    if (data != nullptr) {
+        this->write_to_cmd_sequence(data, data_sizeB, PCIE_ALIGNMENT);
     }
 }
 
-void DeviceCommand::set_issue_data_size(const uint32_t data_size) { this->packet.header.issue_data_size = data_size; }
+void DeviceCommand::add_dispatch_write_paged(bool flush_prefetch, uint8_t is_dram, uint16_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, const void *data) {
+    uint32_t data_sizeB = page_size * pages;
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-void DeviceCommand::set_completion_data_size(const uint32_t data_size) {
-    this->packet.header.completion_data_size = data_size;
-}
+    CQDispatchCmd write_cmd;
+    write_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
+    write_cmd.write_paged.is_dram = is_dram;
+    write_cmd.write_paged.start_page = start_page;
+    write_cmd.write_paged.base_addr = base_addr;
+    write_cmd.write_paged.page_size = page_size;
+    write_cmd.write_paged.pages = pages;
 
-uint32_t DeviceCommand::get_issue_data_size() const { return this->packet.header.issue_data_size; }
+    this->write_to_cmd_sequence(&write_cmd, sizeof(CQDispatchCmd));
 
-uint32_t DeviceCommand::get_completion_data_size() const { return this->packet.header.completion_data_size; }
-
-void DeviceCommand::set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages) {
-    this->packet.header.producer_consumer_transfer_num_pages = producer_consumer_transfer_num_pages;
-}
-
-void DeviceCommand::set_program_transfer_num_pages(const uint32_t program_transfer_num_pages) {
-    this->packet.header.program_transfer_num_pages = program_transfer_num_pages;
-}
-
-void DeviceCommand::set_router_transfer_num_pages(const uint32_t router_transfer_num_pages) {
-    this->packet.header.router_transfer_num_pages = router_transfer_num_pages;
-}
-
-void DeviceCommand::set_is_event_sync(const uint16_t is_event_sync) { this->packet.header.is_event_sync = is_event_sync; }
-void DeviceCommand::set_event_sync_core_x(const uint8_t event_sync_core_x) { this->packet.header.event_sync_core_x = event_sync_core_x; }
-void DeviceCommand::set_event_sync_core_y(const uint8_t event_sync_core_y) { this->packet.header.event_sync_core_y = event_sync_core_y; }
-void DeviceCommand::set_event_sync_event_id(const uint32_t event_sync_event_id) { this->packet.header.event_sync_event_id = event_sync_event_id; }
-
-void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src) {
-    this->packet.data
-        [DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER +
-         buffer_transfer_idx * DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION] = new_src;
-}
-
-void DeviceCommand::add_buffer_transfer_instruction_preamble(
-    const uint32_t src,
-    const uint32_t dst,
-    const uint32_t num_pages,
-    const uint32_t padded_page_size,
-    const uint32_t src_buf_type,
-    const uint32_t dst_buf_type,
-    const uint32_t src_page_index,
-    const uint32_t dst_page_index) {
-    this->packet.data[this->buffer_transfer_idx] = src;
-    this->packet.data[this->buffer_transfer_idx + 1] = dst;
-    this->packet.data[this->buffer_transfer_idx + 2] = num_pages;
-    this->packet.data[this->buffer_transfer_idx + 3] = padded_page_size;
-    this->packet.data[this->buffer_transfer_idx + 4] = src_buf_type;
-    this->packet.data[this->buffer_transfer_idx + 5] = dst_buf_type;
-    this->packet.data[this->buffer_transfer_idx + 6] = src_page_index;
-    this->packet.data[this->buffer_transfer_idx + 7] = dst_page_index;
-}
-
-void DeviceCommand::add_buffer_transfer_instruction_postamble() {
-    this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
-
-    this->packet.header.num_buffer_transfers++;
-    TT_ASSERT(
-        this->packet.header.num_buffer_transfers <= DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS,
-        "Surpassing the limit of {} on possible buffer transfers in a single command",
-        DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);
-}
-
-void DeviceCommand::add_buffer_transfer_interleaved_instruction(
-    const uint32_t src,
-    const uint32_t dst,
-    const uint32_t num_pages,
-    const uint32_t padded_page_size,
-    const uint32_t src_buf_type,
-    const uint32_t dst_buf_type,
-    const uint32_t src_page_index,
-    const uint32_t dst_page_index) {
-    this->add_buffer_transfer_instruction_preamble(
-        src, dst, num_pages, padded_page_size, src_buf_type, dst_buf_type, src_page_index, dst_page_index);
-    this->add_buffer_transfer_instruction_postamble();
-}
-
-void DeviceCommand::add_buffer_transfer_sharded_instruction(
-    const uint32_t src,
-    const uint32_t dst,
-    const uint32_t num_pages,
-    const uint32_t padded_page_size,
-    const uint32_t src_buf_type,
-    const uint32_t dst_buf_type,
-    const uint32_t src_page_index,
-    const uint32_t dst_page_index,
-    const std::vector<uint32_t> num_pages_in_shard,
-    const std::vector<uint32_t> core_id_x,
-    const std::vector<uint32_t> core_id_y) {
-    this->add_buffer_transfer_instruction_preamble(
-        src, dst, num_pages, padded_page_size, src_buf_type, dst_buf_type, src_page_index, dst_page_index);
-
-    // Shard specific portion of instruction
-    TT_ASSERT(core_id_x.size() == core_id_y.size());
-    TT_ASSERT(core_id_x.size() == num_pages_in_shard.size());
-    uint32_t num_shards = core_id_x.size();
-    uint32_t idx_offset = COMMAND_PTR_SHARD_IDX;
-    for (auto shard_id = 0; shard_id < num_shards; shard_id++) {
-        this->packet.data[this->buffer_transfer_idx + idx_offset++] = num_pages_in_shard[shard_id];
-        this->packet.data[this->buffer_transfer_idx + idx_offset++] = core_id_x[shard_id];
-        this->packet.data[this->buffer_transfer_idx + idx_offset++] = core_id_y[shard_id];
+    if (data != nullptr) {
+        this->write_to_cmd_sequence(data, data_sizeB, PCIE_ALIGNMENT);
     }
-
-    this->add_buffer_transfer_instruction_postamble();
 }
 
-void DeviceCommand::write_program_entry(const uint32_t value) {
-    this->packet.data.at(this->program_transfer_idx) = value;
-    this->program_transfer_idx++;
+void DeviceCommand::add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data) {
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+    CQDispatchCmd write_cmd;
+    write_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_HOST;
+    write_cmd.write_linear_host.length = payload_sizeB; // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
+
+    this->write_to_cmd_sequence(&write_cmd, sizeof(CQDispatchCmd));
+
+    if (data != nullptr) {
+        this->write_to_cmd_sequence(data, data_sizeB, PCIE_ALIGNMENT);
+    }
 }
 
-void DeviceCommand::add_write_page_partial_instruction(
-    const uint32_t num_bytes,
-    const uint32_t dst,
-    const uint32_t dst_noc,
-    const uint32_t num_receivers,
-    const bool advance,
-    const bool linked) {
-    // This 'at' does size checking
-    this->packet.data.at(this->program_transfer_idx + 5) = linked;
+void DeviceCommand::add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
+    CQPrefetchCmd exec_buf_cmd;
+    exec_buf_cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+    exec_buf_cmd.exec_buf.base_addr = base_addr;
+    exec_buf_cmd.exec_buf.log_page_size = log_page_size;
+    exec_buf_cmd.exec_buf.pages = pages;
 
-    this->packet.data[this->program_transfer_idx] = num_bytes;
-    this->packet.data[this->program_transfer_idx + 1] = dst;
-    this->packet.data[this->program_transfer_idx + 2] = dst_noc;
-    this->packet.data[this->program_transfer_idx + 3] = num_receivers;
-    this->packet.data[this->program_transfer_idx + 4] = advance;
-
-    this->program_transfer_idx += 6;
+    this->write_to_cmd_sequence(&exec_buf_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
-
-void* DeviceCommand::data() const { return (void*)&this->packet; }

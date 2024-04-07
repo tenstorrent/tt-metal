@@ -389,7 +389,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
 
         uint32_t max_command_size = command_issue_region_size - CQ_START;
         uint32_t buffer = 14240;
-        uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+        uint32_t buffer_size = max_command_size - buffer;
         uint32_t num_pages = buffer_size / page_size;
 
         TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
