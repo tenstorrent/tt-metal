@@ -40,10 +40,6 @@ def test_enable_logging(device, height, width):
         operations.append(operation)
 
     assert len(operations) == 5
-    for operation in operations:
-        assert operation.desired_pcc is not None
-        assert operation.actual_pcc is None
-        assert operation.matches_golden is None
 
 
 @pytest.mark.parametrize("height", [1024])
@@ -144,23 +140,15 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
         operations.append(operation)
 
     assert len(operations) > 0
-    num_compared_operations = 0
-    for operation in operations:
-        assert operation.desired_pcc is not None
-        if operation.name == "ttnn.add":
-            assert operation.actual_pcc is not None
-            assert operation.matches_golden is not None
-            num_compared_operations += 1
-    assert num_compared_operations == 1  # Only one operation is compared (ttnn.add)
 
 
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
-def test_enable_logging_and_enable_tensor_report(device, height, width):
+def test_enable_logging_and_enable_detailed_tensor_report(device, height, width):
     torch.manual_seed(0)
 
     with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_tensor_report", True
+        "enable_detailed_tensor_report", True
     ):
         torch_input_tensor = torch.rand(
             (height, width),

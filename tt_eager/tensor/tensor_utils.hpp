@@ -94,12 +94,12 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
     for (const auto& tensor : input_tensors) {
         if constexpr (IsOptional::value) {
             if (tensor.has_value()) {
-                transformed_tensors.push_back(get_device_tensor(device, *tensor));
+                transformed_tensors.emplace_back(get_device_tensor(device, tensor.value()));
             } else {
-                transformed_tensors.push_back(std::nullopt);
+                transformed_tensors.emplace_back(std::nullopt);
             }
         } else {
-            transformed_tensors.push_back(get_device_tensor(device, tensor));
+            transformed_tensors.emplace_back(get_device_tensor(device, tensor));
         }
     }
     return transformed_tensors;

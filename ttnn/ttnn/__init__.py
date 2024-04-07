@@ -23,7 +23,7 @@ class Config:
     enable_logging: bool = False
     enable_graph_report: bool = False
     enable_detailed_buffer_report: bool = False
-    enable_tensor_report: bool = False
+    enable_detailed_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
     delete_reports_on_start: bool = True

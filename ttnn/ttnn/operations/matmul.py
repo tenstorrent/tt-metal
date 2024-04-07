@@ -280,19 +280,11 @@ def create_matmul_program_config(
     return program_config
 
 
-def _compute_golden_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-
-    input_tensor_b = ttnn.from_device(input_tensor_b)
-    input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor_b = ttnn.to_torch(input_tensor_b)
-
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, compute_golden=_compute_golden_matmul)
+@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, golden_function=_golden_function)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -416,18 +408,16 @@ def matmul(
     )
 
 
-def _compute_golden_linear(
-    input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_
-):
+def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=None, **kwargs):
     import torch
-
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_b = ttnn.to_torch(input_tensor_b)
 
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if bias is not None:
-        bias = ttnn.to_torch(bias, torch_rank=1)
+        if len(bias) == 2:
+            if bias.shape[0] != 1:
+                raise RuntimeError(f"bias must be a 1D tensor")
+            bias = bias[0]
         output_tensor += bias
 
     if activation == "gelu":
@@ -440,7 +430,7 @@ def _compute_golden_linear(
     return output_tensor
 
 
-@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, compute_golden=_compute_golden_linear)
+@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, golden_function=_golden_function)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
