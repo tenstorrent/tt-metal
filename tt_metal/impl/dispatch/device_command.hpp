@@ -4,218 +4,97 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <vector>
 
 #include "dev_mem_map.h"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
-
-struct CommandHeader {
-    uint32_t wrap = 0;
-    uint32_t finish = 0;
-    uint32_t num_workers = 0;
-    uint32_t num_buffer_transfers = 0;
-    uint32_t is_program_buffer = 0;
-    uint32_t stall = 0;
-    uint32_t page_size = 0;
-    uint32_t pull_and_push_cb_size = 0;
-    uint32_t event;
-    uint32_t producer_cb_size = 0;
-    uint32_t consumer_cb_size = 0;
-    uint32_t router_cb_size = 0;
-    uint32_t pull_and_push_cb_num_pages = 0;
-    uint32_t producer_cb_num_pages = 0;
-    uint32_t consumer_cb_num_pages = 0;
-    uint32_t router_cb_num_pages = 0;
-    uint32_t num_pages = 0;
-    uint32_t num_runtime_arg_pages = 0;
-    uint32_t num_cb_config_pages = 0;
-    uint32_t num_program_multicast_pages = 0;
-    uint32_t num_program_unicast_pages = 0;
-    uint32_t num_go_signal_multicast_pages = 0;
-    uint32_t num_go_signal_unicast_pages = 0;
-    uint32_t issue_data_size = 0;
-    uint32_t completion_data_size = 0;
-    uint32_t program_transfer_num_pages = 0;
-    uint32_t router_transfer_num_pages = 0;
-    uint32_t producer_consumer_transfer_num_pages = 0;
-    uint32_t buffer_type = 0;
-    uint32_t sharded_buffer_num_cores = 0;
-    uint32_t new_issue_queue_size = 0;
-    uint32_t new_completion_queue_size = 0;
-    uint16_t is_event_sync = 0;
-    uint8_t event_sync_core_x = 0;
-    uint8_t event_sync_core_y = 0;
-    uint32_t event_sync_event_id = 0;
-    uint32_t fwd_path = 1;
-};
-
-static_assert((offsetof(CommandHeader, event) % 32) == 0);
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
 
 class DeviceCommand {
    public:
-    DeviceCommand();
-
-    enum class TransferType : uint8_t {
-        RUNTIME_ARGS,
-        CB_CONFIGS,
-        PROGRAM_MULTICAST_PAGES,
-        PROGRAM_UNICAST_PAGES,
-        GO_SIGNALS_MULTICAST,
-        GO_SIGNALS_UNICAST,
-        NUM_TRANSFER_TYPES
-    };
+    DeviceCommand(uint32_t cmd_sequence_sizeB);
 
     // Constants
-    //TODO: investigate other num_cores
-    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
-    static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = sizeof(CommandHeader) / sizeof(uint32_t);
-    static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
-    static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
-    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
-    static constexpr uint32_t COMMAND_PTR_SHARD_IDX = 8;
-    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
-    static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
-    // Perf measurements showed best results with divisions of 4 pages being transferred from producer -> consumer
-    static constexpr uint32_t SYNC_NUM_PAGES = 4;
+    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048; // TODO: Move this somewhere else
 
-    // Ensure any changes to this device command have asserts modified/extended
-    static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
+    uint32_t size_bytes() const { return this->cmd_sequence.size() * sizeof(uint32_t); }
 
-    // Denotes which portion of the command queue needs to be wrapped
-    enum class WrapRegion : uint8_t {
-        NONE = 0,
-        ISSUE = 1,
-        COMPLETION = 2
-    };
+    const void* data() const { return this->cmd_sequence.data(); }
 
-    void set_event(uint32_t event);
+    void add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count);
 
-    void set_issue_queue_size(uint32_t new_issue_queue_size);
+    void add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count);
 
-    void set_completion_queue_size(uint32_t new_completion_queue_size);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 
-    void set_wrap(WrapRegion wrap_region);
+    void add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages);
 
-    void set_finish();
+    void add_dispatch_write_linear(bool flush_prefetch, uint8_t num_mcast_dests, uint32_t noc_xy_addr, uint32_t addr, uint32_t data_sizeB, const void *data = nullptr);
 
-    void set_num_workers(const uint32_t num_workers);
+    void add_dispatch_write_paged(bool flush_prefetch, uint8_t is_dram, uint16_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, const void *data = nullptr);
 
-    void set_is_program();
+    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr);
 
-    void set_stall();
+    void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
-    void set_page_size(const uint32_t page_size);
+    template<typename PackedSubCmd>
+    void add_dispatch_write_packed(
+        uint16_t num_sub_cmds,
+        uint32_t common_addr,
+        uint16_t packed_data_sizeB,
+        uint32_t payload_sizeB,
+        const std::vector<PackedSubCmd> &sub_cmds,
+        const std::vector<std::pair<const void *, uint32_t>> &data_and_size_descriptors) {
+        static_assert(std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
-    void set_pull_and_push_cb_size(const uint32_t cb_size);
+        static constexpr uint32_t max_num_packed_sub_cmds = (TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) / sizeof(PackedSubCmd);
+        TT_ASSERT(num_sub_cmds <= max_num_packed_sub_cmds, "Max number of packed sub commands are {} but requesting {}", max_num_packed_sub_cmds, num_sub_cmds);
 
-   void set_producer_cb_size(const uint32_t cb_size);
+        bool flush_prefetch = true;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    void set_consumer_cb_size(const uint32_t cb_size);
+        CQDispatchCmd write_packed_cmd;
+        write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+        write_packed_cmd.write_packed.is_multicast = multicast;
+        write_packed_cmd.write_packed.count = num_sub_cmds;
+        write_packed_cmd.write_packed.addr = common_addr;
+        write_packed_cmd.write_packed.size = packed_data_sizeB;
 
-    void set_router_cb_size(const uint32_t cb_size);
+        this->write_to_cmd_sequence(&write_packed_cmd, sizeof(CQDispatchCmd));
 
-    void set_pull_and_push_cb_num_pages(const uint32_t cb_num_pages);
+        static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = sub_cmds.size() * sizeof(PackedSubCmd);
 
-    void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
+        this->write_to_cmd_sequence(sub_cmds.data(), sub_cmds_sizeB, L1_ALIGNMENT);
 
-    void set_producer_cb_num_pages(const uint32_t cb_num_pages);
+        // copy the actual data
+        for (const std::pair<const void *, uint32_t> &data_and_size : data_and_size_descriptors) {
+            this->write_to_cmd_sequence(data_and_size.first, data_and_size.second, L1_ALIGNMENT);
+        }
 
-    void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
-
-    void set_router_cb_num_pages(const uint32_t cb_num_pages);
-
-    void set_num_pages(const uint32_t num_pages);
-
-    // Denotes the type of buffer
-    enum class BufferType : uint8_t {
-        INTERLEAVED = 0,
-        SHARDED = 1
-    };
-
-    void set_buffer_type(BufferType buff_type);
-
-    void set_sharded_buffer_num_cores(uint32_t num_cores);
-
-    void set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages);
-
-    void set_issue_data_size(const uint32_t data_size);
-
-    void set_completion_data_size(const uint32_t data_size);
-
-    void set_program_transfer_num_pages(const uint32_t program_transfer_num_pages);
-
-    void set_router_transfer_num_pages(const uint32_t router_transfer_num_pages);
-
-    void set_is_event_sync(const uint16_t is_event_sync);
-    void set_event_sync_core_x(const uint8_t event_sync_core_x);
-    void set_event_sync_core_y(const uint8_t event_sync_core_y);
-    void set_event_sync_event_id(const uint32_t event_sync_event_id);
-
-    uint32_t get_issue_data_size() const;
-
-    uint32_t get_completion_data_size() const;
-
-    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
-
-    void add_buffer_transfer_interleaved_instruction(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index
-    );
-
-    void add_buffer_transfer_sharded_instruction(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index,
-        const std::vector<uint32_t> num_pages_in_shard,
-        const std::vector<uint32_t> core_id_x,
-        const std::vector<uint32_t> core_id_y
-    );
-
-    void write_program_entry(const uint32_t val);
-
-    void add_write_page_partial_instruction(
-        const uint32_t num_bytes,
-        const uint32_t dst,
-        const uint32_t dst_noc,
-        const uint32_t num_receivers,
-        const bool advance,
-        const bool linked);
-
-    void* data() const;
+        this->cmd_write_idx += (align(this->cmd_write_idx, PCIE_ALIGNMENT / sizeof(uint32_t)) - this->cmd_write_idx);
+    }
 
    private:
-    uint32_t buffer_transfer_idx;
-    uint32_t program_transfer_idx;
-    void add_buffer_transfer_instruction_preamble(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index
-        );
-    void add_buffer_transfer_instruction_postamble();
+    void add_prefetch_relay_inline(bool flush, uint32_t lengthB);
 
-    struct packet_ {
-        CommandHeader header;
-        std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND - DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER> data;
-    };
+    void validate_cmd_write(uint32_t data_sizeB) const {
+        uint32_t data_end_index = this->cmd_write_idx + (data_sizeB / sizeof(uint32_t));
+        TT_ASSERT(data_end_index <= this->cmd_sequence.size(),
+            "Attemping to write {} B at index {} which is out of bounds for command sequence vector of size {}",
+            data_sizeB, data_end_index, this->cmd_sequence.size());
+    }
 
-    packet_ packet;
+    void write_to_cmd_sequence(const void *data, uint32_t data_sizeB, std::optional<uint32_t> alignmentB = std::nullopt) {
+        this->validate_cmd_write(data_sizeB);
+        memcpy(this->cmd_sequence.data() + this->cmd_write_idx, data, data_sizeB);
+        uint32_t increment_sizeB = alignmentB.has_value() ? align(data_sizeB, alignmentB.value()) : data_sizeB;
+        this->cmd_write_idx += (increment_sizeB / sizeof(uint32_t));
+    }
+
+    std::vector<uint32_t> cmd_sequence;
+    uint32_t cmd_write_idx;
 };
