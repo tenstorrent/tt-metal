@@ -116,6 +116,8 @@ class Program {
 
     void allocate_circular_buffers();
 
+    void update_runtime_args_transfer_info(Device *device);
+
    private:
     void populate_dispatch_data(Device *device);
 
