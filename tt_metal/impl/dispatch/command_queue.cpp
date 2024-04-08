@@ -873,6 +873,7 @@ const void EnqueueProgramCommand::assemble_device_commands(uint32_t host_data_sr
 
     // Runtime Args
     // Runtime Args Cmd
+    program.update_runtime_args_transfer_info(this->device);
     for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
         std::uint32_t num_packed_cmds = transfer_info.size();
         std::uint32_t runtime_args_len = transfer_info[0].data.size();
