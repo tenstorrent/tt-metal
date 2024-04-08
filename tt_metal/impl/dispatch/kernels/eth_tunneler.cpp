@@ -116,7 +116,10 @@ void kernel_main() {
                             &input_queues[i], 1);
     }
 
-    bool timeout = !wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles);
+    if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
+        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        return;
+    }
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
