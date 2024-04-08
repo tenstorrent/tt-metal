@@ -31,20 +31,20 @@ struct ReadEventDescriptor;
 typedef LockFreeQueue<std::variant<ReadBufferDescriptor, ReadEventDescriptor>> CompletionReaderQueue;
 
 struct TraceDescriptor {
-    uint32_t num_events;
     std::optional<uint32_t> initial_event_id;
-    CompletionReaderQueue issued_completion_q_reads;
+    CompletionReaderQueue traced_completion_q_reads;
+    uint32_t num_entries_in_completion_q;
 
     TraceDescriptor() { this->reset(); }
 
     void reset() {
-        this->num_events = 0;
         this->initial_event_id.reset();
-        this->issued_completion_q_reads.clear();
+        this->traced_completion_q_reads.clear();
+        this->num_entries_in_completion_q = 0;
     }
 
     // Calculate relative offset to the initial event ID of the trace
-    uint32_t trace_event_id(uint32_t event_id) {
+    uint32_t relative_event_id(uint32_t event_id) {
         if (not this->initial_event_id.has_value()) {
             initial_event_id = event_id;
         }
