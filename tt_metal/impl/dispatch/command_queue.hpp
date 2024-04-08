@@ -310,6 +310,26 @@ class EnqueueWaitForEventCommand : public Command {
     constexpr bool has_side_effects() { return false; }
 };
 
+class EnqueueTraceCommand : public Command {
+   private:
+    uint32_t command_queue_id;
+    Buffer& buffer;
+    Device* device;
+    SystemMemoryManager& manager;
+    static std::vector<uint32_t> commands;
+
+   public:
+    EnqueueTraceCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, Buffer& buffer);
+
+    const void assemble_device_commands(uint32_t);
+
+    void process();
+
+    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_TRACE; }
+
+    constexpr bool has_side_effects() { return true; }
+};
+
 namespace detail {
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
@@ -346,10 +366,12 @@ struct ReadBufferDescriptor {
 */
 struct ReadEventDescriptor {
     uint32_t event_id;
+    uint32_t global_offset;
 
-    ReadEventDescriptor(uint32_t event) {
-        this->event_id = event;
-    }
+    ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+
+    void set_global_offset(uint32_t offset) { global_offset = offset; }
+    uint32_t get_global_event_id() { return global_offset + event_id; }
 };
 
 typedef LockFreeQueue<std::variant<ReadBufferDescriptor, ReadEventDescriptor>> CompletionReaderQueue;
@@ -418,10 +440,10 @@ class HWCommandQueue {
     void enqueue_record_event(std::shared_ptr<Event> event);
     void populate_record_event(std::shared_ptr<Event> event);
     void enqueue_wait_for_event(std::shared_ptr<Event> event);
-    void enqueue_trace();
+    void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish();
     void launch(launch_msg_t& msg);
-    friend void EnqueueTraceImpl(CommandQueue& cq);
+    friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, HostDataType src, bool blocking);
@@ -447,6 +469,7 @@ struct CommandInterface {
     std::optional<HostDataType> src;
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
+    std::optional<uint32_t> trace_id;
 };
 
 class CommandQueue {
