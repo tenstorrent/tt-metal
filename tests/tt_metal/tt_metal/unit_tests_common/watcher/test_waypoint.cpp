@@ -120,10 +120,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                 }
                 expected = fmt::format(
                     "Device {}, Ethnet Core {}[physical {}]:   {},   X,   X,   X,   X  k_id:{}",
-                    device->id(), logical_core.str(), phys_core.str(),
+                    device->id(),
+                    logical_core,
+                    phys_core,
                     waypoint,
-                    k_id_s
-                );
+                    k_id_s);
             } else {
                 int k_id = 5 + 3 * (fixture->NumDevices()-1) + 4 * device->id() + 1;
                 // Different k_ids for single chip
@@ -141,10 +142,15 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                 }
                 expected = fmt::format(
                     "Device {}, Worker Core {}[physical {}]:   {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
-                    device->id(), logical_core.str(), phys_core.str(),
-                    waypoint, waypoint, waypoint, waypoint, waypoint,
-                    k_ids
-                );
+                    device->id(),
+                    logical_core,
+                    phys_core,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    k_ids);
             }
             expected_waypoints.push_back(expected);
         }
