@@ -28,16 +28,19 @@ void MAIN {
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0
     // to perform the computation.
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    // And we are going to add tiles. This function is only called if we ever need to
+    // switch operation to something else. Since we are only adding tiles, this function
+    // is only called once before the loop.
+    add_tiles_init();
 
     // Loop over all the tiles and perform the computation
     for(uint32_t i = 0; i < n_tiles; i++) {
         // Make sure there is a valid register we can use.
-        acquire_dst(tt::DstMode::Full);
+        acquire_dst(tt::DstMode::Half);
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
         // Add the tiles from the input circular buffers and write the result to the destination register
-        add_tiles_init();
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
         // Make sure there is space in the output circular buffer
         cb_reserve_back(cb_out0, 1);

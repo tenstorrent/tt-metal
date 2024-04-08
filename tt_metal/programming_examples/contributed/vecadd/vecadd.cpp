@@ -16,6 +16,9 @@ using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
+constexpr uint32_t TILE_WIDTH = 32;
+constexpr uint32_t TILE_HEIGHT = 32;
+
 std::shared_ptr<Buffer> MakeBuffer(Device *device, uint32_t size, uint32_t page_size, bool sram)
 {
     InterleavedBufferConfig config{
@@ -35,7 +38,7 @@ std::shared_ptr<Buffer> MakeBuffer(Device *device, uint32_t size, uint32_t page_
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
 std::shared_ptr<Buffer> MakeBufferBFP16(Device *device, uint32_t n_tiles, bool sram)
 {
-    constexpr uint32_t tile_size = 2 * (32 * 32);
+    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
     return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
@@ -62,7 +65,7 @@ CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CB cb, u
 // @param n_tiles: The number of tiles the circular buffer can hold.
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CB cb, uint32_t n_tiles)
 {
-    constexpr uint32_t tile_size = 2 * (32 * 32);
+    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
 }
 
@@ -118,7 +121,7 @@ int main(int argc, char **argv)
 
     CommandQueue& cq = device->command_queue();
     const uint32_t n_tiles = 64;
-    const uint32_t tile_size = 32 * 32;
+    const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
     // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the output buffer.
     auto a = MakeBufferBFP16(device, n_tiles, false);
     auto b = MakeBufferBFP16(device, n_tiles, false);
