@@ -86,6 +86,15 @@ operation::ProgramWithCallbacks embeddings_tilized(
     uint32_t num_tiles_per_block = weights.get_legacy_shape()[-1] / TILE_WIDTH;
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
+    EmbeddingsIndexType embeddings_index_type;
+    if(a.get_dtype() == DataType::BFLOAT16) {
+        embeddings_index_type = EmbeddingsIndexType::BFP16;
+    }
+    else{
+        embeddings_index_type = EmbeddingsIndexType::UINT32;
+    }
+
+
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -148,7 +157,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)TILE_HEIGHT * input_element_size_bytes};
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -322,6 +331,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, problem_size);
     uint32_t g1_numcores = core_group_1.num_cores();
@@ -384,7 +394,15 @@ operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}};
+    EmbeddingsIndexType embeddings_index_type;
+    if(a.get_dtype() == DataType::BFLOAT16) {
+        embeddings_index_type = EmbeddingsIndexType::BFP16;
+    }
+    else{
+        embeddings_index_type = EmbeddingsIndexType::UINT32;
+    }
+
+    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -497,7 +515,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &weights = input_tensors.at(1);
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(a.get_dtype() == DataType::UINT32, "Input must be UINT32");
+    TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16);
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");

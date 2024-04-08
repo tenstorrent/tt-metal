@@ -22,7 +22,7 @@ def _embedding_validate_input_tensors(operation_name, input_tensor, weight, *arg
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.uint32,),
+        dtypes=(ttnn.uint32, ttnn.bfloat16),
         layouts=(ttnn.ROW_MAJOR_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
