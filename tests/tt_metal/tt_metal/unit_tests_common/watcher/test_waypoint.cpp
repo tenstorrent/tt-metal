@@ -120,8 +120,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {}, Ethnet Core {}[physical {}]:   {},   X,   X,   X,   X  k_id:{}",
-                    device->id(), logical_core.str(), phys_core.str(),
+                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}):   {},   X,   X,   X,   X  k_id:{}",
+                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
                     waypoint,
                     k_id_s
                 );
@@ -142,8 +142,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_ids = "";
                 }
                 expected = fmt::format(
-                    "Device {}, Worker Core {}[physical {}]:   {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
-                    device->id(), logical_core.str(), phys_core.str(),
+                    "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
+                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
                     waypoint, waypoint, waypoint, waypoint, waypoint,
                     k_ids
                 );
