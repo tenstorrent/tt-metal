@@ -6,7 +6,6 @@
 
 #include "risc_attribs.h"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
@@ -65,6 +64,13 @@ class packet_queue_state_t {
     uint32_t remote_rptr_sent_update_addr;
     uint32_t remote_rptr_cleared_update_addr;
 
+protected:
+
+    bool cb_mode;
+    uint16_t cb_mode_page_size_words;
+    uint8_t cb_mode_local_sem_id;
+    uint8_t cb_mode_remote_sem_id;
+
 public:
 
     uint8_t queue_id;
@@ -79,18 +85,17 @@ public:
     uint8_t remote_queue_id;
     DispatchRemoteNetworkType remote_update_network_type;
 
-    // For read/write pointers, we use stream credit registers with auto-increment.
-    // Pointers are in 16B units, and we assume buffer size is power of 2 so we get
-    // automatic wrapping. (If needed, we can fix the pointer advance functions later
-    // to handle non-power-of-2 buffer sizes.)
-
     void init(uint8_t queue_id,
               uint32_t queue_start_addr_words,
               uint16_t queue_size_words,
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
-              DispatchRemoteNetworkType remote_update_network_type) {
+              DispatchRemoteNetworkType remote_update_network_type,
+              bool cb_mode,
+              uint8_t cb_mode_local_sem_id,
+              uint8_t cb_mode_remote_sem_id,
+              uint8_t cb_mode_log_page_size) {
 
         this->queue_id = queue_id;
         this->queue_start_addr_words = queue_start_addr_words;
@@ -99,6 +104,21 @@ public:
         this->remote_y = remote_y;
         this->remote_queue_id = remote_queue_id;
         this->remote_update_network_type = remote_update_network_type;
+
+        this->cb_mode = cb_mode;
+        this->cb_mode_local_sem_id = cb_mode_local_sem_id;
+        this->cb_mode_remote_sem_id = cb_mode_remote_sem_id;
+        this->cb_mode_page_size_words = (((uint32_t)0x1) << cb_mode_log_page_size)/PACKET_WORD_SIZE_BYTES;
+
+        // Misc. register definitions below.
+
+        // For read/write pointers, we use stream credit registers with auto-increment.
+        // Pointers are in 16B units, and we assume buffer size is power of 2 so we get
+        // automatic wrapping. (If needed, we can fix the pointer advance functions later
+        // to handle non-power-of-2 buffer sizes.)
+
+        // For source/destination ready synchronization signals, we use misc. registers in
+        // streams that behave like scratch registers and are reset to 0.
 
         this->local_wptr_val = reinterpret_cast<volatile uint32_t*>(
             STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
@@ -235,7 +255,7 @@ public:
 
     inline void remote_reg_update(uint32_t reg_addr, uint32_t val) {
 
-        if (this->remote_update_network_type == DispatchRemoteNetworkType::NONE) {
+        if ((this->remote_update_network_type == DispatchRemoteNetworkType::NONE) || this->cb_mode) {
             return;
         }
         else if (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) {
@@ -290,6 +310,66 @@ public:
         return *this->local_ready_status_ptr == PACKET_QUEUE_REMOTE_FINISHED_FLAG;
     }
 
+    inline uint32_t cb_mode_get_local_sem_val() {
+        if (!this->cb_mode) {
+            return 0;
+        }
+        volatile tt_l1_ptr uint32_t* local_sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->cb_mode_local_sem_id));
+        // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
+        uint32_t val = *local_sem_addr;
+        if (val & 0x80000000) {
+            val &= 0x7fffffff;
+            *this->local_ready_status_ptr = PACKET_QUEUE_REMOTE_FINISHED_FLAG;
+        }
+        return val;
+    }
+
+    inline void cb_mode_inc_local_sem_val(uint32_t val) {
+        if (this->cb_mode) {
+            uint32_t sem_l1_addr = get_semaphore(this->cb_mode_local_sem_id);
+            uint64_t sem_noc_addr = get_noc_addr(sem_l1_addr);
+            noc_semaphore_inc(sem_noc_addr, val);
+            noc_async_atomic_barrier();
+        }
+    }
+
+    inline void cb_mode_inc_remote_sem_val(uint32_t val) {
+        uint32_t sem_l1_addr = get_semaphore(this->cb_mode_remote_sem_id);
+        uint64_t sem_noc_addr = get_noc_addr(remote_x, remote_y, sem_l1_addr);
+        if (this->cb_mode && (val > 0)) {
+            noc_semaphore_inc(sem_noc_addr, val);
+        }
+    }
+
+    inline uint32_t cb_mode_rptr_sent_advance_page_align() {
+        uint32_t rptr_val = this->get_queue_local_rptr_sent();
+        uint32_t page_size_words_mask = this->cb_mode_page_size_words - 1;
+        uint32_t num_words_past_page_boundary = rptr_val & page_size_words_mask;
+        uint32_t pad_words = 0;
+        if (num_words_past_page_boundary > 0) {
+            pad_words = this->cb_mode_page_size_words - num_words_past_page_boundary;
+            this->advance_queue_local_rptr_sent(pad_words);
+        }
+        return pad_words;
+    }
+
+    inline void cb_mode_local_sem_wptr_update() {
+        uint32_t local_sem_val = this->cb_mode_get_local_sem_val();
+        for (uint32_t i = 0; i < local_sem_val; i++) {
+            this->advance_queue_local_wptr(this->cb_mode_page_size_words);
+        }
+        this->cb_mode_inc_local_sem_val(-local_sem_val);
+    }
+
+    inline void cb_mode_local_sem_rptr_cleared_update() {
+        uint32_t local_sem_val = this->cb_mode_get_local_sem_val();
+        for (uint32_t i = 0; i < local_sem_val; i++) {
+            this->advance_queue_local_rptr_cleared(this->cb_mode_page_size_words);
+        }
+        this->cb_mode_inc_local_sem_val(-local_sem_val);
+    }
+
     void yield() {
         // TODO: implement yield for ethernet here
     }
@@ -323,6 +403,8 @@ protected:
     uint32_t curr_packet_tag;
     uint16_t curr_packet_flags;
 
+    uint32_t packetizer_page_words_cleared;
+
     inline void advance_next_packet() {
         if(this->get_queue_data_num_words_available_to_send() > 0) {
             tt_l1_ptr dispatch_packet_header_t* next_packet_header_ptr =
@@ -330,11 +412,19 @@ protected:
                     (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES
                 );
             this->curr_packet_header_ptr = next_packet_header_ptr;
-            this->curr_packet_dest = next_packet_header_ptr->packet_dest;
-            this->curr_packet_src = next_packet_header_ptr->packet_src;
-            this->curr_packet_size_words = next_packet_header_ptr->packet_size_words;
-            this->curr_packet_tag = next_packet_header_ptr->tag;
-            this->curr_packet_flags = next_packet_header_ptr->packet_flags;
+            this->curr_packet_size_words = next_packet_header_ptr->packet_size_bytes/PACKET_WORD_SIZE_BYTES;
+            if (this->cb_mode) {
+                // prefetcher has size in bytes
+                next_packet_header_ptr->packet_dest = this->curr_packet_dest;
+                next_packet_header_ptr->packet_src = this->curr_packet_src;
+                next_packet_header_ptr->tag = this->curr_packet_tag;
+                next_packet_header_ptr->packet_flags = this->curr_packet_flags;
+            } else {
+                this->curr_packet_dest = next_packet_header_ptr->packet_dest;
+                this->curr_packet_src = next_packet_header_ptr->packet_src;
+                this->curr_packet_tag = next_packet_header_ptr->tag;
+                this->curr_packet_flags = next_packet_header_ptr->packet_flags;
+            }
             this->curr_packet_words_sent = 0;
             this->curr_packet_valid = true;
        }
@@ -348,14 +438,32 @@ public:
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
-              DispatchRemoteNetworkType remote_update_network_type) {
+              DispatchRemoteNetworkType remote_update_network_type,
+              bool packetizer_input = false,
+              uint8_t packetizer_input_log_page_size = 0,
+              uint8_t packetizer_input_sem_id = 0,
+              uint8_t packetizer_input_remote_sem_id = 0,
+              uint16_t packetizer_input_src = 0,
+              uint16_t packetizer_input_dest = 0) {
 
         packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words,
-                                   remote_x, remote_y, remote_queue_id, remote_update_network_type);
+                                   remote_x, remote_y, remote_queue_id, remote_update_network_type,
+                                   packetizer_input, packetizer_input_sem_id,
+                                   packetizer_input_remote_sem_id,
+                                   packetizer_input_log_page_size);
 
         tt_l1_ptr uint32_t* queue_ptr =
             reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words*PACKET_WORD_SIZE_BYTES);
-        zero_l1_buf(queue_ptr, queue_size_words*PACKET_WORD_SIZE_BYTES);
+        // zero_l1_buf(queue_ptr, queue_size_words*PACKET_WORD_SIZE_BYTES);
+
+        this->packetizer_page_words_cleared = 0;
+
+        if (packetizer_input) {
+            this->curr_packet_src = packetizer_input_src;
+            this->curr_packet_dest = packetizer_input_dest;
+            this->curr_packet_flags = 0;
+            this->curr_packet_tag = 0xabcd;
+        }
 
         this->ptr_offset_mask = queue_size_words - 1;
         this->queue_size_mask = (queue_size_words << 1) - 1;
@@ -366,8 +474,14 @@ public:
         this->reset_ready_flag();
     }
 
+    inline bool is_packetizer_input() const {
+        return this->cb_mode;
+    }
 
     inline bool get_curr_packet_valid() {
+        if (this->cb_mode) {
+            this->cb_mode_local_sem_wptr_update();
+        }
         if (!this->curr_packet_valid && (this->get_queue_data_num_words_available_to_send() > 0)){
             this->advance_next_packet();
         }
@@ -427,6 +541,9 @@ public:
         return this->curr_packet_valid && (this->curr_packet_words_sent > 0);
     }
 
+    inline bool curr_packet_start() const {
+        return this->curr_packet_valid && (this->curr_packet_words_sent == 0);
+    }
 
     inline bool input_queue_full_packet_available_to_send(uint32_t& num_words_available_to_send) {
         num_words_available_to_send = this->get_queue_data_num_words_available_to_send();
@@ -437,6 +554,9 @@ public:
     }
 
     inline uint32_t input_queue_curr_packet_num_words_available_to_send() {
+        if (this->cb_mode) {
+            this->cb_mode_local_sem_wptr_update();
+        }
         uint32_t num_words = this->get_queue_data_num_words_available_to_send();
         if (num_words == 0) {
             return 0;
@@ -445,28 +565,46 @@ public:
         return num_words;
     }
 
-    inline void input_queue_advance_words_sent(uint32_t num_words) {
+    // returns the number of words skipped for page padding if in packetizer mode
+    inline uint32_t input_queue_advance_words_sent(uint32_t num_words) {
+        uint32_t pad_words = 0;
         if (num_words > 0) {
             this->advance_queue_local_rptr_sent(num_words);
             this->advance_queue_remote_rptr_sent(num_words);
             this->curr_packet_words_sent += num_words;
             uint32_t curr_packet_words_remaining = this->get_curr_packet_words_remaining();
             if (curr_packet_words_remaining == 0) {
+                if (this->is_packetizer_input()) {
+                    pad_words = this->cb_mode_rptr_sent_advance_page_align();
+                }
                 this->curr_packet_valid = false;
                 this->advance_next_packet();
             }
         }
+        return pad_words;
     }
 
     inline void input_queue_advance_words_cleared(uint32_t num_words) {
         if (num_words > 0) {
             this->advance_queue_local_rptr_cleared(num_words);
             this->advance_queue_remote_rptr_cleared(num_words);
+            if (this->is_packetizer_input()) {
+                this->packetizer_page_words_cleared += num_words;
+                uint32_t remote_sem_inc = 0;
+                while (this->packetizer_page_words_cleared >= this->cb_mode_page_size_words) {
+                    remote_sem_inc++;
+                    this->packetizer_page_words_cleared -= this->cb_mode_page_size_words;
+                }
+                this->cb_mode_inc_remote_sem_val(remote_sem_inc);
+            }
         }
     }
 
     inline void input_queue_clear_all_words_sent() {
-        this->input_queue_advance_words_cleared(this->get_num_words_sent_not_cleared());
+        uint32_t num_words = this->get_num_words_sent_not_cleared();
+        if (num_words > 0) {
+            this->input_queue_advance_words_cleared(num_words);
+        }
     }
 
     void dprint_object() {
@@ -486,8 +624,12 @@ public:
 
 class packet_output_queue_state_t : public packet_queue_state_t {
 
+protected:
+
     uint32_t max_noc_send_words;
     uint32_t max_eth_send_words;
+
+    uint32_t unpacketizer_page_words_sent;
 
     struct {
 
@@ -496,8 +638,8 @@ class packet_output_queue_state_t : public packet_queue_state_t {
 
         uint32_t* curr_input_queue_words_in_flight;
         uint32_t* prev_input_queue_words_in_flight;
-        uint32_t curr_total_words_in_flight;
-        uint32_t prev_total_words_in_flight;
+        uint32_t curr_output_total_words_in_flight;
+        uint32_t prev_output_total_words_in_flight;
 
         uint8_t num_input_queues;
 
@@ -506,25 +648,25 @@ class packet_output_queue_state_t : public packet_queue_state_t {
             this->input_queue_array = input_queue_array;
             this->curr_input_queue_words_in_flight = &(this->input_queue_words_in_flight[0]);
             this->prev_input_queue_words_in_flight = &(this->input_queue_words_in_flight[MAX_SWITCH_FAN_IN]);
-            this->curr_total_words_in_flight = 0;
-            this->prev_total_words_in_flight = 0;
+            this->curr_output_total_words_in_flight = 0;
+            this->prev_output_total_words_in_flight = 0;
             for (uint32_t i = 0; i < MAX_SWITCH_FAN_IN; i++) {
                 this->curr_input_queue_words_in_flight[i] = 0;
                 this->prev_input_queue_words_in_flight[i] = 0;
             }
         }
 
-        inline uint32_t get_curr_total_words_in_flight() const {
-            return this->curr_total_words_in_flight;
+        inline uint32_t get_curr_output_total_words_in_flight() const {
+            return this->curr_output_total_words_in_flight;
         }
 
-        inline uint32_t get_prev_total_words_in_flight() const {
-            return this->prev_total_words_in_flight;
+        inline uint32_t get_prev_output_total_words_in_flight() const {
+            return this->prev_output_total_words_in_flight;
         }
 
         inline uint32_t prev_words_in_flight_flush() {
 
-            uint32_t words_flushed = this->prev_total_words_in_flight;
+            uint32_t words_flushed = this->prev_output_total_words_in_flight;
             if (words_flushed > 0) {
                 for (uint32_t i = 0; i < num_input_queues; i++) {
                     this->input_queue_array[i].input_queue_advance_words_cleared(this->prev_input_queue_words_in_flight[i]);
@@ -535,27 +677,27 @@ class packet_output_queue_state_t : public packet_queue_state_t {
             uint32_t* tmp = this->prev_input_queue_words_in_flight;
             this->prev_input_queue_words_in_flight = this->curr_input_queue_words_in_flight;
             this->curr_input_queue_words_in_flight = tmp;
-            this->prev_total_words_in_flight = this->curr_total_words_in_flight;
-            this->curr_total_words_in_flight = 0;
+            this->prev_output_total_words_in_flight = this->curr_output_total_words_in_flight;
+            this->curr_output_total_words_in_flight = 0;
 
             return words_flushed;
         }
 
         inline void register_words_in_flight(uint32_t input_queue_id, uint32_t num_words) {
-            this->curr_input_queue_words_in_flight[input_queue_id] += num_words;
-            this->curr_total_words_in_flight += num_words;
-            this->input_queue_array[input_queue_id].input_queue_advance_words_sent(num_words);
+            uint32_t pad_words_skipped = this->input_queue_array[input_queue_id].input_queue_advance_words_sent(num_words);
+            this->curr_input_queue_words_in_flight[input_queue_id] += (num_words + pad_words_skipped);
+            this->curr_output_total_words_in_flight += num_words;
         }
 
         void dprint_object() {
-            DPRINT << "  curr_total_words_in_flight: " << DEC() << this->curr_total_words_in_flight << ENDL();
+            DPRINT << "  curr_output_total_words_in_flight: " << DEC() << this->curr_output_total_words_in_flight << ENDL();
             for (uint32_t j = 0; j < MAX_SWITCH_FAN_IN; j++) {
                 DPRINT << "       from input queue id " << DEC() <<
                             this->input_queue_array[j].get_queue_id() << ": "
                             << DEC() << this->curr_input_queue_words_in_flight[j]
                             << ENDL();
             }
-            DPRINT << "  prev_total_words_in_flight: " << DEC() << this->prev_total_words_in_flight << ENDL();
+            DPRINT << "  prev_output_total_words_in_flight: " << DEC() << this->prev_output_total_words_in_flight << ENDL();
             for (uint32_t j = 0; j < MAX_SWITCH_FAN_IN; j++) {
                 DPRINT << "       from input queue id " << DEC() <<
                             this->input_queue_array[j].get_queue_id() << ": "
@@ -576,11 +718,19 @@ public:
               uint8_t remote_queue_id,
               DispatchRemoteNetworkType remote_update_network_type,
               packet_input_queue_state_t* input_queue_array,
-              uint8_t num_input_queues) {
+              uint8_t num_input_queues,
+              bool unpacketizer_output = false,
+              uint16_t unpacketizer_output_log_page_size = 0,
+              uint8_t unpacketizer_output_sem_id = 0,
+              uint8_t unpacketizer_output_remote_sem_id = 0) {
 
         packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words,
-                                   remote_x, remote_y, remote_queue_id, remote_update_network_type);
+                                   remote_x, remote_y, remote_queue_id, remote_update_network_type,
+                                   unpacketizer_output, unpacketizer_output_sem_id,
+                                   unpacketizer_output_remote_sem_id,
+                                   unpacketizer_output_log_page_size);
 
+        this->unpacketizer_page_words_sent = 0;
         this->ptr_offset_mask = queue_size_words - 1;
         this->queue_size_mask = (queue_size_words << 1) - 1;
         this->max_noc_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
@@ -590,6 +740,10 @@ public:
         this->reset_queue_local_rptr_cleared();
         this->reset_queue_local_wptr();
         this->reset_ready_flag();
+    }
+
+    inline bool is_unpacketizer_output() const {
+        return this->cb_mode;
     }
 
     inline void set_max_noc_send_words(uint32_t max_noc_send_words) {
@@ -622,9 +776,18 @@ public:
     }
 
     inline uint32_t prev_words_in_flight_check_flush() {
-        if (this->get_num_words_written_not_sent() <= this->input_queue_status.get_curr_total_words_in_flight()) {
+        if (this->is_unpacketizer_output()) {
+            uint32_t words_written_not_sent = get_num_words_written_not_sent();
+            noc_async_writes_flushed();
+            this->advance_queue_local_rptr_sent(words_written_not_sent);
+            uint32_t words_flushed = this->input_queue_status.prev_words_in_flight_flush();
+            this->cb_mode_local_sem_rptr_cleared_update();
+            return words_flushed;
+        }
+        else if (this->get_num_words_written_not_sent() <= this->input_queue_status.get_curr_output_total_words_in_flight()) {
             return this->input_queue_status.prev_words_in_flight_flush();
-        } else {
+        }
+        else {
             return 0;
         }
     }
@@ -634,7 +797,13 @@ public:
         if (timeout_cycles > 0) {
             start_timestamp = get_timestamp_32b();
         }
+        if (this->is_unpacketizer_output()) {
+           noc_async_writes_flushed();
+        }
         while (this->get_queue_data_num_words_occupied() > 0) {
+            if (this->is_unpacketizer_output()) {
+                this->cb_mode_local_sem_rptr_cleared_update();
+            }
             if (timeout_cycles > 0) {
                 uint32_t cycles_elapsed = get_timestamp_32b() - start_timestamp;
                 if (cycles_elapsed > timeout_cycles) {
@@ -687,7 +856,27 @@ public:
         this->send_data_to_remote(src_addr, dest_addr, num_words_to_forward);
         this->input_queue_status.register_words_in_flight(input_queue_index, num_words_to_forward);
         this->advance_queue_local_wptr(num_words_to_forward);
-        this->remote_wptr_update(num_words_to_forward);
+
+        if (!this->is_unpacketizer_output()) {
+            this->remote_wptr_update(num_words_to_forward);
+        } else {
+            this->unpacketizer_page_words_sent += num_words_to_forward;
+            if (full_packet_sent) {
+                uint32_t unpacketizer_page_words_sent_past_page_bound =
+                    this->unpacketizer_page_words_sent & (this->cb_mode_page_size_words - 1);
+                if (unpacketizer_page_words_sent_past_page_bound > 0) {
+                    uint32_t pad_words = this->cb_mode_page_size_words - unpacketizer_page_words_sent_past_page_bound;
+                    this->unpacketizer_page_words_sent += pad_words;
+                    this->advance_queue_local_wptr(pad_words);
+                }
+            }
+            uint32_t remote_sem_inc = 0;
+            while (this->unpacketizer_page_words_sent >= this->cb_mode_page_size_words) {
+                this->unpacketizer_page_words_sent -= this->cb_mode_page_size_words;
+                remote_sem_inc++;
+            }
+            this->cb_mode_inc_remote_sem_val(remote_sem_inc);
+        }
 
         return num_words_to_forward;
     }
@@ -727,7 +916,8 @@ bool wait_all_src_dest_ready(packet_input_queue_state_t* input_queue_array, uint
         all_src_dest_ready = true;
         for (uint32_t i = 0; i < num_input_queues; i++) {
             if (!src_ready[i]) {
-                src_ready[i] = input_queue_array[i].is_remote_ready();
+                src_ready[i] = input_queue_array[i].is_packetizer_input() ||
+                               input_queue_array[i].is_remote_ready();
                 if (!src_ready[i]) {
                     input_queue_array[i].send_remote_ready_notification();
                     all_src_dest_ready = false;
@@ -738,7 +928,8 @@ bool wait_all_src_dest_ready(packet_input_queue_state_t* input_queue_array, uint
         }
         for (uint32_t i = 0; i < num_output_queues; i++) {
             if (!dest_ready[i]) {
-                dest_ready[i] = output_queue_array[i].is_remote_ready();
+                dest_ready[i] = output_queue_array[i].is_remote_ready() ||
+                                output_queue_array[i].is_unpacketizer_output();
                 if (dest_ready[i]) {
                     output_queue_array[i].send_remote_ready_notification();
                 } else {
