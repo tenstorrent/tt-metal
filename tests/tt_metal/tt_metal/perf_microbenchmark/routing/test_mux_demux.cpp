@@ -192,7 +192,8 @@ int main(int argc, char **argv) {
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 test_results_addr, // 14: test_results_addr
                 test_results_size, // 15: test_results_size
-                timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
+                timeout_mcycles * 1000 * 1000, // 16: timeout_cycles,
+                0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
             };
 
         log_info(LogTest, "run mux at x={},y={}", mux_core.x, mux_core.y);
@@ -290,6 +291,7 @@ int main(int argc, char **argv) {
                 test_results_addr, // 22: test_results_addr
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
+                0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
             };
 
         log_info(LogTest, "run demux at x={},y={}", demux_core.x, demux_core.y);

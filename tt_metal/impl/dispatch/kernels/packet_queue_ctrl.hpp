@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <setjmp.h>
-
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
 constexpr uint32_t MAX_SWITCH_FAN_OUT = 4;
@@ -65,7 +63,7 @@ inline bool is_remote_network_type_noc(DispatchRemoteNetworkType type) {
 
 struct dispatch_packet_header_t {
 
-    uint32_t packet_size_words;
+    uint32_t packet_size_bytes;
     uint16_t packet_src;
     uint16_t packet_dest;
     uint16_t packet_flags;
