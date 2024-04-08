@@ -59,8 +59,12 @@ struct ShardSpec {
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
     const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
-    tt::stl::reflection::Attributes attributes() const;
 
+    static constexpr auto attribute_names = std::make_tuple("grid", "shape", "orientation", "halo");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->grid), std::cref(this->shape), std::cref(this->orientation), std::cref(this->halo));
+    }
 };
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
@@ -277,7 +281,7 @@ class Buffer {
 
     std::vector<uint32_t> get_host_page_to_local_shard_page_mapping() const
     {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
         return host_page_to_local_shard_page_mapping_;
     }
 
