@@ -68,10 +68,13 @@ struct CQPrefetchRelayLinearCmd {
     uint32_t length;
 } __attribute__((packed));;
 
+constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT = 0;
+constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT = 4;
+constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0x0f;
+
 struct CQPrefetchRelayPagedCmd {
-    uint8_t pad1;
-    uint8_t is_dram;          // one flag, false=l1
-    uint8_t start_page;
+    uint8_t packed_page_flags;  // start page and is_dram flag
+    uint16_t length_adjust;     // bytes subtracted from size (multiple of 32)
     uint32_t base_addr;
     uint32_t page_size;
     uint32_t pages;
