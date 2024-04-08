@@ -254,7 +254,15 @@ def test_transformer_2d_model_512x512(
             upcast_attention=upcast_attention,
         )
     else:
-        model = transformer_2d_model_tt2(device, parameters, {}, input_shape[0], input_shape[2], input_shape[3])
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        model = transformer_2d_model_tt2(
+            device, parameters, {}, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
+        )
         ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
         output = model(
             hidden_states=ttnn_hidden_state,

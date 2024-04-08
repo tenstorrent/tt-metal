@@ -104,7 +104,16 @@ def test_downsample_2d_512x512(device, model_name, batch_size, in_channels, inpu
         ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device), layout=ttnn.ROW_MAJOR_LAYOUT
     )
     reader_patterns_cache = {}
-    model = tt2_ttnn_downsample_2d(device, parameters, reader_patterns_cache, batch_size, input_height, input_width)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = tt2_ttnn_downsample_2d(
+        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    )
     ttnn_hidden_state = pre_process_input(device, ttnn_hidden_state)
     ttnn_output = model(
         in_channels=in_channels,
