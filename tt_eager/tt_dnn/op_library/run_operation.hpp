@@ -167,13 +167,12 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
         tensor.get_storage());
 }
 
-template<typename OperationType>
+template <typename OperationType>
 static void append_operation_to_operation_history(
     const std::size_t ttnn_operation_id,
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-
     std::vector<operation_history::TensorRecord> input_tensor_records;
     input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
 
@@ -186,16 +185,27 @@ static void append_operation_to_operation_history(
         }
     }
 
-    operation_history::append(
-        operation_history::OperationRecord{
-            ttnn_operation_id,
-            boost::core::demangle(typeid(OperationType).name()),
-            operation.get_type_name(),
-            operation.attributes(),
-            input_tensor_records,
-            run_operation_state::get_composite_parent_names()
+    std::optional<bool> program_cache_hit = std::nullopt;
+    std::optional<tt::stl::hash::hash_t> program_hash = std::nullopt;
+    if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
+        auto& program_cache = input_tensors[0].device()->program_cache;
+        if (program_cache.is_enabled()) {
+            program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
+            auto program_pointer = program_cache.find(program_hash.value());
+            program_cache_hit = program_pointer.has_value();
         }
-    );
+    }
+
+    operation_history::append(operation_history::OperationRecord{
+        ttnn_operation_id,
+        boost::core::demangle(typeid(OperationType).name()),
+        operation.get_type_name(),
+        operation.attributes(),
+        input_tensor_records,
+        run_operation_state::get_composite_parent_names(),
+        program_cache_hit,
+        program_hash,
+    });
 }
 
 }  // namespace detail
@@ -211,6 +221,15 @@ inline void log_operation(
         "Launching Operation: \"{}\" ({})",
         operation.get_type_name(),
         detail::operation_type_to_string<OperationType>());
+
+    if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
+        auto& program_cache = input_tensors[0].device()->program_cache;
+        if (program_cache.is_enabled()) {
+            auto program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
+            auto program_pointer = program_cache.find(program_hash);
+            log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, program_pointer.has_value() ? "HIT" : "MISS");
+        }
+    }
 
     if (run_operation_state::is_composite_operation()) {
         tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
@@ -240,7 +259,8 @@ inline void log_operation(
     tt::log_debug(tt::LogOp, "");
 
     if (operation_history::enabled()) {
-        detail::append_operation_to_operation_history(ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
+        detail::append_operation_to_operation_history(
+            ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
     }
 }
 #else
