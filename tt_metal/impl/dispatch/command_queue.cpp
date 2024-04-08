@@ -144,8 +144,8 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
         } else {
             relay_buffer.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-            relay_buffer.relay_paged.is_dram = 0;
-            relay_buffer.relay_paged.start_page = 0;
+            relay_buffer.relay_paged.packed_page_flags = 0;
+            relay_buffer.relay_paged.length_adjust = 0;
             relay_buffer.relay_paged.base_addr = 0;
             relay_buffer.relay_paged.page_size = 0;
             relay_buffer.relay_paged.pages = 0;
@@ -194,8 +194,10 @@ const void EnqueueReadBufferCommand::assemble_device_commands(uint32_t dst_addre
         relay_buffer->relay_linear.addr = this->buffer.address() + buffer.get_host_page_to_local_shard_page_mapping()[buffer.get_dev_to_host_mapped_page_id(this->src_page_index)] * padded_page_size;
     } else {
         relay_buffer->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
-        relay_buffer->relay_paged.is_dram = (this->buffer.buffer_type() == BufferType::DRAM);
-        relay_buffer->relay_paged.start_page = this->src_page_index;
+        relay_buffer->relay_paged.packed_page_flags =
+            ((this->buffer.buffer_type() == BufferType::DRAM) << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+            (this->src_page_index << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+        relay_buffer->relay_paged.length_adjust = 0;
         relay_buffer->relay_paged.base_addr = this->buffer.address();
         relay_buffer->relay_paged.page_size = padded_page_size;
         relay_buffer->relay_paged.pages = this->pages_to_read;
@@ -725,8 +727,10 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 
                     CQPrefetchCmd relay_program_bins_cmd;  // program binaries
                     relay_program_bins_cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
-                    relay_program_bins_cmd.relay_paged.is_dram = 1;
-                    relay_program_bins_cmd.relay_paged.start_page = kg_transfer_info.page_offsets[kernel_idx];
+                    relay_program_bins_cmd.relay_paged.packed_page_flags =
+                        (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+                        (kg_transfer_info.page_offsets[kernel_idx] << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+                    relay_program_bins_cmd.relay_paged.length_adjust = 0;
                     relay_program_bins_cmd.relay_paged.base_addr = this->program.kg_buffers[buffer_idx]->address();
                     relay_program_bins_cmd.relay_paged.page_size = this->program.kg_buffers[buffer_idx]->page_size();
                     relay_program_bins_cmd.relay_paged.pages =
