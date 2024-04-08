@@ -8,6 +8,7 @@ import tt_lib
 import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_model import TtFalconModelShared
+from models.utility_functions import is_wormhole_b0
 
 
 class TtFalconCausalLM(TtFalconModelShared):
@@ -30,6 +31,15 @@ class TtFalconCausalLM(TtFalconModelShared):
         )
         self.model_config = model_config
         self.lm_head_weights = parameters.lm_head.weight
+
+        if is_wormhole_b0():
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
+            )
+            self.core_grid = ttnn.CoreGrid(y=7, x=8)
+        else:
+            self.compute_kernel_config = None
+            self.core_grid = ttnn.CoreGrid(y=9, x=12)
 
     def __call__(
         self,
@@ -57,6 +67,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
             use_1d_systolic_array=True,
+            core_grid=self.core_grid,
         )
 
         return lm_logits, presents

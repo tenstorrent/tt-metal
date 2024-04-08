@@ -12,6 +12,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -127,6 +128,12 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t
 }
 
 inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
+    if (is_multi_device_tensor(tensor)) {
+        return transform(tensor, [&](const Tensor& device_tensor) {
+            return unsqueeze_to_4D(device_tensor);
+        });
+    }
+
     const auto tensor_shape = tensor.get_shape();
     const auto rank = tensor_shape.rank();
     if (rank == 4) {

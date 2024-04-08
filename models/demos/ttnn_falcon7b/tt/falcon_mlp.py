@@ -7,9 +7,8 @@ from models.utility_functions import is_wormhole_b0
 
 
 class TtFalconMLP:
-    def __init__(self, device, model_config, parameters):
+    def __init__(self, model_config, parameters):
         super().__init__()
-        self.device = device
         self.model_config = model_config
         self.dense_h_to_4h_weights = parameters.dense_h_to_4h.weight
         self.dense_4h_to_h_weights = parameters.dense_4h_to_h.weight
@@ -17,8 +16,10 @@ class TtFalconMLP:
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
             )
+            self.core_grid = ttnn.CoreGrid(y=7, x=8)
         else:
             self.compute_kernel_config = None
+            self.core_grid = ttnn.CoreGrid(y=9, x=12)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         ff1_linear: ttnn.Tensor = ttnn.linear(
@@ -29,6 +30,7 @@ class TtFalconMLP:
             use_1d_systolic_array=True,
             activation="gelu",
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
         )
         ff2_linear: ttnn.Tensor = ttnn.linear(
             ff1_linear,
@@ -37,6 +39,7 @@ class TtFalconMLP:
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             use_1d_systolic_array=True,
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
         )
         ttnn.deallocate(ff1_linear)
 
