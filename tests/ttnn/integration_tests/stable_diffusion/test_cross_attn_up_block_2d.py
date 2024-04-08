@@ -251,8 +251,16 @@ def test_cross_attn_up_block_2d_512x512(
         upsample_size=upsample_size,
     )
 
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     N, _, H, W = input_shape
-    model = tt2_ttnn_cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W)
+    model = tt2_ttnn_cross_attention_upblock2d(
+        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
+    )
 
     timestep = (None,)
     class_labels = (None,)
@@ -351,4 +359,4 @@ def test_cross_attn_up_block_2d_512x512(
         op = torch.reshape(op, (N, H * 2, W * 2, Cout))
     op = op.permute(0, 3, 1, 2)
 
-    assert_with_pcc(torch_output, op, 0.63)
+    assert_with_pcc(torch_output, op, 0.92)

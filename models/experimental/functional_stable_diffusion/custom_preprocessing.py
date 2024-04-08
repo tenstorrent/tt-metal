@@ -27,4 +27,15 @@ def custom_preprocessor(model, name):
         weight = torch.permute(model.weight, (2, 3, 0, 1))
         parameters["weight"] = preprocess_conv_parameter(weight, dtype=ttnn.bfloat16)
         parameters["bias"] = preprocess_conv_parameter(model.bias, dtype=ttnn.bfloat16)
+
+    if isinstance(model, nn.Linear):
+        weight = model.weight.T.contiguous()
+        while len(weight.shape) < 4:
+            weight = weight.unsqueeze(0)
+        parameters["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if model.bias is not None:
+            bias = model.bias
+            while len(bias.shape) < 4:
+                bias = bias.unsqueeze(0)
+            parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return parameters

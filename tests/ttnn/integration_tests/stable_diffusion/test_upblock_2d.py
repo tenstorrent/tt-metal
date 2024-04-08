@@ -107,7 +107,14 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     )
     parameters = parameters.up_blocks[0]
     N, _, H, W = hidden_states
-    model = tt2_ttnn_upblock_2d(device, parameters, reader_patterns_cache, N, H, W)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = tt2_ttnn_upblock_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
 
     # synthesize the input
     in_channels = hidden_states[1]

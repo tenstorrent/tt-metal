@@ -102,7 +102,16 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
     parameters = parameters.up_blocks[index].upsamplers[0]
-    model = tt2_ttnn_upsample2d(device, parameters, reader_patterns_cache, batch_size, input_height, input_width)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = tt2_ttnn_upsample2d(
+        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    )
 
     input_shape = batch_size, in_channels, input_height, input_width
     out_channels = in_channels

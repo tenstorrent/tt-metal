@@ -152,8 +152,6 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
 )
 def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index, in_channels):
     torch.manual_seed(0)
-    if in_channels == 320:
-        pytest.skip()
 
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     down_block = pipe.unet.down_blocks[index]
@@ -167,7 +165,14 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
-    model = cross_attention_down_block_2d(device, parameters, reader_patterns_cache, N, H, W)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = cross_attention_down_block_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.randn(hidden_states_shape)
@@ -215,7 +220,4 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
     ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    if in_channels == 1280:
-        assert_with_pcc(torch_output, ttnn_output, 0.76)
-    else:
-        assert_with_pcc(torch_output, ttnn_output, 0.94)
+    assert_with_pcc(torch_output, ttnn_output, 0.96)

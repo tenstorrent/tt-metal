@@ -179,8 +179,22 @@ def test_resnet_block_2d_512x512(
 
     torch_output = resnet(input, temb.squeeze(0).squeeze(0))
     reader_patterns_cache = {}
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     resnet_block = resnetBlock2D(
-        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=True
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        group_norm_on_device=True,
+        compute_kernel_config=compute_kernel_config,
     )
 
     input = torch.permute(input, (0, 2, 3, 1))
