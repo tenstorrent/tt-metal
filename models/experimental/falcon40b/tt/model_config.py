@@ -772,6 +772,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     )
     BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    BFP4_DTYPE = ttl.tensor.DataType.BFLOAT4_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ACCEPTABLE_PREFILL_MODEL_CONFIG_STRS:
@@ -822,6 +823,9 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
+    # model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"] = BFP4_DTYPE
+    # model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"] = BFP4_DTYPE
+
     # # TODO: use BFLOAT16 for the attention mask!
     # # model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     # model_config["ATTN_MASK_DTYPE"] = BFLOAT16_DTYPE
@@ -839,7 +843,39 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     layernorm_max_num_cores_y = 7
 
     layernorm_slice_size = 512
-    attetnion_slice_size = 128
+    attetnion_slice_size = min(128, row_height)
+    attention_num_cores = attetnion_slice_size * 16 // 32
+    assert attention_num_cores in (16, 32, 64)
+    if attention_num_cores == 16:
+        attetnion_mm_grid_size = (8, 2)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 1),
+                ),
+            }
+        )
+    elif attention_num_cores == 32:
+        attetnion_mm_grid_size = (8, 4)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 3),
+                ),
+            }
+        )
+    else:
+        attetnion_mm_grid_size = (8, 8)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 7),
+                ),
+            }
+        )
 
     (
         layernorm_block_sharded_mem_config,
@@ -863,9 +899,13 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     # Specify program configs
 
+    attetnion_mm_M = (
+        attetnion_slice_size * 16 // attention_num_cores // 32
+    )  # attetnion_slice_size * 16 qheads // attention_num_cores // TILE_SIZE
+
     # Attention
     model_config["ATTENTION_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        compute_with_storage_grid_size=attetnion_mm_grid_size,
         in0_block_w=head_dim // 32,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -876,13 +916,13 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         mcast_in0=False,
     )
     model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        compute_with_storage_grid_size=attetnion_mm_grid_size,
         subblock_w=1,
         block_h=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
         block_w=1,  # Dynamic
     )
     model_config["ATTENTION_MM_2_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        compute_with_storage_grid_size=attetnion_mm_grid_size,
         in0_block_w=row_height // 32,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -894,66 +934,37 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     )
     model_config["ATTENTION_DTYPE"] = dtype
 
-    # QKV Projection
-    model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=16,  # TODO: Can this be larger # 256 tiles in K
-        out_subblock_h=4,  # TODO: Can this be larger
-        out_subblock_w=1,
-        per_core_M=row_height // 32 // 8,  # S2048: 8
-        per_core_N=1152 // 32 // 4,  # 9
-        fused_activation=None,
-        transpose_mcast=True,
+    model_config["QUERY_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * row_height // attention_num_cores, head_dim],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
-    # Dense Out
-    # input: [S, 8k], weight: [8k, 1k]
-    model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=16,  # 256 tiles in K
-        out_subblock_h=4,
-        out_subblock_w=1,
-        per_core_M=row_height // 32 // 4,  # S2048: 16
-        per_core_N=1024 // 32 // 8,  # 4
-        fused_activation=None,
-        transpose_mcast=False,
+    model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * row_height // attention_num_cores, head_dim],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
-    # MLP FF1
-    model_config["DENSE_H_TO_4H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=8,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 4,  # S2048: 16 M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=[ttl.tensor.FusibleActivation.GELU, True],
-    )
-
-    # MLP FF2
-    model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=8,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 4,  # S2048: 16 # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=4,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=None,
-    )
-
-    # LM Head
-    # input: [S, 8k], weight: [8k, 8k]
-    model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=1,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 8,  # S2048: 8 M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=8192 // 32 // 8,  # 64,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=None,
+    model_config["ATTN_MASK_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * row_height // attention_num_cores, row_height],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
     # uncomment if need to see all the configs
