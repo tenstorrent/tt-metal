@@ -17,7 +17,6 @@ namespace tt_metal {
 namespace detail {
 
 static constexpr std::size_t SENTINEL_VALUE = std::numeric_limits<std::size_t>::max();
-static constexpr std::uint8_t VERSION_ID = 1;
 
 void dump_owned_storage(ofstream& output_stream, const OwnedStorage& storage) {
     std::visit(
@@ -158,7 +157,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     auto storage_type = tensor.storage_type();
 
     output_stream.write(reinterpret_cast<const char*>(&detail::SENTINEL_VALUE), sizeof(std::size_t));
-    output_stream.write(reinterpret_cast<const char*>(&detail::VERSION_ID), sizeof(std::uint8_t));
+    output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
     output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(Shape));
     output_stream.write(reinterpret_cast<const char*>(&data_type), sizeof(DataType));
     output_stream.write(reinterpret_cast<const char*>(&layout), sizeof(Layout));
@@ -201,7 +200,7 @@ Tensor load_tensor(const std::string& file_name) {
     if (read_sentinel == detail::SENTINEL_VALUE) {
         std::uint8_t version_id;
         input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(version_id));
-        if (version_id != detail::VERSION_ID) {
+        if (version_id != VERSION_ID) {
             throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
         }
         auto shape = Shape{};

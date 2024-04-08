@@ -92,10 +92,32 @@ def operations():
             operation_history = pd.read_csv(
                 ttnn.CONFIG.reports_path / "operation_history" / f"{operation_id}.csv", index_col=False
             )
-            return operation_history.to_html(
-                columns=["operation_name", "operation_type"], index=False, justify="center"
+
+            def normalize_program_cache_hit(value):
+                if value == "std::nullopt":
+                    return ""
+                else:
+                    return value == 1
+
+            operation_history["program_cache_hit"] = operation_history.program_cache_hit.apply(
+                normalize_program_cache_hit
             )
-        except:
+
+            def normalize_program_hash(value):
+                if value == "std::nullopt":
+                    return ""
+                else:
+                    return value
+
+            operation_history["program_hash"] = operation_history.program_hash.apply(normalize_program_hash)
+
+            return operation_history.to_html(
+                columns=["operation_name", "operation_type", "program_cache_hit", "program_hash"],
+                index=False,
+                justify="center",
+            )
+        except Exception as e:
+            logger.warning(e)
             return ""
 
     return render_template(

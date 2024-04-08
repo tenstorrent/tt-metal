@@ -36,6 +36,8 @@ struct OperationRecord {
     const tt::stl::reflection::Attributes attributes;
     const std::vector<TensorRecord> input_tensor_records;
     const std::vector<const char*> composite_parent_names{};
+    std::optional<bool> program_cache_hit;
+    const std::optional<tt::stl::hash::hash_t> program_hash;
 };
 
 namespace detail {

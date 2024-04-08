@@ -171,6 +171,8 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    dump_memory_config,
+    load_memory_config,
 )
 
 from ttnn.validation import validate_input_tensor

@@ -124,12 +124,14 @@ std::vector<Tensor> run_device_operation(
                                    std::vector<Tensor>& output_tensors) -> std::reference_wrapper<Program> {
 
             auto program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-            auto&& [program_ptr, cache_hit] = program_cache.find(program_hash);
+            auto program_ptr = program_cache.find(program_hash);
+
+            bool cache_hit = program_ptr.has_value();
             if (not cache_hit) {
                 program_ptr = std::make_shared<operation::ProgramWithCallbacks>(operation.create_program(input_tensors, optional_input_tensors, output_tensors));
-                program_cache.insert(program_hash, program_ptr);
+                program_cache.insert(program_hash, program_ptr.value());
             }
-            auto& program_with_callbacks = *(reinterpret_cast<operation::ProgramWithCallbacks*>(program_ptr.get()));
+            auto& program_with_callbacks = *(reinterpret_cast<operation::ProgramWithCallbacks*>(program_ptr.value().get()));
             TT_ASSERT(program_with_callbacks.supports_program_cache());
 
             if (cache_hit) {

@@ -164,6 +164,78 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
+void dump_memory_config(std::ofstream& output_stream, const MemoryConfig& memory_config) {
+    output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
+    output_stream.write(reinterpret_cast<const char*>(&memory_config.memory_layout), sizeof(TensorMemoryLayout));
+    output_stream.write(reinterpret_cast<const char*>(&memory_config.buffer_type), sizeof(BufferType));
+
+    bool has_shard_spec = memory_config.shard_spec.has_value();
+    output_stream.write(reinterpret_cast<const char*>(&has_shard_spec), sizeof(bool));
+    if (has_shard_spec) {
+        const auto& shard_spec = memory_config.shard_spec.value();
+        const auto& core_ranges = shard_spec.grid.ranges();
+        std::size_t num_core_ranges = core_ranges.size();
+        output_stream.write(reinterpret_cast<const char*>(&num_core_ranges), sizeof(std::size_t));
+        for (const auto& core_range : core_ranges) {
+            output_stream.write(reinterpret_cast<const char*>(&core_range), sizeof(CoreRange));
+        }
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
+    }
+}
+
+void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
+    ofstream output_stream(file_name, ios::out | ios::binary);
+    if (not output_stream) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    dump_memory_config(output_stream, memory_config);
+}
+
+MemoryConfig load_memory_config(std::ifstream& input_stream) {
+    std::uint8_t version_id;
+    TensorMemoryLayout memory_layout;
+    BufferType buffer_type;
+    bool has_shard_spec;
+    input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(std::uint8_t));
+    if (version_id != VERSION_ID) {
+        throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
+    }
+    input_stream.read(reinterpret_cast<char*>(&memory_layout), sizeof(TensorMemoryLayout));
+    input_stream.read(reinterpret_cast<char*>(&buffer_type), sizeof(BufferType));
+    input_stream.read(reinterpret_cast<char*>(&has_shard_spec), sizeof(bool));
+
+    std::optional<ShardSpec> shard_spec = std::nullopt;
+    if (has_shard_spec) {
+        std::size_t num_core_ranges;
+        std::set<CoreRange> core_ranges;
+        std::array<uint32_t, 2> shape;
+        ShardOrientation orientation;
+        bool halo;
+
+        input_stream.read(reinterpret_cast<char*>(&num_core_ranges), sizeof(std::size_t));
+        for (auto index = 0; index < num_core_ranges; index++) {
+            CoreRange core_range{{}, {}};
+            input_stream.read(reinterpret_cast<char*>(&core_range), sizeof(CoreRange));
+            core_ranges.insert(core_range);
+        }
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
+        input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
+        input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
+        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation, halo};
+    }
+    return MemoryConfig{memory_layout, buffer_type, shard_spec};
+}
+
+MemoryConfig load_memory_config(const std::string& file_name) {
+    ifstream input_stream(file_name, ios::in | ios::binary);
+    if (not input_stream) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    return load_memory_config(input_stream);
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
