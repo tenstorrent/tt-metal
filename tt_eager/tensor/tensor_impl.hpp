@@ -877,6 +877,9 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
     if (tensor.storage_type() == StorageType::DEVICE) {
         return to_string<T>(to_host<T>(tensor));
     }
+    if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
+        return to_string<T>(to_host<T>(tensor));
+    }
 
     if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
         // Convert to FLOAT32 tensor before printing

@@ -956,7 +956,7 @@ def as_tensor(
             ttnn.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        storage_type = "_multi_device" if mesh_mapper else ""
+        storage_type = f"_multi_device_{device.get_num_devices()}" if mesh_mapper else ""
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         try:

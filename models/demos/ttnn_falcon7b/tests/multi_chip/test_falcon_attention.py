@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.demos.ttnn_falcon7b.tt import TtFalconAttention
+from models.demos.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.ttnn_falcon7b.tt.common import (
     create_custom_preprocessor,
@@ -21,6 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import transformers
 
 from loguru import logger
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
@@ -45,7 +46,7 @@ def torch_model():
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
+    "llm_mode, device_batch_size, seq_len, kv_cache_len",
     (
         ("prefill", 1, 128, 0),
         ("decode", 32, 1, 128),
@@ -57,10 +58,30 @@ def torch_model():
     (("tiiuae/falcon-7b-instruct", 0.99),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize(
+    "device_mesh",
+    [
+        2,
+    ],
+    indirect=True,
+)
 def test_falcon_attention(
-    device, model_name, llm_mode, batch, seq_len, kv_cache_len, expected_pcc, model_config_str, torch_model
+    device_mesh,
+    model_name,
+    llm_mode,
+    device_batch_size,
+    seq_len,
+    kv_cache_len,
+    expected_pcc,
+    model_config_str,
+    torch_model,
 ):
     torch.manual_seed(0)
+    batch = device_batch_size * device_mesh.get_num_devices()
+    if llm_mode == "decode":
+        shard_dim = 2
+    else:
+        shard_dim = 0
 
     configuration = transformers.FalconConfig.from_pretrained(model_name)
     model_config = get_model_config(model_config_str)
@@ -68,13 +89,35 @@ def test_falcon_attention(
     kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
 
     attention_input, tt_attention_input = create_attention_input(
-        llm_mode, dtype, batch, seq_len, configuration.hidden_size, device
+        llm_mode,
+        dtype,
+        batch,
+        seq_len,
+        configuration.hidden_size,
+        device_mesh,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=shard_dim),
     )
     position_ids = create_position_ids(llm_mode, kv_cache_len)
     attention_mask, tt_attention_mask = create_attention_mask(
-        llm_mode, dtype, attention_input, batch, seq_len, configuration.num_attention_heads, kv_cache_len, device
+        llm_mode,
+        dtype,
+        attention_input,
+        batch,
+        seq_len,
+        configuration.num_attention_heads,
+        kv_cache_len,
+        device_mesh,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=shard_dim),
     )
-    layer_past, tt_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
+    layer_past, tt_layer_past = create_kv_cache(
+        llm_mode,
+        dtype,
+        batch,
+        kv_cache_len,
+        configuration,
+        device_mesh,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+    )
 
     pytorch_out, pytorch_layer_present = torch_model(
         attention_input,
@@ -86,12 +129,13 @@ def test_falcon_attention(
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        device=device,
+        device=device_mesh,
         custom_preprocessor=create_custom_preprocessor(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
-            device=device,
+            device=device_mesh,
             base_file_name=get_model_prefix(),
+            weights_mesh_mapper=ReplicateTensorToMesh(device_mesh),
         ),
     )
     tt_FalconAttention_model = TtFalconAttention(
@@ -112,11 +156,11 @@ def test_falcon_attention(
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
 
     tt_layer_present = (
-        ttnn.to_torch(tt_layer_present[0]).squeeze(1),
-        ttnn.to_torch(tt_layer_present[1]).squeeze(1),
+        ttnn.to_torch(tt_layer_present[0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).squeeze(1),
+        ttnn.to_torch(tt_layer_present[1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).squeeze(1),
     )
 
     if llm_mode == "decode":

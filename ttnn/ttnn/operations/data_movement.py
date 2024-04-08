@@ -204,7 +204,6 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         )
 
     on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-    device = input_tensor.device()
     layout = input_tensor.layout
     rank = len(input_tensor.shape)
 
@@ -228,6 +227,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
 
         if on_device and not ttnn.is_tensor_storage_on_device(output_tensor):
+            device = input_tensor.device()
             output_tensor = ttnn.to_device(output_tensor, device)
         return output_tensor
     else:
