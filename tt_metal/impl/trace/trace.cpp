@@ -78,9 +78,15 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
         cq.wait_until_empty();
     });
 
-    uint64_t unpadded_size = data.size() * sizeof(uint32_t);
+    // Add command to terminate the trace buffer
+    CQPrefetchCmd cmd;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
+    uint32_t* ptr = (uint32_t*)&cmd;
+    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+        data.push_back(*ptr++);
+    }
 
-    // TODO: add CQ_PREFETCH_EXEC_BUF_END command and pad to the next page
+    uint64_t unpadded_size = data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(unpadded_size, cq.device()->num_banks(BufferType::DRAM), 0, 0);
     size_t numel_page = page_size / sizeof(uint32_t);
     size_t numel_padding = numel_page - data.size() % numel_page;
@@ -102,7 +108,7 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
         LogMetalTrace,
         "Trace {} instantiated with completion buffer num_entries={}, issue buffer unpadded size={}, padded size={}, num_pages={}",
         tid,
-        desc->num_entries_in_completion_q,
+        desc->num_completion_q_reads,
         unpadded_size,
         padded_size,
         padded_size / page_size);

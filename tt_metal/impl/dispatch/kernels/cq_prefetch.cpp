@@ -675,13 +675,13 @@ bool process_cmd(uint32_t& cmd_ptr,
         break;
 
     case CQ_PREFETCH_CMD_EXEC_BUF:
-        DPRINT << "exec buf" << ENDL();
+        DPRINT << "exec buf: " << cmd_ptr << ENDL();
         ASSERT(!exec_buf);
         stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
         break;
 
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
-        DPRINT << "exec buf end" << ENDL();
+        DPRINT << "exec buf end: " << cmd_ptr << ENDL();
         ASSERT(exec_buf);
         done = true;
         break;
