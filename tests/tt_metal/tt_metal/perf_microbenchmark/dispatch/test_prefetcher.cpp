@@ -248,14 +248,16 @@ void add_prefetcher_paged_read_cmd(vector<uint32_t>& cmds,
                              uint32_t base_addr,
                              uint32_t page_size,
                              uint32_t pages,
-                             bool is_dram) {
+                             bool is_dram,
+                             uint32_t length_adjust) {
 
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-    cmd.relay_paged.pad1 = 0;
-    cmd.relay_paged.is_dram = is_dram;
-    cmd.relay_paged.start_page = start_page;
+    cmd.relay_paged.packed_page_flags =
+        (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+        (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+    cmd.relay_paged.length_adjust = length_adjust;
     cmd.relay_paged.base_addr = base_addr;
     cmd.relay_paged.page_size = page_size;
     cmd.relay_paged.pages = pages;
@@ -407,18 +409,22 @@ void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uin
                                   uint32_t start_page,
                                   uint32_t base_addr,
                                   uint32_t page_size,
-                                  uint32_t pages) {
+                                  uint32_t pages,
+                                  uint32_t length_adjust) {
 
     uint32_t base_addr_words = base_addr / sizeof(uint32_t);
     uint32_t page_size_words = page_size / sizeof(uint32_t);
+    uint32_t length_adjust_words = length_adjust / sizeof(uint32_t);
 
     // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
     TT_ASSERT(start_page < num_dram_banks_g);
-    for (uint32_t page_idx = start_page; page_idx < start_page + pages; page_idx++) {
+    uint32_t last_page = start_page + pages;
+    for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
 
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
+        if (page_idx == last_page - 1) page_size_words -= length_adjust_words;
         for (uint32_t j = 0; j  < page_size_words; j++) {
             for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
                 for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
@@ -480,12 +486,16 @@ void gen_dram_read_cmd(Device *device,
                        uint32_t start_page,
                        uint32_t base_addr,
                        uint32_t page_size,
-                       uint32_t pages) {
+                       uint32_t pages,
+                       uint32_t length_adjust) {
 
     vector<uint32_t> dispatch_cmds;
     const bool is_dram = true;
 
-    uint32_t worker_data_size = page_size * pages;
+    // Device code assumes padding to 32 bytes
+    TT_ASSERT((length_adjust & 0x1f) == 0);
+
+    uint32_t worker_data_size = page_size * pages - length_adjust;
     log_trace(tt::LogTest, "Starting {} with worker_core: {} dst_addr: 0x{:x} start_page: {} base_addr: 0x{:x} page_size: {} pages: {}. worker_data_size: 0x{:x}",
         __FUNCTION__, worker_core.str(), dst_addr, start_page, base_addr, page_size, pages, worker_data_size);
 
@@ -493,7 +503,7 @@ void gen_dram_read_cmd(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
-    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages, is_dram);
+    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages, is_dram, length_adjust);
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
@@ -501,7 +511,7 @@ void gen_dram_read_cmd(Device *device,
     cmd_sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
 
     // Model the paged read in this function by updating worker data with interleaved/paged DRAM data, for validation later.
-    add_paged_dram_data_to_worker_data(dram_data_map, worker_core, worker_data, start_page, base_addr, page_size, pages);
+    add_paged_dram_data_to_worker_data(dram_data_map, worker_core, worker_data, start_page, base_addr, page_size, pages, length_adjust);
 }
 
 
@@ -625,7 +635,7 @@ void gen_paged_read_dram_test(Device *device,
         uint32_t base_addr = (pages_read / num_dram_banks_g) * dram_page_size_g;
 
         gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
 
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_read += dram_pages_to_read_g;
@@ -662,7 +672,7 @@ void gen_paged_write_read_dram_test(Device *device,
                           start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
         gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
         gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, write_addr,
-                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
 
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_written += dram_pages_to_read_g;
@@ -735,8 +745,11 @@ void gen_rnd_dram_paged_cmd(Device *device,
     if (size < page_size) size = page_size;
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
+    uint32_t length_adjust = std::rand() % page_size;
+    length_adjust = (length_adjust >> 5) << 5;
+    if (length_adjust > 64 * 1024) length_adjust = 64 * 1024;
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      start_page, base_addr, page_size, pages);
+                      start_page, base_addr, page_size, pages, length_adjust);
 }
 
 void gen_rnd_inline_cmd(Device *device,
@@ -934,20 +947,35 @@ void gen_smoke_test(Device *device,
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 32, num_dram_banks_g);
+                      0, 0, 32, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 32, num_dram_banks_g);
+                      0, 0, 32, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      4, 32, 64, num_dram_banks_g);
+                      4, 32, 64, num_dram_banks_g, 0);
 
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 128, 128);
+                      0, 0, 128, 128, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      4, 32, 2048, num_dram_banks_g * 8);
+                      4, 32, 2048, num_dram_banks_g + 4, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      5, 32, 2048, num_dram_banks_g * 8 + 1);
+                      5, 32, 2048, num_dram_banks_g * 8 + 1, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      3, 128, 6144, num_dram_banks_g * 8 + 7);
+                      3, 128, 6144, num_dram_banks_g + 7, 0);
+
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      0, 0, 128, 128, 32);
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      4, 32, 2048, num_dram_banks_g * 2, 1536);
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      5, 32, 2048, num_dram_banks_g * 2 + 1, 256);
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      3, 128, 6144, num_dram_banks_g + 7, 640);
+
+    // Forces length_adjust to back into prior read.  Device reads pages, shouldn't be a problem...
+    uint32_t page_size = 256 + 32;
+    uint32_t length = scratch_db_size_g / 2 / page_size * page_size + page_size;
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      3, 128, page_size, length / page_size, 160);
 
     // Send inline data to (maybe) multiple cores
     dispatch_cmds.resize(0);
