@@ -253,6 +253,7 @@ int main(int argc, char **argv) {
                     test_results_addr, // 14: test_results_addr
                     test_results_size, // 15: test_results_size
                     timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
+                    0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
                 };
             log_info(LogTest, "run L1 MUX {} at x={},y={} (phys x={},y={})",
                             i, mux_l1_core[i].x, mux_l1_core[i].y, mux_l1_phys_core[i].x, mux_l1_phys_core[i].y);
@@ -300,6 +301,7 @@ int main(int argc, char **argv) {
                 test_results_addr, // 14: test_results_addr
                 test_results_size, // 15: test_results_size
                 timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
+                0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
             };
         log_info(LogTest, "run L2 MUX at x={},y={} (phys x={},y={})",
                  mux_l2_core.x, mux_l2_core.y, mux_l2_phys_core.x, mux_l2_phys_core.y);
@@ -359,6 +361,7 @@ int main(int argc, char **argv) {
                 test_results_addr, // 22: test_results_addr
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
+                0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
             };
 
         log_info(LogTest, "run L1 DEMUX at x={},y={} (phys x={},y={})",
@@ -423,6 +426,7 @@ int main(int argc, char **argv) {
                     test_results_addr, // 22: test_results_addr
                     test_results_size, // 23: test_results_size
                     timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
+                    0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
                 };
 
             log_info(LogTest, "run L2 DEMUX at x={},y={} (phys x={},y={})",
