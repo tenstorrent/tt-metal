@@ -248,6 +248,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 }  // namespace unit_tests::create_pipeline
 
 TEST_F(CommandQueueFixture, TestPipelineAcrossRows) {
+    // #7222
+    GTEST_SKIP();
     if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
