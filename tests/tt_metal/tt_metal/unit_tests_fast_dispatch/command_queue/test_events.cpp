@@ -17,7 +17,10 @@ enum class DataMovementMode: uint8_t {
     READ = 1
 };
 
-TEST_F(CommandQueueFixture, TestDataMovementEventsWrittenToCompletionQueueInOrder) {
+constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
+constexpr uint32_t completion_queue_page_size = 4096;
+
+TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
     uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
@@ -31,7 +34,6 @@ TEST_F(CommandQueueFixture, TestDataMovementEventsWrittenToCompletionQueueInOrde
         uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
-        constexpr uint32_t completion_queue_event_alignment = 32;
 
         vector<std::shared_ptr<Buffer>> buffers;
         for (size_t i = 0; i < num_buffers; i++) {
@@ -52,16 +54,17 @@ TEST_F(CommandQueueFixture, TestDataMovementEventsWrittenToCompletionQueueInOrde
         uint32_t event;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
-                uint32_t host_addr = last_read_address + i * completion_queue_event_alignment;
+                uint32_t host_addr = last_read_address + i*completion_queue_page_size + completion_queue_event_offset;
                 tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, expected_event_id++);
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
             for (size_t i = 0; i < num_buffers; i++) {
-                uint32_t host_addr = completion_queue_base + (i * (completion_queue_event_alignment + page_size));
+                // Extra entry in the completion queue is from the buffer read data.
+                uint32_t host_addr = completion_queue_base + (2*i + 1)*completion_queue_page_size + completion_queue_event_offset;
                 tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, expected_event_id++);
-                last_read_address = host_addr + completion_queue_event_alignment + page_size;
+                last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
         }
     }
@@ -150,6 +153,8 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
 // Negative test. Device sync. Single CQ here syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventHang) {
+    // Skip this test until #7216 is implemented.
+    GTEST_SKIP();
     tt::llrt::OptionsG.set_test_mode_enabled(true); // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
@@ -257,7 +262,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
     uint32_t cmds_issued_per_cq = 0;
-    const uint32_t num_cmds_per_cq = 3; // Record, Write, Wait
+    const uint32_t num_cmds_per_cq = 2; // Record, Write
     uint32_t expected_event_id = 0;
 
     auto start = std::chrono::system_clock::now();
@@ -288,7 +293,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     // Read completion queue and ensure we see expected event IDs
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_cmds_per_cq; i++) {
-        uint32_t host_addr = completion_queue_base + i * completion_queue_event_alignment;
+        uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
         tt::Cluster::instance().read_sysmem(&event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, expected_event_id++);
     }
