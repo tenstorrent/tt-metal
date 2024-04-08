@@ -78,20 +78,19 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
         cq.wait_until_empty();
     });
 
-    uint64_t data_size = data.size() * sizeof(uint32_t);
+    uint64_t unpadded_size = data.size() * sizeof(uint32_t);
 
     // TODO: add CQ_PREFETCH_EXEC_BUF_END command and pad to the next page
-    size_t page_size = interleaved_page_size(data_size, cq.device()->num_banks(BufferType::DRAM), 0, 0);
+    size_t page_size = interleaved_page_size(unpadded_size, cq.device()->num_banks(BufferType::DRAM), 0, 0);
     size_t numel_page = page_size / sizeof(uint32_t);
     size_t numel_padding = numel_page - data.size() % numel_page;
     if (numel_padding > 0) {
         data.resize(data.size() + numel_padding, 0/*padding value*/);
     }
-    log_trace(LogMetalTrace, "Trace buffer size = {}, padded size = {}, data = {}", data_size, data.size() * sizeof(uint32_t), data);
+    uint64_t padded_size = data.size() * sizeof(uint32_t);
 
     // Commit the trace buffer to device DRAM
-    auto buffer = std::make_shared<Buffer>(
-        cq.device(), data.size() * sizeof(uint32_t), page_size, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED);
+    auto buffer = std::make_shared<Buffer>(cq.device(), padded_size, page_size, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED);
 
     EnqueueWriteBuffer(cq, buffer, data, kBlocking);
     Finish(cq);  // clear side effects flag
@@ -99,6 +98,14 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     // Pin the trace buffer in memory until explicitly released by the user
     this->add_instance(tid, {desc, buffer});
     this->state = TraceState::READY;
+    log_trace(
+        LogMetalTrace,
+        "Trace {} instantiated with completion buffer num_entries={}, issue buffer unpadded size={}, padded size={}, num_pages={}",
+        tid,
+        desc->num_entries_in_completion_q,
+        unpadded_size,
+        padded_size,
+        padded_size / page_size);
     return tid;
 }
 
