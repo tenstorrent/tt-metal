@@ -10,6 +10,7 @@
 #include <string>
 
 #include "allocator/allocator.hpp"
+#include "assert.hpp"
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "tt_metal/common/logger.hpp"
@@ -1476,12 +1477,6 @@ void HWCommandQueue::enqueue_program(
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
 
-    // FIXME: #7070 need special handling for bypass mode to allow tracing of events as well
-    if (this->manager.get_bypass_mode()) {
-        tt::log_debug(tt::LogDispatch, "Skipping enqueue_record_event for command queue {} in bypass mode", this->id);
-        return;
-    }
-
     // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
     // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
     // in main thread otherwise event_id selection would get out of order due to main/worker thread timing.
@@ -1490,11 +1485,20 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     event->device = this->device;
     event->ready = true; // what does this mean???
 
+    if (this->manager.get_bypass_mode()) {
+        TT_FATAL(this->trace_ctx != nullptr, "A trace context must be present in bypass mode!");
+        event->event_id = this->trace_ctx->relative_event_id(event->event_id);
+    }
     auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event->event_id, this->expected_num_workers_completed);
     this->enqueue_command(command, false);
 
-    this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
-    this->num_entries_in_completion_q++;
+    if (this->manager.get_bypass_mode()) {
+        this->trace_ctx->traced_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
+        this->trace_ctx->num_entries_in_completion_q++;
+    } else {
+        this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
+        this->num_entries_in_completion_q++;
+    }
 }
 
 void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> event) {
