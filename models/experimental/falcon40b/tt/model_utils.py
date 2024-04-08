@@ -354,6 +354,7 @@ def partial_layernorm(
                     pgmconfig,
                 )
 
+            for i in range(num_devices):
                 ttl.tensor.sharded_to_interleaved_partial(
                     xs_slice[i],
                     xs_output_cat[i],

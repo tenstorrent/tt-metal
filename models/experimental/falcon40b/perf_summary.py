@@ -11,66 +11,6 @@ DRAM_INTERLEAVED = "{'buffer_type': 'DRAM'; 'memory_layout': 'INTERLEAVED'}"
 def assign_op_id_cross_device(df, num_chips):
     df.loc[:, "OP ID CROSS DEVICE"] = df["GLOBAL CALL COUNT"].apply(lambda x: x // num_chips)
 
-    # Fix for partially scliced groups
-    partial_group_counter = 0
-    partial_group_size = 0
-    partial_group_idx = 0
-    partial_group_assignments = {}
-    partial_group_sizes = {}
-    partial_group_op_ids = {}
-    found_partial_group_size = False
-
-    def count_partial_group_size(row):
-        nonlocal partial_group_counter
-        nonlocal partial_group_size
-        nonlocal partial_group_idx
-        nonlocal partial_group_assignments
-        nonlocal partial_group_sizes
-        nonlocal found_partial_group_size
-        nonlocal partial_group_op_ids
-        if row["OP CODE"] == "InterleavedToShardedPartial":  # Start of a partial group
-            partial_group_counter += 1
-
-        elif row["OP CODE"] == "ShardedToInterleavedPartial":
-            if not found_partial_group_size:
-                found_partial_group_size = True
-                partial_group_sizes[
-                    str(partial_group_idx)
-                ] = partial_group_size  # Size of partial group including ShardedToInterleavedPartial op, excluding InterleavedToShardedPartial op
-
-            partial_group_counter -= 1
-            if partial_group_counter == 0:  # Done with the partial group, resetting for next group
-                partial_group_idx += 1
-                found_partial_group_size = False
-                partial_group_size = 0
-
-        if partial_group_counter > 0 and row["OP CODE"] != "InterleavedToShardedPartial":
-            # This means we are within a partial group but it's not the start (InterleavedToShardedPartial)
-            if not str(partial_group_idx) in partial_group_assignments:
-                partial_group_assignments[str(partial_group_idx)] = [row["GLOBAL CALL COUNT"]]
-                partial_group_op_ids[str(partial_group_idx)] = row["OP ID CROSS DEVICE"]
-            else:
-                partial_group_assignments[str(partial_group_idx)].append(row["GLOBAL CALL COUNT"])
-            if not found_partial_group_size:
-                partial_group_size += 1
-        return row
-
-    df = df.apply(count_partial_group_size, axis=1)
-
-    def update_op_id_cross_device(row):
-        nonlocal partial_group_assignments
-        nonlocal partial_group_sizes
-        for groups in partial_group_assignments:
-            if row["GLOBAL CALL COUNT"] in partial_group_assignments[groups]:
-                row["OP ID CROSS DEVICE"] = partial_group_op_ids[groups] + (
-                    (row["GLOBAL CALL COUNT"] - partial_group_assignments[groups][0])
-                    % (partial_group_sizes[groups] + 1)
-                )
-                return row
-        return row
-
-    df = df.apply(update_op_id_cross_device, axis=1)
-
     return df
 
 
