@@ -238,6 +238,7 @@ class TTPyMaxPool(TTPyOp):
                 pad_w,
                 output_mem_config=act_mem_config if output_mem_config is None else output_mem_config,
             )
+            haloed_act.deallocate()
             return output
 
         self.max_pool = max_pool_
