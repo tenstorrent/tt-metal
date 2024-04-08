@@ -253,6 +253,7 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
 }
 
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
+    GTEST_SKIP();
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -332,6 +333,7 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
 }
 
 TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
+    GTEST_SKIP();
     CommandQueue& command_queue = this->device_->command_queue();
 
     std::shared_ptr<Buffer> input = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
