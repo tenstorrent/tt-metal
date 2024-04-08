@@ -511,7 +511,6 @@ class CommandQueue {
         hwcq.set_trace_context(ctx);
         hwcq.manager.set_bypass_mode(true /* enable bypass */, true /*clear buffer*/);
         run_commands();
-        hwcq.set_trace_context(nullptr);
         hwcq.manager.set_bypass_mode(false /* disable bypass */, false);
         return std::move(hwcq.manager.get_bypass_data());
     }
