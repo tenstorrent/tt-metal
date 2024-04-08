@@ -362,13 +362,13 @@ static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
 // The dispatch buffer is a ring buffer.
 template<bool is_dram>
 uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
-                                 uint32_t& downstream__data_ptr) {
+                                 uint32_t& downstream__data_ptr,
+                                 uint32_t page_id) {
 
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-    uint32_t page_id = cmd->relay_paged.start_page;
     uint32_t base_addr = cmd->relay_paged.base_addr;
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
@@ -430,15 +430,19 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     }
 
     // Third step - write from DB
+    // Note that we may write less than full pages despite reading full pages based on length_adjust
+    // Expectation is that the gain from reading less is small to 0, revisit as needed
+    ASSERT(cmd->relay_paged.length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
-    uint32_t amt_to_write = amt_read;
+    uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
+    ASSERT((amt_to_write & 0x1f) == 0);
     uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     uint32_t pad_to_page = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
     downstream_data_ptr += pad_to_page;
 
-    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
+    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -653,10 +657,17 @@ bool process_cmd(uint32_t& cmd_ptr,
 
     case CQ_PREFETCH_CMD_RELAY_PAGED:
         DPRINT << "relay dram page: " << cmd_ptr << ENDL();
-        if (cmd->relay_paged.is_dram) {
-            stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr);
-        } else {
-            stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr);
+        {
+            uint32_t packed_page_flags = cmd->relay_paged.packed_page_flags;
+            uint32_t is_dram = packed_page_flags & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
+            uint32_t start_page =
+                (packed_page_flags >> CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT) &
+                CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
+            if (is_dram) {
+                stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
+            } else {
+                stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr, start_page);
+            }
         }
         break;
 
