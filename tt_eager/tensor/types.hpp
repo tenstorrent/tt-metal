@@ -320,6 +320,20 @@ struct MultiDeviceStorage {
     std::vector<Shape> shapes;
 
     MultiDeviceStorage() = default;
+    const MemoryConfig memory_config() const {
+        if (this->buffers.at(0).get() == nullptr) {
+            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
+        }
+
+        std::optional<ShardSpec> shard_spec = std::nullopt;
+        if (is_sharded(this->buffers.at(0)->buffer_layout())) {
+            shard_spec = this->buffers.at(0)->shard_spec().tensor_shard_spec;
+        }
+        return MemoryConfig{
+            .memory_layout = this->buffers.at(0)->buffer_layout(),
+            .buffer_type = this->buffers.at(0)->buffer_type(),
+            .shard_spec = shard_spec};
+    }
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };

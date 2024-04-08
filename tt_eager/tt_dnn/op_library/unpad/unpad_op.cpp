@@ -220,7 +220,7 @@ Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, con
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
 
-    return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, output_mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
+    return operation::run(Unpad{output_tensor_start, output_tensor_end, output_mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
 
 }
 
