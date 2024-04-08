@@ -16,6 +16,9 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
 
 # Llama2_70b related cached files and tests (the test should parse env variables similar to these)
 export LLAMA_CKPT_DIR=/opt/cache/llama2_70b_cache/llama-data-repacked-2/llama-2-70b/

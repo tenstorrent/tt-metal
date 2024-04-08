@@ -11,6 +11,7 @@ from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 import transformers
 
 from loguru import logger
@@ -48,8 +49,15 @@ def torch_model():
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize(
+    "device_mesh",
+    [
+        2,
+    ],
+    indirect=True,
+)
 def test_falcon_mlp(
-    device,
+    device_mesh,
     model_name,
     batch,
     seq_len,
@@ -60,18 +68,19 @@ def test_falcon_mlp(
     torch.manual_seed(0)
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_input = (torch.rand(batch, 1, seq_len, configuration.hidden_size) * 2) - 1
+    torch_input = (torch.rand(batch * device_mesh.get_num_devices(), 1, seq_len, configuration.hidden_size) * 2) - 1
     torch_output = torch_model(torch_input)
 
     model_config = get_model_config(model_config_str)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        device=device,
+        device=device_mesh,
         custom_preprocessor=create_custom_preprocessor(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
-            device=device,
+            device=device_mesh,
             base_file_name=get_model_prefix(),
+            weights_mesh_mapper=ReplicateTensorToMesh(device_mesh),
         ),
     )
 
@@ -79,10 +88,15 @@ def test_falcon_mlp(
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=model_config["DEFAULT_DTYPE"],
-        device=device,
+        device=device_mesh,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
     )
     ttnn_output = ttnn_model(ttnn_input)
 
-    passed, pcc = assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output).to(torch_output.dtype), expected_pcc)
+    passed, pcc = assert_with_pcc(
+        torch_output,
+        ttnn.to_torch(ttnn_output, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).to(torch_output.dtype),
+        expected_pcc,
+    )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")

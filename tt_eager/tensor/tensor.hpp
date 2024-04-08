@@ -222,6 +222,9 @@ struct Tensor {
             if (buffer == nullptr)
                 TT_THROW("Cannot get the device from a tensor without an allocated buffer");
             return buffer->device();
+        } else if (this->storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
+            auto& storage = std::get<MultiDeviceStorage>(this->get_storage());
+            return storage.buffers.at(0)->device();
         } else {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }
@@ -231,6 +234,8 @@ struct Tensor {
             [](const auto &storage) -> MemoryConfig {
                 using T = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<T, DeviceStorage>) {
+                    return storage.memory_config();
+                } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                     return storage.memory_config();
                 } else {
                     TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");

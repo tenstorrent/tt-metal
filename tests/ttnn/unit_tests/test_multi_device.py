@@ -271,8 +271,8 @@ def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
     """Multidevice API: Data Parallel on matmul using cached tensor"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
-    torch_input_a_tensor = torch.rand((4, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
-    torch_input_b_tensor = torch.rand((1, 1, 32 * device_mesh.get_num_devices(), 32), dtype=torch.bfloat16)
+    torch_input_a_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
+    torch_input_b_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     torch_output_golden = torch_input_a_tensor @ torch_input_b_tensor
 
     ttnn_input_a_tensor = ttnn.as_tensor(
@@ -311,3 +311,26 @@ def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
             ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+def test_multi_device_permute(device_mesh, layout, memory_config, dtype):
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
+
+    torch_tensor = torch.rand((32, 1, 160, 64 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
+    torch_golden = torch.permute(torch_tensor, (0, 1, 3, 2))
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor, dtype=dtype, layout=layout, mesh_mapper=ShardTensorToMesh(device_mesh, dim=3)
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh, memory_config=memory_config)
+    ttnn_permute = ttnn.permute(ttnn_tensor, (0, 1, 3, 2))
+    ttnn_loop_back_tensor = ttnn.from_device(ttnn_permute)
+    torch_loop_back_tensor = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=2))
+
+    assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
