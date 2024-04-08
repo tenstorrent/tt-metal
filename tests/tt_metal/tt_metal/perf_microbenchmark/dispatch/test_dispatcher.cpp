@@ -294,7 +294,7 @@ void gen_cmds(Device *device,
 
     switch (test_type_g) {
     case 0:
-        if (all_workers_g.size() != 1) log_fatal("Should use single core for unicast write test. Other cores ignored.");
+        if (all_workers_g.size() != 1) TT_FATAL("Should use single core for unicast write test. Other cores ignored.");
         gen_linear_or_packed_write_test(cmd_count, true, false, device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, page_size);
         break;
     case 1:
@@ -553,12 +553,12 @@ int main(int argc, char **argv) {
                 if (max_xfer_size_bytes_g == min_xfer_size_bytes_g) {
                     total_words = (num_pages_g * max_xfer_size_bytes_g) / sizeof(uint32_t);
                 } else {
-                    log_fatal("Set max_xfer_size_bytes_g to min_xfer_size_bytes_g to calculate perf accurately");
+                    log_warning("Set max_xfer_size_bytes_g to min_xfer_size_bytes_g to calculate perf accurately");
                 }
                 break;
             case 4:
                 if (!send_to_all_g) {
-                    log_fatal("Set send_to_all to true for reliable perf data");
+                    log_warning("Set send_to_all to true for reliable perf data");
                 }
                 total_words = worker_data_size(worker_data) * all_workers_g.size();
                 break;
