@@ -918,7 +918,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}", this->id_);
+    log_info(tt::LogMetal, "Initializing device {}. Program cache is NOT enabled", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);

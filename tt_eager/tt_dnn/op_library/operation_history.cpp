@@ -35,8 +35,13 @@ void write_row(std::ofstream& output_file_stream, const std::size_t num_columns,
 
 std::size_t write_header(
     std::ofstream& output_file_stream, const std::size_t num_attributes, const std::size_t num_input_tensors) {
-    auto column_names =
-        std::vector<std::string>{"ttnn_operation_id", "operation_type", "operation_name", "composite_parent_names"};
+    auto column_names = std::vector<std::string>{
+        "ttnn_operation_id",
+        "operation_type",
+        "operation_name",
+        "composite_parent_names",
+        "program_cache_hit",
+        "program_hash"};
 
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
         column_names.push_back(fmt::format("attribute_{}_name", attribute_index));
@@ -68,6 +73,8 @@ void write_record(
     row.push_back(record.operation_type);
     row.push_back(record.operation_name);
     row.push_back(fmt::format("{}", record.composite_parent_names));
+    row.push_back(fmt::format("{}", record.program_cache_hit));
+    row.push_back(fmt::format("{}", record.program_hash));
     for (auto attribute_index = 0; attribute_index < num_attributes; attribute_index++) {
         if (attribute_index < record.attributes.size()) {
             const auto& [name, value] = record.attributes.at(attribute_index);
