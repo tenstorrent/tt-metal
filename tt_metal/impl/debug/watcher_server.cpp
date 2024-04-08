@@ -584,13 +584,12 @@ static void dump_core(
     CoreCoord core = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? "Ethnet Core" : "Worker Core";
+    string core_type = is_eth_core ? "ethnet" : "worker";
     string core_str = fmt::format(
-        "Device {}, {} {}[physical {}]",
-        device->id(), core_type, logical_core.coord, core.str()
+        "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2})",
+        device->id(), core_type, logical_core.coord.x, logical_core.coord.y, core.x, core.y
     );
-    string pad(11 - core.str().length(), ' ');
-    fprintf(f, "%s:%s ", core_str.c_str(), pad.c_str());
+    fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;

@@ -138,11 +138,11 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     int line_num = 30;
 
     string expected = fmt::format(
-        "Device {}, {} Core {}[physical {}]: {} tripped an assert on line {}. Current kernel: {}.",
+        "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
         device->id(),
-        (riscv_type == DebugErisc) ? "Ethnet" : "Worker",
-        logical_core.str(),
-        phys_core.str(),
+        (riscv_type == DebugErisc) ? "ethnet" : "worker",
+        logical_core.x, logical_core.y,
+        phys_core.x, phys_core.y,
         risc,
         line_num,
         kernel

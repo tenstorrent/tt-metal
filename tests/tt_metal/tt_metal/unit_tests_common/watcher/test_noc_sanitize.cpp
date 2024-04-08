@@ -129,10 +129,10 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access Unknown core w/ physical coords {} [addr=0x{:08x},len=102400]",
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc0 tried to access Unknown core w/ physical coords {} [addr=0x{:08x},len=102400]",
                 device->id(),
-                (is_eth_core) ? "Ethnet" : "Worker",
-                core.str(), phys_core.str(),
+                (is_eth_core) ? "ethnet" : "worker",
+                core.x, core.y, phys_core.x, phys_core.y,
                 (is_eth_core) ? "erisc" : "brisc", output_dram_noc_xy.str(),
                 output_dram_buffer_addr
             );
@@ -140,10 +140,10 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         case SanitizeAlignmentL1:
         case SanitizeAlignmentDRAM:
             expected = fmt::format(
-                "Device {}, {} Core {}[physical {}]: {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
                 device->id(),
-                (is_eth_core) ? "Ethnet" : "Worker",
-                core.str(), phys_core.str(),
+                (is_eth_core) ? "ethnet" : "worker",
+                core.x, core.y, phys_core.x, phys_core.y,
                 (is_eth_core) ? "erisc" : "brisc", input_dram_noc_xy.str(),
                 input_dram_buffer_addr,
                 l1_buffer_addr
