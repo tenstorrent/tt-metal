@@ -176,19 +176,12 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
         input_data[i] = i;
     }
 
-    EnqueueWriteBuffer(command_queue, input, input_data.data(), kBlocking);
-    vector<uint32_t> input_readback(input_data.size());
-    EnqueueReadBuffer(command_queue, input, input_readback.data(), kBlocking);
-    EXPECT_EQ(input_data, input_readback);
-
     // Capture trace on a trace queue
     Trace trace;
     BeginTrace(trace);
     EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
     EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
     EndTrace(trace);
-
-    trace.queue().dump();
 
     // Instantiate a trace on a device bound command queue
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
@@ -229,6 +222,33 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     EXPECT_EQ(d_cmd->write_paged.page_size, 2048);
 
     log_trace(LogTest, "Trace buffer content: {}", data_fd);
+    ReleaseTrace(trace_id);
+}
+
+TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    // Capture trace on a trace queue
+    Trace trace;
+    BeginTrace(trace);
+    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
+    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
+    EndTrace(trace);
+
+    // Instantiate a trace on a device bound command queue
+    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+
+    EnqueueTrace(command_queue, trace_id, true);
+    vector<uint32_t> input_readback(input_data.size());
+    EnqueueReadBuffer(command_queue, input, input_readback.data(), kBlocking);
+    EXPECT_EQ(input_data, input_readback);
+
     ReleaseTrace(trace_id);
 }
 
