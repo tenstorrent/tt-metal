@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_lib_bindings.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
-#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "tt_lib_bindings.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt::tt_metal::detail
 {
