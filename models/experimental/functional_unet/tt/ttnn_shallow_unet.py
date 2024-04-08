@@ -106,14 +106,15 @@ class UNet:
         self.c8_3 = parameters.c8_3
         self.output_layer = parameters.output_layer
 
-    def __call__(self, device, input_tensor, perf_mode=False):
+    def __call__(self, device, input_tensor, original_shape, perf_mode=False):
+        nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
         input_tensor = input_tensor.to(device, self.c1.conv.input_sharded_memory_config)
 
         profiler.tracy_message("c1")
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
         if perf_mode:
-            save_c1_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+            save_c1_2_out = output_tensor
         else:
             save_c1_2_out = ttl.tensor.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
@@ -125,7 +126,7 @@ class UNet:
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
         if perf_mode:
-            save_c2_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+            save_c2_2_out = output_tensor
         else:
             save_c2_2_out = ttl.tensor.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
@@ -137,7 +138,7 @@ class UNet:
         output_tensor = self.c3(output_tensor)
         output_tensor = self.c3_2(output_tensor)
         if perf_mode:
-            save_c3_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+            save_c3_2_out = output_tensor
         else:
             save_c3_2_out = ttl.tensor.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
@@ -149,7 +150,7 @@ class UNet:
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
         if perf_mode:
-            save_c4_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+            save_c4_2_out = output_tensor
         else:
             save_c4_2_out = ttl.tensor.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
@@ -169,11 +170,15 @@ class UNet:
 
         ## upsample block
         profiler.tracy_message("upsample1")
-        output_tensor = ttnn.reshape(output_tensor, (1, 132, 10, 64))
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (original_shape[-4], original_shape[-2] // 16, original_shape[-1] // 16, output_tensor.shape[-1]),
+        )
         output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
-        output_tensor = ttnn.reshape(output_tensor, (1, 1, 5280, 64))
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, nhw // 64, output_tensor.shape[-1]))
 
         profiler.tracy_message("concat1")
+        save_c4_2_out = ttnn.to_layout(save_c4_2_out, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = unet_concat([output_tensor, save_c4_2_out], dim=-1, perf_mode=perf_mode)
 
         profiler.tracy_message("c5")
@@ -189,11 +194,15 @@ class UNet:
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample2")
-        output_tensor = ttnn.reshape(output_tensor, (1, 264, 20, 32))
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (original_shape[-4], original_shape[-2] // 8, original_shape[-1] // 8, output_tensor.shape[-1]),
+        )
         output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
-        output_tensor = ttnn.reshape(output_tensor, (1, 1, 21120, 32))
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, nhw // 16, output_tensor.shape[-1]))
 
         profiler.tracy_message("concat2")
+        save_c3_2_out = ttnn.to_layout(save_c3_2_out, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = unet_concat([output_tensor, save_c3_2_out], dim=-1, perf_mode=perf_mode)
 
         profiler.tracy_message("c6")
@@ -209,11 +218,15 @@ class UNet:
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample3")
-        output_tensor = ttnn.reshape(output_tensor, (1, 528, 40, 32))
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (original_shape[-4], original_shape[-2] // 4, original_shape[-1] // 4, output_tensor.shape[-1]),
+        )
         output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
-        output_tensor = ttnn.reshape(output_tensor, (1, 1, 84480, 32))
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, nhw // 4, output_tensor.shape[-1]))
 
         profiler.tracy_message("concat3")
+        save_c2_2_out = ttnn.to_layout(save_c2_2_out, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = unet_concat([output_tensor, save_c2_2_out], dim=-1, perf_mode=perf_mode)
 
         profiler.tracy_message("c7")
@@ -232,11 +245,15 @@ class UNet:
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample4")
-        output_tensor = ttnn.reshape(output_tensor, (1, 1056, 80, 16))
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (original_shape[-4], original_shape[-2] // 2, original_shape[-1] // 2, output_tensor.shape[-1]),
+        )
         output_tensor = ttnn.upsample(output_tensor, (2, 2, 1))
-        output_tensor = ttnn.reshape(output_tensor, (1, 1, 160 * 1056 * 2, 16))
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, nhw, output_tensor.shape[-1]))
 
         profiler.tracy_message("concat4")
+        save_c1_2_out = ttnn.to_layout(save_c1_2_out, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = unet_concat([output_tensor, save_c1_2_out], dim=-1, perf_mode=perf_mode)
 
         profiler.tracy_message("c8")
