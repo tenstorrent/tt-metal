@@ -2108,7 +2108,6 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
-    TT_THROW("EnqueueRecordEvent currently unsupported in FD2.0");
     TT_ASSERT(event->device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
     TT_ASSERT(event->event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
     TT_ASSERT(event->cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
