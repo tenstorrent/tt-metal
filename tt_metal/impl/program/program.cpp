@@ -566,13 +566,6 @@ void Program::populate_dispatch_data(Device* device) {
         {RISCV::TRISC2, MEM_TRISC2_INIT_LOCAL_L1_BASE},
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
 
-    static const map<RISCV, uint32_t> processor_to_l1_arg_base_addr = {
-        {RISCV::BRISC, BRISC_L1_ARG_BASE},
-        {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
-        {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
-        {RISCV::ERISC, eth_l1_mem::address_map::ERISC_L1_ARG_BASE},
-    };
-
     auto extract_dst_noc_multicast_info =
         [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -609,24 +602,8 @@ void Program::populate_dispatch_data(Device* device) {
 
     // Runtime Args
     // TODO: add multicasting
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(*this, kernel_id);
+    this->update_runtime_args_transfer_info(device);
 
-        uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
-
-        for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-          // can make a vector of unicast encodings here
-            CoreCoord physical_core =
-                device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-            const auto& runtime_args_data = kernel->runtime_args(core_coord);
-            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
-                detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
-
-            transfer_info_2 transfer_info = {
-                .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
-            this->program_transfer_info.runtime_args[dst].push_back(transfer_info);
-        }
-    }
     // Unicast/Multicast Semaphores
     for (const Semaphore& semaphore : this->semaphores()) {
         vector<uint32_t> semaphore_data(1);
@@ -822,6 +799,53 @@ void Program::populate_dispatch_data(Device* device) {
     this->program_transfer_info.num_active_cores = num_active_cores;
 
     return;
+}
+
+void Program::update_runtime_args_transfer_info(Device* device) {
+    static const map<RISCV, uint32_t> processor_to_l1_arg_base_addr = {
+        {RISCV::BRISC, BRISC_L1_ARG_BASE},
+        {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
+        {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
+        {RISCV::ERISC, eth_l1_mem::address_map::ERISC_L1_ARG_BASE},
+    };
+    // TODO: commonize
+    auto extract_dst_noc_unicast_info =
+        [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
+        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info;
+        for (const CoreRange& core_range : ranges) {
+            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                    CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    uint32_t dst_noc_unicast_encoding =
+                        NOC_XY_ENCODING(NOC_X(physical_coord.x), NOC_Y(physical_coord.y));
+                    dst_noc_unicast_info.push_back(std::make_pair(dst_noc_unicast_encoding, /*num_mcast_dests=*/0));
+                }
+            }
+        }
+        return dst_noc_unicast_info;
+    };
+    this->program_transfer_info.runtime_args.clear();
+    // Runtime Args
+    // TODO: add multicasting
+    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+        auto kernel = detail::GetKernel(*this, kernel_id);
+
+        uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+
+        for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+          // can make a vector of unicast encodings here
+            CoreCoord physical_core =
+                device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
+            const auto& runtime_args_data = kernel->runtime_args(core_coord);
+            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
+                detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
+
+            transfer_info_2 transfer_info = {
+                .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
+            this->program_transfer_info.runtime_args[dst].push_back(transfer_info);
+        }
+    }
 }
 
 void Program::compile( Device * device )
