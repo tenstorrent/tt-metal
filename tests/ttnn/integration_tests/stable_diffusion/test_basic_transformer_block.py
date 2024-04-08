@@ -11,6 +11,7 @@ import tt_lib as ttl
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as ttnn_basic_transformer_block,
 )
+from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as tt2_ttnn_basic_transformer_block,
 )
@@ -173,7 +174,9 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
 
     torch_output = basic_transformer(hidden_states.squeeze(0), encoder_hidden_states.squeeze(0))
 
-    parameters = preprocess_model_parameters(initialize_model=lambda: basic_transformer, device=device)
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device
+    )
     model = tt2_ttnn_basic_transformer_block(device, parameters)
 
     hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
