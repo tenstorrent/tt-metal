@@ -8,6 +8,7 @@
 #include <iterator>   // for back_inserter
 #include <memory>
 #include <string>
+#include <variant>
 
 #include "allocator/allocator.hpp"
 #include "assert.hpp"
@@ -1193,6 +1194,52 @@ const void EnqueueWaitForEventCommand::assemble_device_commands(uint32_t) {
 void EnqueueWaitForEventCommand::process() {
 }
 
+std::vector<uint32_t> EnqueueTraceCommand::commands;
+
+EnqueueTraceCommand::EnqueueTraceCommand(
+    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, Buffer& buffer) :
+    command_queue_id(command_queue_id), buffer(buffer), device(device), manager(manager) {
+    if (this->commands.empty()) {
+        CQPrefetchCmd exec_buf_cmd;
+        exec_buf_cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+        exec_buf_cmd.exec_buf.pad1 = 0;
+        exec_buf_cmd.exec_buf.pad2 = 0;
+
+        uint32_t* exec_buf_l1_ptr = (uint32_t*)&exec_buf_cmd;
+        for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
+            this->commands.push_back(*exec_buf_l1_ptr++);
+        }
+    }
+}
+
+const void EnqueueTraceCommand::assemble_device_commands(uint32_t) {
+    CQPrefetchCmd* exec_buf_cmd = (CQPrefetchCmd*)(this->commands.data());
+    uint32_t page_size = buffer.page_size();
+    uint32_t page_size_log2 = __builtin_ctz(page_size);
+    TT_ASSERT((page_size & (page_size - 1)) == 0, "Page size must be a power of 2");
+    exec_buf_cmd->exec_buf.base_addr = buffer.address();
+    exec_buf_cmd->exec_buf.log_page_size = page_size_log2;
+    exec_buf_cmd->exec_buf.pages = buffer.num_pages();
+}
+
+void EnqueueTraceCommand::process() {
+    this->assemble_device_commands(0);
+
+    uint32_t fetch_size_bytes = this->commands.size() * sizeof(uint32_t);
+
+    // move this into the command queue interface
+    TT_ASSERT(fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    this->manager.cq_write(this->commands.data(), fetch_size_bytes, write_ptr);
+    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+
+    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+}
+
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
     manager(device->sysmem_manager()), completion_queue_thread{} {
@@ -1494,7 +1541,7 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
 
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->traced_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
-        this->trace_ctx->num_entries_in_completion_q++;
+        this->trace_ctx->num_completion_q_reads++;
     } else {
         this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
         this->num_entries_in_completion_q++;
@@ -1506,9 +1553,43 @@ void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> event) {
 }
 
 
-void HWCommandQueue::enqueue_trace() {
+void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_trace");
-    TT_THROW("Not implemented");
+
+    auto trace_inst = Trace::get_instance(trace_id);
+    auto command = EnqueueTraceCommand(this->id, this->device, this->manager, *trace_inst.buffer);
+
+    // Emit the completion queue entries from the trace
+    auto& cmpl_q = trace_inst.desc->traced_completion_q_reads;
+    uint32_t num_events = 0;
+    uint32_t event_id = this->manager.get_next_event(this->id);
+    for (auto read_descriptor : cmpl_q) {
+        std::visit(
+            [&](auto&& read_descriptor) {
+                using T = std::decay_t<decltype(read_descriptor)>;
+                if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
+                    TT_THROW("Device trace does not support ReadBuffer commands, please perform on Host instead!");
+                } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                    read_descriptor.set_global_offset(event_id);
+                    this->issued_completion_q_reads.push(read_descriptor);
+                    this->num_entries_in_completion_q++;
+                    num_events++;
+                }
+            },
+            read_descriptor);
+
+    }
+    // Increment the global event counter due to trace emitting events in a batch
+    this->manager.increment_event(this->id, num_events);
+
+    this->enqueue_command(command, false);
+
+    if (blocking) {
+        this->finish();
+    } else {
+        std::shared_ptr<Event> event = std::make_shared<Event>();
+        this->enqueue_record_event(event);
+    }
 }
 
 void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
@@ -1723,7 +1804,8 @@ void HWCommandQueue::read_completion_queue() {
                             uint32_t event_completed = dispatch_cmd_and_event.at(sizeof(CQDispatchCmd) / sizeof(uint32_t));
                             TT_ASSERT(event_completed == read_descriptor.event_id, "Event Order Issue: expected to read back completion signal for event {} but got {}!", read_descriptor.event_id, event_completed);
                             this->manager.completion_queue_pop_front(1, this->id);
-                            this->manager.set_last_completed_event(this->id, event_completed);
+                            this->manager.set_last_completed_event(this->id, read_descriptor.get_global_event_id());
+                            log_info(LogAlways, "DEBUG completed event {} (global: {})", event_completed, read_descriptor.get_global_event_id());
                         }
                     },
                     read_descriptor
@@ -2123,17 +2205,13 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     TT_FATAL(Trace::has_instance(trace_id), "Trace instance " + std::to_string(trace_id) + " must exist on device");
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_TRACE,
-        .blocking = blocking
+        .blocking = blocking,
+        .trace_id = trace_id
     });
 }
 
-void EnqueueTraceImpl(CommandQueue& cq) {
-    // STUB: Run the trace in eager mode for now
-    // auto& tq = cq.trace()->queue();
-    // for (const auto& cmd : tq.worker_queue) {
-    //     cq.run_command_impl(cmd);
-    // }
-    TT_THROW("EnqueueTrace is not yet implemented!");
+void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+    cq.hw_command_queue().enqueue_trace(trace_id, blocking);
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
@@ -2336,7 +2414,7 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             EnqueueProgramImpl(*this, command.program.value(), command.blocking.value());
             break;
         case EnqueueCommandType::ENQUEUE_TRACE:
-            EnqueueTraceImpl(*this);
+            EnqueueTraceImpl(*this, command.trace_id.value(), command.blocking.value());
             break;
         case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
             TT_ASSERT(command.event.has_value(), "Must provide an event!");
