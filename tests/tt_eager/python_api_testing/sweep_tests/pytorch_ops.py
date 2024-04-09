@@ -548,6 +548,12 @@ def heaviside(x, *args, **kwargs):
     return result
 
 
+def unary_ne(x, *args, **kwargs):
+    value = kwargs.pop("scalar")
+    result = torch.ne(x, value)
+    return result
+
+
 def erf(x, *args, **kwargs):
     return torch.erf(x)
 

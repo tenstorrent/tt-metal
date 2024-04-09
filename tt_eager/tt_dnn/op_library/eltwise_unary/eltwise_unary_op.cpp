@@ -131,6 +131,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::ADD_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::MUL_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::DIV_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f/param0))}; break;
+        case UnaryOpType::UNARY_NE: op_init_and_name = {"unary_ne_tile_init();", fmt::format("unary_ne_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };

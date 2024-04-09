@@ -64,6 +64,7 @@ Compute APIs
   gtz_tile
   gez_tile
   nez_tile
+  unary_ne_tile
 
   cb_wait_front
   cb_pop_front

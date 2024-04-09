@@ -151,6 +151,13 @@ namespace tt::tt_metal::detail {
 
         );
         detail::bind_unary_op_with_param(
+            m_tensor, "unary_ne", unary_ne,
+            py::arg("value"),
+            R"doc(Perform an eltwise-unary not-equal (``{0} != {1}``) on input tensor.)doc",
+            R"doc("value", "float", "")doc"
+
+        );
+        detail::bind_unary_op_with_param(
             m_tensor, "rdiv", rdiv,
             py::arg("denominator"),
             R"doc(Returns tensor  with value ``{1}`` divided by each of respective elements of the input tensor ``{0}``.)doc",
