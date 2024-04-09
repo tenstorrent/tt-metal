@@ -377,6 +377,7 @@ void Device::compile_command_queue_programs() {
                 CoreCoord pcie_physical_core = tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.at(0);
 
                 std::map<string, string> prefetch_defines = {
+                    {"DISPATCH_KERNEL", "1"},
                     {"MY_NOC_X", std::to_string(prefetch_physical_core.x)},
                     {"MY_NOC_Y", std::to_string(prefetch_physical_core.y)},
                     {"UPSTREAM_NOC_X", std::to_string(0)},
@@ -425,6 +426,7 @@ void Device::compile_command_queue_programs() {
 
                 if (device_id == this->id()) {
                     std::map<string, string> dispatch_defines = {
+                        {"DISPATCH_KERNEL", "1"},
                         {"MY_NOC_X", std::to_string(dispatch_physical_core.x)},
                         {"MY_NOC_Y", std::to_string(dispatch_physical_core.y)},
                         {"UPSTREAM_NOC_X", std::to_string(prefetch_physical_core.x)},
