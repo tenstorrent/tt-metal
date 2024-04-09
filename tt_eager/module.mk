@@ -3,7 +3,7 @@ TT_LIBS_HOME ?= $(TT_METAL_HOME)
 TT_METAL_BASE_INCLUDES = $(BASE_INCLUDES)
 EAGER_OUTPUT_DIR = $(OUT)/dist
 
-TT_EAGER_INCLUDES = $(TT_METAL_BASE_INCLUDES) -Itt_eager/
+TT_EAGER_INCLUDES = $(TT_METAL_BASE_INCLUDES) -Itt_eager/ -I ttnn/cpp/
 
 include tt_eager/tensor/module.mk
 include tt_eager/tt_dnn/module.mk
