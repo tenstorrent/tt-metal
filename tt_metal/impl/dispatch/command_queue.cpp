@@ -1209,6 +1209,14 @@ EnqueueTraceCommand::EnqueueTraceCommand(
         for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
             this->commands.push_back(*exec_buf_l1_ptr++);
         }
+
+        uint32_t exec_buf_aligned_size = align(sizeof(CQPrefetchCmd), HUGEPAGE_ALIGNMENT);
+        TT_ASSERT(exec_buf_aligned_size == CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+
+        uint32_t padding = exec_buf_aligned_size - sizeof(CQPrefetchCmd);
+        for (int i = 0; i < padding / sizeof(uint32_t); i++) {
+            this->commands.push_back(0);
+        }
     }
 }
 
@@ -1236,8 +1244,8 @@ void EnqueueTraceCommand::process() {
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
     this->manager.cq_write(this->commands.data(), fetch_size_bytes, write_ptr);
     this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-
     this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    // log_trace(LogDispatch, "EnqueueTraceCommand issued write_ptr={}, fetch_size={}, commands={}", write_ptr, fetch_size_bytes, this->commands);
 }
 
 // HWCommandQueue section
