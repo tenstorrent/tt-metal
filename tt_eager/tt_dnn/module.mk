@@ -209,7 +209,7 @@ TT_DNN_DEPS = $(addprefix $(OBJDIR)/, $(TT_DNN_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_eager/tt_dnn: $(TT_DNN_LIB)
 
-$(TT_DNN_LIB): $(COMMON_LIB) $(DTX_LIB) $(TT_DNN_OBJS)
+$(TT_DNN_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_LIB) $(TT_DNN_OBJS)
 	@mkdir -p $(LIBDIR)
 	ar rcs -o $@ $(TT_DNN_OBJS)
 

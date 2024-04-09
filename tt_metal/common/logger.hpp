@@ -40,7 +40,6 @@ namespace tt {
     X(Reportify)       \
     X(GraphCompiler)   \
     X(Dispatch)        \
-    X(DTX)             \
     X(Metal)
 
 enum LogType : uint32_t {

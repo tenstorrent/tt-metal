@@ -1,11 +1,5 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_EAGER_TESTS += \
-		 tests/tt_eager/dtx/unit_tests \
-		 tests/tt_eager/dtx/tensor \
-		 tests/tt_eager/dtx/overlap \
-		 tests/tt_eager/dtx/collapse_transformations \
-		 tests/tt_eager/dtx/test_dtx \
-		 tests/tt_eager/dtx/test_dtx_tilized_row_to_col_major \
 		 tests/tt_eager/ops/ccl/test_all_gather_utils \
 		 tests/tt_eager/ops/test_average_pool \
 		 tests/tt_eager/ops/test_eltwise_binary_op \
