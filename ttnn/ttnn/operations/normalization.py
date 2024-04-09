@@ -99,15 +99,6 @@ def layer_norm(
 
     """
 
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    if residual_input_tensor is not None:
-        residual_input_tensor = ttnn.unsqueeze_to_4D(residual_input_tensor)
-    if weight is not None:
-        weight = ttnn.unsqueeze_to_4D(weight)
-    if bias is not None:
-        bias = ttnn.unsqueeze_to_4D(bias)
-
     if program_config is None:
         if residual_input_tensor is not None:
             output_tensor = ttnn.experimental.tensor.add_layernorm(
@@ -137,7 +128,6 @@ def layer_norm(
                 input_tensor, epsilon, weight, bias, output_mem_config=memory_config, program_config=program_config
             )
 
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
@@ -174,6 +164,18 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
+def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+    import torch
+
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        input_tensor = input_tensor.to(weight.dtype)
+
+    return weight * input_tensor
+
+
 @ttnn.register_operation(
     name="ttnn.rms_norm",
     validate_input_tensors=_rms_norm_validate_input_tensors,
@@ -186,19 +188,7 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     Compute rms_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise RuntimeError("rms_norm only supports device storage type")
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    weight = ttnn.unsqueeze_to_4D(weight)
-
-    output_tensor = ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
-
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-
-    return output_tensor
+    return ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
 
 
 # group norm helper function

@@ -40,17 +40,6 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
 
-struct TensorSchema {
-    const std::size_t min_rank;
-    const std::size_t max_rank;
-    const std::set<DataType> dtypes;
-    const std::set<Layout> layouts;
-    const bool can_be_on_device;
-    const bool can_be_on_cpu;
-    const bool can_be_a_scalar;
-    const bool is_optional;
-};
-
 struct CoreGrid {
     std::size_t x;
     std::size_t y;

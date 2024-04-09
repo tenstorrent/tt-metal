@@ -43,13 +43,13 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3], fmt::format("{} != {}", a.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
+            TT_FATAL(a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1], fmt::format("{} != {}", a.get_legacy_shape()[-1], gamma.value().get_legacy_shape()[-1]));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT);
+            TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT);
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
+            TT_FATAL((gamma.value().get_legacy_shape()[-1] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device());
             TT_FATAL(gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16);
@@ -61,13 +61,13 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3]);
+            TT_FATAL(a.get_legacy_shape()[-1] == beta.value().get_legacy_shape()[-1]);
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT);
+            TT_FATAL(beta.value().get_legacy_shape()[-2] == TILE_HEIGHT);
         } else {
             TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL((beta.value().get_legacy_shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
+            TT_FATAL((beta.value().get_legacy_shape()[-1] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH));
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device());
             TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16);
