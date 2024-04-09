@@ -162,12 +162,22 @@ class TtFalconMLP:
                 )
             )
             x[i].deallocate(True)
+
+        # # Convert to BFP4 for all-gather
+        # for i in range(len(hidden_states)):
+        #     hidden_states[i] = tt_lib.tensor.typecast(hidden_states[i], self.model_config["BFP4_DTYPE"])
+
         hidden_states = tt_lib.tensor.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
+        # # Convert back
+        # for i in range(len(hidden_states)):
+        #     hidden_states[i] = tt_lib.tensor.typecast(hidden_states[i], self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"])
+
         for i in range(len(hidden_states)):
             hidden_states[i] = falcon_prefill_matmul(
                 hidden_states[i],
