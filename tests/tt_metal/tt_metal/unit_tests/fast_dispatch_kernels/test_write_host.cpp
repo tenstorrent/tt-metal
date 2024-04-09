@@ -136,6 +136,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
         dispatch_cb_sem, // ugly, share an address
         dispatch_buffer_size_blocks_g,
         prefetch_sync_sem,
+        default_ptrs.second,
         dev_hugepage_base,
         hugepage_buffer_size_g,
         0,    // unused downstream_cb_base

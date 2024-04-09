@@ -12,7 +12,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow
     env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-    test_filter="CommandQueueSingleCardFixture.*:CommandQueueFixture.*:FastDispatchHostSuite.*"
+    test_filter="CommandQueueSingleCardFixture.*:CommandQueueFixture.*:FastDispatchHostSuite.*:MultiCommandQueueSingleDeviceFixture.*"
     ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="${test_filter}"
     # env python tests/scripts/run_tt_eager.py --dispatch-mode fast
     # env python tests/scripts/run_tt_metal.py --dispatch-mode fast
