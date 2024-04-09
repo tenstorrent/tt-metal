@@ -585,7 +585,10 @@ static void dump_core(
 
     // Print device id, core coords (logical)
     string core_type = is_eth_core ? "Ethnet Core" : "Worker Core";
-    string core_str = fmt::format("Device {}, {} {}[physical {}]", device->id(), core_type, logical_core.coord, core);
+    string core_str = fmt::format(
+        "Device {}, {} {}[physical {}]",
+        device->id(), core_type, logical_core.coord, core.str()
+    );
     string pad(11 - core.str().length(), ' ');
     fprintf(f, "%s:%s ", core_str.c_str(), pad.c_str());
 
