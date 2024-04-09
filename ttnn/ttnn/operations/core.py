@@ -130,7 +130,8 @@ def _preprocess_shape(input_shape, shape):
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
-    input_tensor, shape, *args = args
+    input_tensor, args, kwargs = ttnn.reflection.get_argument(0, "input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.get_argument(1, "shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
     input_tensor = input_tensor.reshape(input_tensor.shape.with_tile_padding())
     return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
@@ -141,9 +142,11 @@ def _golden_function(input_tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) ->
 
 
 def _postprocess_golden_function_outputs(output, args, kwargs):
-    input_tensor, shape, *_ = args
-    shape = _preprocess_shape(input_tensor.shape, shape)
     tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output, args, kwargs)
+
+    input_tensor, args, kwargs = ttnn.reflection.get_argument(0, "input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.get_argument(1, "shape", args, kwargs)
+    shape = _preprocess_shape(input_tensor.shape, shape)
 
     shape_with_tile_padding = shape.with_tile_padding()
     if tensor.layout == ttnn.TILE_LAYOUT:
