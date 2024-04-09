@@ -674,11 +674,11 @@ void Program::populate_dispatch_data(Device* device) {
             uint32_t sub_kernel_index = 0;
             const auto& binaries = kernel->binaries(device->id());
 
-            std::vector<uint32_t> dst_base_addrs;
-            std::vector<uint32_t> page_offsets;
-            std::vector<uint32_t> lengths;
-            vector<uint32_t> binaries_data;
             for (size_t j = 0; j < binaries.size(); j++) {
+                std::vector<uint32_t> dst_base_addrs;
+                std::vector<uint32_t> page_offsets;
+                std::vector<uint32_t> lengths;
+                vector<uint32_t> binaries_data;
                 const ll_api::memory& kernel_bin = binaries[j];
 
                 uint32_t k = 0;
