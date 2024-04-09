@@ -130,8 +130,8 @@ def _preprocess_shape(input_shape, shape):
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
-    input_tensor, args, kwargs = ttnn.reflection.get_argument(0, "input_tensor", args, kwargs)
-    shape, args, kwargs = ttnn.reflection.get_argument(1, "shape", args, kwargs)
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
     input_tensor = input_tensor.reshape(input_tensor.shape.with_tile_padding())
     return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
@@ -144,8 +144,8 @@ def _golden_function(input_tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) ->
 def _postprocess_golden_function_outputs(output, args, kwargs):
     tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output, args, kwargs)
 
-    input_tensor, args, kwargs = ttnn.reflection.get_argument(0, "input_tensor", args, kwargs)
-    shape, args, kwargs = ttnn.reflection.get_argument(1, "shape", args, kwargs)
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
 
     shape_with_tile_padding = shape.with_tile_padding()
@@ -392,7 +392,13 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     )
 
 
-@ttnn.register_operation(name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors, golden_function=_golden_function
+)
 def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG):
     """
     to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
@@ -518,7 +524,15 @@ def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args
     )
 
 
-@ttnn.register_operation(name="ttnn.to_memory_config", validate_input_tensors=_to_memory_config_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_memory_config",
+    validate_input_tensors=_to_memory_config_validate_input_tensors,
+    golden_function=_golden_function,
+)
 def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[ttnn.DataType] = None):
     """
     to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: Optional[DataType] = None) -> ttnn.Tensor
@@ -593,7 +607,13 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     )
 
 
-@ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors, golden_function=_golden_function
+)
 def to_layout(
     tensor,
     layout: ttnn.Layout,
@@ -826,9 +846,8 @@ def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
     return ttl.tensor.clone(tensor, output_mem_config=memory_config, output_dtype=dtype)
 
 
-def _torch_identity(input_tensor):
-    input_tensor = to_torch(input_tensor)
-    return input_tensor.clone()
+def _golden_function(input_tensor):
+    return input_tensor
 
 
 def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -844,7 +863,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 
 
 @ttnn.register_operation(
-    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, golden_function=_torch_identity
+    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, golden_function=_golden_function
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     if ttnn.is_sharded(input_tensor):
