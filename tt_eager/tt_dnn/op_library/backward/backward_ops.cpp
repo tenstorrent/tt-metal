@@ -1195,17 +1195,6 @@ std::vector<Tensor> hardtanh_bw(const Tensor& grad, const Tensor& input, float m
     return operation::decorate_as_composite(__func__, _hardtanh_bw)(grad, input, min, max, output_mem_config);
 }
 
-std::vector<Tensor> _angle_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _angle_bw)(grad, input, output_mem_config);
-}
-
 // name: sin(Tensor self) -> Tensor
 // self: grad * self.cos()
 std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
@@ -1826,6 +1815,53 @@ std::vector<Tensor> real_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _real_bw)(grad, input, output_mem_config);
 }
 
+// angle at::where(self == 0.0, at::zeros({}, self.options()), grad * self / self.abs().pow(2)
+std::vector<Tensor> _angle_bw(const Tensor& grad, const Tensor& input, bool is_complextensor, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    if(is_complextensor){
+        CHECK_FOR_COMPLEX(input);
+        Tensor inp_r = real(input, output_mem_config);
+        Tensor inp_i = imag(input, output_mem_config);
+        Tensor condition_zero = logical_and(eqz(inp_r,output_mem_config), eqz(inp_i,output_mem_config), std::nullopt, output_mem_config);
+        Tensor abs_squared = recip(add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        Tensor real = where(condition_zero, zeros_like(inp_r, output_mem_config), mul(grad, mul(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        Tensor imag = where(condition_zero, zeros_like(inp_i, output_mem_config), mul(grad, mul(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        condition_zero.deallocate();
+        abs_squared.deallocate();
+        inp_r.deallocate();
+        inp_i.deallocate();
+        Tensor grad_result = mk_complex(real, imag, output_mem_config);
+        real.deallocate();
+        imag.deallocate();
+        grad_tensor.emplace_back(grad_result);
+    }
+    else {
+        Tensor grad_result = zeros_like(grad, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+    }
+    return grad_tensor;
+}
+std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, bool is_complextensor, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _angle_bw)(grad, input, is_complextensor, output_mem_config);
+}
+
+// complex abs
+// self: grad * self.sgn()
+std::vector<Tensor> _complex_abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    std::vector<Tensor> grad_tensor;
+    Tensor result = complex_abs(input, output_mem_config);
+    result = mk_complex(result, result, output_mem_config);
+    Tensor grad_c = mk_complex(grad, grad, output_mem_config);
+    Tensor grad_result = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), mul(grad_c, mul(input, recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_abs_bw)(grad, input, output_mem_config);
+}
 #undef CHECK_FOR_COMPLEX
 
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
