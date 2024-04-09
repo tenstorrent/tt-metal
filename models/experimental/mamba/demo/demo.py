@@ -8,6 +8,8 @@ from typing import List
 from loguru import logger
 import ttnn
 
+import pytest
+
 import torch
 
 from transformers import AutoTokenizer
@@ -36,6 +38,7 @@ def get_tt_metal_model(version: MambaPretrainedModelName, use_cache: bool, batch
         cache_path = ""
     model = MambaTT(reference_model, device, tt_cache_path=cache_path)
     return model, device
+
 
 def get_tt_opt_metal_model(version: MambaPretrainedModelName, use_cache: bool, batch_size: int):
     from models.experimental.mamba.tt_opt.full_model import MambaTT
@@ -155,6 +158,30 @@ def run_demo(
     if device is not None:
         ttnn.close_device(device)
     return all_decoded_sequences
+
+
+@pytest.mark.parametrize(
+    "prompt, model_type, model_version, batch, genlen",
+    (
+        (
+            "Hello",
+            "wh-opt",
+            "state-spaces/mamba-2.8b",
+            32,
+            50,
+        ),
+    ),
+)
+def test_demo(prompt: str, model_type: str, model_version: MambaPretrainedModelName, batch: int, genlen: int):
+    prompts = [prompt for _ in range(batch)]
+    run_demo(
+        prompts,
+        model_type,
+        generated_sequence_length=genlen,
+        model_version=model_version,
+        display=True,
+        use_cache=True,
+    )
 
 
 def main():
