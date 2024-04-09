@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-def get_argument(position, name, args, kwargs):
-    if position < len(args):
-        output = args[position]
-        args = args[:position] + args[position + 1 :]
+def pop_argument(name, args, kwargs):
+    if args:
+        output, *args = args
     elif name in kwargs:
         output = kwargs[name]
         kwargs = {k: v for k, v in kwargs.items() if k != name}

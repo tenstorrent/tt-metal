@@ -298,12 +298,18 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             if object_value.tensor_id is None:
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
             if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
-                logger.warning(
-                    f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors"
-                )
-                input_index += 1
-                return ttnn.to_torch(object_value)
-            golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
+                if ttnn.database.query_output_tensor_by_tensor_id(object_value.tensor_id) is not None:
+                    logger.warning(
+                        f"Intermediate tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
+                    )
+                    raise RuntimeError("Intermediate tensor is not found in the global golden tensors")
+                else:
+                    logger.warning(
+                        f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
+                    )
+                    golden_tensor = ttnn.to_torch(object_value)
+            else:
+                golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
@@ -314,21 +320,22 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
         else:
             return object_value
 
-    new_args = []
-    for arg in function_args:
-        new_arg = recursive_preprocess_golden_function_inputs(arg)
-        new_args.append(new_arg)
-    new_kwargs = {}
-    for key, value in function_kwargs.items():
-        new_value = recursive_preprocess_golden_function_inputs(value)
-        new_kwargs[key] = new_value
-    return new_args, new_kwargs
+    try:
+        new_args = []
+        for arg in function_args:
+            new_arg = recursive_preprocess_golden_function_inputs(arg)
+            new_args.append(new_arg)
+        new_kwargs = {}
+        for key, value in function_kwargs.items():
+            new_value = recursive_preprocess_golden_function_inputs(value)
+            new_kwargs[key] = new_value
+        return new_args, new_kwargs
+    except:
+        return None
 
 
 def posprocess_global_golden_function_outputs(outputs, golden_outputs):
     import torch
-
-    from models.utility_functions import comp_pcc
 
     if isinstance(outputs, ttnn.Tensor):
         if not isinstance(golden_outputs, torch.Tensor):
@@ -436,6 +443,14 @@ class Operation:
             def call_wrapper(*function_args, **function_kwargs):
                 import torch
 
+                if self.golden_function is not None:
+                    local_golden_function_args, local_golden_function_kwargs = self.preprocess_golden_function_inputs(
+                        function_args, function_kwargs
+                    )
+                    global_golden_function_args_and_kwargs = preprocess_global_golden_function_inputs(
+                        function_args, function_kwargs
+                    )
+
                 function_return_value = function(*function_args, **function_kwargs)
 
                 local_tensor_comparison_records = []
@@ -458,22 +473,19 @@ class Operation:
                     output = function_return_value
 
                 logger.debug(f"{self.name}: Comparing against CPU")
-                local_golden_function_args, local_golden_function_kwargs = self.preprocess_golden_function_inputs(
-                    function_args, function_kwargs
-                )
                 local_golden_function_output = self.golden_function(
                     *local_golden_function_args, **local_golden_function_kwargs
                 )
                 set_tensor_id(local_golden_function_output, force=True)
 
-                global_golden_function_args, global_golden_function_kwargs = preprocess_global_golden_function_inputs(
-                    function_args, function_kwargs
-                )
-                global_golden_function_output = self.golden_function(
-                    *global_golden_function_args, **global_golden_function_kwargs
-                )
-                set_tensor_id(global_golden_function_output, force=True)
-                posprocess_global_golden_function_outputs(output, global_golden_function_output)
+                global_golden_function_output = None
+                if global_golden_function_args_and_kwargs is not None:
+                    global_golden_function_args, global_golden_function_kwargs = global_golden_function_args_and_kwargs
+                    global_golden_function_output = self.golden_function(
+                        *global_golden_function_args, **global_golden_function_kwargs
+                    )
+                    set_tensor_id(global_golden_function_output, force=True)
+                    posprocess_global_golden_function_outputs(output, global_golden_function_output)
 
                 if local_golden_function_output is not None:
                     local_tensor_comparison_records = compare_tensors_using_pcc(
@@ -567,7 +579,7 @@ class Operation:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
-                    input_tensors = get_ttnn_tensors((function_args, function_kwargs))
+                    input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
                     decorated_function = set_output_tensor_id_decorator(decorated_function)
 
@@ -621,11 +633,12 @@ class Operation:
                     ttnn.database.insert_tensor_comparison_records(
                         "local_tensor_comparison_records", local_tensor_comparison_records, local_golden_function_output
                     )
-                    ttnn.database.insert_tensor_comparison_records(
-                        "global_tensor_comparison_records",
-                        global_tensor_comparison_records,
-                        global_golden_function_output,
-                    )
+                    if global_golden_function_output is not None:
+                        ttnn.database.insert_tensor_comparison_records(
+                            "global_tensor_comparison_records",
+                            global_tensor_comparison_records,
+                            global_golden_function_output,
+                        )
                     ttnn.database.insert_buffers(operation_id)
                     if ttnn.CONFIG.enable_detailed_buffer_report:
                         ttnn.database.insert_buffer_pages(operation_id)

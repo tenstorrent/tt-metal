@@ -70,7 +70,8 @@
                 <th>Shape</th>
                 <th>Dtype</th>
                 <th>Layout</th>
-                <th>Visualization</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
             </tr>
             {% for tensor_record, tensor in input_tensors %}
             <tr>
@@ -78,6 +79,7 @@
                 <td>{{tensor_record.shape}}</td>
                 <td>{{tensor_record.dtype}}</td>
                 <td>{{tensor_record.layout}}</td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}
@@ -95,7 +97,8 @@
                 <th>Shape</th>
                 <th>Dtype</th>
                 <th>Layout</th>
-                <th>Visualization</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
                 <th>Matches Locally</th>
                 <th>Matches Globally</th>
             </tr>
@@ -105,6 +108,7 @@
                 <td>{{tensor_record.shape}}</td>
                 <td>{{tensor_record.dtype}}</td>
                 <td>{{tensor_record.layout}}</td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
 
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
@@ -137,7 +141,8 @@
                 <th>Shape</th>
                 <th>Dtype</th>
                 <th>Layout</th>
-                <th>Visualization</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
             </tr>
             {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
             local_golden_tensors.items() %}
@@ -146,6 +151,7 @@
                 <td>{{tensor_record.shape}}</td>
                 <td>{{tensor_record.dtype}}</td>
                 <td>{{tensor_record.layout}}</td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}
@@ -162,7 +168,8 @@
                 <th>Shape</th>
                 <th>Dtype</th>
                 <th>Layout</th>
-                <th>Visualization</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
             </tr>
             {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
             global_golden_tensors.items() %}
@@ -171,6 +178,7 @@
                 <td>{{tensor_record.shape}}</td>
                 <td>{{tensor_record.dtype}}</td>
                 <td>{{tensor_record.layout}}</td>
+                <td>{{get_tensor_statistics(tensor)| safe}}</td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}

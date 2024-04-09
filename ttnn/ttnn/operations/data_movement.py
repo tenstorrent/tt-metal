@@ -11,8 +11,8 @@ import ttnn.decorators
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
-    input_tensor, args, kwargs = ttnn.reflection.get_argument(0, "input_tensor", args, kwargs)
-    padding, args, kwargs = ttnn.reflection.get_argument(1, "padding", args, kwargs)
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    padding, args, kwargs = ttnn.reflection.pop_argument("padding", args, kwargs)
 
     if len(padding) != len(input_tensor.shape):
         raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")

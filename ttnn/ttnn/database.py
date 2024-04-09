@@ -504,7 +504,7 @@ def convert_arguments_to_strings(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object):
         nonlocal index
         if isinstance(object, (ttnn.Tensor, torch.Tensor)):
-            output = f"input_tensor@{index}"
+            output = f"{object}"
             index += 1
             return output
         elif isinstance(object, (list, tuple)):
@@ -549,11 +549,11 @@ def insert_operation_arguments(operation_id, function_args, function_kwargs):
     sqlite_connection.commit()
 
 
-def insert_tensor_comparison_records(table_name, tensor_comaprison_records, golden_tensors):
+def insert_tensor_comparison_records(table_name, tensor_comparison_records, golden_tensors):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db()
     cursor = sqlite_connection.cursor()
 
-    for record in tensor_comaprison_records:
+    for record in tensor_comparison_records:
         cursor.execute(
             f"""INSERT INTO {table_name} VALUES (
                 {record.tensor_id},
@@ -712,6 +712,17 @@ def query_output_tensors(operation_id):
     cursor.execute("SELECT * FROM output_tensors WHERE operation_id = ?", (operation_id,))
     for row in cursor.fetchall():
         yield ttnn.database.OutputTensor(*row)
+
+    sqlite_connection.close()
+
+
+def query_output_tensor_by_tensor_id(tensor_id):
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
+    for row in cursor.fetchall():
+        return ttnn.database.OutputTensor(*row)
 
     sqlite_connection.close()
 
