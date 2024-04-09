@@ -511,7 +511,7 @@ class UNet(nn.Module):
 
 
 @pytest.mark.parametrize("loop", [0])
-@pytest.mark.parametrize("perf_mode, groups", [(False, 1)])  # , (True, 1), (True, 2)])
+@pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1)])  # , (True, 2)])
 def test_unet(device, loop, perf_mode, groups):
     with torch.no_grad():
         torch.manual_seed(0)
