@@ -162,7 +162,7 @@ endif
 
 build: $(LIBS_TO_BUILD) $(TOOLS_TO_BUILD)
 
-clean: set_up_kernels/clean eager_package/clean
+clean: set_up_kernels/clean eager_package/clean tracy_tools_clean
 	test -d build && find build  -mindepth 1 -maxdepth 1 ! -path "build/python_env" -exec rm -rf {} + || true
 	rm -rf dist/
 
