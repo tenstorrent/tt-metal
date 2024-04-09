@@ -25,6 +25,7 @@ from tt_lib.utils import (
     _nearest_y,
     find_closest_largest_divisor,
     find_closest_largest_divisor_with_num_padding,
+    divup,
 )
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -104,21 +105,15 @@ def determine_parallel_config(
     input_width = sliding_window_op_params.input_w
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
-
-    # pad height to 32
-    conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
-    if is_out_tiled:
-        conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
-        conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
-    else:
-        conv_out_2d_matrix_height_ntiles = conv_out_2d_matrix_height
-        conv_out_2d_matrix_width_ntiles = output_channels
+    tile_size = 32 if is_out_tiled else 1
+    conv_out_2d_matrix_width_ntiles = divup(output_channels, tile_size)
 
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
     device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
     max_num_cores = device_grid_size[0] * device_grid_size[1]
 
     def calculate_num_cores_nhw(override):
+        conv_out_2d_matrix_height_ntiles = divup(conv_out_2d_matrix_height, tile_size)
         num_cores_nhw = (
             find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
             if is_1d_systolic
@@ -155,16 +150,18 @@ def determine_parallel_config(
         return grid_size
 
     def calculate_per_core_out_matrix_height_ntiles(logical_grid_x, override):
-        round_up = 0 if is_1d_systolic else (logical_grid_x - 1)
-        # per_core_out_matrix_height_ntiles = _nearest_32(conv_out_2d_matrix_height / num_cores_nhw) // 32
-        per_core_out_matrix_height_ntiles = (conv_out_2d_matrix_height_ntiles + round_up) // logical_grid_x
+        per_core_out_matrix_height_ntiles = divup(divup(conv_out_2d_matrix_height, logical_grid_x), tile_size)
+        total_padded_height = per_core_out_matrix_height_ntiles * tile_size * logical_grid_x
+        assert (
+            total_padded_height - conv_out_2d_matrix_height
+        ) <= per_core_out_matrix_height_ntiles * tile_size, f"total_padded_height({total_padded_height}) - original_height({conv_out_2d_matrix_height}) = {total_padded_height - conv_out_2d_matrix_height}, which exceeds the per-core shard shape height({per_core_out_matrix_height_ntiles * tile_size}).  This will result in cores doing work on padded data only which is illegal. This is a result of choosing override num_cores_nhw({num_cores_nhw}) that cannot satisfy this height after tile padding."
         if override is not None:
-            assert override % 32 == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
-            if (override // 32) != per_core_out_matrix_height_ntiles:
+            assert override % tile_size == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
+            if (override // tile_size) != per_core_out_matrix_height_ntiles:
                 warnings.warn(
-                    f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * 32} to user provided config={override}"
+                    f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * tile_size} to user provided config={override}"
                 )
-                per_core_out_matrix_height_ntiles = override // 32
+                per_core_out_matrix_height_ntiles = override // tile_size
         return per_core_out_matrix_height_ntiles
 
     def calculate_per_core_out_matrix_width_ntiles(logical_grid_y, override):
