@@ -131,6 +131,16 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
         )};
 }
 
+const operation::Hash Reshard::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<Reshard>(
+        this->input_mem_config,
+        this->output_mem_config,
+        this->input_shape);
+}
+
+
+
 
 ShardedOpParallelizationStrategy Reshard::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     return ShardedOpParallelizationStrategy::MULTI_CORE;

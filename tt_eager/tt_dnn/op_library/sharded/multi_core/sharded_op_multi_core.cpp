@@ -787,43 +787,20 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
     }
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_dst0](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, cb_dst0, grid, cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-        auto output_core_to_page_range_pair = get_core_page_ranges(src_buffer, dst_buffer);
-
-        auto input_shard_spec = input_tensors.at(0).shard_spec().value();
-        auto output_shard_spec = output_tensors.at(0).shard_spec().value();
-        auto all_cores = input_shard_spec.grid.merge(output_shard_spec.grid);
-        auto cores = corerange_to_cores(all_cores);
-        auto device = input_tensors.at(0).device();
-
-        for (auto core : cores) {
-            auto page_stride_vector = output_core_to_page_range_pair.at(core);
-            uint32_t num_ranges = page_stride_vector.size();
-            std::vector<uint32_t> runtime_args = {src_buffer->address(), 0, num_ranges};
-            uint32_t num_output_pages = 0;
-            for (const auto& [start_core, start_data, stride_size, stride, num_strides] : page_stride_vector) {
-                auto physical_input_core = device->worker_core_from_logical_core(start_core);
-                runtime_args.push_back(physical_input_core.x);
-                runtime_args.push_back(physical_input_core.y);
-                runtime_args.push_back(stride.core.x);
-                runtime_args.push_back(stride.core.y);
-                runtime_args.push_back(stride.data * page_size);                // start
-                runtime_args.push_back(start_data * page_size);                // start
-                runtime_args.push_back(stride_size * page_size);  // stride
-                runtime_args.push_back(num_strides);  // stride
-                num_output_pages += stride_size * num_strides;
-            }
-            runtime_args[1] = num_output_pages;
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
+        for (auto core: cores) {
+            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[grid.x + grid.y] = input.buffer()->address();
             tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
         }
+        UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
