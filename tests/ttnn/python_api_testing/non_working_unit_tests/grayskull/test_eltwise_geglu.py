@@ -50,7 +50,7 @@ def run_eltwise_geglu_tests(
 
 test_sweep_args = [
     (
-        [(3, 2, 192, 32)],
+        [(3, 2, 192, 256)],
         [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
@@ -58,14 +58,15 @@ test_sweep_args = [
         -1,
         11079580,
     ),
-    # (
-    #     [(2, 4, 224, 64)],
-    #     [ttnn.bfloat8_b],
-    #     [ttnn.TILE_LAYOUT],
-    #     [ttnn.L1_MEMORY_CONFIG],
-    #     ttnn.DRAM_MEMORY_CONFIG,
-    #     2699313,
-    # ),
+    (
+        [(2, 4, 224, 64)],
+        [ttnn.bfloat8_b],
+        [ttnn.TILE_LAYOUT],
+        [ttnn.L1_MEMORY_CONFIG],
+        ttnn.DRAM_MEMORY_CONFIG,
+        3,
+        2699313,
+    ),
 ]
 
 
