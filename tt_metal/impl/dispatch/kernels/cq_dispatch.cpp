@@ -28,14 +28,15 @@ constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
 constexpr uint32_t upstream_dispatch_cb_sem_id = get_compile_time_arg_val(4);
 constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(5);
 constexpr uint32_t upstream_sync_sem = get_compile_time_arg_val(6);
-constexpr uint32_t completion_queue_base_addr = get_compile_time_arg_val(7);
-constexpr uint32_t completion_queue_size = get_compile_time_arg_val(8);
-constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(9);
-constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(10);
-constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(11);
-constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(13);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(14);
+constexpr uint32_t command_queue_base_addr = get_compile_time_arg_val(7);
+constexpr uint32_t completion_queue_base_addr = get_compile_time_arg_val(8);
+constexpr uint32_t completion_queue_size = get_compile_time_arg_val(9);
+constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(10);
+constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(11);
+constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(12);
+constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(13);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(14);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(15);
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -106,7 +107,8 @@ void completion_queue_reserve_back(uint32_t num_pages) {
 
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
-    uint64_t pcie_address = get_noc_addr_helper(pcie_noc_xy_encoding, HOST_CQ_COMPLETION_WRITE_PTR);  // For now, we are writing to host hugepages at offset
+    uint64_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
+    uint64_t pcie_address = get_noc_addr_helper(pcie_noc_xy_encoding, completion_queue_write_ptr_addr);  // For now, we are writing to host hugepages at offset
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;

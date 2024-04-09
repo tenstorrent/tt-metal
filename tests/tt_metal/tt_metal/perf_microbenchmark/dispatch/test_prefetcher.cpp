@@ -1643,6 +1643,7 @@ int main(int argc, char **argv) {
              split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
+             dev_hugepage_base_g,
              dev_hugepage_completion_buffer_base,
              DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
@@ -1654,8 +1655,8 @@ int main(int argc, char **argv) {
         CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
         if (split_dispatcher_g) {
             // dispatch_hd and dispatch_d
-            dispatch_compile_args[11] = dispatch_downstream_cb_sem;
-            dispatch_compile_args[12] = dispatch_h_cb_sem;
+            dispatch_compile_args[12] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[13] = dispatch_h_cb_sem;
             configure_kernel_variant<true, false>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
@@ -1666,8 +1667,8 @@ int main(int argc, char **argv) {
 
             // dispatch_h
             dispatch_compile_args[3] = dispatch_h_cb_sem;
-            dispatch_compile_args[11] = dispatch_h_cb_sem;
-            dispatch_compile_args[12] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[12] = dispatch_h_cb_sem;
+            dispatch_compile_args[13] = dispatch_downstream_cb_sem;
             configure_kernel_variant<false, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
