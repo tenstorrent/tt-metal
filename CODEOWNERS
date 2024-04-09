@@ -125,6 +125,7 @@ models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
+models/demos/grayskull @boris-drazic
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin
