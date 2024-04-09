@@ -36,7 +36,7 @@ def shorten_stack_trace(stack_trace, num_lines=12):
 
 def red_to_green_spectrum(percentage):
     percentage_difference = 1.0 - percentage
-    red_color = int(min(255, percentage_difference * 2 * 255))
+    red_color = int(min(255, percentage_difference * 8 * 255))
     green_color = int(min(255, percentage * 2 * 255))
     color = f"#{red_color:02X}{green_color:02X}{0:02X}"
     return color
@@ -47,9 +47,37 @@ def tensor_comparison_record_to_percentage(record):
         percentage = 1
     elif record.actual_pcc < 0:
         percentage = 0
+    elif record.actual_pcc >= record.desired_pcc:
+        return 1.0
     else:
-        percentage = record.actual_pcc * 0.5 / record.desired_pcc
+        percentage = record.actual_pcc * 0.9 / record.desired_pcc
     return percentage
+
+
+def comparison_percentages(table_name, operation_id):
+    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
+
+    if not output_tensor_records:
+        return "No output tensors"
+
+    percentages = []
+    for output_tensor_record in output_tensor_records:
+        tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
+            table_name, tensor_id=output_tensor_record.tensor_id
+        )
+        if tensor_comparison_record is None:
+            continue
+        if tensor_comparison_record.matches:
+            percentages.append(1)
+        else:
+            percentages.append(tensor_comparison_record.actual_pcc / tensor_comparison_record.desired_pcc)
+
+    if not percentages:
+        return "Couldn't compare (Does the operation have a golden function?)"
+
+    percentage = sum(percentages) / len(percentages)
+    return f"{percentage:.6f}"
 
 
 def comparison_color(table_name, operation_id):
@@ -57,7 +85,7 @@ def comparison_color(table_name, operation_id):
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
 
     if not output_tensor_records:
-        return red_to_green_spectrum(1.0)
+        return "white"
 
     percentages = []
     for output_tensor_record in output_tensor_records:
@@ -143,6 +171,7 @@ def operations():
         "operations.html",
         operations=operations,
         comparison_color=comparison_color,
+        comparison_percentages=comparison_percentages,
         load_underlying_operations=load_underlying_operations,
     )
 
@@ -612,6 +641,23 @@ def operation_tensor_report(operation_id):
 
         return components(plot)
 
+    def get_tensor_statistics(tensor):
+        if tensor is None:
+            return ""
+
+        if isinstance(tensor, ttnn.Tensor):
+            tensor = ttnn.to_torch(tensor)
+
+        statistics = {
+            "Min": tensor.min().item(),
+            "Max": tensor.max().item(),
+            "Mean": tensor.mean().item(),
+            "Std": tensor.std().item(),
+            "Var": tensor.var().item(),
+        }
+
+        return pd.DataFrame(statistics, index=[0]).to_html(index=False, justify="center")
+
     return render_template(
         "operation_tensor_report.html",
         operation=operation,
@@ -624,6 +670,7 @@ def operation_tensor_report(operation_id):
         global_golden_tensors=global_golden_tensors,
         display_tensor_comparison_record=display_tensor_comparison_record,
         plot_tensor=plot_tensor,
+        get_tensor_statistics=get_tensor_statistics,
     )
 
 
