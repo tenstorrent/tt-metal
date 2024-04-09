@@ -501,6 +501,8 @@ Tensor relational operations
 
 .. autofunction:: tt_lib.tensor.ne
 
+.. autofunction:: tt_lib.tensor.unary_ne
+
 Tensor ternary operations
 =========================
 .. autofunction:: tt_lib.tensor.where
