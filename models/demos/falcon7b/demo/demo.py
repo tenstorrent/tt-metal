@@ -242,11 +242,10 @@ def run_falcon_demo_kv(
     for user_id, output_id in enumerate(output_ids):
         decode_ids[user_id] = output_id
 
-    kv_cache_len = num_input_tokens  # This will increment by one after each decode
     prompt_is_done = [False for _ in range(num_users)]
 
     time_decode_compile = 0
-    for output_token_index in tqdm(range(max_seq_len - num_input_tokens)):
+    for kv_cache_len in tqdm(range(num_input_tokens, max_seq_len, 32)):
         time_decode_compile_start = time.time()
         (
             tt_decode_embeddings,
@@ -278,7 +277,6 @@ def run_falcon_demo_kv(
         decode_ids = post_processor(logits=logits, index=...).reshape(batch_size, 1)
 
         generated_ids = torch.concat((generated_ids, decode_ids[:num_users]), dim=1)
-        kv_cache_len += 1
 
     logger.info("Finished 1st run decode stage with compile!")
     tt_lib.device.Synchronize(device)
