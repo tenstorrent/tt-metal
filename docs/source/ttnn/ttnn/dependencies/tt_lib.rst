@@ -1062,6 +1062,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.real_bw
 
+.. autofunction:: tt_lib.tensor.complex_div_bw
+
+.. autofunction:: tt_lib.tensor.polar_bw
+
 .. autofunction:: tt_lib.tensor.multigammaln_bw
 
 .. autofunction:: tt_lib.tensor.repeat_bw
