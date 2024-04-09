@@ -204,10 +204,59 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
     with open(allOpsCSVPath, "w") as allOpsCSV:
         rowDicts = []
-        maxInputCount = -1
-        maxOutputCount = -1
-        inputHeaders = []
-        outputHeaders = []
+
+        tensorCSVData = {
+            "INPUT": {
+                "maxCount": -1,
+                "headers": [],
+            },
+            "OUTPUT": {
+                "maxCount": -1,
+                "headers": [],
+            },
+        }
+
+        def io_tensor_to_csv(ioField, ioData):
+            headers = []
+            data = {}
+            if ioField == "shape":
+                for field in ["W", "Z", "Y", "X"]:
+                    headers.append(field)
+                    assert field in ioData.keys(), "Wrong io tensor shape data format"
+                    data[field] = ioData[field]
+            elif ioField == "dtype":
+                headers = ["DATATYPE"]
+                data["DATATYPE"] = ioData
+            elif ioField == "layout":
+                headers = ["LAYOUT"]
+                data["LAYOUT"] = ioData
+            elif ioField == "storage_type":
+                headers = ["MEMORY"]
+                assert "device_id" in ioData.keys(), "Wrong io tensor memory data format"
+                deviceID = ioData["device_id"]
+                assert "memory_config" in ioData.keys(), "Wrong io tensor memory data format"
+                assert "buffer_type" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                bufferType = ioData["memory_config"]["buffer_type"].upper()
+                assert "memory_layout" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                memoryLayout = ioData["memory_config"]["memory_layout"].upper()
+                data["MEMORY"] = f"DEV_{deviceID}_{bufferType}_{memoryLayout}"
+
+            return headers, data
+
+        def add_io_data(tensors, ioType):
+            ioFields = ["shape", "layout", "dtype", "storage_type"]
+            for count, tensor in enumerate(tensors):
+                for ioField in ioFields:
+                    assert ioField in tensor.keys(), "Wrong io tensor fields"
+                    ioData = tensor[ioField]
+                    fields, data = io_tensor_to_csv(ioField, ioData)
+                    for field in fields:
+                        header = f"{ioType}_{count}_{field}".upper()
+                        rowDict[header] = data[field]
+                        if count > tensorCSVData[ioType]["maxCount"]:
+                            tensorCSVData[ioType]["headers"].append(header)
+                if count > tensorCSVData[ioType]["maxCount"]:
+                    tensorCSVData[ioType]["maxCount"] = count
 
         def csv_header_format(header):
             return header.replace("_", " ").upper()
@@ -273,24 +322,13 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                     rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
 
                 assert "input_tensors" in opData.keys(), "Ops must have input tensors"
-                for count, tensor in enumerate(opData["input_tensors"]):
-                    for ioField, ioData in tensor.items():
-                        header = f"INPUT_{count}_{ioField}".upper()
-                        rowDict[header] = ioData
-                        if count > maxInputCount:
-                            inputHeaders.append(header)
-                    if count > maxInputCount:
-                        maxInputCount = count
+                if "optional_input_tensors" in opData.keys():
+                    add_io_data(opData["input_tensors"] + opData["optional_input_tensors"], "INPUT")
+                else:
+                    add_io_data(opData["input_tensors"], "INPUT")
 
                 if "output_tensors" in opData.keys():
-                    for count, tensor in enumerate(opData["output_tensors"]):
-                        for ioField, ioData in tensor.items():
-                            header = f"OUTPUT_{count}_{ioField}".upper()
-                            rowDict[header] = ioData
-                            if count > maxOutputCount:
-                                outputHeaders.append(header)
-                        if count > maxOutputCount:
-                            maxOutputCount = count
+                    add_io_data(opData["output_tensors"], "OUTPUT")
 
                 if "performance_model" in opData.keys():
                     rowDict["PM IDEAL [ns]"] = opData["performance_model"]["compute_ns"]
@@ -302,7 +340,12 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
             rowDicts.append(rowDict)
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
-        allHeaders = OPS_CSV_HEADER[:ioHeaderIndex] + inputHeaders + outputHeaders + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+        allHeaders = (
+            OPS_CSV_HEADER[:ioHeaderIndex]
+            + tensorCSVData["INPUT"]["headers"]
+            + tensorCSVData["OUTPUT"]["headers"]
+            + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+        )
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
         writer.writeheader()
         for rowDict in rowDicts:
