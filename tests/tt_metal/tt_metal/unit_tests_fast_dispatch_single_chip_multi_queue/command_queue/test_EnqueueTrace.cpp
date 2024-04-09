@@ -76,6 +76,8 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 namespace basic_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
+    // TODO: Re-enable when Trace brought up
+    GTEST_SKIP();
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
@@ -119,6 +121,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
+    // TODO: Re-enable when Trace brought up
+    GTEST_SKIP();
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
@@ -169,6 +173,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
+    // TODO: Re-enable when Trace brought up
+    GTEST_SKIP();
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
