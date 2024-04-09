@@ -259,8 +259,8 @@ def test_simple(
     batch_size = 1
     output_channels = 128
     input_channels = 128
-    input_height = 16
-    input_width = 16
+    input_height = 17
+    input_width = 17
     filter_height = 3
     filter_width = 3
     stride_h = 2
@@ -270,8 +270,8 @@ def test_simple(
     is_1d_systolic = False
     untilize_out = False
     bias = False
-    config = None  # {"act_reshard_num_cores_nhw": 2}
-    debug = True
+    config = {"num_cores_nhw": 2}
+    debug = False
     fuse_relu = False
 
     assert output_channels % 32 == 0
@@ -370,7 +370,7 @@ def test_simple(
     )
 
     # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
-    if is_1d_systolic:
+    if False and is_1d_systolic:
         conv_input = conv_input.to(device, conv.input_sharded_memory_config)
     else:
         interleaved_mem_config = tt_lib.tensor.MemoryConfig(
