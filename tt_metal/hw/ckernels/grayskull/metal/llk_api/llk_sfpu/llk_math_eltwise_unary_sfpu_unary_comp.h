@@ -26,4 +26,32 @@ inline void llk_math_eltwise_unary_sfpu_unary_ne(uint dst_index, uint param0, in
                                 dst_index, vector_mode, param0);
 }
 
+//Unary greater than
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_gt_init() {
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_gt(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
+                                (ckernel::sfpu::calculate_unary_gt<APPROXIMATE>,
+                                ckernel::sfpu::calculate_unary_gt<APPROXIMATE>,
+                                dst_index, vector_mode, param0);
+}
+
+//Unary lesser than
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_lt_init() {
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_lt(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
+                                (ckernel::sfpu::calculate_unary_lt<APPROXIMATE>,
+                                ckernel::sfpu::calculate_unary_lt<APPROXIMATE>,
+                                dst_index, vector_mode, param0);
+}
+
 }

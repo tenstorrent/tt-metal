@@ -187,6 +187,18 @@ namespace tt::tt_metal::detail {
             R"doc(Returns tensor with the unary op chain applied to all of elements of the input tensor ``{0}``.)doc",
             R"doc("Unary op chain", "Vector<FusibleActivation>", "At least 1 activation")doc"
         );
+        detail::bind_unary_op_with_param(
+            m_tensor, "unary_gt", unary_gt,
+            py::arg("value"),
+            R"doc(Perform an eltwise-unary greater-than (``{0} > {1}``) on input tensor.)doc",
+            R"doc("value", "float", "")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "unary_lt", unary_lt,
+            py::arg("value"),
+            R"doc(Perform an eltwise-unary less-than (``{0} < {1}``) on input tensor.)doc",
+            R"doc("value", "float", "")doc"
+        );
 
         // *** bcast binary tied to unary ***
         detail::bind_unary_op(m_tensor, "add1", &add1, R"doc(Returns tensor with the addition of one with input tensor ``{0}``.)doc");

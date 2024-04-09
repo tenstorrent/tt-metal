@@ -953,6 +953,18 @@ def ne(x, y, *args, **kwargs):
         return x != y
 
 
+def unary_gt(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.gt(x, value)
+    return result
+
+
+def unary_lt(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.lt(x, value)
+    return result
+
+
 def max(x, y, *args, **kwargs):
     return torch.max(x, y)
 
