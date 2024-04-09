@@ -53,16 +53,7 @@ int main(int argc, char **argv) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(
-        program,
-        binary_reader_kernel_id,
-        core,
-        {
-            src0_dram_buffer->address(),
-            src1_dram_buffer->address(),
-            dst_dram_buffer->address(),
-        }
-    );
+    SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(),});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
