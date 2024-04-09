@@ -11,26 +11,29 @@
 #include <set>
 #include <string>
 
-#include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
+#include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
 
 using std::pair;
 
 using CoreCoord = tt_xy_pair;
 
-static constexpr auto attribute_names(const CoreCoord &core_coord) { return std::make_tuple("x", "y"); }
-static const auto attribute_values(const CoreCoord &core_coord) {
-    return std::make_tuple(std::cref(core_coord.x), std::cref(core_coord.y));
+template <>
+struct fmt::formatter<CoreCoord> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const CoreCoord &core_coord, format_context &ctx) const -> format_context::iterator {
+        std::stringstream ss;
+        ss << core_coord.str();
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+constexpr inline bool operator<=(const CoreCoord &a, const CoreCoord &b) {
+    return (a < b) or (a == b);
 }
-
-static_assert(
-    tt::stl::reflection::detail::supports_compile_time_attributes_function_v<CoreCoord>,
-    "CoreCoord does not support compile time attributes function");
-
-constexpr inline bool operator<=(const CoreCoord &a, const CoreCoord &b) { return (a < b) or (a == b); }
 
 struct RelativeCoreCoord {
   long x = 0;
@@ -38,8 +41,6 @@ struct RelativeCoreCoord {
 
   std::string str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
-  static constexpr auto attribute_names = std::make_tuple("x", "y");
-  const auto attribute_values() const { return std::make_tuple(std::cref(this->x), std::cref(this->y)); }
 };
 
 constexpr inline bool operator==(const RelativeCoreCoord &a, const RelativeCoreCoord &b) { return a.x == b.x && a.y == b.y; }
@@ -162,9 +163,6 @@ struct CoreRange {
     size_t size() const { return (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1); }
 
     CoreCoord grid_size() const { return {this->end.x - this->start.x + 1, this->end.y - this->start.y + 1}; }
-
-    static constexpr auto attribute_names = std::make_tuple("start", "end");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->start), std::cref(this->end)); }
 };
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) { return a.start == b.start && a.end == b.end; }
@@ -214,6 +212,18 @@ struct fmt::formatter<CoreRange> {
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
+
+namespace std {
+template <>
+struct hash<CoreRange> {
+    std::size_t operator()(const CoreRange &core_range) const {
+        std::size_t seed = 0;
+        seed = std::hash<CoreCoord>{}(core_range.start) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed = std::hash<CoreCoord>{}(core_range.end) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
+}  // namespace std
 
 class CoreRangeSet {
   public:
@@ -368,10 +378,7 @@ class CoreRangeSet {
       return {{min_x, min_y},{max_x, max_y}};
     }
 
-    static constexpr auto attribute_names = std::make_tuple("ranges_");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->ranges_)); }
-
-   private:
+  private:
     std::set<CoreRange> ranges_;
 };
 
@@ -509,3 +516,27 @@ struct fmt::formatter<CoreRangeSet> {
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
+
+namespace std {
+template <>
+struct hash<CoreRangeSet> {
+    std::size_t operator()(const CoreRangeSet &core_range_set) const {
+        std::size_t seed = 0;
+        for (const auto &core_range : core_range_set.ranges()) {
+            seed = std::hash<CoreRange>{}(core_range) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        }
+        return seed;
+    }
+};
+}  // namespace std
+
+namespace std {
+template <>
+struct hash<RelativeCoreCoord> {
+  std::size_t operator()(RelativeCoreCoord const &o) const {
+    std::size_t seed = 0;
+    seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
+    return seed;
+  }
+};
+}
