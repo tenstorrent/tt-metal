@@ -616,9 +616,7 @@ class resnet50:
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
-    def __call__(self, torch_input_tensor) -> ttnn.Tensor:
-        input_tensor = self.preprocessing(torch_input_tensor)
-
+    def __call__(self, input_tensor) -> ttnn.Tensor:
         ## copy input to device sharded directly
         x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
 
