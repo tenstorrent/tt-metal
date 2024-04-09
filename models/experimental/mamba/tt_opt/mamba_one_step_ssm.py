@@ -22,7 +22,7 @@ class TtMambaSSM(torch.nn.Module):
         self.args = args
 
         # hidden state
-        self.num_users = args.batch_size
+        self.batch_size = args.batch_size
         self.hidden_size = args.d_inner
         self.configs = configs
         self.n = 16
@@ -84,7 +84,7 @@ class TtMambaSSM(torch.nn.Module):
             # padding with inf
             # x = F.pad(x, (0, 16), "constant", float("-inf"))
             x = x.reshape(1, self.hidden_size * self.n)  # (1, 2en)
-            return x.repeat(self.num_users, 1)  # b, 2en
+            return x.repeat(self.batch_size, 1)  # b, 2en
 
         self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
 
@@ -97,7 +97,7 @@ class TtMambaSSM(torch.nn.Module):
         )
 
         # hidden state
-        prev_hidden_states = torch.zeros((1, 1, self.num_users, self.hidden_size * self.n))
+        prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
         self.tt_hidden_state = load_fn(f"tt_hidden_state_{args.batch_size}", torch_tensor=prev_hidden_states)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(

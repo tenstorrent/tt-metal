@@ -19,7 +19,7 @@ def get_cpu_reference_model(version, batch_size):
     return MambaDecode.from_pretrained(f"state-spaces/{version}", batch_size=batch_size)
 
 
-def get_tt_metal_model(num_users, hidden_size, configs, version):
+def get_tt_metal_model(batch_size, hidden_size, configs, version):
     from models.experimental.mamba.tt_opt.full_model import MambaTT
 
     device_id = 0
@@ -28,26 +28,26 @@ def get_tt_metal_model(num_users, hidden_size, configs, version):
     torch.manual_seed(0)
     ttnn.enable_program_cache(device)
 
-    reference_model = get_cpu_reference_model(version, num_users)
+    reference_model = get_cpu_reference_model(version, batch_size)
     cache_path = f"/tmp/state-spaces/{version}"
 
     model = MambaTT(reference_model, device, configs, cache_path, 1)
     return model, device
 
 
-def run_demo(num_users, hidden_size, profile):
-    configs = model_config.create_model_config(num_users, hidden_size)
-    model, device = get_tt_metal_model(num_users, hidden_size, configs, "mamba-2.8b-slimpj")
+def run_demo(batch_size, hidden_size, profile):
+    configs = model_config.create_model_config(batch_size, hidden_size)
+    model, device = get_tt_metal_model(batch_size, hidden_size, configs, "mamba-2.8b-slimpj")
 
     # evaluate model:
     model.eval()
 
     with torch.no_grad():
-        # create random torch tensor of hidden size and num_users, with datatype bfloat16
+        # create random torch tensor of hidden size and batch size, with datatype bfloat16
 
         tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
         input_data = tokenizer("Hello", return_tensors="pt")["input_ids"]
-        input_data = input_data.repeat(num_users, 1)
+        input_data = input_data.repeat(batch_size, 1)
 
         if profile == 1:
             out_data = model(input_data)
@@ -59,12 +59,12 @@ def run_demo(num_users, hidden_size, profile):
 
 
 def main():
-    num_users = int(sys.argv[1])
+    batch_size = int(sys.argv[1])
     hidden_size = int(sys.argv[2])
     profile = int(sys.argv[3])
-    assert num_users == 32
+    assert batch_size == 32
     assert (hidden_size // 8) % 32 == 0
-    return run_demo(num_users, hidden_size, profile)
+    return run_demo(batch_size, hidden_size, profile)
 
 
 if __name__ == "__main__":
