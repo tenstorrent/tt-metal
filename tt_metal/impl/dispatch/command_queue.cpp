@@ -338,6 +338,7 @@ const void EnqueueWriteBufferCommand::assemble_device_commands(uint32_t) {
         write_cmd->write_linear.addr = this->bank_base_address;
         write_cmd->write_linear.length = this->pages_to_write * padded_page_size;
         write_cmd->write_linear.noc_xy_addr = get_noc_unicast_encoding(core);
+        write_cmd->write_linear.num_mcast_dests = 0;
     } else {
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
         write_cmd->write_paged.is_dram = uint8_t(this->buffer.buffer_type() == BufferType::DRAM);
