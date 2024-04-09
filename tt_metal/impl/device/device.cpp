@@ -369,9 +369,11 @@ void Device::compile_command_queue_programs() {
                 CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, dispatch_core_type);
                 CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
 
+                uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t issue_queue_start_addr = command_queue_start_addr + CQ_START;
                 uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
-                uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
-                uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
+                uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
+                uint32_t completion_queue_size = this->sysmem_manager_->get_completion_queue_size(cq_id);
 
                 TT_ASSERT(tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.size() == 1);
                 CoreCoord pcie_physical_core = tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.at(0);
@@ -392,7 +394,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_buffer_pages,
                     prefetch_downstream_cb_sem,
                     dispatch_cb_sem,
-                    CQ_START,
+                    issue_queue_start_addr,
                     issue_queue_size,
                     prefetch_q_base,
                     PREFETCH_Q_ENTRIES * (uint32_t)sizeof(prefetch_q_entry_type),
@@ -442,6 +444,7 @@ void Device::compile_command_queue_programs() {
                         prefetch_downstream_cb_sem,
                         DISPATCH_BUFFER_SIZE_BLOCKS,
                         prefetch_sync_sem,
+                        command_queue_start_addr,
                         completion_queue_start_addr,
                         completion_queue_size,
                         dispatch_buffer_base,
