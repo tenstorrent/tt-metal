@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_metal/tt_stl/concepts.hpp"
 
 namespace tt {
 namespace stl {
@@ -174,79 +173,45 @@ template <typename T>
 using has_attributes_t = decltype(std::declval<T>().attributes());
 
 template <typename T>
-constexpr bool supports_runtime_time_attributes_method_v = std::experimental::is_detected_v<has_attributes_t, T>;
-
-template <typename T>
-using has_attribute_names_method_t = decltype(std::declval<T>().attribute_names);
-
-template <typename T>
-using has_attribute_values_method_t = decltype(std::declval<T>().attribute_values());
-
-template <typename T>
-constexpr bool supports_compile_time_attributes_method_v =
-    std::experimental::is_detected_v<has_attribute_names_method_t, T> and
-    std::experimental::is_detected_v<has_attribute_values_method_t, T>;
-
-template <typename T>
-using has_attribute_names_function_t = decltype(attribute_names(std::declval<T>()));
-
-template <typename T>
-using has_attribute_values_function_t = decltype(attribute_values(std::declval<T>()));
-
-template <typename T>
-constexpr bool supports_compile_time_attributes_function_v =
-    std::experimental::is_detected_v<has_attribute_names_function_t, T> and
-    std::experimental::is_detected_v<has_attribute_values_function_t, T>;
-
-template <typename T>
-constexpr bool supports_conversion_to_string_v =
-    detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_method_v<T> or
-    detail::supports_compile_time_attributes_function_v<T> or detail::supports_runtime_time_attributes_method_v<T>;
+constexpr bool supports_runtime_time_attributes_v = std::experimental::is_detected_v<has_attributes_t, T>;
 
 template <typename T>
 inline constexpr std::size_t get_num_attributes() {
-    if constexpr (supports_compile_time_attributes_method_v<T>) {
-        return std::tuple_size_v<decltype(T::attribute_names)>;
-    } else if constexpr (supports_compile_time_attributes_function_v<T>) {
-        return std::tuple_size_v<decltype(attribute_names(std::declval<T>()))>;
-    } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<T>, "Object doesn't support compile-time or run-time attributes!");
-    }
+    return std::tuple_size_v<decltype(T::attribute_names)>;
 }
+template <typename T>
+using has_attribute_names_t = decltype(std::declval<T>().attribute_names);
+
+template <typename T>
+using has_attribute_values_t = decltype(std::declval<T>().attribute_values());
+
+template <typename T>
+constexpr bool supports_compile_time_attributes_v = std::experimental::is_detected_v<has_attribute_names_t, T> and
+                                                    std::experimental::is_detected_v<has_attribute_values_t, T>;
+
+template <typename T>
+constexpr bool supports_conversion_to_string_v =
+    detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T> or
+    detail::supports_runtime_time_attributes_v<T>;
 }  // namespace detail
 
 template <typename T>
 Attributes get_attributes(const T& object) {
-    if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_method_v<std::decay_t<T>>) {
+    if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
         constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
-        tt::stl::reflection::Attributes output;
+        tt::stl::reflection::Attributes attributes;
         const auto attribute_values = object.attribute_values();
-        [&object, &output, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
-            (
-                [&object, &output, &attribute_values] {
-                    const auto& attribute_name = std::get<Ns>(object.attribute_names);
-                    const auto& attribute = std::get<Ns>(attribute_values);
-                    output.push_back({attribute_name, attribute});
-                }(),
-                ...);
-        }(std::make_index_sequence<num_attributes>{});
-        return output;
-    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_function_v<std::decay_t<T>>) {
-        constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
-        tt::stl::reflection::Attributes output;
-        const auto attributes = attribute_values(object);
-        [&object, &output, &attributes]<size_t... Ns>(std::index_sequence<Ns...>) {
-            (
-                [&object, &output, &attributes] {
-                    const auto& attribute_name = std::get<Ns>(attribute_names(object));
-                    const auto& attribute = std::get<Ns>(attributes);
-                    output.push_back({attribute_name, attribute});
-                }(),
-                ...);
-        }(std::make_index_sequence<num_attributes>{});
-        return output;
-    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_method_v<std::decay_t<T>>) {
+            [&object, &attributes, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&object, &attributes, &attribute_values] {
+                        const auto& attribute_name = std::get<Ns>(object.attribute_names);
+                        const auto& attribute = std::get<Ns>(attribute_values);
+                        attributes.push_back({attribute_name, attribute});
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes>{});
+            return attributes;
+    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
         return object.attributes();
     } else {
         static_assert(
@@ -279,7 +244,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
     std::ostream& os, const T& object) {
     if constexpr (detail::supports_to_string_v<T>) {
         os << object.to_string();
-    } else if constexpr (detail::supports_compile_time_attributes_method_v<T>) {
+    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
         constexpr auto num_attributes = detail::get_num_attributes<T>();
         os << boost::core::demangle(typeid(T).name());
         os << "(";
@@ -305,33 +270,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
         }
 
         os << ")";
-    } else if constexpr (detail::supports_compile_time_attributes_function_v<T>) {
-        constexpr auto num_attributes = detail::get_num_attributes<T>();
-        os << boost::core::demangle(typeid(T).name());
-        os << "(";
-
-        if constexpr (num_attributes > 0) {
-            const auto attributes = attribute_values(object);
-            [&os, &object, &attributes]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-                (
-                    [&os, &object, &attributes] {
-                        const auto& attribute = std::get<Ns>(attributes);
-                        os << std::get<Ns>(attribute_names(object));
-                        os << "=";
-                        os << attribute;
-                        os << ",";
-                    }(),
-                    ...);
-            }(std::make_index_sequence<num_attributes - 1>{});
-
-            const auto& attribute = std::get<num_attributes - 1>(attributes);
-            os << std::get<num_attributes - 1>(attribute_names(object));
-            os << "=";
-            os << attribute;
-        }
-
-        os << ")";
-    } else if constexpr (detail::supports_runtime_time_attributes_method_v<T>) {
+    } else if constexpr (detail::supports_runtime_time_attributes_v<T>) {
         static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
         os << boost::core::demangle(typeid(T).name());
         os << object.attributes();
@@ -597,7 +536,7 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing struct {} using to_hash method: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         return object.to_hash();
-    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_method_v<T>) {
+    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print(
                 "Hashing struct {} using compile-time attributes: {}\n",
@@ -616,26 +555,7 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return hash;
-    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_function_v<T>) {
-        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print(
-                "Hashing struct {} using compile-time attributes: {}\n",
-                boost::core::demangle(typeid(T).name()),
-                object);
-        }
-        constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
-        std::size_t hash = hash_objects(0, typeid(T).hash_code());
-        const auto attributes = attribute_values(object);
-        [&object, &hash, &attributes]<size_t... Ns>(std::index_sequence<Ns...>) {
-            (
-                [&object, &hash, &attributes] {
-                    const auto& attribute = std::get<Ns>(attributes);
-                    hash = hash_objects(hash, attribute);
-                }(),
-                ...);
-        }(std::make_index_sequence<num_attributes>{});
-        return hash;
-    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_method_v<T>) {
+    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print(
                 "Hashing struct {} using run-time attributes: {}\n", boost::core::demangle(typeid(T).name()), object);
