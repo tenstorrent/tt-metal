@@ -83,28 +83,9 @@ int main(int argc, char **argv) {
     EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(
-        program,
-        binary_reader_kernel_id,
-        core,
-        { src0_dram_buffer->address(),
-          src1_dram_buffer->address()
-        }
-    );
-
-    SetRuntimeArgs(
-        program,
-        eltwise_binary_kernel_id,
-        core,
-        {}
-    );
-
-    SetRuntimeArgs(
-        program,
-        unary_writer_kernel_id,
-        core,
-        {dst_dram_buffer->address()}
-    );
+    SetRuntimeArgs( program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address()});
+    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
