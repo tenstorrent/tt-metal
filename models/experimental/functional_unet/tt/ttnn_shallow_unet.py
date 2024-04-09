@@ -114,7 +114,7 @@ class UNet:
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
         if perf_mode:
-            save_c1_2_out = output_tensor
+            save_c1_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
             save_c1_2_out = ttl.tensor.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttl.tensor.DataType.BFLOAT16
@@ -253,7 +253,6 @@ class UNet:
         output_tensor = ttnn.reshape(output_tensor, (1, 1, nhw, output_tensor.shape[-1]))
 
         profiler.tracy_message("concat4")
-        save_c1_2_out = ttnn.to_layout(save_c1_2_out, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = unet_concat([output_tensor, save_c1_2_out], dim=-1, perf_mode=perf_mode)
 
         profiler.tracy_message("c8")
