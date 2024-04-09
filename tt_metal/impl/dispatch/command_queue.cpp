@@ -1819,7 +1819,7 @@ void HWCommandQueue::read_completion_queue() {
                             TT_ASSERT(event_completed == read_descriptor.event_id, "Event Order Issue: expected to read back completion signal for event {} but got {}!", read_descriptor.event_id, event_completed);
                             this->manager.completion_queue_pop_front(1, this->id);
                             this->manager.set_last_completed_event(this->id, read_descriptor.get_global_event_id());
-                            log_info(LogAlways, "DEBUG completed event {} (global: {})", event_completed, read_descriptor.get_global_event_id());
+                            log_debug(LogAlways, "DEBUG completed event {} (global: {})", event_completed, read_descriptor.get_global_event_id());
                         }
                     },
                     read_descriptor
