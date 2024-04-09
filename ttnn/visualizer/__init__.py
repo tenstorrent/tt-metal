@@ -144,11 +144,9 @@ def operations():
                 if value == "std::nullopt":
                     return ""
                 else:
-                    return value == 1
+                    return "HIT" if value == 1 else "MISS"
 
-            operation_history["program_cache_hit"] = operation_history.program_cache_hit.apply(
-                normalize_program_cache_hit
-            )
+            operation_history["program_cache"] = operation_history.program_cache_hit.apply(normalize_program_cache_hit)
 
             def normalize_program_hash(value):
                 if value == "std::nullopt":
@@ -159,7 +157,7 @@ def operations():
             operation_history["program_hash"] = operation_history.program_hash.apply(normalize_program_hash)
 
             return operation_history.to_html(
-                columns=["operation_name", "operation_type", "program_cache_hit", "program_hash"],
+                columns=["operation_name", "operation_type", "program_cache", "program_hash"],
                 index=False,
                 justify="center",
             )
@@ -648,6 +646,8 @@ def operation_tensor_report(operation_id):
         if isinstance(tensor, ttnn.Tensor):
             tensor = ttnn.to_torch(tensor)
 
+        tensor = tensor.double()
+
         statistics = {
             "Min": tensor.min().item(),
             "Max": tensor.max().item(),
@@ -670,6 +670,7 @@ def operation_tensor_report(operation_id):
         global_golden_tensors=global_golden_tensors,
         display_tensor_comparison_record=display_tensor_comparison_record,
         plot_tensor=plot_tensor,
+        get_tensor_file_name_by_id=ttnn.database.get_tensor_file_name_by_id,
         get_tensor_statistics=get_tensor_statistics,
     )
 
