@@ -83,6 +83,25 @@ def root():
     return operations()
 
 
+@app.route("/apis")
+def apis():
+    apis = ttnn.query_operations(include_experimental=True)
+    df = pd.DataFrame(apis)
+    df.sort_values(by=["is_experimental", "is_cpp_function", "name"], inplace=True)
+    df["has_fallback"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
+    df["will_fallback"] = df[["has_fallback", "allow_to_fallback_to_golden_function_on_failure"]].apply(
+        lambda row: row.has_fallback and row.allow_to_fallback_to_golden_function_on_failure, axis=1
+    )
+    return render_template(
+        "apis.html",
+        apis=df.to_html(
+            index=False,
+            justify="center",
+            columns=["name", "is_cpp_function", "is_experimental", "has_fallback", "will_fallback"],
+        ),
+    )
+
+
 @app.route("/operations")
 def operations():
     operations = list(ttnn.database.query_operations())
