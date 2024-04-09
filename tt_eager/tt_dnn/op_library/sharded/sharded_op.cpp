@@ -136,6 +136,15 @@ ShardedOpParallelizationStrategy Reshard::get_parallelization_strategy(const std
     return ShardedOpParallelizationStrategy::MULTI_CORE;
 }
 
+const operation::Hash Reshard::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<Reshard>(
+        input_tensors.at(0).memory_config(),
+        input_tensors.at(0).get_dtype(),
+        this->output_mem_config,
+        input_tensors.at(0).get_legacy_shape());
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

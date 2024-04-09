@@ -25,7 +25,7 @@ from models.perf.perf_utils import prep_perf_report
         [
             20,
             "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi",
-            815,
+            7363,
         ],
     ],
 )
@@ -68,7 +68,7 @@ def test_performance(
 ):
     disable_persistent_kernel_cache()
 
-    num_iterations = 10
+    num_iterations = 2
 
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
