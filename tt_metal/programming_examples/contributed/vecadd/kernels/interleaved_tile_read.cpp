@@ -23,7 +23,7 @@ void kernel_main()
     // Create address generators for the input buffers. This is much faster
     // then doing plain DRAM reads.
     // Setting the page size to be tile_size_bytes works because we set it up
-    // explicitly in host code. This is usully a good idea as it makes coding
+    // explicitly in host code. This is usually a good idea as it makes coding
     // easy. But may not be the most efficient way to do it in all cases.
     const InterleavedAddrGenFast<true> a = {
         .bank_base_address = a_addr,          // The base address of the buffer
