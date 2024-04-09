@@ -12,7 +12,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_numpy/functions.hpp"
@@ -1244,9 +1244,20 @@ Tensor _glu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
-    Tensor sigmoid_b = sigmoid(ab[1], output_mem_config);
-    Tensor glu_result = mul(ab[0], sigmoid_b, std::nullopt, output_mem_config);
+    Shape inshape = input_a.get_legacy_shape();
+    TT_FATAL(((inshape[dim] / 2 )% TILE_WIDTH == 0),
+                "Split tensor dimension should be in full tile");
+    Shape s_a = {0, 0, 0, 0};
+    Shape e_a = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3]/2 - 1 };
+
+    Shape s_b = {0, 0, 0, inshape[3]/2 };
+    Shape e_b = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3] - 1 };
+
+    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
+
+    Tensor sigmoid_b = sigmoid(t_b, output_mem_config);
+    Tensor glu_result = mul(t_a, sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
 Tensor glu(
@@ -1264,9 +1275,19 @@ Tensor _reglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
-    Tensor relu_b = relu(ab[1], output_mem_config);
-    Tensor reglu_result = mul(ab[0], relu_b, std::nullopt, output_mem_config);
+    Shape inshape = input_a.get_legacy_shape();
+    TT_FATAL(((inshape[dim] / 2 )% TILE_WIDTH == 0),
+                "Split tensor dimension should be in full tile");
+    Shape s_a = {0, 0, 0, 0};
+    Shape e_a = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3]/2 - 1 };
+
+    Shape s_b = {0, 0, 0, inshape[3]/2 };
+    Shape e_b = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3] - 1 };
+
+    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
+    Tensor relu_b = relu(t_b, output_mem_config);
+    Tensor reglu_result = mul(t_a, relu_b, std::nullopt, output_mem_config);
     return reglu_result;
 }
 Tensor reglu(
@@ -1284,10 +1305,20 @@ Tensor _geglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
+    Shape inshape = input_a.get_legacy_shape();
+    TT_FATAL(((inshape[dim] / 2 )% TILE_WIDTH == 0),
+                "Split tensor dimension should be in full tile");
+    Shape s_a = {0, 0, 0, 0};
+    Shape e_a = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3]/2 - 1 };
+
+    Shape s_b = {0, 0, 0, inshape[3]/2 };
+    Shape e_b = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3] - 1 };
+
+    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
     constexpr bool fast_appx = true;
-    Tensor gelu_b = gelu(ab[1], fast_appx, output_mem_config);
-    Tensor geglu_result = mul(ab[0], gelu_b, std::nullopt, output_mem_config);
+    Tensor gelu_b = gelu(t_b, fast_appx, output_mem_config);
+    Tensor geglu_result = mul(t_a, gelu_b, std::nullopt, output_mem_config);
     return geglu_result;
 }
 Tensor geglu(
@@ -1305,9 +1336,20 @@ Tensor _swiglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
-    Tensor swish_b = swish(ab[1], output_mem_config);
-    Tensor swiglu_result = mul(ab[0], swish_b, std::nullopt, output_mem_config);
+    Shape inshape = input_a.get_legacy_shape();
+    TT_FATAL(((inshape[dim] / 2 )% TILE_WIDTH == 0),
+                "Split tensor dimension should be in full tile");
+    Shape s_a = {0, 0, 0, 0};
+    Shape e_a = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3]/2 - 1 };
+
+    Shape s_b = {0, 0, 0, inshape[3]/2 };
+    Shape e_b = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3] - 1 };
+
+    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
+
+    Tensor swish_b = swish(t_b, output_mem_config);
+    Tensor swiglu_result = mul(t_a, swish_b, std::nullopt, output_mem_config);
     return swiglu_result;
 }
 Tensor swiglu(
