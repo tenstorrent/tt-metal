@@ -482,6 +482,18 @@ def store_tensor(tensor):
         raise ValueError(f"Unsupported tensor type {type(tensor)}")
 
 
+def get_tensor_file_name_by_id(tensor_id):
+    tensors_path = ttnn.CONFIG.reports_path / "tensors"
+    tensors_path.mkdir(parents=True, exist_ok=True)
+    tensor_path = tensors_path / f"{tensor_id}.bin"
+    if tensor_path.exists():
+        return tensor_path
+    tensor_path = tensors_path / f"{tensor_id}.pt"
+    if tensor_path.exists():
+        return tensor_path
+    return None
+
+
 def load_tensor_by_id(tensor_id):
     import torch
 

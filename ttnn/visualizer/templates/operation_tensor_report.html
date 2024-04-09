@@ -72,6 +72,7 @@
                 <th>Layout</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
             </tr>
             {% for tensor_record, tensor in input_tensors %}
             <tr>
@@ -84,10 +85,11 @@
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}
                     {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
             </tr>
             {% endfor %}
-            </table>
-            {% endif %}
+        </table>
+        {% endif %}
 
         {% if output_tensors %}
         <h3>Output Tensors</h3>
@@ -101,6 +103,7 @@
                 <th>1024x1024 Chunk of Face 0</th>
                 <th>Matches Locally</th>
                 <th>Matches Globally</th>
+                <th>File Name</th>
             </tr>
             {% for tensor_record, tensor in output_tensors %}
             <tr>
@@ -128,10 +131,11 @@
                 <td bgcolor="gray">
                 </td>
                 {%endif%}
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
             </tr>
             {% endfor %}
-            </table>
-            {% endif %}
+        </table>
+        {% endif %}
 
         {% if local_golden_tensors %}
         <h3>Local Golden Tensors</h3>
@@ -143,6 +147,7 @@
                 <th>Layout</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
             </tr>
             {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
             local_golden_tensors.items() %}
@@ -156,11 +161,12 @@
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}
                     {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
             </tr>
             {% endfor %}
-            </table>
-            {% endif %}
-            {% if global_golden_tensors %}
+        </table>
+        {% endif %}
+        {% if global_golden_tensors %}
         <h3>Global Golden Tensors</h3>
         <table>
             <tr>
@@ -170,6 +176,7 @@
                 <th>Layout</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
             </tr>
             {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
             global_golden_tensors.items() %}
@@ -183,11 +190,12 @@
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
                     {{ tensor_script | safe }}
                     {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
             </tr>
             {% endfor %}
-            </table>
-            {% endif %}
-            </div>
+        </table>
+        {% endif %}
+        </div>
 </body>
 
 </html>
