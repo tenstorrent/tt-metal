@@ -299,8 +299,9 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
             if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
                 logger.warning(
-                    f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the model-level golden tensors"
+                    f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors"
                 )
+                input_index += 1
                 return ttnn.to_torch(object_value)
             golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1

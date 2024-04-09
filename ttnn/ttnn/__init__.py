@@ -175,6 +175,7 @@ from ttnn.core import (
     load_memory_config,
 )
 
+import ttnn.reflection
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
