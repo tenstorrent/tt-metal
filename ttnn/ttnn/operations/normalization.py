@@ -8,7 +8,7 @@ from typing import Optional, Union
 import ttnn
 
 import tt_lib as ttl
-from tt_lib.utils import find_closest_largest_divisor, find_closest_largest_divisor_with_num_padding
+from tt_lib.utils import find_closest_largest_divisor
 import math
 
 
@@ -33,53 +33,9 @@ def _golden_function(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-def _layer_norm_validate_input_tensors(
-    operation_name, input_tensor, *args, weight=None, bias=None, residual_input_tensor=None, **kwargs
-):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        weight,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        bias,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        residual_input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-
-
 @ttnn.register_operation(
     name="ttnn.layer_norm",
-    validate_input_tensors=_layer_norm_validate_input_tensors,
+    is_cpp_function=True,
     golden_function=_golden_function,
 )
 def layer_norm(
@@ -98,15 +54,6 @@ def layer_norm(
     Compute layer_norm over :attr:`input_tensor`.
 
     """
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    if residual_input_tensor is not None:
-        residual_input_tensor = ttnn.unsqueeze_to_4D(residual_input_tensor)
-    if weight is not None:
-        weight = ttnn.unsqueeze_to_4D(weight)
-    if bias is not None:
-        bias = ttnn.unsqueeze_to_4D(bias)
 
     if program_config is None:
         if residual_input_tensor is not None:
@@ -137,34 +84,25 @@ def layer_norm(
                 input_tensor, epsilon, weight, bias, output_mem_config=memory_config, program_config=program_config
             )
 
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
-def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        weight,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+    import torch
+
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        input_tensor = input_tensor.to(weight.dtype)
+
+    return weight * input_tensor
 
 
 @ttnn.register_operation(
     name="ttnn.rms_norm",
-    validate_input_tensors=_rms_norm_validate_input_tensors,
+    is_cpp_function=True,
+    golden_function=_golden_function,
 )
 def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
     r"""
@@ -173,19 +111,7 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     Compute rms_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise RuntimeError("rms_norm only supports device storage type")
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    weight = ttnn.unsqueeze_to_4D(weight)
-
-    output_tensor = ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
-
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-
-    return output_tensor
+    return ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
 
 
 # group norm helper function

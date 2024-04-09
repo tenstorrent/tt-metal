@@ -6,11 +6,10 @@
 
 #include <optional>
 
-#include "tt_eager/tensor/tensor.hpp"
-
-#include "tt_dnn/op_library/run_operation.hpp"
-
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_eager/tensor/tensor.hpp"
+#include "ttnn/operations/core.hpp"
 
 using namespace tt::constants;
 
@@ -96,18 +95,38 @@ template <LayerNormType norm_type>
 struct make_layernorm {
     Tensor operator()(
         const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
-        TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+        TT_FATAL(a.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
 
         if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
-            TT_FATAL(gamma.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Gamma width must be equal to input width");
+            TT_FATAL(
+                gamma.value().get_legacy_shape()[-1] == a.get_legacy_shape()[-1],
+                "Gamma width must be equal to input width");
         }
         if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
+            TT_FATAL(
+                beta.value().get_legacy_shape()[-1] == a.get_legacy_shape()[-1],
+                "Beta width must be equal to input width");
         }
 
-        auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto original_shape = a.get_shape();
+        auto a_4D = ttnn::unsqueeze_to_4D(a);
+        std::optional<const Tensor> gamma_4D = gamma.has_value() ? ttnn::unsqueeze_to_4D(gamma.value()) : gamma;
+        std::optional<const Tensor> beta_4D = beta.has_value() ? ttnn::unsqueeze_to_4D(beta.value()) : beta;
+
+        auto arch =
+            a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig(), .compute_kernel_config=kernel_config_val}, {a}, {std::nullopt, gamma, beta}).at(0);
+        auto output = operation::run_with_autoformat(
+                          LayerNorm{
+                              .norm_type = norm_type,
+                              .eps = eps,
+                              .output_mem_config = mem_config,
+                              .program_config = LayerNormDefaultProgramConfig(),
+                              .compute_kernel_config = kernel_config_val},
+                          {a_4D},
+                          {std::nullopt, gamma_4D, beta_4D})
+                          .at(0);
+        return ttnn::reshape(output, original_shape);
     }
 };
 
@@ -115,18 +134,38 @@ template <LayerNormType norm_type>
 struct make_add_layernorm {
     Tensor operator()(
         const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
-        TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+        TT_FATAL(a.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
         TT_FATAL(a.get_legacy_shape() == b.get_legacy_shape(), "Input shapes must be equal");
         if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
-            TT_FATAL(gamma.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Gamma width must be equal to input width");
+            TT_FATAL(
+                gamma.value().get_legacy_shape()[-1] == a.get_legacy_shape()[-1],
+                "Gamma width must be equal to input width");
         }
         if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
+            TT_FATAL(
+                beta.value().get_legacy_shape()[-1] == a.get_legacy_shape()[-1],
+                "Beta width must be equal to input width");
         }
+
+        auto original_shape = a.get_shape();
+        auto a_4D = ttnn::unsqueeze_to_4D(a);
+        auto b_4D = ttnn::unsqueeze_to_4D(b);
+        auto gamma_4D = gamma.has_value() ? ttnn::unsqueeze_to_4D(gamma.value()) : gamma;
+        auto beta_4D = beta.has_value() ? ttnn::unsqueeze_to_4D(beta.value()) : beta;
 
         auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-        return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig(), .compute_kernel_config=kernel_config_val}, {a}, {b, gamma, beta}).at(0);
+        auto output = operation::run_with_autoformat(
+                          LayerNorm{
+                              .norm_type = norm_type,
+                              .eps = eps,
+                              .output_mem_config = mem_config,
+                              .program_config = LayerNormDefaultProgramConfig(),
+                              .compute_kernel_config = kernel_config_val},
+                          {a_4D},
+                          {b_4D, gamma_4D, beta_4D})
+                          .at(0);
+        return ttnn::reshape(output, original_shape);
     }
 };
 
@@ -147,10 +186,24 @@ template <LayerNormType layernorm_type>
 struct make_layernorm {
     Tensor operator()(
         const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
+        auto original_shape = a.get_shape();
+        auto a_4D = ttnn::unsqueeze_to_4D(a);
+        std::optional<const Tensor> gamma_4D = gamma.has_value() ? ttnn::unsqueeze_to_4D(gamma.value()) : gamma;
+        std::optional<const Tensor> beta_4D = beta.has_value() ? ttnn::unsqueeze_to_4D(beta.value()) : beta;
 
         auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config, .compute_kernel_config=kernel_config_val}, {a}, {std::nullopt, gamma, beta}).at(0);
+        auto output = operation::run(
+                          LayerNorm{
+                              .norm_type = layernorm_type,
+                              .eps = eps,
+                              .output_mem_config = mem_config,
+                              .program_config = program_config,
+                              .compute_kernel_config = kernel_config_val},
+                          {a_4D},
+                          {std::nullopt, gamma_4D, beta_4D})
+                          .at(0);
+        return ttnn::reshape(output, original_shape);
     }
 };
 
@@ -158,10 +211,25 @@ template <LayerNormType layernorm_type>
 struct make_add_layernorm {
     Tensor operator()(
         const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = LayerNormDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) const {
+        auto original_shape = a.get_shape();
+        auto a_4D = ttnn::unsqueeze_to_4D(a);
+        auto b_4D = ttnn::unsqueeze_to_4D(b);
+        auto gamma_4D = gamma.has_value() ? ttnn::unsqueeze_to_4D(gamma.value()) : gamma;
+        auto beta_4D = beta.has_value() ? ttnn::unsqueeze_to_4D(beta.value()) : beta;
 
         auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-        return operation::run(LayerNorm{.norm_type=layernorm_type, .eps=eps, .output_mem_config=mem_config, .program_config=program_config, .compute_kernel_config=kernel_config_val}, {a}, {b, gamma, beta}).at(0);
+        auto output = operation::run(
+                          LayerNorm{
+                              .norm_type = layernorm_type,
+                              .eps = eps,
+                              .output_mem_config = mem_config,
+                              .program_config = program_config,
+                              .compute_kernel_config = kernel_config_val},
+                          {a_4D},
+                          {b_4D, gamma_4D, beta_4D})
+                          .at(0);
+        return ttnn::reshape(output, original_shape);
     }
 };
 
