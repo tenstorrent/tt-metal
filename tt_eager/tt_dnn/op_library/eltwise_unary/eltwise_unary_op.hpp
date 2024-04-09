@@ -75,7 +75,9 @@ enum class UnaryOpType {
     MUL_UNARY_SFPU = 57,
     DIV_UNARY_SFPU = 58,
     IDENTITY_UINT32 = 59,
-    UNARY_NE = 60
+    UNARY_NE = 60,
+    UNARY_GT = 61,
+    UNARY_LT = 62
 };
 
 template <typename T>
@@ -102,7 +104,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
         case UnaryOpType::DIV_UNARY_SFPU:
-        case UnaryOpType::UNARY_NE: return true;
+        case UnaryOpType::UNARY_NE:
+        case UnaryOpType::UNARY_GT:
+        case UnaryOpType::UNARY_LT: return true;
         default: return false;
     }
     return false;
@@ -317,6 +321,8 @@ constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 constexpr auto identity_uint32 = make_eltwise_unary<UnaryOpType::IDENTITY_UINT32>{};
 constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
 constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
+constexpr auto unary_gt = make_eltwise_unary_with_param<UnaryOpType::UNARY_GT>{};
+constexpr auto unary_lt = make_eltwise_unary_with_param<UnaryOpType::UNARY_LT>{};
 constexpr auto sub_unary_sfpu =
     make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>{};
 constexpr auto div_unary_sfpu =
