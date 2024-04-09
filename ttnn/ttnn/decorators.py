@@ -355,6 +355,7 @@ class Operation:
     golden_function: callable
     postprocess_golden_function_outputs: callable
     is_cpp_function: bool
+    is_experimental: bool
     allow_to_fallback_to_golden_function_on_failure: bool
 
     def __gt__(self, other):
@@ -690,6 +691,7 @@ def register_operation(
     *,
     name,
     is_cpp_function=False,
+    is_experimental=False,
     is_method=False,
     validate_input_tensors=None,
     golden_function=None,
@@ -726,6 +728,7 @@ def register_operation(
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_function=is_cpp_function,
+            is_experimental=is_experimental,
             allow_to_fallback_to_golden_function_on_failure=allow_to_fallback_to_golden_function_on_failure,
         )
 
@@ -750,5 +753,6 @@ def register_ttl_operation_as_ttnn_operation(name, function):
     function = register_operation(
         name=name,
         is_cpp_function=True,
+        is_experimental=True,
     )(function)
     return function

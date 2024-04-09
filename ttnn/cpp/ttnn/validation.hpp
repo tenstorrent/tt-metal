@@ -15,7 +15,7 @@ namespace validation {
 
 using TensorToValidate = std::variant<ttnn::Tensor, int, float>;
 
-void validate_input_tensor(
+static void validate_input_tensor(
     const char* operation_name,
     const std::optional<TensorToValidate>& optional_tensor_to_validate,
     const TensorSchema& input_schema) {
