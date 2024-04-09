@@ -188,8 +188,9 @@ void process_write_host_h() {
         }
         noc_async_write(data_ptr, host_completion_queue_write_addr, xfer_size);
         // This will update the write ptr on device and host
-        // Since writes use static vc we don't need to barrier after writes since writes are ordered
+        // We flush to ensure the ptr has been read out of l1 before we update it again
         completion_queue_push_back(npages);
+        noc_async_writes_flushed();
         block_noc_writes_to_clear[rd_block_idx]+=(xfer_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE; // XXXXX maybe just write the noc internal api counter
 
         length -= xfer_size;
