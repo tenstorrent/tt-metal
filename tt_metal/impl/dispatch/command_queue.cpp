@@ -857,7 +857,7 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
 
 // TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
 //  Look into modifying command to do read/write of a page at a time to avoid doing copy
-void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buffer, bool read = false) {
+void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buffer) {
     const uint32_t num_pages = buffer.num_pages();
     const uint32_t page_size = buffer.page_size();
 
@@ -866,19 +866,20 @@ void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& bu
     void* swapped = malloc(size_in_bytes);
 
     std::set<uint32_t> pages_seen;
-    for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
-
-        if (read) {
-            auto host_page_id = page_id;
-            auto dev_page_id = buffer.get_dev_to_host_mapped_page_id(host_page_id);
-            TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
-            memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
-        } else {
-            auto dev_page_id = page_id;
-            auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
-            TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-            memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size);
+    uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
+    for (uint32_t page_id = 0; page_id < num_pages;) {
+        uint32_t local_num_pages;
+        auto dev_page_id = page_id;
+        auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
+        TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
+        if(page_id + shard_width_in_pages < num_pages) {
+            local_num_pages = shard_width_in_pages;
         }
+        else {
+            local_num_pages = num_pages - page_id;
+        }
+        memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size*local_num_pages);
+        page_id += local_num_pages;
     }
     return swapped;
 }
