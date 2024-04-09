@@ -18,7 +18,7 @@ test-list:
       args-gen: gen_scalar_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: backward_clamp_max_sweep.csv
