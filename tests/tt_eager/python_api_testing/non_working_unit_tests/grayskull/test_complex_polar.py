@@ -45,7 +45,7 @@ def run_complex_polar_test(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 
 test_sweep_args = [
     (
-        (4, 7, 32, 96),
+        (4, 7, 32, 64),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -67,7 +67,7 @@ test_sweep_args = [
         14854324,
     ),
     (
-        (6, 11, 192, 32),
+        (6, 11, 192, 64),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
