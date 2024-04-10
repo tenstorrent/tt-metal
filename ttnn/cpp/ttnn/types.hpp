@@ -16,6 +16,7 @@ constexpr auto TILE_SIZE = 32;
 
 using tt::tt_metal::DataType;
 static constexpr auto uint16 = DataType::UINT16;
+static constexpr auto int32 = DataType::INT32;
 static constexpr auto uint32 = DataType::UINT32;
 static constexpr auto float32 = DataType::FLOAT32;
 static constexpr auto bfloat16 = DataType::BFLOAT16;

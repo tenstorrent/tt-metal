@@ -116,6 +116,7 @@ from ttnn.types import (
     TILE_SIZE,
     DataType,
     uint16,
+    int32,
     uint32,
     bfloat8_b,
     bfloat4_b,

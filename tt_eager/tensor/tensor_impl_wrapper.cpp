@@ -17,6 +17,7 @@ uint32_t element_size_bytes_wrapper(DataType dtype) {
     const static std::map<DataType, std::function<uint32_t()>> element_size_bytes_map = {
         {DataType::BFLOAT16, &element_size_bytes<bfloat16>},
         {DataType::FLOAT32, &element_size_bytes<float>},
+        {DataType::INT32, &element_size_bytes<int32_t>},
         {DataType::UINT32, &element_size_bytes<uint32_t>},
         {DataType::UINT16, &element_size_bytes<uint16_t>},
         {DataType::BFLOAT8_B, &element_size_bytes<std::byte>},
@@ -29,6 +30,7 @@ uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpack
     const static std::map<DataType, std::function<uint32_t(uint32_t)>> packed_buffer_size_bytes_map = {
         {DataType::BFLOAT16, &packed_buffer_size_bytes<bfloat16>},
         {DataType::FLOAT32, &packed_buffer_size_bytes<float>},
+        {DataType::INT32, &packed_buffer_size_bytes<int32_t>},
         {DataType::UINT32, &packed_buffer_size_bytes<uint32_t>},
         {DataType::BFLOAT8_B, &packed_buffer_size_bytes<uint32_t>},
         {DataType::BFLOAT4_B, &packed_buffer_size_bytes<uint32_t>},
@@ -41,6 +43,7 @@ Tensor to_host_wrapper(const Tensor &tensor, bool blocking) {
     const static std::map<DataType, std::function<Tensor(const Tensor &, bool blocking)>> to_host_map = {
         {DataType::BFLOAT16, &to_host<bfloat16>},
         {DataType::FLOAT32, &to_host<float>},
+        {DataType::INT32, &to_host<int32_t>},
         {DataType::UINT32, &to_host<uint32_t>},
         {DataType::BFLOAT8_B, &to_host<uint32_t>},
         {DataType::BFLOAT4_B, &to_host<uint32_t>},
@@ -54,6 +57,7 @@ Tensor to_extract_shard_wrapper(const Tensor &tensor, const uint32_t & core_id) 
     const static std::map<DataType, std::function<Tensor(const Tensor &, const uint32_t &)>> to_host_map = {
         {DataType::BFLOAT16, &extract_shard<bfloat16>},
         {DataType::FLOAT32, &extract_shard<float>},
+        {DataType::INT32, &extract_shard<int32_t>},
         {DataType::UINT32, &extract_shard<uint32_t>},
         {DataType::BFLOAT8_B, &extract_shard<uint32_t>},
         {DataType::BFLOAT4_B, &extract_shard<uint32_t>},
@@ -66,6 +70,7 @@ Tensor to_host_wrapper_sharded(const Tensor &tensor) {
     const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
         {DataType::BFLOAT16, &to_host_sharded<bfloat16>},
         {DataType::FLOAT32, &to_host_sharded<float>},
+        {DataType::INT32, &to_host_sharded<int32_t>},
         {DataType::UINT32, &to_host_sharded<uint32_t>},
         {DataType::BFLOAT8_B, &to_host_sharded<uint32_t>},
         {DataType::BFLOAT4_B, &to_host_sharded<uint32_t>},
@@ -79,6 +84,7 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
         to_device_map = {
             {DataType::BFLOAT16, &to_device<bfloat16>},
             {DataType::FLOAT32, &to_device<float>},
+            {DataType::INT32, &to_device<int32_t>},
             {DataType::UINT32, &to_device<uint32_t>},
             {DataType::BFLOAT8_B, &to_device<uint32_t>},
             {DataType::BFLOAT4_B, &to_device<uint32_t>},
@@ -92,6 +98,7 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
         {DataType::BFLOAT16, &to_layout<bfloat16>},
         {DataType::FLOAT32, &to_layout<float>},
+        {DataType::INT32, &to_layout<int32_t>},
         {DataType::UINT32, &to_layout<uint32_t>},
         {DataType::BFLOAT8_B, &to_layout_bfloat8_b},
         {DataType::BFLOAT4_B, &to_layout_bfloat4_b},
@@ -105,6 +112,7 @@ Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const
         pad_map = {
             {DataType::BFLOAT16, &pad<bfloat16>},
             {DataType::FLOAT32, &pad<float>},
+            {DataType::INT32, &pad<int32_t>},
             {DataType::UINT32, &pad<uint32_t>},
             {DataType::BFLOAT8_B, &pad_bfloat8_b},
             {DataType::BFLOAT4_B, &pad_bfloat4_b},
@@ -117,6 +125,7 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &)>> unpad_map = {
         {DataType::BFLOAT16, &unpad<bfloat16>},
         {DataType::FLOAT32, &unpad<float>},
+        {DataType::INT32, &unpad<int32_t>},
         {DataType::UINT32, &unpad<uint32_t>},
         {DataType::BFLOAT8_B, &unpad_bfloat8_b},
         {DataType::BFLOAT4_B, &unpad_bfloat4_b},
@@ -130,6 +139,7 @@ std::string to_string_wrapper(const Tensor &tensor) {
         to_string_map = {
             {DataType::BFLOAT16, &to_string<bfloat16>},
             {DataType::FLOAT32, &to_string<float>},
+            {DataType::INT32, &to_string<int32_t>},
             {DataType::UINT32, &to_string<uint32_t>},
             {DataType::BFLOAT8_B, &to_string<uint32_t>},
             {DataType::BFLOAT4_B, &to_string<uint32_t>},
