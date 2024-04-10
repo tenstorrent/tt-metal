@@ -93,10 +93,8 @@ class TtLlamaModel_optimized(nn.Module):
         logger.info("Done creating layers")
 
         # Rotary Embedding
-        if self.model_config["LLM_MODE"] == "prefill":
-            self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
-        else:
-            self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
+        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
+        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
             devices,
