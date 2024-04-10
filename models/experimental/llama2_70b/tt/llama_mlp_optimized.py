@@ -190,9 +190,17 @@ class TtLlamaMLP_optimized(nn.Module):
         # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
 
         seq_tiles = x[0].shape[2] // 32
-        self.model_config["PADDED_FF1_MM_PROGCFG"] = self.model_config["PADDED_FF1_MM_PROGCFG_LAMBDA"](seq_tiles)
-        self.model_config["PADDED_FF3_MM_PROGCFG"] = self.model_config["PADDED_FF3_MM_PROGCFG_LAMBDA"](seq_tiles)
-        self.model_config["PADDED_FF2_MM_PROGCFG"] = self.model_config["PADDED_FF2_MM_PROGCFG_LAMBDA"](seq_tiles)
+        cores_y = 8 if seq_tiles % 8 == 0 else 4  # Pick largest possible coregrid for op
+        self.model_config["PADDED_FF1_MM_PROGCFG"] = self.model_config["PADDED_FF1_MM_PROGCFG_LAMBDA"](
+            seq_tiles, cores_y
+        )
+        self.model_config["PADDED_FF3_MM_PROGCFG"] = self.model_config["PADDED_FF3_MM_PROGCFG_LAMBDA"](
+            seq_tiles, cores_y
+        )
+        self.model_config["PADDED_FF2_MM_PROGCFG"] = self.model_config["PADDED_FF2_MM_PROGCFG_LAMBDA"](
+            seq_tiles, cores_y
+        )
+        block_sharded_memcfg = self.model_config["MLP_BLOCK_SHARDED_MEMCFG_LAMBDA"](x[0].shape[2], cores_y)
         for i in range(len(x)):
             """
             x[i] is shape [1,32,128,8192]
@@ -203,7 +211,9 @@ class TtLlamaMLP_optimized(nn.Module):
                     x[i],
                     self.w1_list[i],
                     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
+                    output_mem_config=block_sharded_memcfg,
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                 )
             )
 
@@ -213,7 +223,9 @@ class TtLlamaMLP_optimized(nn.Module):
                     x[i],
                     self.w3_list[i],
                     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+                    output_mem_config=block_sharded_memcfg,
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                 )
             )
             x[i].deallocate(True)
