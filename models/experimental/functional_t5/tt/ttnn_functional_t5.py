@@ -333,7 +333,8 @@ def t5_stack(
     hidden_states = ttnn.embedding(input_ids, shared_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
     is_decoder = encoder_hidden_states is not None
-    attention_mask = create_attention_mask(input_shape, config.num_heads, input_ids.device(), is_decoder=is_decoder)
+    if attention_mask is None:
+        attention_mask = create_attention_mask(input_shape, config.num_heads, input_ids.device(), is_decoder=is_decoder)
     if encoder_hidden_states is not None:
         encoder_attention_mask = create_encoder_attention_mask(input_shape, config.num_heads, input_ids.device())
     else:

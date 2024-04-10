@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import math
 from typing import Optional
 
 import torch
@@ -169,11 +170,16 @@ def t5_attention(
     key_value_states=None,
     mask=None,
     layer_head_mask=None,
+    position_bias=None,
     *,
+    is_decoder,
     parameters,
     num_cores_x=12,
 ):
-    batch_size, *_ = hidden_states.shape
+    batch_size, seq_length, _ = hidden_states.shape
+
+    real_seq_length = seq_length
+    key_length = real_seq_length if key_value_states is None else key_value_states.shape[1]
 
     if key_value_states is None:
         query_key_value_output = ttnn.linear(
@@ -217,7 +223,7 @@ def t5_attention(
         ttnn.deallocate(query_proj)
         ttnn.deallocate(key_value_proj)
 
-    attention_scores = ttnn.matmul(
+    scores = ttnn.matmul(
         query,
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -227,10 +233,24 @@ def t5_attention(
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
-    if mask is None:
-        attn_weights = ttnn.softmax(attention_scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-    else:
-        attn_weights = ttnn.transformer.attention_softmax_(attention_scores, attention_mask=mask, head_size=None)
+    if position_bias is None:
+        if "relative_attention_bias" in parameters:
+            position_bias = compute_bias(
+                config, real_seq_length, key_length, is_decoder=is_decoder, parameters=parameters
+            )
+        else:
+            position_bias = torch.zeros((1, config.num_heads, real_seq_length, key_length), dtype=torch.float32)
+
+        position_bias = ttnn.from_torch(
+            position_bias, dtype=ttnn.bfloat16, device=scores.device(), layout=ttnn.TILE_LAYOUT
+        )
+
+        if mask is not None:
+            position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
+
+    scores = ttnn.add(scores, position_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Mask heads if we want to
     if layer_head_mask is not None:
@@ -260,77 +280,94 @@ def t5_attention(
     )
     ttnn.deallocate(context_layer)
 
-    return self_output
+    return self_output, position_bias
 
 
 def t5_layer_self_attention(
     config,
     hidden_states,
     attention_mask=None,
+    position_bias=None,
     *,
+    is_decoder,
     parameters,
 ):
     normed_hidden_states = t5_layer_norm(config, hidden_states, weight=parameters.layer_norm.weight)
-    attention_output = t5_attention(
+    attention_output, position_bias = t5_attention(
         config,
         normed_hidden_states,
         mask=attention_mask,
+        position_bias=position_bias,
+        is_decoder=is_decoder,
         parameters=parameters.SelfAttention,
     )
     hidden_states = ttnn.add(hidden_states, attention_output, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return hidden_states
+    return hidden_states, position_bias
 
 
-def t5_layer_cross_attention(config, hidden_states, key_value_states, attention_mask=None, *, parameters):
+def t5_layer_cross_attention(
+    config, hidden_states, key_value_states, attention_mask=None, position_bias=None, *, is_decoder, parameters
+):
     normed_hidden_states = t5_layer_norm(config, hidden_states, weight=parameters.layer_norm.weight)
-    attention_output = t5_attention(
+    attention_output, position_bias = t5_attention(
         config,
         normed_hidden_states,
-        key_value_states=key_value_states,
+        key_value_states,
         mask=attention_mask,
+        position_bias=position_bias,
+        is_decoder=is_decoder,
         parameters=parameters.EncDecAttention,
     )
     layer_output = ttnn.add(hidden_states, attention_output, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return layer_output
+    return layer_output, position_bias
 
 
 def t5_block(
     config,
     hidden_states,
     attention_mask=None,
+    position_bias=None,
     encoder_hidden_states=None,
     encoder_attention_mask=None,
+    encoder_decoder_position_bias=None,
     *,
+    is_decoder,
     parameters,
 ):
-    hidden_states = t5_layer_self_attention(
+    hidden_states, position_bias = t5_layer_self_attention(
         config,
         hidden_states,
         attention_mask=attention_mask,
+        position_bias=position_bias,
+        is_decoder=is_decoder,
         parameters=parameters.layer[0],
     )
 
     do_cross_attention = encoder_hidden_states is not None
     if do_cross_attention:
-        hidden_states = t5_layer_cross_attention(
+        hidden_states, encoder_decoder_position_bias = t5_layer_cross_attention(
             config,
             hidden_states,
             key_value_states=encoder_hidden_states,
             attention_mask=encoder_attention_mask,
+            position_bias=encoder_decoder_position_bias,
+            is_decoder=is_decoder,
             parameters=parameters.layer[1],
         )
 
     # Apply Feed Forward layer
     hidden_states = t5_layer_ff(config, hidden_states, parameters.layer[-1])
 
-    return hidden_states  # hidden-states, present_key_value_states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
+    return hidden_states, position_bias, encoder_decoder_position_bias
 
 
 def t5_stack(
     config,
     input_ids,
     shared_embedding_weight,
+    attention_mask=None,
     encoder_hidden_states=None,
+    encoder_attention_mask=None,
     *,
     parameters,
 ):
@@ -340,21 +377,27 @@ def t5_stack(
         input_ids, shared_embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    attention_mask = create_attention_mask(
-        input_shape, input_ids.device(), is_decoder=encoder_hidden_states is not None
-    )
+    is_decoder = encoder_hidden_states is not None
+    if attention_mask is None:
+        attention_mask = create_attention_mask(input_shape, config.num_heads, input_ids.device(), is_decoder=is_decoder)
     if encoder_hidden_states is not None:
-        encoder_attention_mask = create_encoder_attention_mask(input_shape, input_ids.device())
+        encoder_attention_mask = create_encoder_attention_mask(input_shape, config.num_heads, input_ids.device())
     else:
         encoder_attention_mask = None
 
+    position_bias = None
+    encoder_decoder_position_bias = None
+
     for block_parameters in parameters.block:
-        hidden_states = t5_block(
+        hidden_states, position_bias, encoder_decoder_position_bias = t5_block(
             config,
             hidden_states,
             attention_mask=attention_mask,
+            position_bias=position_bias,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
+            encoder_decoder_position_bias=encoder_decoder_position_bias,
+            is_decoder=is_decoder,
             parameters=block_parameters,
         )
 
@@ -398,7 +441,7 @@ def t5_for_conditional_generation(
 
 
 @functools.lru_cache
-def create_attention_mask(input_shape, device, is_decoder):
+def create_attention_mask(input_shape, num_heads, device, is_decoder):
     batch_size, seq_length = input_shape
 
     attention_mask = torch.ones(batch_size, seq_length)
@@ -407,8 +450,7 @@ def create_attention_mask(input_shape, device, is_decoder):
         attention_mask, input_shape, is_decoder=is_decoder, dtype=torch.bfloat16
     )
 
-    extended_attention_mask = torch.clamp(extended_attention_mask, min=-1000)
-    extended_attention_mask = extended_attention_mask.expand((-1, -1, seq_length, -1))
+    extended_attention_mask = extended_attention_mask.expand((-1, num_heads, seq_length, -1))
     extended_attention_mask = ttnn.from_torch(extended_attention_mask)
     extended_attention_mask = ttnn.to_layout(extended_attention_mask, ttnn.TILE_LAYOUT)
     extended_attention_mask = ttnn.to_device(extended_attention_mask, device)
@@ -416,14 +458,14 @@ def create_attention_mask(input_shape, device, is_decoder):
 
 
 @functools.lru_cache
-def create_encoder_attention_mask(input_shape, device):
+def create_encoder_attention_mask(input_shape, num_heads, device):
     batch_size, seq_length = input_shape
 
     encoder_attention_mask = torch.ones(batch_size, seq_length, dtype=torch.long)
 
     encoder_extended_attention_mask = invert_attention_mask(encoder_attention_mask)
 
-    encoder_extended_attention_mask = encoder_extended_attention_mask.expand((-1, -1, seq_length, -1))
+    encoder_extended_attention_mask = encoder_extended_attention_mask.expand((-1, num_heads, seq_length, -1))
     encoder_extended_attention_mask = ttnn.from_torch(encoder_extended_attention_mask)
     encoder_extended_attention_mask = ttnn.to_layout(encoder_extended_attention_mask, ttnn.TILE_LAYOUT)
     encoder_extended_attention_mask = ttnn.to_device(encoder_extended_attention_mask, device)
@@ -449,7 +491,6 @@ def custom_preprocessor(model, name):
             parameters = {
                 "q": {"weight": preprocess_linear_weight(model.q.weight, dtype=ttnn.bfloat16)},
                 "key_value": {"weight": preprocess_linear_weight(preprocessed_kv_weight, dtype=ttnn.bfloat16)},
-                "o": {"weight": preprocess_linear_weight(model.o.weight, dtype=ttnn.bfloat16)},
             }
         else:
             # Self Attention
@@ -458,5 +499,9 @@ def custom_preprocessor(model, name):
                 "query_key_value": {"weight": preprocess_linear_weight(preprocessed_qkv_weight, dtype=ttnn.bfloat16)},
                 "o": {"weight": preprocess_linear_weight(model.o.weight, dtype=ttnn.bfloat16)},
             }
+        if hasattr(model, "relative_attention_bias"):
+            parameters["relative_attention_bias"] = model.relative_attention_bias
+        if hasattr(model, "o"):
+            parameters["o"] = {"weight": preprocess_linear_weight(model.o.weight, dtype=ttnn.bfloat16)}
 
     return parameters
