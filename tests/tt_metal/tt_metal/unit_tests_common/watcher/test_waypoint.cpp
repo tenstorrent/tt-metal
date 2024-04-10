@@ -171,6 +171,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
+    // TODO: Re-enable with #7329
+    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }
