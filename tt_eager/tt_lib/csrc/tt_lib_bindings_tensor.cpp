@@ -311,6 +311,8 @@ void TensorModule(py::module &m_tensor) {
         .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
+    auto py_owned_buffer_for_int32_t = py::class_<owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<owned_buffer::Buffer<int32_t>, int32_t>(py_owned_buffer_for_int32_t);
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint32_t>, uint32_t>(py_owned_buffer_for_uint32_t);
@@ -325,6 +327,9 @@ void TensorModule(py::module &m_tensor) {
         m_tensor, "borrowed_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint16_t>, std::uint16_t>(
         py_borrowed_buffer_for_uint16_t);
+
+    auto py_borrowed_buffer_for_int32_t = py::class_<borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::int32_t>, std::int32_t>(py_borrowed_buffer_for_int32_t);
 
     auto py_borrowed_buffer_for_uint32_t = py::class_<borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint32_t>, std::uint32_t>(py_borrowed_buffer_for_uint32_t);

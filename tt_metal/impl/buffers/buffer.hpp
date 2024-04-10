@@ -268,6 +268,7 @@ inline buffer_map BUFFER_MAP;
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint16_t>>,
+    const std::shared_ptr<std::vector<int32_t>>,
     const std::shared_ptr<std::vector<uint32_t>>,
     const std::shared_ptr<std::vector<float>>,
     const std::shared_ptr<std::vector<bfloat16>>,

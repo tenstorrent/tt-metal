@@ -32,7 +32,8 @@ enum class DataType {
     BFLOAT8_B = 3,
     BFLOAT4_B = 4,
     UINT16 = 6,
-    INVALID = 7,
+    INT32 = 7,
+    INVALID = 8,
 };
 
 enum class StorageType {
@@ -217,6 +218,7 @@ MemoryConfig load_memory_config(const std::string &file_name);
 
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint16_t>,
+    owned_buffer::Buffer<int32_t>,
     owned_buffer::Buffer<uint32_t>,
     owned_buffer::Buffer<float>,
     owned_buffer::Buffer<bfloat16>>;
@@ -259,6 +261,7 @@ struct DeviceStorage {
 
 using BorrowedBuffer = std::variant<
     borrowed_buffer::Buffer<uint16_t>,
+    borrowed_buffer::Buffer<int32_t>,
     borrowed_buffer::Buffer<uint32_t>,
     borrowed_buffer::Buffer<float>,
     borrowed_buffer::Buffer<bfloat16>>;

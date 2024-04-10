@@ -59,6 +59,19 @@ template <typename DataType, template <typename> typename BufferType>
 std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
+    } else if constexpr (std::is_same_v<DataType, int32_t>) {
+        std::vector<uint32_t> uint32_data;
+        union int32_uint32_convert {
+            uint32_t u;
+            int32_t i;
+            int32_uint32_convert() : u(0) {}
+        };
+        for (auto i = 0; i < data_to_pack.size(); i ++) {
+            int32_uint32_convert a;
+            a.i = data_to_pack[i];
+            uint32_data.push_back(a.u);
+        }
+        return uint32_data;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<uint32_t> output;
         for (auto index = 0; index < data_to_pack.size(); index += 2) {
@@ -91,6 +104,19 @@ template <typename DataType>
 std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return data_to_unpack;
+    } else if constexpr (std::is_same_v<DataType, int32_t>) {
+        union int32_uint32_convert {
+            uint32_t u;
+            int32_t i;
+            int32_uint32_convert() : u(0) {}
+        };
+        std::vector<int32_t> int32_data;
+        for (auto i = 0; i < data_to_unpack.size(); i++) {
+            int32_uint32_convert a;
+            a.u = data_to_unpack[i];
+            int32_data.push_back(a.i);
+        }
+        return int32_data;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<DataType> output;
         for (auto index = 0; index < data_to_unpack.size(); index++) {
@@ -304,8 +330,8 @@ inline DeviceBuffer to_device_buffer(
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (
-                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t> or
-                    std::is_same_v<T, std::uint16_t>) {
+                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t>
+                    or std::is_same_v<T, std::int32_t> or std::is_same_v<T, std::uint16_t>) {
                     auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
                     TT_ASSERT(
                         compute_buffer_size(shape, data_type) == data_to_write.size(),
@@ -955,7 +981,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (
                     std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
-                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::uint16_t>) {
+                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or std::is_same_v<DataType, std::uint16_t>) {
                     auto buffer = borrowed_buffer::get_as<DataType>(storage.buffer);
                     return buffer.data();
                 } else {

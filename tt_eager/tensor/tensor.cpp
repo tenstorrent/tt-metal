@@ -662,6 +662,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     const static std::unordered_map<DataType, std::function<void*(const Tensor&)>> dispatch_map = {
         {DataType::BFLOAT16, &tensor_impl::get_raw_host_data_ptr<bfloat16>},
         {DataType::FLOAT32, &tensor_impl::get_raw_host_data_ptr<float>},
+        {DataType::INT32, &tensor_impl::get_raw_host_data_ptr<int32_t>},
         {DataType::UINT32, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::BFLOAT8_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::BFLOAT4_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
