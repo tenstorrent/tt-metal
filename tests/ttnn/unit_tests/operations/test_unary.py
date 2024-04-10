@@ -30,7 +30,7 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
 def run_identity_test(device, h, w, data_type, pcc=0.9999):
     torch.manual_seed(0)
 
-    int_format = data_type == ttnn.uint32 or data_type == ttnn.uint16
+    int_format = data_type == ttnn.uint32 or data_type == ttnn.uint16 or data_type == ttnn.int32
     if int_format:
         torch_input_tensor = torch.randint(0, 10000, (1, 1, h, w), dtype=torch.int32)
     else:
@@ -51,9 +51,9 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32, ttnn.float32])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32, ttnn.int32, ttnn.float32])
 @skip_for_grayskull("Grayskull doesn't support uint32 / fp32 formats and fp32 dest")
 def test_fp32_uint32(device, h, w, dtype):
     run_identity_test(device, h, w, dtype, pcc=0.9998)
