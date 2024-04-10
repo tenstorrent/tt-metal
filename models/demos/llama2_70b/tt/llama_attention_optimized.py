@@ -310,18 +310,12 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             for device_id in range(self.num_devices):
                 xs.append(as_tensor(x.clone(), None, device_id))
 
-            (
-                cos_gathereds,
-                sin_gathereds,
-            ) = (
-                [],
-                [],
-            )
             cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
             cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
             assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
 
+            cos_gathereds, sin_gathereds = [], []
             for device_id in range(self.num_devices):
                 cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", device_id))
                 sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", device_id))
@@ -331,6 +325,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, 1, -1, -1)
+
             attn_masks = []
             for device_id in range(self.num_devices):
                 attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", device_id))
