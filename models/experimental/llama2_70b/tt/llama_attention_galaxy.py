@@ -9,7 +9,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, pad_by_zero
-from models.demos.llama2_70b.tt.llama_common import (
+from models.experimental.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -17,7 +17,7 @@ from models.demos.llama2_70b.tt.llama_common import (
     get_weight_cache_path,
     generate_rot_emb,
 )
-from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
+from models.experimental.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
 
 class TtLlamaAttention_galaxy(torch.nn.Module):

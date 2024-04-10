@@ -12,14 +12,14 @@ from time import sleep
 import pytest
 from loguru import logger
 
-from models.demos.llama2_70b.reference.llama.llama import Llama
+from models.experimental.llama2_70b.reference.llama.llama import Llama
 from transformers.generation.utils import top_k_top_p_filtering
-from models.demos.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
-from models.demos.llama2_70b.tt.model_config import (
+from models.experimental.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from models.utility_functions import get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_common import get_llama_path
+from models.experimental.llama2_70b.tt.llama_common import get_llama_path
 
 
 def main(args):

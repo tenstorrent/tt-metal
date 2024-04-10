@@ -9,11 +9,11 @@ from torch import nn
 import tt_lib
 import ttnn
 
-from models.demos.llama2_70b.reference.llama.llama import Llama
-from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
-from models.demos.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-from models.demos.llama2_70b.tt.model_config import (
+from models.experimental.llama2_70b.reference.llama.llama import Llama
+from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
+from models.experimental.llama2_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
+from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
+from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_common import (
+from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
