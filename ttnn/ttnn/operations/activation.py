@@ -32,6 +32,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
             "sigmoid": torch.sigmoid,
             "sigmoid_accurate": torch.sigmoid,
             "sign": torch.sign,
+            "celu": F.celu,
             "softsign": F.softsign,
             "swish": F.hardswish,
             "softplus": F.softplus,
@@ -370,6 +371,7 @@ TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
     ("leaky_relu", ttl.tensor.leaky_relu, "leaky relu", "slope"),
     ("prelu", ttl.tensor.prelu, "prelu", "weight"),
     ("elu", ttl.tensor.elu, "elu", "alpha"),
+    ("celu", ttl.tensor.celu, "celu", "alpha"),
     ("softshrink", ttl.tensor.softshrink, "softshrink", "lambda"),
 ]
 

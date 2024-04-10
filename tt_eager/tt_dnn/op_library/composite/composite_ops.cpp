@@ -901,6 +901,25 @@ Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _xlogy)(input_a, input_b, output_mem_config);
 }
 
+// Celu
+// torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
+Tensor _celu(const Tensor& input_a, float alpha, const MemoryConfig& output_mem_config) {
+    float recip_val = 1.0f / alpha;
+    std::vector<UnaryWithParam> ops_chain = {UnaryWithParam{.op_type = UnaryOpType::MUL_UNARY_SFPU, recip_val},
+                                             UnaryWithParam{.op_type = UnaryOpType::EXP, 1.0f},
+                                             UnaryWithParam{.op_type = UnaryOpType::SUB_UNARY_SFPU, 1.0f},
+                                             UnaryWithParam{.op_type = UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    Tensor result = unary_chain(input_a, ops_chain, output_mem_config);
+    result = where(gtz(input_a, output_mem_config), input_a, result, output_mem_config);
+    return result;
+}
+Tensor celu(const Tensor& input_a, float alpha, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _celu)(input_a, alpha, output_mem_config);
+}
+
+
+
+
 Tensor _variance_impl(
     const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const MemoryConfig& output_mem_config) {
     constexpr float correction = 0.0f;
