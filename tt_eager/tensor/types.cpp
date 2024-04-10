@@ -21,9 +21,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::FLOAT32: return tt::DataFormat::Float32;
         case tt::tt_metal::DataType::UINT32: return tt::DataFormat::UInt32;
         case tt::tt_metal::DataType::UINT16: return tt::DataFormat::UInt16;
-        default:
-            TT_ASSERT(false, "Unsupported DataType");
-            return tt::DataFormat::Float16_b;
+        default: TT_ASSERT(false, "Unsupported DataType"); return tt::DataFormat::Float16_b;
     }
 }
 

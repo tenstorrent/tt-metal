@@ -26,6 +26,11 @@ def compare_tensors_using_pcc(name, golden_outputs, outputs, desired_pcc, level)
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
+    elif isinstance(outputs, torch.Tensor):
+        if not isinstance(golden_outputs, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
+        outputs = [outputs]
+        golden_outputs = [golden_outputs]
     else:
         if not isinstance(outputs, (list, tuple)):
             raise TypeError(f"Expected list or tuple, got {type(outputs)}")
@@ -342,6 +347,11 @@ def posprocess_global_golden_function_outputs(outputs, golden_outputs):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
+    elif isinstance(outputs, torch.Tensor):
+        if not isinstance(golden_outputs, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
+        outputs = [outputs]
+        golden_outputs = [golden_outputs]
     else:
         if not isinstance(outputs, (list, tuple)):
             raise TypeError(f"Expected list or tuple, got {type(outputs)}")
@@ -476,7 +486,6 @@ class Operation:
                 local_golden_function_output = self.golden_function(
                     *local_golden_function_args, **local_golden_function_kwargs
                 )
-                set_tensor_id(local_golden_function_output, force=True)
 
                 global_golden_function_output = None
                 if global_golden_function_args_and_kwargs is not None:
@@ -484,10 +493,9 @@ class Operation:
                     global_golden_function_output = self.golden_function(
                         *global_golden_function_args, **global_golden_function_kwargs
                     )
-                    set_tensor_id(global_golden_function_output, force=True)
-                    posprocess_global_golden_function_outputs(output, global_golden_function_output)
 
                 if local_golden_function_output is not None:
+                    set_tensor_id(local_golden_function_output, force=True)
                     local_tensor_comparison_records = compare_tensors_using_pcc(
                         self.name,
                         local_golden_function_output,
@@ -497,6 +505,8 @@ class Operation:
                     )
 
                 if global_golden_function_output is not None:
+                    set_tensor_id(global_golden_function_output, force=True)
+                    posprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.name,
                         global_golden_function_output,
@@ -548,9 +558,6 @@ class Operation:
                 return output
 
             return call_wrapper
-
-        if self.will_fallback_to_golden_function_on_failure:
-            function = fallback_to_golden_function_decorator(function)
 
         def runtime_decorator(function):
             @wraps(function)
@@ -633,12 +640,11 @@ class Operation:
                     ttnn.database.insert_tensor_comparison_records(
                         "local_tensor_comparison_records", local_tensor_comparison_records, local_golden_function_output
                     )
-                    if global_golden_function_output is not None:
-                        ttnn.database.insert_tensor_comparison_records(
-                            "global_tensor_comparison_records",
-                            global_tensor_comparison_records,
-                            global_golden_function_output,
-                        )
+                    ttnn.database.insert_tensor_comparison_records(
+                        "global_tensor_comparison_records",
+                        global_tensor_comparison_records,
+                        global_golden_function_output,
+                    )
                     ttnn.database.insert_buffers(operation_id)
                     if ttnn.CONFIG.enable_detailed_buffer_report:
                         ttnn.database.insert_buffer_pages(operation_id)
@@ -661,6 +667,10 @@ class Operation:
 
             return call_wrapper
 
+        if self.will_fallback_to_golden_function_on_failure:
+            function = fallback_to_golden_function_decorator(function)
+        self.function_with_fallback = function
+
         if not ttnn.CONFIG.enable_fast_runtime_mode:
             # If fast runtime mode is enabled during import-time, then don't decorate the original function
             function = runtime_decorator(function)
@@ -668,9 +678,9 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
-        # If fast runtime mode is enabled during runtime, then only run the original function
+        # If fast runtime mode is enabled during runtime, then only run the original function with the fallback
         if ttnn.CONFIG.enable_fast_runtime_mode:
-            return self.function(*function_args, **function_kwargs)
+            return self.function_with_fallback(*function_args, **function_kwargs)
         try:
             OPERATION_CALL_STACK.append(self.name)
             output = self.decorated_function(*function_args, **function_kwargs)

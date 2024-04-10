@@ -23,7 +23,7 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     output_tensor = input_tensor + scalar
     output_tensor = ttnn.to_torch(output_tensor, torch_rank=1)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == (size,)
 
 

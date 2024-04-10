@@ -21,7 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-static constexpr std::uint8_t VERSION_ID = 1;
+static constexpr std::uint8_t VERSION_ID = 2;
 
 enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
@@ -38,8 +38,8 @@ enum class DataType {
 enum class StorageType {
     OWNED,
     DEVICE,
-    BORROWED,  // for storing torch/numpy/etc tensors
-    MULTI_DEVICE,  // on-device storage for multi-device context
+    BORROWED,           // for storing torch/numpy/etc tensors
+    MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
 
@@ -209,7 +209,10 @@ struct MemoryConfig {
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
+void dump_memory_config(std::ofstream &output_stream, const MemoryConfig &memory_config);
 void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
+
+MemoryConfig load_memory_config(std::ifstream &input_stream);
 MemoryConfig load_memory_config(const std::string &file_name);
 
 using OwnedBuffer = std::variant<
@@ -230,89 +233,87 @@ struct OwnedStorage {
     const auto attribute_values() const { return std::make_tuple(); }
 };
 
-    using DeviceBuffer = std::shared_ptr<Buffer>;
-    struct DeviceStorage {
-        DeviceBuffer buffer;
+using DeviceBuffer = std::shared_ptr<Buffer>;
+struct DeviceStorage {
+    DeviceBuffer buffer;
 
-        DeviceStorage() = default;
-        const MemoryConfig memory_config() const {
-            if (this->buffer.get() == nullptr) {
-                TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
-            }
-
-            std::optional<ShardSpec> shard_spec = std::nullopt;
-            if (is_sharded(this->buffer->buffer_layout())) {
-                shard_spec = this->buffer->shard_spec().tensor_shard_spec;
-            }
-            return MemoryConfig{
-                .memory_layout = this->buffer->buffer_layout(),
-                .buffer_type = this->buffer->buffer_type(),
-                .shard_spec = shard_spec};
+    DeviceStorage() = default;
+    const MemoryConfig memory_config() const {
+        if (this->buffer.get() == nullptr) {
+            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
         }
 
-        static constexpr auto attribute_names = std::make_tuple("memory_config");
-        const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
-    };
-
-    using BorrowedBuffer = std::variant<
-        borrowed_buffer::Buffer<uint16_t>,
-        borrowed_buffer::Buffer<uint32_t>,
-        borrowed_buffer::Buffer<float>,
-        borrowed_buffer::Buffer<bfloat16>>;
-    struct BorrowedStorage {
-        BorrowedBuffer buffer;
-
-        BorrowedStorage() = default;
-        std::function<void()> on_creation_callback = [] {};
-        std::function<void()> on_destruction_callback = [] {};
-
-        explicit BorrowedStorage(
-            const BorrowedBuffer &buffer,
-            const std::function<void()> &on_creation_callback,
-            const std::function<void()> &on_destruction_callback) :
-            buffer(buffer),
-            on_creation_callback(on_creation_callback),
-            on_destruction_callback(on_destruction_callback) {
-            this->on_creation_callback();
+        std::optional<ShardSpec> shard_spec = std::nullopt;
+        if (is_sharded(this->buffer->buffer_layout())) {
+            shard_spec = this->buffer->shard_spec().tensor_shard_spec;
         }
+        return MemoryConfig{
+            .memory_layout = this->buffer->buffer_layout(),
+            .buffer_type = this->buffer->buffer_type(),
+            .shard_spec = shard_spec};
+    }
 
-        BorrowedStorage(const BorrowedStorage &other) :
-            buffer(other.buffer),
-            on_creation_callback(other.on_creation_callback),
-            on_destruction_callback(other.on_destruction_callback) {
-            this->on_creation_callback();
-        }
+    static constexpr auto attribute_names = std::make_tuple("memory_config");
+    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+};
 
-        BorrowedStorage operator=(const BorrowedStorage &other) {
-            this->buffer = other.buffer;
-            this->on_creation_callback = other.on_creation_callback;
-            this->on_destruction_callback = other.on_destruction_callback;
-            this->on_creation_callback();
-            return *this;
-        }
+using BorrowedBuffer = std::variant<
+    borrowed_buffer::Buffer<uint16_t>,
+    borrowed_buffer::Buffer<uint32_t>,
+    borrowed_buffer::Buffer<float>,
+    borrowed_buffer::Buffer<bfloat16>>;
+struct BorrowedStorage {
+    BorrowedBuffer buffer;
 
-        BorrowedStorage(BorrowedStorage &&other) :
-            buffer(other.buffer),
-            on_creation_callback(other.on_creation_callback),
-            on_destruction_callback(other.on_destruction_callback) {
-            other.on_creation_callback = [] {};
-            other.on_destruction_callback = [] {};
-        }
+    BorrowedStorage() = default;
+    std::function<void()> on_creation_callback = [] {};
+    std::function<void()> on_destruction_callback = [] {};
 
-        BorrowedStorage operator=(BorrowedStorage &&other) {
-            this->buffer = other.buffer;
-            this->on_creation_callback = other.on_creation_callback;
-            this->on_destruction_callback = other.on_destruction_callback;
-            other.on_creation_callback = [] {};
-            other.on_destruction_callback = [] {};
-            return *this;
-        }
+    explicit BorrowedStorage(
+        const BorrowedBuffer &buffer,
+        const std::function<void()> &on_creation_callback,
+        const std::function<void()> &on_destruction_callback) :
+        buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
+        this->on_creation_callback();
+    }
 
-        ~BorrowedStorage() { this->on_destruction_callback(); }
+    BorrowedStorage(const BorrowedStorage &other) :
+        buffer(other.buffer),
+        on_creation_callback(other.on_creation_callback),
+        on_destruction_callback(other.on_destruction_callback) {
+        this->on_creation_callback();
+    }
 
-        static constexpr auto attribute_names = std::make_tuple();
-        const auto attribute_values() const { return std::make_tuple(); }
-    };
+    BorrowedStorage operator=(const BorrowedStorage &other) {
+        this->buffer = other.buffer;
+        this->on_creation_callback = other.on_creation_callback;
+        this->on_destruction_callback = other.on_destruction_callback;
+        this->on_creation_callback();
+        return *this;
+    }
+
+    BorrowedStorage(BorrowedStorage &&other) :
+        buffer(other.buffer),
+        on_creation_callback(other.on_creation_callback),
+        on_destruction_callback(other.on_destruction_callback) {
+        other.on_creation_callback = [] {};
+        other.on_destruction_callback = [] {};
+    }
+
+    BorrowedStorage operator=(BorrowedStorage &&other) {
+        this->buffer = other.buffer;
+        this->on_creation_callback = other.on_creation_callback;
+        this->on_destruction_callback = other.on_destruction_callback;
+        other.on_creation_callback = [] {};
+        other.on_destruction_callback = [] {};
+        return *this;
+    }
+
+    ~BorrowedStorage() { this->on_destruction_callback(); }
+
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
+};
 
     struct MultiDeviceHostStorage {
         std::vector<OwnedBuffer> buffers;
@@ -451,26 +452,25 @@ struct OwnedStorage {
         }
     };
 
-    using Storage =
-        std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
+using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
 
-    template <typename T>
-    constexpr void raise_unsupported_storage() {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
-    }
+template <typename T>
+constexpr void raise_unsupported_storage() {
+    static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
+}
 
-    inline bool operator==(const Storage &v1, const Storage &v2) {
-        return std::visit(
-            [](const auto &a, const auto &b) -> bool {
-                if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
-                    return a == b;
-                } else {
-                    return false;
-                }
-            },
-            v1,
-            v2);
-    };
+inline bool operator==(const Storage &v1, const Storage &v2) {
+    return std::visit(
+        [](const auto &a, const auto &b) -> bool {
+            if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
+                return a == b;
+            } else {
+                return false;
+            }
+        },
+        v1,
+        v2);
+};
 
 }  // namespace tt_metal
 

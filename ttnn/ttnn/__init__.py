@@ -221,6 +221,7 @@ from ttnn.operations.others import (
     # reduction operations
     mean,
     upsample,
+    pearson_correlation_coefficient,
 )
 
 from ttnn.operations.creation import (
