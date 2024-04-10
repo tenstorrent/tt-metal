@@ -299,7 +299,7 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
     else:
         scaler = 1.0
 
-    input_tensor *= scaler
+    input_tensor = input_tensor * scaler
 
     if attention_mask is not None:
         input_tensor += attention_mask
@@ -387,6 +387,7 @@ def attention_softmax_(
     program_config: Optional[
         ttl.operations.primary.transformers.SoftmaxProgramConfig
     ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+    casual_mask: Optional[bool] = False,
 ) -> ttnn.Tensor:
     """
     attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
@@ -414,7 +415,7 @@ def attention_softmax_(
 
     if attention_mask is not None:
         tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            tensor, scaler, attention_mask, program_config=program_config
+            tensor, scaler, attention_mask, program_config=program_config, is_causal_mask=casual_mask
         )
         return tensor
     else:
