@@ -61,10 +61,10 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool with_bias,
     bool split_reader,
     bool fp32_dest_acc_en,
-    bool packer_l1_acc
+    bool packer_l1_acc_en
 ) {
 
-    tt::DataFormat interm0_df = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
+    tt::DataFormat interm0_df = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
@@ -460,7 +460,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t dst_l1_act_buffer_size_bytes = out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
     uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
-
     // For debug
     {
         log_debug(tt::LogOp, "multi_core_optimized_conv_sharded_v2_");
@@ -648,6 +647,26 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
 
+    std::vector<uint32_t> reader_rt_args;
+    std::vector<uint32_t> reader_compile_time_args;
+    std::vector<uint32_t> writer_rt_args;
+    std::vector<uint32_t> writer_compile_time_args;
+
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    uint32_t act_block_w_extra_align_bytes = (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
+
+    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
+    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_num_blocks_w = num_blocks_act_w * conv_act_c_blocks; // Fold outer c_block loop together with weight_block_num_tiles = 9
+
+    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
+
+    //Only enable packer l1 accumulation when there are spills, otherwise
+    //unnecessary overhead for reconfigs are added
+    bool packer_l1_acc_en = packer_l1_acc && (in0_num_blocks_w > 1);
+
     // TODO: Moving this function call to after kernel logic causes pcc fails
     // There are additional CBs and semaphores created in 2D conv in kernel logic,
     // so does order of create_cb calls matter?
@@ -673,7 +692,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             has_bias,
             split_reader,
             fp32_dest_acc_en,
-            packer_l1_acc
+            packer_l1_acc_en
     );
 
     string reader_kernel;
@@ -729,22 +748,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     } else {
         TT_ASSERT(false, "Sharded input not supported for this conv yet!");
     }
-
-    std::vector<uint32_t> reader_rt_args;
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_rt_args;
-    std::vector<uint32_t> writer_compile_time_args;
-
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
-    uint32_t act_block_w_extra_align_bytes = (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
-
-    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
-    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
-    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_num_blocks_w = num_blocks_act_w * conv_act_c_blocks; // Fold outer c_block loop together with weight_block_num_tiles = 9
-
-    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
 
     if (read_3x3_window_in_inner_loop) {
         const uint32_t window_size = weight_size_h * weight_size_w;
@@ -812,7 +815,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         compute_defines["SPLIT_READER"] = "1";
     }
 
-    if (packer_l1_acc) {
+    if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
