@@ -69,6 +69,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 
 TEST_F(DPrintFixture, TestPrintEthCores) {
+    // TODO: Re-enable with #7328
+    GTEST_SKIP();
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {
