@@ -38,6 +38,8 @@ class CommandQueueFixture : public ::testing::Test {
 class CommandQueueMultiDeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
+        // TODO(FD2_MULTI): Re-enable this suite when FD2.0 supports multichip
+        GTEST_SKIP();
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
