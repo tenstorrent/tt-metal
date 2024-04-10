@@ -9,8 +9,8 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32, profiler
-from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_common import (
+from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
+from models.experimental.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     generate_rot_emb,
     get_weight_cache_path,
@@ -228,7 +228,13 @@ class TtLlamaModel_optimized(nn.Module):
             xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
             for i in range(self.num_devices):
                 xs.append(
-                    ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
+                    ttnn.as_tensor(
+                        x_fractured[i],
+                        dtype=ttnn.bfloat16,
+                        device=self.devices[i],
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 )
                 cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
                 sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))

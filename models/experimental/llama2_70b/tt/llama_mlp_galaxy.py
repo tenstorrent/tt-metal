@@ -8,7 +8,11 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch, get_weight_cache_path_galaxy, tt_all_reduce
+from models.experimental.llama2_70b.tt.llama_common import (
+    tt_all_gather_torch,
+    get_weight_cache_path_galaxy,
+    tt_all_reduce,
+)
 
 
 class TtLlamaMLP_galaxy(nn.Module):

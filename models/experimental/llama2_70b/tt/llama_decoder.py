@@ -7,13 +7,13 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
-from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
-from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
+from models.experimental.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.experimental.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
-# from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
-from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch
+# from models.experimental.llama2_70b.tt.llama_mlp import TtLlamaMLP
+from models.experimental.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.experimental.llama2_70b.tt.llama_mlp import TtLlamaMLP
+from models.experimental.llama2_70b.tt.llama_common import tt_all_gather_torch
 
 
 class TtLlamaDecoder:
@@ -79,7 +79,7 @@ class TtLlamaDecoder:
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
         position_ids = torch.ones(seq_len, batch, dtype=torch.long) * start_pos
-        from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
+        from models.experimental.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
 
         rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
         rot_mat = gather_rotary_emb(rot_emb, position_ids)
