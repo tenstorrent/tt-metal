@@ -88,7 +88,7 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
     pad_id = tokenizer.pad_id
     tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
     for k, t in enumerate(prompt_tokens):
-        tokens[k, : len(t)] = t.clone().detach()
+        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu").clone().detach()
     eos_reached = torch.tensor([False] * bsz, device="cpu")
     input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
     return tokens, input_text_mask
@@ -118,7 +118,7 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     max_gen_len = args.num_tokens
     args.greedy = args.top_k == 1  # greedy decoding is top-k with k=1
     max_prompt_len = max(len(t) for t in prompt_tokens)
-    min_prompt_len = min(len(t) for t in prompt_tokens)
+    min_prompt_len = min(len(t) for t in prompt_tokens) if not args.decode_only else 1
     assert max_prompt_len <= model_args.max_seq_len
     assert (
         max_gen_len >= max_prompt_len
@@ -136,7 +136,7 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+        logits = model.forward(input_tokens, prev_pos, decode_only=args.decode_only)
         # expects logits to be of shape (bsz, 1, vocab_size)
 
         # sample next token
@@ -156,7 +156,7 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
         # Decode the entire sequence generated so far and log it
         for user_id in range(bsz):
             text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
-            logger.info(f"Loop {cur_pos-1} user {user_id}: {text}\n")
+            logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
         # text = tokenizer.decode(tokens[0, prev_pos].tolist())
 
@@ -255,6 +255,7 @@ class Args:
         n_devices=8,
         emulated=False,
         cache_path=None,
+        decode_only=False,
     ):
         self.implementation = implementation
         self.ckpt_dir = ckpt_dir
@@ -273,6 +274,7 @@ class Args:
         self.n_devices = n_devices
         self.emulated = emulated
         self.cache_path = cache_path
+        self.decode_only = decode_only
 
 
 def construct_arg(**kwargs):
@@ -280,6 +282,7 @@ def construct_arg(**kwargs):
 
 
 @pytest.mark.timeout(240000)
+@pytest.mark.parametrize("decode_only", (True, False), ids=["decode_only", "prefill_decode"])
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=["1L", "2L", "10L", "80L"])
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices, emulated",
@@ -329,6 +332,7 @@ def test_LlamaModel_demo(
     all_devices,
     n_devices,
     emulated,
+    decode_only,
 ):
     ## Get model config
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
@@ -361,5 +365,6 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         emulated=emulated,
         cache_path=cache_path,
+        decode_only=decode_only,
     )
     main(args)
