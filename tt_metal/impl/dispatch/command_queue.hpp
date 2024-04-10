@@ -446,7 +446,7 @@ class HWCommandQueue {
     void enqueue_program(Program& program, bool blocking);
     void enqueue_record_event(std::shared_ptr<Event> event);
     void populate_record_event(std::shared_ptr<Event> event);
-    void enqueue_wait_for_event(std::shared_ptr<Event> event);
+    void enqueue_wait_for_event(std::shared_ptr<Event> sync_event);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish();
     void launch(launch_msg_t& msg);
