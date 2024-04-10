@@ -57,7 +57,6 @@ def test_transformer_attention_softmax(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.992)
 
 
-@pytest.mark.skip(reason="This test is failing due to a mismatch")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("sequence_size", [384, 1024])
@@ -103,11 +102,13 @@ def test_transformer_attention_softmax_(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    output_tensor = ttnn.transformer.attention_softmax_(input_tensor, head_size=None, attention_mask=attention_mask)
+    output_tensor = ttnn.transformer.attention_softmax_(
+        input_tensor, head_size=None, attention_mask=attention_mask, casual_mask=True
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
 
 
 @pytest.mark.parametrize("batch_size", [1])

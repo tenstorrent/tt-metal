@@ -46,6 +46,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
+    uint32_t mask_H = H;
+    if (mask.has_value()) {
+        mask_H = mask.value().get_legacy_shape()[2];
+    }
+    uint32_t mask_Ht = mask_H/TILE_HEIGHT;
+
     Program program = CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
@@ -232,8 +238,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
         uint32_t tile_offset = curr_row * Wt;
         uint32_t curr_ht = curr_row % Ht;
-        uint32_t mask_curr_ht = curr_ht % Wt;   // the start offset for causal mask
-        uint32_t mask_offset = curr_row / Ht * Wt * Wt; // causal mask batch offset
+        uint32_t mask_curr_ht = curr_ht % mask_Ht;   // the start offset for causal mask
+        uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt; // causal mask batch offset
         uint32_t mask_id = causal_mask ? (mask_curr_ht * Wt + mask_offset) : (curr_row / Ht * Wt); // causal mask start offset + causal mask batch offset
 
         if (causal_mask) {
@@ -442,6 +448,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
+
+    uint32_t mask_H = shape[2];
+    if (mask.has_value()) {
+        mask_H = mask.value().get_legacy_shape()[2];
+    }
+    uint32_t mask_Ht = mask_H/TILE_HEIGHT;
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
     uint32_t block_h = block_ht * TILE_WIDTH;
@@ -536,12 +548,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     }
     if (causal_mask) {
         if (!hw_dims_only_causal_mask) {
-            reader_compile_time_args.push_back((std::uint32_t) block_ht / block_wt); // fused head
+            reader_compile_time_args.push_back((std::uint32_t) block_ht / mask_Ht); // fused head
         } else {
             reader_compile_time_args.push_back((std::uint32_t) block_ht);
         }
     }
     reader_compile_time_args.push_back((std::uint32_t) (mask_cb_data_format == tt::DataFormat::Float32)); // mask float32
+    reader_compile_time_args.push_back((std::uint32_t) mask_Ht);
 
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
