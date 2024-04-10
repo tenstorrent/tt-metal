@@ -54,10 +54,11 @@ class TtFalconModelShared:
 
         embeddings = self.embeddings(input_ids)
 
-        if llm_mode == "decode":
-            shard_dim = 2
+        if isinstance(self.device, ttnn.Device):
+            mesh_mapper = None
         else:
-            shard_dim = 0
+            shard_dim = 2 if llm_mode == "decode" else 0
+            mesh_mapper = ShardTensorToMesh(self.device, dim=shard_dim)
 
         # Generate input and attention_mask ---------------------------------------------
         if llm_mode == "prefill":
@@ -67,7 +68,7 @@ class TtFalconModelShared:
                 memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                 dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(self.device, dim=shard_dim),
+                mesh_mapper=mesh_mapper,
             )
 
         elif llm_mode == "decode":
@@ -80,7 +81,7 @@ class TtFalconModelShared:
                 memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                 dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(self.device, dim=shard_dim),
+                mesh_mapper=mesh_mapper,
             )
 
         else:
@@ -95,7 +96,7 @@ class TtFalconModelShared:
             self.config.num_attention_heads,
             kv_cache_len,
             self.device,
-            mesh_mapper=ShardTensorToMesh(self.device, dim=shard_dim),
+            mesh_mapper=mesh_mapper,
         )
 
         return tt_embeddings, tt_attention_mask

@@ -232,14 +232,17 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                 data["LAYOUT"] = ioData
             elif ioField == "storage_type":
                 headers = ["MEMORY"]
-                assert "device_id" in ioData.keys(), "Wrong io tensor memory data format"
-                deviceID = ioData["device_id"]
-                assert "memory_config" in ioData.keys(), "Wrong io tensor memory data format"
-                assert "buffer_type" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
-                bufferType = ioData["memory_config"]["buffer_type"].upper()
-                assert "memory_layout" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
-                memoryLayout = ioData["memory_config"]["memory_layout"].upper()
-                data["MEMORY"] = f"DEV_{deviceID}_{bufferType}_{memoryLayout}"
+                if type(ioData) == str:
+                    data["MEMORY"] = ioData
+                else:
+                    assert "device_id" in ioData.keys(), "Wrong io tensor memory data format"
+                    deviceID = ioData["device_id"]
+                    assert "memory_config" in ioData.keys(), "Wrong io tensor memory data format"
+                    assert "buffer_type" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                    bufferType = ioData["memory_config"]["buffer_type"].upper()
+                    assert "memory_layout" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                    memoryLayout = ioData["memory_config"]["memory_layout"].upper()
+                    data["MEMORY"] = f"DEV_{deviceID}_{bufferType}_{memoryLayout}"
 
             return headers, data
 
