@@ -19,7 +19,7 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((1, 1, height, width), -1, 1, dtype=torch.bfloat16)
-    torch_output_tensor = torch.exp(torch_input_tensor)
+    torch_output_tensor = ttnn.experimental.tensor.exp.golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
     output_tensor = ttnn.experimental.tensor.exp(input_tensor)
