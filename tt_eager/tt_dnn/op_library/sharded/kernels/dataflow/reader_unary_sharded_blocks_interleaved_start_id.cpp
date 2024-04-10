@@ -47,7 +47,7 @@ void kernel_main() {
     uint32_t barrier_count = 0;
     uint32_t curr_tile_id = start_id;
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-    if (reserving_kernel) {
+    if constexpr (reserving_kernel) {
         cb_reserve_back(cb_id_in0, all_block_num_tiles);
         cb_reserve_back(cb_id_sync, 1);
         cb_push_back(cb_id_sync, 1);
