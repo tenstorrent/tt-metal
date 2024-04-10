@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_eager/tt_dnn/op_library/softmax/softmax_op.hpp"

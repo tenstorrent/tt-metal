@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_eager/tt_dnn/op_library/softmax/softmax_op.hpp"
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "common/base_types.hpp"
 #include "tensor/types.hpp"
 #include "tt_eager/tt_dnn/op_library/math.hpp"
