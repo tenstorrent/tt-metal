@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "common/assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
