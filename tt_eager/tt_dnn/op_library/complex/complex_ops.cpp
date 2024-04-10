@@ -6,7 +6,7 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 
@@ -26,6 +26,22 @@ Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConf
     return concat(inputs, -1, output_mem_config);
 }
 
+Tensor get_real(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Shape t_Shape = input.get_legacy_shape();
+    Shape start = {0, 0, 0, 0} ;
+    Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] / 2) - 1};
+    Tensor r_tensor = unpad(input, start, end, output_mem_config);
+    return r_tensor;
+}
+
+Tensor get_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Shape t_Shape = input.get_legacy_shape();
+    Shape start = {0, 0, 0, (t_Shape[3] / 2)};
+    Shape end = {t_Shape[0] - 1,t_Shape[1] - 1 ,t_Shape[2] - 1, (t_Shape[3] - 1)};
+    Tensor i_tensor = unpad(input, start, end, output_mem_config);
+    return i_tensor;
+}
+
 namespace utility {
     bool is_complex_shape(const Tensor& input) {
         const Shape& shape = input.get_legacy_shape();
@@ -36,8 +52,8 @@ namespace utility {
 
 Tensor _is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return eqz(ab[1],output_mem_config); //imaginary portion = 0
+    Tensor real = get_real(input, output_mem_config);
+    return eqz(real, output_mem_config); //imaginary portion = 0
 }
 Tensor is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _is_real)(input, output_mem_config);
@@ -45,45 +61,47 @@ Tensor is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
 
 Tensor is_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return eqz(ab[0],output_mem_config); //real portion = 0
+    Tensor imag = get_imag(input, output_mem_config);
+    return eqz(imag, output_mem_config);
 }
 
 Tensor real(const Tensor& input, const MemoryConfig& output_mem_config) {
 	CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return ab[0];
+    return get_real(input, output_mem_config);
 }
 
 Tensor imag(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return ab[1];
+    return get_imag(input, output_mem_config);
 }
 
 Tensor conj(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return mk_complex(ab[0],neg(ab[1],output_mem_config));
+    Tensor real = get_real(input, output_mem_config);
+    Tensor imag = get_imag(input, output_mem_config);
+    return mk_complex(real,neg(imag, output_mem_config));
 }
 
 Tensor complex_abs(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return hypot(ab[0],ab[1],output_mem_config);
+    Tensor real = get_real(input, output_mem_config);
+    Tensor imag = get_imag(input, output_mem_config);
+    return hypot(real, imag, output_mem_config);
 }
 
 Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
 
-    Tensor a_plus_b = add(ab[0],ab[1],{},output_mem_config);
-    Tensor a_minus_b = sub(ab[0],ab[1],{},output_mem_config);
-    Tensor asqr_plus_bsqr = add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+    Tensor real = get_real(input, output_mem_config);
+    Tensor imag = get_imag(input, output_mem_config);
+
+    Tensor a_plus_b = add(real,imag,{},output_mem_config);
+    Tensor a_minus_b = sub(real, imag,{},output_mem_config);
+    Tensor asqr_plus_bsqr = add(square(real,output_mem_config),square(imag,output_mem_config),
                                 {},output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
-    Tensor conj_im = mul( neg(ab[1],output_mem_config), inv_dr, {}, output_mem_config);
-    Tensor conj_re = mul( ab[0], inv_dr, {}, output_mem_config);
+    Tensor conj_im = mul( neg(imag,output_mem_config), inv_dr, {}, output_mem_config);
+    Tensor conj_re = mul( real, inv_dr, {}, output_mem_config);
     return mk_complex( conj_re, conj_im, output_mem_config );
 }
 
@@ -98,10 +116,15 @@ Tensor complex_sub(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
 Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input_a);
     CHECK_FOR_COMPLEX(input_b);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
-    std::vector<Tensor> cd = split_last_dim_two_chunks_tiled(input_b,output_mem_config);
-    Tensor re_part = sub( mul(ab[0],cd[0],{},output_mem_config), mul(ab[1],cd[1],{},output_mem_config), {}, output_mem_config );
-    Tensor im_part = add( mul(ab[0],cd[1],{},output_mem_config), mul(ab[1],cd[0],{},output_mem_config), {}, output_mem_config );
+
+    Tensor r_a = get_real(input_a, output_mem_config);
+    Tensor i_a = get_imag(input_a, output_mem_config);
+
+    Tensor r_b = get_real(input_b, output_mem_config);
+    Tensor i_b = get_imag(input_b, output_mem_config);
+
+    Tensor re_part = sub( mul(r_a,r_b,{},output_mem_config), mul(i_a,i_b,{},output_mem_config), {}, output_mem_config );
+    Tensor im_part = add( mul(r_a,i_b,{},output_mem_config), mul(i_a,r_b,{},output_mem_config), {}, output_mem_config );
     return mk_complex( re_part, im_part, output_mem_config);
 }
 
@@ -116,8 +139,9 @@ Tensor complex_div(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
 // theta = /_x + iy = atan2(y,x)
 Tensor angle(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return neg( atan2(ab[1],ab[0],output_mem_config), output_mem_config );
+    Tensor real = get_real(input, output_mem_config);
+    Tensor imag = get_imag(input, output_mem_config);
+    return neg( atan2(imag, real, output_mem_config), output_mem_config );
 }
 
 #undef CHECK_FOR_COMPLEX

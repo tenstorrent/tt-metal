@@ -12,7 +12,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_numpy/functions.hpp"
@@ -817,7 +817,13 @@ Tensor _addcdiv(
     t_div.deallocate();
     t_value.deallocate();
     Tensor result = add(input_a, t_factor, std::nullopt, output_mem_config);
-    return result;
+    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
+    return where(eqz(input_c, output_mem_config),
+                ( value == 0 ) ? t_nan : where(eqz(input_b, output_mem_config),
+                                            t_nan ,
+                                            mul(t_inf, sign(input_b, output_mem_config), std::nullopt, output_mem_config), output_mem_config) ,
+                result, output_mem_config);
 }
 Tensor addcdiv(
     const Tensor& input_a,
@@ -1230,6 +1236,27 @@ Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);
 }
 
+std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const MemoryConfig& output_mem_config)
+{
+    std::vector<Tensor> t_split;
+    Shape inshape = input_a.get_legacy_shape();
+    TT_FATAL(((inshape[dim] / 2 )% TILE_WIDTH == 0),
+                "Split tensor dimension should be in full tile");
+    Shape s_a = {0, 0, 0, 0};
+    Shape e_a = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3]/2 - 1 };
+
+    Shape s_b = {0, 0, 0, inshape[3]/2 };
+    Shape e_b = {inshape[0]-1, inshape[1]-1, inshape[2]-1, inshape[3] - 1 };
+
+    Tensor t_a = unpad(input_a, s_a, e_a, output_mem_config);
+    Tensor t_b = unpad(input_a, s_b, e_b, output_mem_config);
+
+    t_split.emplace_back(t_a);
+    t_split.emplace_back(t_b);
+
+    return t_split;
+}
+
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
 Tensor _glu(
     const Tensor& input_a,
@@ -1238,7 +1265,8 @@ Tensor _glu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
     Tensor sigmoid_b = sigmoid(ab[1], output_mem_config);
     Tensor glu_result = mul(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
@@ -1258,7 +1286,7 @@ Tensor _reglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
     Tensor relu_b = relu(ab[1], output_mem_config);
     Tensor reglu_result = mul(ab[0], relu_b, std::nullopt, output_mem_config);
     return reglu_result;
@@ -1278,7 +1306,9 @@ Tensor _geglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
     constexpr bool fast_appx = true;
     Tensor gelu_b = gelu(ab[1], fast_appx, output_mem_config);
     Tensor geglu_result = mul(ab[0], gelu_b, std::nullopt, output_mem_config);
@@ -1299,7 +1329,9 @@ Tensor _swiglu(
     TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1)
         dim = 3;
-    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a, output_mem_config);
+
+    std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
+
     Tensor swish_b = swish(ab[1], output_mem_config);
     Tensor swiglu_result = mul(ab[0], swish_b, std::nullopt, output_mem_config);
     return swiglu_result;

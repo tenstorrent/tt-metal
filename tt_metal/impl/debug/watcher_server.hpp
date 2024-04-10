@@ -17,17 +17,19 @@ void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord
 
 int watcher_register_kernel(const string& name);
 
-// Check whether the watcher server has been killed due to an error detected.
+// Check whether the watcher server has been killed due to an error detected, and a function to set
+// that flag. Used in test mode only.
 bool watcher_server_killed_due_to_error();
-// Function to set this flag to true/false, so that non-watcher runs can continue as normal when set to false.
-// TODO(dma): this doesn't currently clear the actual error codes on the device. Once watcher is
-// moved out of llrt we can change this to watcher_clear_errors().
 void watcher_server_set_error_flag(bool val);
+string watcher_server_get_exception_message();
 
 // Helper function to clear the watcher log file
 void watcher_clear_log();
 
 // Helper function to get the current watcher log file name/path
 string watcher_get_log_file_name();
+
+// Helper function to get the current watcher dump count
+int watcher_get_dump_count();
 
 } // namespace tt

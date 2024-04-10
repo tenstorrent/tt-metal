@@ -62,7 +62,7 @@
     </div>
     <div>
         <pre><code class="python">{{ stack_trace }}</code></pre>
-        <a href=" /operation_shortened_stack_trace/{{ operation.operation_id}}">Open Full Stack Trace</a>
+        <a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Full Stack Trace</a>
         <a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a>
     </div>
     <div id="left">
@@ -92,7 +92,7 @@
                     </tr>
                     {% for tensor in input_tensors %}
                     <tr bgcolor={{get_tensor_color(tensor)}}>
-                        <td>{{tensor.input_index}}</td>
+                        <td>{{loop.index0}}</td>
                         <td>{{tensor.address}}</td>
                         <td>{{tensor.buffer_type}}</td>
                     </tr>
@@ -113,7 +113,7 @@
                     </tr>
                     {% for tensor in output_tensors %}
                     <tr bgcolor={{get_tensor_color(tensor)}}>
-                        <td>{{tensor.output_index}}</td>
+                        <td>{{loop.index0}}</td>
                         <td>{{tensor.address}}</td>
                         <td>{{tensor.buffer_type}}</td>
                     </tr>

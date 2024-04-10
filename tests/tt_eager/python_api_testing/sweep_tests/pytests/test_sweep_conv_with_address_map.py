@@ -102,6 +102,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     return passing_pcc
 
 
+@pytest.mark.skip(reason="Test is not ready to run")
 def test_sweep_conv_tt(device):
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)

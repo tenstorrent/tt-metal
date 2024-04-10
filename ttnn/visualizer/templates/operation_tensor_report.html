@@ -19,57 +19,171 @@
     td {
         padding: 15px;
     }
+
+    table,
+    th,
+    td {
+        border: 1px solid;
+    }
+</style>
+
+<style>
+    .fa {
+
+        color: black;
+        font-size: 48px;
+        padding-right: 15px;
+    }
 </style>
 
 <body>
-    <ul>
-        <div>
-            <p>{{ operation.name }}</p>
-            {% if input_tensors %}
-            <table>
-                <caption>Input Tensors</caption>
-                <tr>
-                    <th>Index</th>
-                    <th>Shape</th>
-                    <th>Dtype</th>
-                    <th>Layout</th>
-                    <th>String Representation</th>
-                </tr>
-                {% for tensor in input_tensors %}
-                <tr>
-                    <td>{{loop.index0}}</td>
-                    <td>{{tensor.shape}}</td>
-                    <td>{{tensor.dtype}}</td>
-                    <td>{{tensor.layout}}</td>
-                    <td>{{tensor}}</td>
-                </tr>
-                {% endfor %}
-            </table>
-            {% endif %}
-
-            {% if output_tensors %}
-            <table>
-                <caption>Output Tensors</caption>
-                <tr>
-                    <th>Index</th>
-                    <th>Shape</th>
-                    <th>Dtype</th>
-                    <th>Layout</th>
-                    <th>String Representation</th>
-                </tr>
-                {% for tensor in output_tensors %}
-                <tr>
-                    <td>{{loop.index0}}</td>
-                    <td>{{tensor.shape}}</td>
-                    <td>{{tensor.dtype}}</td>
-                    <td>{{tensor.layout}}</td>
-                    <td>{{tensor}}</td>
-                </tr>
-                {% endfor %}
-            </table>
-            {% endif %}
+    <div>
+        <h1>Operation Tensor Report</h1>
+        {%if previous_operation %}
+        <a href=" /operation_tensor_report/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
+        {% endif %}
+        {%if next_operation %}
+        <a href=" /operation_tensor_report/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
+        <br>
+        {% endif %}
+        <h2>{{ operation.operation_id }}: {{ operation.name }}</h1> <br>
+    </div>
+    <div>
+        <pre><code class="python">{{ stack_trace }}</code></pre>
+        <a href=" /operation_stack_trace/{{operation.operation_id}}">Open Full Stack Trace</a>
         </div>
-    </ul>
+        <div>
+        <h3>Arguments</h3>
+        <table>
+            <tr>
+                <th>Position/Name</th>
+                <th>Value</th>
+            </tr>
+            {% for operation_argument in operation_arguments %}
+            <tr>
+                <td>{{operation_argument.name}}</td>
+                <td>{{operation_argument.value}}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% if input_tensors %}
+        <h3>Input Tensors</h3>
+        <table>
+            <tr>
+                <th>Index</th>
+                <th>Attributes</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
+            </tr>
+            {% for tensor_record, tensor in input_tensors %}
+            <tr>
+                <td>{{loop.index0}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
+                <td>
+                    {% set tensor_script, tensor_div = plot_tensor(tensor) %}
+                    {{ tensor_script | safe }}
+                    {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        {% if output_tensors %}
+        <h3>Output Tensors</h3>
+        <table>
+            <tr>
+                <th>Index</th>
+                <th>Attributes</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
+                <th>Matches Locally</th>
+                <th>Matches Globally</th>
+                <th>File Name</th>
+            </tr>
+            {% for tensor_record, tensor in output_tensors %}
+            <tr>
+                <td>{{loop.index0}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
+
+                <td>
+                    {% set tensor_script, tensor_div = plot_tensor(tensor) %}
+                    {{ tensor_script | safe }}
+                    {{ tensor_div | safe }}</td>
+
+                {% if loop.index0 in local_golden_tensors %}
+                {{display_tensor_comparison_record(local_golden_tensors[loop.index0][1]) | safe}}
+                {% else %}
+                <td bgcolor="gray">
+                </td>
+                {%endif%}
+
+                {% if loop.index0 in global_golden_tensors %}
+                {{display_tensor_comparison_record(global_golden_tensors[loop.index0][1]) | safe}}
+                {%else %}
+                <td bgcolor="gray">
+                </td>
+                {%endif%}
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        {% if local_golden_tensors %}
+        <h3>Local Golden Tensors</h3>
+        <table>
+            <tr>
+                <th>Index</th>
+                <th>Attributes</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
+            </tr>
+            {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
+            local_golden_tensors.items() %}
+            <tr>
+                <td>{{output_tensor_index}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
+                <td>{{get_tensor_statistics(tensor)| safe}} </td>
+                <td>
+                    {% set tensor_script, tensor_div = plot_tensor(tensor) %}
+                    {{ tensor_script | safe }}
+                    {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+        {% if global_golden_tensors %}
+        <h3>Global Golden Tensors</h3>
+        <table>
+            <tr>
+                <th>Index</th>
+                <th>Attributes</th>
+                <th>Statistics</th>
+                <th>1024x1024 Chunk of Face 0</th>
+                <th>File Name</th>
+            </tr>
+            {% for output_tensor_index, (tensor_record, tensor_comparison_record, tensor) in
+            global_golden_tensors.items() %}
+            <tr>
+                <td>{{output_tensor_index}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
+                <td>{{get_tensor_statistics(tensor)| safe}}</td>
+                <td>
+                    {% set tensor_script, tensor_div = plot_tensor(tensor) %}
+                    {{ tensor_script | safe }}
+                    {{ tensor_div | safe }}</td>
+                <td> {{get_tensor_file_name_by_id(tensor_record.tensor_id)}} </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+    </div>
 </body>
 
 </html>

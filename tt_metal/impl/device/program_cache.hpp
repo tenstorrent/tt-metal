@@ -17,12 +17,12 @@ namespace detail {
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from TT-Metal
 // and TT-Eager using std::shared_ptr<void>.
 struct ProgramCache {
-    inline std::tuple<std::shared_ptr<void>, bool> find(uint64_t program_hash) {
+    inline std::optional<std::shared_ptr<void>> find(uint64_t program_hash) {
         auto cache_hit = this->cache_.count(program_hash) > 0;
         if (cache_hit) {
-            return {this->cache_.at(program_hash), cache_hit};
+            return this->cache_.at(program_hash);
         }
-        return {std::shared_ptr<int>(), cache_hit};
+        return std::nullopt;
     }
     inline void insert(uint64_t program_hash, std::shared_ptr<void> program_ptr) {
         this->cache_[program_hash] = program_ptr;

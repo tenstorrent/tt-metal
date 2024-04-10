@@ -25,6 +25,12 @@ TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --g
 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="DPrintFixture.*:WatcherFixture.*"
 pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k post_commit
 
+# ttnn multi-chip apis unit tests
+pytest tests/ttnn/unit_tests/test_multi_device.py
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
+
 # Falcon40B 4 chip tests
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-prefill_seq32-4chips]
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-decode_batch32-4chips]
@@ -36,3 +42,4 @@ pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_i
 pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-8chips]
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
+pytest tests/ttnn/unit_tests/test_multi_device_async.py

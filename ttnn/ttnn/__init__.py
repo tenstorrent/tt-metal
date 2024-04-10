@@ -23,7 +23,7 @@ class Config:
     enable_logging: bool = False
     enable_graph_report: bool = False
     enable_detailed_buffer_report: bool = False
-    enable_tensor_report: bool = False
+    enable_detailed_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
     delete_reports_on_start: bool = True
@@ -171,8 +171,11 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    dump_memory_config,
+    load_memory_config,
 )
 
+import ttnn.reflection
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
@@ -218,6 +221,7 @@ from ttnn.operations.others import (
     # reduction operations
     mean,
     upsample,
+    pearson_correlation_coefficient,
 )
 
 from ttnn.operations.creation import (

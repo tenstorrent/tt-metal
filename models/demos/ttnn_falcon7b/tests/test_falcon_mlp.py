@@ -75,7 +75,7 @@ def test_falcon_mlp(
         ),
     )
 
-    ttnn_model = TtFalconMLP(device, model_config, parameters)
+    ttnn_model = TtFalconMLP(model_config, parameters)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=model_config["DEFAULT_DTYPE"],

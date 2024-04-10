@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
+from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
 
 
 class TtTensorLoader:
@@ -19,7 +20,7 @@ class TtTensorLoader:
         self.tt_cache_path = tt_cache_path
         self.device = device
 
-    def get_tensor_loader(self, layer_num):
+    def get_tensor_loader(self, layer_num: Optional[int] = None):
         def load_tt_tensor(
             name: str,
             tm_fn: Callable = lambda x: x,
@@ -30,7 +31,11 @@ class TtTensorLoader:
             tt_dtype=ttnn.bfloat16,
             torch_tensor=None,
         ):
-            tensor_name = f"layers.{layer_num}.{name}"
+            if layer_num == None:
+                tensor_name = name
+            else:
+                tensor_name = f"layers.{layer_num}.{name}"
+
             if self.tt_cache_path is not None:
                 tensor_cache_filepath = str(Path(self.tt_cache_path) / (tensor_name + postfix))
             else:
@@ -76,13 +81,23 @@ class MambaTT(torch.nn.Module):
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
 
+        transformer = MambaSsmBlockTransformer(self.device, self.args.d_inner, self.args.d_state)
+
         self.layers = [
-            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i)) for i in range(self.num_layers)
+            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i), transformer)
+            for i in range(self.num_layers)
         ]
 
-        self.norm_f = reference_model.norm_f
-
-        self.lm_head = reference_model.lm_head
+        load_fn = loader.get_tensor_loader()
+        self.norm_f_weights = load_fn(
+            "norm_f.weight",
+            tt_dtype=ttnn.bfloat8_b,
+        )
+        self.lm_head_weights = load_fn(
+            "lm_head.weight",
+            lambda x: x.transpose(-1, -2),
+            tt_dtype=ttnn.bfloat8_b,
+        )
 
     def forward(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
@@ -99,12 +114,20 @@ class MambaTT(torch.nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
+
         for layer in self.layers:
             x = layer(x)
 
+        x = ttnn.rms_norm(x, self.norm_f_weights, epsilon=self.args.eps)
+        x = ttnn.linear(
+            x,
+            self.lm_head_weights,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_1d_systolic_array=True,
+            core_grid=ttnn.CoreGrid(y=7, x=8),
+        )
+
         x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
         x = x.squeeze(0).squeeze(0).unsqueeze(1)
-        x = self.norm_f(x)  # (B, 1, E) -> (B, 1, E)
-        x = self.lm_head(x)
 
         return x

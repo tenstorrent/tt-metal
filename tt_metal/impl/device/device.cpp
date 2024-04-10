@@ -918,7 +918,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}", this->id_);
+    log_info(tt::LogMetal, "Initializing device {}. Program cache is NOT enabled", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);
@@ -1022,6 +1022,14 @@ CoreCoord Device::compute_with_storage_grid_size() const {
 CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+}
+
+CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
+        TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
+
+    return soc_desc.physical_cores.at(physical_coord).type;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

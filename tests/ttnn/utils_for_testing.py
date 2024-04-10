@@ -4,7 +4,6 @@
 
 import os
 import json
-import torch
 
 from loguru import logger
 from models.utility_functions import comp_pcc

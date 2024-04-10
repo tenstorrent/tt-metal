@@ -82,7 +82,6 @@ inline Tensor interleaved_to_sharded_partial(
                     case TensorMemoryLayout::WIDTH_SHARDED: num_cores = div_up(total_width, shard_shape[1]); break;
                     case TensorMemoryLayout::BLOCK_SHARDED:
                         num_cores = div_up(total_height, shard_shape[0]) * div_up(total_width, shard_shape[1]);
-                        log_info("Selected number of cores for I->S partial op is {}", num_cores);
                         break;
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }

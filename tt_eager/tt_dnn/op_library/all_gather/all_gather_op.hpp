@@ -11,38 +11,69 @@
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
+#include <optional>
+#include <vector>
+#include <algorithm>
+
 namespace tt {
 
 namespace tt_metal {
 
+enum AllGatherMode {
+    RING_INTERLEAVED,
+    FULL_WORKER_GRID_SHARDED,
+    SINGLE_TILE_HIGH_WIDTH_SHARDED
+};
+
+namespace all_gather_op {
+enum Topology {
+    Ring = 0,
+    Linear = 1,
+    Meash = 2
+};
+}; // namespace all_gather_op
 
 class AllGatherConfig {
    public:
-    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links) :
+    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology) :
         num_links(num_links),
         semaphore_size(32),
         ring_size(ring_size),
 
-        // enable_bidirectional - currently doesn't support batch dim and multi-link (some tests are flaky with those configs)
         erisc_handshake_address(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE),
-        enable_bidirectional(dim != 0 && dim != 1),
+        topology(topology),
+        enable_bidirectional(false),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM)
     {
+        // "duplicate" directions are a short hand to enable linear/mesh all-gather topologies with
+        // less code-changes. Ideally a new concept is added amongst "num_eth_buffers", "num_workers_per_link", etc.
+        uint32_t num_duplicate_directions = topology == all_gather_op::Topology::Ring ? 1 : 2;
+
         constexpr uint32_t total_l1_buffer_space = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
         this->is_sharded = input_tensor.is_sharded();
-        this->num_buffers = input_tensor.is_sharded() ? 1 : (this->enable_bidirectional ? 8 : 4);
+        this->num_eth_buffers = (this->enable_bidirectional ? 8 : (this->is_sharded && topology != all_gather_op::Topology::Linear? 8 : 4));
+        if (this->is_sharded) {
+            this->num_eth_buffers = std::min(this->num_eth_buffers, input_tensor.shard_spec()->num_cores());
+            if ((input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) % (ring_size) != 0 &&
+                (ring_size % (input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) != 0)) {
+                // Currently don't support misalignment here
+                this->num_eth_buffers = 1;
+            }
+            log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
+        }
+        this->num_workers_per_link = this->num_eth_buffers;
         this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16;
-        this->semaphore_offset = this->semaphore_size * this->num_buffers; // TODO: Remove this once dedicated semaphore space for user kernels are added
+        this->semaphore_offset = this->semaphore_size * this->num_eth_buffers * num_duplicate_directions; // TODO: Remove this once dedicated semaphore space for user kernels are added
         this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
 
         uint32_t const page_size = input_tensor.buffer()->page_size();
-        this->eth_buffer_size = round_down((total_l1_buffer_space - this->semaphore_offset) / this->num_buffers, page_size);
+        this->eth_buffer_size = round_down((total_l1_buffer_space - this->semaphore_offset) / (this->num_eth_buffers * num_duplicate_directions), page_size);
 
-        TT_FATAL(eth_buffer_size == 0 or num_buffers <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
-        TT_FATAL(this->eth_buffer_size * this->num_buffers + this->semaphore_offset <= total_l1_buffer_space);
+        TT_FATAL(eth_buffer_size == 0 or (this->num_eth_buffers * num_duplicate_directions) <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
+        TT_FATAL(this->eth_buffer_size * (this->num_eth_buffers * num_duplicate_directions) + this->semaphore_offset <= total_l1_buffer_space);
 
         // FIXME: dynamically select the number and size of each buffer based on tensor attributes, link count, ring size, etc.
         // Erisc is able to keep up with workers up to around 17-20 GBps bidirectional (numbers still being locked down)
@@ -58,8 +89,9 @@ class AllGatherConfig {
     uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
 
     uint32_t get_semaphores_offset() const { return this->semaphore_offset; }
-    uint32_t get_num_buffers_per_link() const { return this->num_buffers; }
-    uint32_t get_num_buffers() const { return this->num_buffers * this->num_links; }
+    uint32_t get_num_eth_buffers_per_edm() const { return this->num_eth_buffers; }
+    uint32_t get_num_workers_per_link() const { return this->num_workers_per_link; }
+    uint32_t get_num_workers() const { return this->num_workers_per_link * this->num_links; }
 
     uint32_t get_eth_buffer_size() const { return this->eth_buffer_size; }
 
@@ -69,13 +101,10 @@ class AllGatherConfig {
 
     uint32_t get_semaphore_size() const { return this->semaphore_size; }
 
-    uint32_t get_num_buffers_in_clockwise_direction() const {
-        if (this->is_sharded) {
-            return 0; // Currently only support in CCW direction to make tile ordering work out.
-        }
+    uint32_t get_num_edm_channels_in_clockwise_direction() const {
         return this->enable_bidirectional ?
-            this->num_buffers / 2 :
-            this->num_buffers;
+            this->num_workers_per_link / 2 :
+            this->num_workers_per_link;
     }
     uint32_t get_ring_size() const { return this->ring_size; }
     bool is_buffer_in_clockwise_ring(const uint32_t buffer_index) const {
@@ -83,41 +112,48 @@ class AllGatherConfig {
         // This is slightly suboptimal since the non-full-chunks go to the upper half.
         // A more optimal split would be round robin
         return this->enable_bidirectional ?
-            buffer_index < get_num_buffers_in_clockwise_direction() :
+            buffer_index < get_num_edm_channels_in_clockwise_direction() :
             true;
     }
-    uint32_t get_num_buffers_in_counter_clockwise_direction() const {
+    uint32_t get_num_edm_channels_in_counter_clockwise_direction() const {
         // return all_gather_buffer_params::enable_bidirectional ? all_gather_buffer_params::num_buffers - all_gather_buffer_params::num_buffers / 2 : 0;
         // Force all through counter-clockwise direction
-        return this->num_buffers - this->get_num_buffers_in_clockwise_direction();
+        return this->num_workers_per_link - this->get_num_edm_channels_in_clockwise_direction();
     }
 
     bool is_input_dram() const { return input_is_dram; }
     bool is_output_dram() const { return output_is_dram; }
 
+    AllGatherMode get_mode() const { return mode; }
+
     void print() const {
-        log_trace(tt::LogOp, "AllGatherConfig: {");
+        log_trace(tt::LogOp, "AllGatherConfig: (");
+        log_trace(tt::LogOp, "\tis_sharded: {}", is_sharded);
         log_trace(tt::LogOp, "\terisc_handshake_address: {}", erisc_handshake_address);
-        log_trace(tt::LogOp, "\tnum_buffers: {}", num_buffers);
+        log_trace(tt::LogOp, "\tnum_buffers: {}", num_eth_buffers);
+        log_trace(tt::LogOp, "\tnum_workers_per_link: {}", num_workers_per_link);
         log_trace(tt::LogOp, "\teth_buffer_size: {}", eth_buffer_size);
         log_trace(tt::LogOp, "\tsemaphore_size: {}", semaphore_size);
         log_trace(tt::LogOp, "\tsemaphore_offset: {}", semaphore_offset);
         log_trace(tt::LogOp, "\teth_buffers_l1_base_byte_address: {}", eth_buffers_l1_base_byte_address);
         log_trace(tt::LogOp, "\teth_sems_l1_base_byte_address: {}", eth_sems_l1_base_byte_address);
         log_trace(tt::LogOp, "\tenable_bidirectional: {}", enable_bidirectional);
-        log_trace(tt::LogOp, "}");
+        log_trace(tt::LogOp, ")");
     }
 
    private:
     const uint32_t erisc_handshake_address;
     uint32_t ring_size;
     uint32_t num_links;
-    uint32_t num_buffers;
+    uint32_t num_eth_buffers;
+    uint32_t num_workers_per_link;
     uint32_t eth_buffer_size;
     uint32_t semaphore_size;
     uint32_t semaphore_offset;
     uint32_t eth_buffers_l1_base_byte_address;
     uint32_t eth_sems_l1_base_byte_address;
+    const all_gather_op::Topology topology;
+    AllGatherMode mode;
     bool is_sharded;
     const bool enable_bidirectional;
     const bool input_is_dram;
@@ -129,9 +165,10 @@ struct AllGather {
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
-    const chip_id_t receiver_device_id;
-    const chip_id_t sender_device_id;
+    const std::optional<chip_id_t> receiver_device_id;
+    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
+    const all_gather_op::Topology topology;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -140,9 +177,45 @@ struct AllGather {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const chip_id_t receiver_device_id, const chip_id_t sender_device_id);
+// All Gather Variants
+operation::ProgramWithCallbacks all_gather_full_shard_grid(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology);
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology);
 
-std::vector<Tensor> all_gather(const std::vector<Tensor> &input_tensors, const uint32_t dim, const uint32_t num_links = 1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+std::vector<Tensor> all_gather_impl(
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const MemoryConfig& output_mem_config,
+    const all_gather_op::Topology topology);
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor> &input_tensors,
+    const uint32_t dim,
+    const uint32_t num_links = 1,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+std::vector<Tensor> line_all_gather(
+    const std::vector<Tensor> &input_tensors,
+    const uint32_t dim,
+    const uint32_t num_links = 1,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
 struct ShardedAllGatherConfig {
@@ -433,7 +506,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         // TODO: update to support block sharding
         // TODO: update if input grid != output grid
         return get_first_output_shard_starting_location(
-            all_gather_config.get_num_buffers(),
+            all_gather_config.get_num_eth_buffers_per_edm(),
             input_tensor.shard_spec()->grid.num_cores(),
             ring_index,
             all_gather_config.get_ring_size(),
@@ -509,6 +582,166 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
 
 };
 
+
+class EriscDatamoverBuilder {
+   public:
+    struct ChannelBufferInterface {
+        uint32_t eth_buffer_l1_address;
+        uint32_t eth_semaphore_l1_address;
+    };
+
+    EriscDatamoverBuilder(AllGatherConfig const& all_gather_config, std::vector<uint32_t> const& local_semaphore_addresses, std::vector<uint32_t> const& local_buffer_addresses) :
+        local_semaphore_addresses(local_semaphore_addresses),
+        local_buffer_addresses(local_buffer_addresses),
+        eth_buffer_size_bytes(all_gather_config.get_eth_buffer_size()),
+        handshake_addr(all_gather_config.get_erisc_handshake_address()),
+        num_channel_buffers(all_gather_config.get_num_eth_buffers_per_edm()),
+        enable_sender(false),
+        enable_receiver(false),
+        num_senders(0),
+        num_receivers(0)
+        {
+            active_channels.reserve(num_channel_buffers);
+            TT_ASSERT(eth_buffer_size_bytes < 163000);
+            log_trace(tt::LogOp, "EriscDatamoverBuilder:");
+            for (auto const& addr : local_semaphore_addresses) {
+                log_trace(tt::LogOp, "\tsemaphore_address: {}", addr);
+            }
+            for (auto const& addr : local_buffer_addresses) {
+                log_trace(tt::LogOp, "\tbuffer_address: {}", addr);
+            }
+        }
+
+    [[nodiscard]]
+    ChannelBufferInterface add_sender_channel(uint32_t worker_semaphore_address, uint32_t num_eth_messages_to_forward, std::vector<ccl::WorkerXY> const& worker_coords) {
+        this->enable_sender = true;
+        this->num_senders++;
+        auto channel = active_channels.size();
+        active_channels.emplace_back(true, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords);
+        log_trace(tt::LogOp, "Adding sender channel:");
+        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
+        log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
+        log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
+        log_trace(tt::LogOp, "\tbuffer_address: {}", local_buffer_addresses.at(channel));
+        log_trace(tt::LogOp, "\tsemaphore_address: {}", local_semaphore_addresses.at(channel));
+
+        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+    }
+    [[nodiscard]]
+    ChannelBufferInterface add_receiver_channel(uint32_t worker_semaphore_address, uint32_t num_eth_messages_to_forward, std::vector<ccl::WorkerXY> const& worker_coords) {
+        this->enable_receiver = true;
+        this->num_receivers++;
+        auto channel = active_channels.size();
+        active_channels.emplace_back(false, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords);
+        log_trace(tt::LogOp, "Adding receiver channel:");
+        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
+        log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
+        log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
+        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+    }
+
+    [[nodiscard]]
+    std::vector<uint32_t> emit_compile_time_args() const {
+        return std::vector<uint32_t>{
+            static_cast<uint32_t>(this->enable_sender ? 1 : 0),
+            static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
+            this->num_senders,
+            this->num_receivers};
+    }
+
+    [[nodiscard]]
+    std::vector<uint32_t> emit_runtime_args() const {
+        std::vector<uint32_t> args;
+        uint32_t size = 3 + active_channels.size() * 6;
+        for (auto const& channel : active_channels) {
+            size += channel.worker_coords.size();
+        }
+        args.reserve(size);
+
+        // Handshake address
+        args.push_back(handshake_addr);
+
+        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
+
+        // Sender channel args
+        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
+        args.push_back(sender_channels_offset);
+        for (auto const& channel : this->active_channels) {
+            if (!channel.is_sender) {
+                continue;
+            }
+            push_back_channel_args(args, channel);
+        }
+
+        // Receiver channel args
+        uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
+        args.push_back(receiver_channels_offset);
+        for (auto const& channel : this->active_channels) {
+            if (channel.is_sender) {
+                continue;
+            }
+            push_back_channel_args(args, channel);
+        }
+
+        return args;
+    }
+
+    void dump_to_log() const {
+        auto const& rt_args = this->emit_runtime_args();
+        log_trace(tt::LogOp, "EDM RT Args:");
+        for (auto const& arg : rt_args) {
+            log_trace(tt::LogOp, "\t{}", arg);
+        }
+    };
+
+   private:
+    struct ChannelBufferSpec {
+        ChannelBufferSpec(
+            bool is_sender,
+            uint32_t worker_semaphore_address,
+            uint32_t num_eth_messages_to_forward,
+            uint32_t channel,
+            std::vector<ccl::WorkerXY> const& worker_coords
+        ) :
+            worker_coords(worker_coords),
+            worker_semaphore_address(worker_semaphore_address),
+            num_eth_messages_to_forward(num_eth_messages_to_forward),
+            channel(channel),
+            is_sender(is_sender) {}
+
+        std::vector<ccl::WorkerXY> const worker_coords;
+        uint32_t worker_semaphore_address;
+        uint32_t num_eth_messages_to_forward;
+        uint32_t channel;
+        bool is_sender;
+    };
+
+    void push_back_channel_args (std::vector<uint32_t> &args, ChannelBufferSpec const& channel) const {
+        args.push_back(this->local_buffer_addresses.at(channel.channel));
+        args.push_back(channel.num_eth_messages_to_forward);
+        args.push_back(this->eth_buffer_size_bytes);
+        args.push_back(this->local_semaphore_addresses.at(channel.channel));
+        args.push_back(channel.worker_semaphore_address);
+        args.push_back(channel.worker_coords.size());
+        for (auto const& worker_coord : channel.worker_coords) {
+            args.push_back(worker_coord.to_uint32());
+        }
+    }
+
+    std::vector<ChannelBufferSpec> active_channels;
+    std::vector<uint32_t> const local_semaphore_addresses;
+    std::vector<uint32_t> const local_buffer_addresses;
+    uint32_t eth_buffer_size_bytes;
+    uint32_t handshake_addr;
+    uint32_t const num_channel_buffers;
+    uint32_t num_senders;
+    uint32_t num_receivers;
+
+    bool enable_sender;
+    bool enable_receiver;
+};
 
 }  // namespace tt_metal
 

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/logger.hpp"
+#include "impl/buffers/buffer.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 #include "tt_eager/tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_eager/tt_dnn/op_library/math.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
@@ -42,6 +45,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
+
+    uint32_t mask_H = H;
+    if (mask.has_value()) {
+        mask_H = mask.value().get_legacy_shape()[2];
+    }
+    uint32_t mask_Ht = mask_H/TILE_HEIGHT;
 
     Program program = CreateProgram();
 
@@ -229,8 +238,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
         uint32_t tile_offset = curr_row * Wt;
         uint32_t curr_ht = curr_row % Ht;
-        uint32_t mask_curr_ht = curr_ht % Wt;   // the start offset for causal mask
-        uint32_t mask_offset = curr_row / Ht * Wt * Wt; // causal mask batch offset
+        uint32_t mask_curr_ht = curr_ht % mask_Ht;   // the start offset for causal mask
+        uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt; // causal mask batch offset
         uint32_t mask_id = causal_mask ? (mask_curr_ht * Wt + mask_offset) : (curr_row / Ht * Wt); // causal mask start offset + causal mask batch offset
 
         if (causal_mask) {
@@ -377,6 +386,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     const std::optional<const Tensor> mask,
     std::optional<float> scale,
     bool causal_mask,
+    bool hw_dims_only_causal_mask,
     CoreCoord grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
@@ -438,6 +448,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
+
+    uint32_t mask_H = shape[2];
+    if (mask.has_value()) {
+        mask_H = mask.value().get_legacy_shape()[2];
+    }
+    uint32_t mask_Ht = mask_H/TILE_HEIGHT;
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
     uint32_t block_h = block_ht * TILE_WIDTH;
@@ -469,7 +485,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // attention mask
     uint32_t in3_CB_size;
     if (causal_mask) {
-        in3_CB_size = mask.value().is_sharded() ? block_wt * block_ht * mask_tile_size : block_wt * mask_tile_size * 2;
+        if (mask.value().is_sharded()) {
+            in3_CB_size = block_wt * block_ht * mask_tile_size;
+        } else {
+            in3_CB_size = block_wt * mask_tile_size;
+            if (!hw_dims_only_causal_mask) {
+                // For some reason, if we have hw_dims_causal_mask version, single buffering is up to ~20% faster
+                // Then double buffering CB3.
+                in3_CB_size *= 2;
+            }
+        }
     } else {
         in3_CB_size = block_wt * mask_tile_size;
     }
@@ -505,6 +530,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         (std::uint32_t) is_dram_mask
     };
     std::map<string, string> softmax_defines;
+    // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask.value().get_layout() == Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
         auto mask_stick_size = mask.value().get_legacy_shape()[3] * mask.value().element_size();
@@ -521,9 +547,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         reader_compile_time_args.push_back(0);
     }
     if (causal_mask) {
-        reader_compile_time_args.push_back((std::uint32_t) block_ht / block_wt); // fused head
+        if (!hw_dims_only_causal_mask) {
+            reader_compile_time_args.push_back((std::uint32_t) block_ht / mask_Ht); // fused head
+        } else {
+            reader_compile_time_args.push_back((std::uint32_t) block_ht);
+        }
     }
     reader_compile_time_args.push_back((std::uint32_t) (mask_cb_data_format == tt::DataFormat::Float32)); // mask float32
+    reader_compile_time_args.push_back((std::uint32_t) mask_Ht);
 
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -533,9 +564,17 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         if (mask.value().is_sharded())
             softmax_defines["SHARDED_CAUSAL_MASK"] =  "1";
     }
+    std::string reader_kernel_path;
+    if (use_row_major_kernel) {
+        reader_kernel_path = "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm_rm_mask.cpp";
+    } else if (!hw_dims_only_causal_mask) {
+        reader_kernel_path = "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm.cpp";
+    } else {
+        reader_kernel_path = "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/readed_unary_sharded_sm_causal_mask_hw_dims.cpp";
+    }
     auto reader_kernels_id = CreateKernel(
         program,
-        use_row_major_kernel ? "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm_rm_mask.cpp" : "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm.cpp",
+        reader_kernel_path,
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(
             reader_compile_time_args,
@@ -608,9 +647,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
     union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
+
+    uint32_t num_tiles_in_attn_mask = 0;
+    uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
+    if (hw_dims_only_causal_mask) {
+        num_tiles_in_attn_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_HW;
+        num_tiles_of_attn_mask_needed_per_core = block_ht * block_wt;
+    }
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
 
-        if (shard_orient == ShardOrientation::COL_MAJOR) {
+        if (shard_orient == ShardOrientation::COL_MAJOR && !hw_dims_only_causal_mask) {
             mask_start_tile_id = 0;
         }
 
@@ -623,22 +669,30 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
             reader_args.push_back(s.u);
             reader_args.push_back(mask_addr);
             reader_args.push_back(mask_start_tile_id);
-            tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+            if (hw_dims_only_causal_mask) {
+                reader_args.push_back(num_tiles_in_attn_mask);
+            }
 
-            if (shard_orient == ShardOrientation::COL_MAJOR) {
-                if (mask.has_value()) {
-                    if (causal_mask) {
-                        mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
-                    } else {
-                        mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+            tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+            if (hw_dims_only_causal_mask) {
+                uint32_t mask_tile_id_end = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
+                mask_start_tile_id = mask_tile_id_end;
+            } else {
+                if (shard_orient == ShardOrientation::COL_MAJOR) {
+                    if (mask.has_value()) {
+                        if (causal_mask) {
+                            mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                        } else {
+                            mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                        }
                     }
-                }
-            } else if (core_idx_x == num_cores_c - 1) {
-                if (mask.has_value()) {
-                    if (causal_mask) {
-                        mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
-                    } else {
-                        mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                } else if (core_idx_x == num_cores_c - 1) {
+                    if (mask.has_value()) {
+                        if (causal_mask) {
+                            mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                        } else {
+                            mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                        }
                     }
                 }
             }

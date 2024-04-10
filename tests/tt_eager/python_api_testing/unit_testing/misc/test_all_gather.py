@@ -178,7 +178,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])  # TODO: restore to 500
+@pytest.mark.parametrize("num_iters", [100])  # TODO: restore to 500
 def test_all_gather_on_t3000_post_commit_looping(
     all_devices,
     num_devices,
@@ -288,6 +288,111 @@ def test_all_gather_on_t3000_post_commit(
         use_program_cache,
         function_level_defaults,
     )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, input_shape, dim, layout",
+    [
+        (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
+        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+    ],
+)
+def test_line_all_gather_on_t3000_post_commit(
+    all_devices,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    num_iters=1,
+):
+    if len(all_devices) != 8:
+        pytest.skip("Not T3000!")
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    (is_known_failure, message) = is_unsupported_case(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
+
+    devices = get_devices_for_t3000(all_devices, num_devices)
+    # for device in devices:
+    #    device.disable_and_clear_program_cache()
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    input_tensor = torch.zeros(input_shape).bfloat16()
+
+    id = 0
+    if layout == ttl.tensor.Layout.TILE:
+        for w in range(input_shape[0]):
+            for z in range(input_shape[1]):
+                for i in range(0, input_shape[2], 32):
+                    for j in range(0, input_shape[3], 32):
+                        input_tensor[w][z][i : i + 32][j : j + 32] = id
+                        id += 1
+    else:
+        for w in range(input_shape[0]):
+            for z in range(input_shape[1]):
+                for i in range(input_shape[2]):
+                    for j in range(0, input_shape[3], 32):
+                        input_tensor[w][z][i][j : j + 32] = id
+                        id += 1
+
+    input_tensors = torch.chunk(input_tensor, num_devices, dim)
+    tt_input_tensors = []
+    for i, t in enumerate(input_tensors):
+        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+
+    for i in range(num_iters):
+        tt_out_tensors = ttl.tensor.line_all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
+
+        for d in devices:
+            ttl.device.Synchronize(d)
+        logger.info(f"Done iteration {i}")
+
+    for i, t in enumerate(tt_out_tensors):
+        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        if input_dtype == ttl.tensor.DataType.BFLOAT16:
+            eq, output = comp_equal(tt_output_tensor, input_tensor)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, input_tensor)
+        if not eq:
+            logger.error(f"output mismatch for tensor {i}")
+        assert eq, f"{i} FAILED: {output}"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -435,7 +540,7 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-# @pytest.mark.skip("Not ready for prime time")
+@pytest.mark.skip("Re-enable with FD 2.0 and most recent all-gather updates/bug-fixes")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
@@ -499,11 +604,6 @@ def test_all_gather_on_t3000_nightly(
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
         ),
         (
-            # 2048 wide works
-            # 3072 wide hangs -> maybe I'm exceeding some size limit... (add asserts on buffer sizes:
-            #  - eth buffer size
-            #  - shard buffer size
-            # )
             (1, 1, 32, 3072),
             (32, 128),
             ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 2))}),
@@ -644,28 +744,12 @@ def test_all_gather_post_commit_sharded(
     reported_mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        # print(tt_output_tensor[...,:2048])
-        # print(tt_output_tensor[...,6144:])
-        # breakpoint()
         if input_dtype == ttl.tensor.DataType.BFLOAT16:
             eq, output = comp_equal(tt_output_tensor, unchunked_input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
         if not eq:
-            print(f"output mismatch for tensor {i}")
-            if not reported_mismatch:
-                reported_mismatch = True
-                for w in range(unchunked_input_shape[0]):
-                    for z in range(unchunked_input_shape[1]):
-                        for y in range(unchunked_input_shape[2]):
-                            for x in range(unchunked_input_shape[3]):
-                                if tt_output_tensor[w, z, y, x] != unchunked_input_tensor[w, z, y, x]:
-                                    print(
-                                        f"mismatch at {w} {z} {y} {x} {unchunked_input_tensor[w, z, y, x]} != {tt_output_tensor[w, z, y, x]}"
-                                    )
-            all_eq = False
-            print(f"")
-            print(f"")
+            logger.error(f"output mismatch for tensor {i}")
     assert all_eq, f"{i} FAILED: {output}"
 
 

@@ -8,37 +8,24 @@ from typing import Optional, Union
 import ttnn
 
 import tt_lib as ttl
-from tt_lib.utils import find_closest_largest_divisor, find_closest_largest_divisor_with_num_padding
+from tt_lib.utils import find_closest_largest_divisor
 import math
 
 
-def _compute_golden_layer_norm(
+def _golden_function(
     input_tensor: ttnn.Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_
 ):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
-
     if residual_input_tensor is not None:
-        residual_input_tensor = ttnn.from_device(residual_input_tensor)
-        residual_input_tensor = ttnn.to_layout(residual_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        residual_input_tensor = ttnn.to_torch(residual_input_tensor)
         input_tensor += residual_input_tensor
 
     if weight is not None:
-        weight = ttnn.from_device(weight)
-        weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
-        weight = ttnn.to_torch(weight)
         if len(weight.shape) == 2:
             weight = weight[0]
         weight = weight.to(input_tensor.dtype)
 
     if bias is not None:
-        bias = ttnn.from_device(bias)
-        bias = ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT)
-        bias = ttnn.to_torch(bias)
         if len(bias.shape) == 2:
             bias = bias[0]
         bias = bias.to(input_tensor.dtype)
@@ -93,7 +80,7 @@ def _layer_norm_validate_input_tensors(
 @ttnn.register_operation(
     name="ttnn.layer_norm",
     validate_input_tensors=_layer_norm_validate_input_tensors,
-    compute_golden=_compute_golden_layer_norm,
+    golden_function=_golden_function,
 )
 def layer_norm(
     input_tensor: ttnn.Tensor,
@@ -175,9 +162,22 @@ def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args
     )
 
 
+def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+    import torch
+
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        input_tensor = input_tensor.to(weight.dtype)
+
+    return weight * input_tensor
+
+
 @ttnn.register_operation(
     name="ttnn.rms_norm",
     validate_input_tensors=_rms_norm_validate_input_tensors,
+    golden_function=_golden_function,
 )
 def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
     r"""
@@ -314,38 +314,20 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
     return input_mask_tensor
 
 
-def _compute_golden_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
+def _golden_function(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
-
-    if weight is not None:
-        weight = ttnn.from_device(weight)
-        weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
-        weight = ttnn.to_torch(weight)
-        if len(weight.shape) == 2:
-            weight = weight[0]
-
-    if bias is not None:
-        bias = ttnn.from_device(bias)
-        bias = ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT)
-        bias = ttnn.to_torch(bias)
-        if len(bias.shape) == 2:
-            bias = bias[0]
+    if len(weight.shape) == 2:
+        weight = weight[0]
+    if len(bias.shape) == 2:
+        bias = bias[0]
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 
-def _fallback_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
-    output_tensor = _compute_golden_group_norm(
-        input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias
-    )
-    output_tensor = ttnn.from_torch(
-        output_tensor, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device()
-    )
-    output_tensor = ttnn.reshape(output_tensor, input_tensor.shape)
-    return output_tensor
+def _postprocess_golden_function_outputs(output, args, kwargs):
+    input_tensor = args[0]
+    output = ttnn.reshape(output, input_tensor.shape)
+    return output
 
 
 def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weight=None, bias=None, **kwargs):
@@ -383,8 +365,8 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
 @ttnn.register_operation(
     name="ttnn.group_norm",
     validate_input_tensors=_group_norm_validate_input_tensors,
-    compute_golden=_compute_golden_group_norm,
-    fallback=_fallback_group_norm,
+    golden_function=_golden_function,
+    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
 )
 def group_norm(
     input_tensor: ttnn.Tensor,

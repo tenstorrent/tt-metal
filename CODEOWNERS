@@ -109,8 +109,9 @@ tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 
 # eager - python api
 # **/tt_lib/
-**/tt_lib/csrc/ @TT-BrianLiu @tt-aho @arakhmati @mywoodstock @eyonland @cfjchu @xanderchin
-**/tt_lib/fallback_ops @tt-aho @arakhmati @eyonland @cfjchu @xanderchin
+**/tt_eager/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock
+**/tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
+**/tt_eager/tt_lib/fallback_ops @tt-aho
 
 # TTNN
 ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
@@ -124,6 +125,8 @@ models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
+models/demos/grayskull @boris-drazic
+models/experimental/
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin
@@ -138,5 +141,6 @@ tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
-tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati @eyonland @cfjchu @xanderchin
+tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
+scripts/install @tapspatel

@@ -134,6 +134,8 @@ LIBS_TO_BUILD =
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
 	python_env/dev \
+	python_env/dev/editable \
+	python_env/dev/stubs \
 	git_hooks
 endif
 
@@ -162,7 +164,7 @@ endif
 
 build: $(LIBS_TO_BUILD) $(TOOLS_TO_BUILD)
 
-clean: set_up_kernels/clean eager_package/clean
+clean: set_up_kernels/clean eager_package/clean tracy_tools_clean
 	test -d build && find build  -mindepth 1 -maxdepth 1 ! -path "build/python_env" -exec rm -rf {} + || true
 	rm -rf dist/
 

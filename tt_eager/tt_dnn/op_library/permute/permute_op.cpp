@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 #include <functional>
 
@@ -104,6 +105,11 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
 }
 
 Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
+    if (is_multi_device_tensor(a)) {
+        return transform(a, [&](const Tensor& tensor) {
+            return permute(tensor, dims, output_mem_config);
+        });
+    }
 
     std::vector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});

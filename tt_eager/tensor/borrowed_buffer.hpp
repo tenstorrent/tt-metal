@@ -32,7 +32,6 @@ struct Buffer {
 
     inline void* data() noexcept { return static_cast<void*>(this->data_ptr_); }
     inline const void* data() const noexcept { return static_cast<void*>(this->data_ptr_); }
-
    private:
     T* data_ptr_;
     std::size_t size_;

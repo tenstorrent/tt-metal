@@ -76,24 +76,11 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_eager/tests/tensors/test_raw_host_memory_pointer", "tensors/test_raw_host_memory_pointer"),
     TestEntry("tt_eager/tests/tensors/test_async_tensor_apis", "tensors/test_async_tensor_apis"),
-    # DTX Tests
-    TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
-    TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
-    TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
-    TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
     # Integration tests
     # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
-TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu")),
-    # DTX Tests
-    TestEntry(
-        "tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major",
-        "dtx/test_dtx_tilized_row_to_col_major",
-    ),
-    TestEntry("tt_eager/tests/dtx/test_dtx", "dtx/test_dtx"),
-)
+TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu")),)
 
 
 def run_single_tt_eager_test(test_entry, timeout):

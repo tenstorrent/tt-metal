@@ -22,10 +22,14 @@ def pytest_make_parametrize_id(config, val, argname):
 
 @pytest.fixture(autouse=True)
 def pre_and_post():
-    ttnn._tt_lib.operations.clear_operation_history()
+    try:
+        ttnn._tt_lib.operations.clear_operation_history()
+    except:
+        ...
     ttnn.load_config_from_json_file(ttnn.CONFIG_PATH)
     ttnn.load_config_from_dictionary(json.loads(ttnn.CONFIG_OVERRIDES))
     logger.debug(f"ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(ttnn.CONFIG))}")
-    ttnn.database.delete_reports()
+    if ttnn.CONFIG.delete_reports_on_start:
+        ttnn.database.delete_reports()
     yield
     ttnn.tracer.disable_tracing()

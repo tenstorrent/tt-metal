@@ -21,7 +21,7 @@ __all__ = []
 
 
 def register_ttl_activation_function_unary(name, ttl_activation_function, op_name):
-    def _compute_golden_activation(input_tensor: ttnn.Tensor, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
         name_to_torch_function = {
             "hardsigmoid": F.hardsigmoid,
             "hardswish": F.hardswish,
@@ -53,7 +53,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_activation_validate_input_tensors,
-        compute_golden=_compute_golden_activation,
+        golden_function=_golden_function,
     )
     def activation_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -108,7 +108,7 @@ def torch_prelu(x, *args, **kwargs):
 
 
 def register_ttl_activation_function_with_float(name, ttl_activation_function, op_name, param):
-    def _compute_golden_activation(input_tensor: ttnn.Tensor, parameter, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
         name_to_torch_function = {
             "hardshrink": F.hardshrink,
             "heaviside": torch_heaviside,
@@ -119,7 +119,6 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
             "tanhshrink": F.tanhshrink,
         }
         torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
 
         if name == "heaviside" or name == "prelu":
             return torch_function(input_tensor, scalar=parameter)
@@ -140,7 +139,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_activation_validate_input_tensors,
-        compute_golden=_compute_golden_activation,
+        golden_function=_golden_function,
     )
     def activation_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -183,10 +182,9 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
 
 
 def register_ttl_activation_function_with_two_float(name, ttl_activation_function, op_name, param1_name, param2_name):
-    def _compute_golden_activation(input_tensor: ttnn.Tensor, parameter1, parameter2, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, parameter1, parameter2, **_):
         name_to_torch_function = {"clip": torch.clamp, "threshold": F.threshold, "softplus": F.softplus}
         torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, parameter1, parameter2)
 
     def _activation_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -203,7 +201,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_activation_validate_input_tensors,
-        compute_golden=_compute_golden_activation,
+        golden_function=_golden_function,
     )
     def activation_function(
         input_tensor: ttnn.Tensor,
@@ -273,7 +271,7 @@ def torch_geglu(input_tensor, *args, **kwargs):
 
 
 def register_ttl_activation_function_glu(name, ttl_activation_function, op_name, param):
-    def _compute_golden_activation(input_tensor: ttnn.Tensor, dim: int = -1, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, dim: int = -1, **_):
         name_to_torch_function = {
             "glu": F.glu,
             "reglu": torch_reglu,
@@ -299,7 +297,7 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_activation_validate_input_tensors,
-        compute_golden=_compute_golden_activation,
+        golden_function=_golden_function,
     )
     def activation_function(
         input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG

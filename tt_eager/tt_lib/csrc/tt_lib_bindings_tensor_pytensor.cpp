@@ -318,7 +318,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
-    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_shapes};
+    auto storage = MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_shapes);
 
     return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
 }
@@ -1428,6 +1428,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         reshaped_tensor = tt_tensor.reshape((4, 3, 32))
-                )doc");
+                )doc")
+            .def_property(
+                "tensor_id",
+                [](const Tensor &self) { return self.tensor_id; },
+                [](Tensor &self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
     }
     }  // namespace tt::tt_metal::detail

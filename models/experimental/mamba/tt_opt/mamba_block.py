@@ -12,18 +12,19 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.helper_funcs import Linear
 from models.experimental.mamba.reference.args import ModelArgs
 from models.experimental.mamba.tt_opt.mamba_one_step_ssm import TtMambaSSM
+from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
 
 
 class TtMambaBlock(torch.nn.Module):
-    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
+    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable, transformer: MambaSsmBlockTransformer):
         super().__init__()
 
         self.device = device
         self.args = args
-        self.num_users = args.batch_size
+        self.batch_size = args.batch_size
         self.configs = configs
 
-        assert self.num_users == 32, "Batch size must be 32 for now"
+        assert self.batch_size == 32, "Batch size must be 32 for now"
 
         in_proj_weight_name = "mixer.in_proj.weight"
 
@@ -55,7 +56,7 @@ class TtMambaBlock(torch.nn.Module):
             self.conv1d_weights.append(
                 load_fn(
                     conv1d_weight_name,
-                    lambda x: x[:, :, i].transpose(-1, -2).repeat(self.num_users, 1).unsqueeze(0).unsqueeze(0),
+                    lambda x: x[:, :, i].transpose(-1, -2).repeat(self.batch_size, 1).unsqueeze(0).unsqueeze(0),
                     postfix=f"{i}_{args.batch_size}",
                 )
             )
@@ -72,12 +73,12 @@ class TtMambaBlock(torch.nn.Module):
             self.conv_states.append(
                 load_fn(
                     f"conv_state{i}",
-                    torch_tensor=torch.zeros(1, 1, self.num_users, self.args.d_inner),
+                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
                     postfix=f"{args.batch_size}",
                 )
             )
 
-        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
+        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn, transformer)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi3,
