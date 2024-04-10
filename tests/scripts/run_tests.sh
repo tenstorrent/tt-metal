@@ -69,8 +69,7 @@ run_post_commit_pipeline_tests() {
         echo "Fast dispatch post commit pipeline tests not supported in FD2.0"
         # ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
     elif [[ $dispatch_mode == "fast-multi-queue-single-device" ]]; then
-        echo "Fast dispatch multi queue single device post commit pipeline tests not supported in FD2.0"
-    #     TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
+        TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     fi
 }
 
