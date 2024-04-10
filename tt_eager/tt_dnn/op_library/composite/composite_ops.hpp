@@ -99,6 +99,11 @@ Tensor selu(
     const float alpha = 1.6732632423543772848170429916717,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor celu(
+    const Tensor& x,
+    float alpha,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 // Function Swish = same as SILU
 // use transformation y = x * sigmoid( x ) by broadcast
 Tensor swish(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

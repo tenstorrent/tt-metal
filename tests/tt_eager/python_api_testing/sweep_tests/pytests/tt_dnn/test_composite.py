@@ -112,6 +112,7 @@ if is_wormhole_b0():
                 "polygamma",
                 "nextafter",
                 "scatter",
+                "celu",
             ),
             shapes,
         )
@@ -127,6 +128,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
     options["atan2"] = (-100, 100)
+    options["celu"] = (-100, 100)
     options["cbrt"] = (-1000, 1000)
     options["hardsigmoid"] = (-100, 100)
     options["hardswish"] = (-100, 100)
@@ -209,7 +211,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"value": np.random.randint(1, 100)})
     elif fn in ["lerp_binary"]:
         test_args.update({"weight": np.random.randint(1, 100)})
-    elif fn in ["subalpha"]:
+    elif fn in ["subalpha", "celu"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
