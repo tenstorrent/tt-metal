@@ -460,6 +460,7 @@ class TtLlamaModel_optimized(nn.Module):
                     norm_list[i],
                     program_config=self.model_config["LN_F_PROGCFG"],
                     output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+                    compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
                 )
 
                 tt_lib.tensor.sharded_to_interleaved_partial(
