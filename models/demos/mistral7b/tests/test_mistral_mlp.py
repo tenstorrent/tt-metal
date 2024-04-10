@@ -25,7 +25,6 @@ def test_mistral_mlp_inference(device, use_program_cache, reset_seeds):
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[22:]: v for k, v in state_dict.items() if (k.startswith("layers.0.feed_forward"))}
 
-    model_args.max_batch_size = 1
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
