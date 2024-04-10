@@ -686,6 +686,11 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
+def div(x, y, *args, accurate_mode, **kwargs):
+    result = torch.div(x, y)
+    return result
+
+
 def div_unary(x, *args, scalar, **kwargs):
     result = torch.div(x, scalar)
     return result

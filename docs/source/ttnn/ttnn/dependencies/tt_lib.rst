@@ -303,6 +303,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.mul
 
+.. autofunction:: tt_lib.tensor.div
+
 .. autofunction:: tt_lib.tensor.add_unary
 
 .. autofunction:: tt_lib.tensor.sub_unary

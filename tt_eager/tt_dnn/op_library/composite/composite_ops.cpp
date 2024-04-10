@@ -834,6 +834,31 @@ Tensor addcdiv(
     return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
 }
 
+Tensor _div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    bool accurate_mode,
+    const MemoryConfig& output_mem_config) {
+    Tensor result = div_fast(input_a, input_b);
+    if(accurate_mode == false){ // If input_b is non-zero tensor
+        return result;
+    }
+    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
+    return where(eqz(input_b, output_mem_config),
+                where(eqz(input_a, output_mem_config),
+                    t_nan,
+                    mul(t_inf, sign(input_a, output_mem_config), std::nullopt, output_mem_config), output_mem_config),
+                result, output_mem_config);
+}
+Tensor div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    bool accurate_mode,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, output_mem_config);
+}
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps, output_mem_config);

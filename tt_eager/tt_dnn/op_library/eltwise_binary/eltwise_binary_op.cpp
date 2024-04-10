@@ -63,6 +63,12 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
             break;
+        case BinaryOpType::DIV_FAST:
+            //Divide by a non-zero tensor
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
+            op_name = "mul_tiles";
+            op_code = "2";
+            break;
         case BinaryOpType::LOGICAL_OR:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));

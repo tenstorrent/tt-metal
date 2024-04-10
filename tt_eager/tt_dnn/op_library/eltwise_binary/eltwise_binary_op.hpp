@@ -34,7 +34,8 @@ enum class BinaryOpType {
     LOGICAL_AND = 12,
     LOGICAL_OR = 13,
     LDEXP = 14,
-    LOGADDEXP2 = 15
+    LOGADDEXP2 = 15,
+    DIV_FAST = 16
 };
 
 enum class BinaryOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
@@ -158,6 +159,7 @@ constexpr auto bias_gelu = make_eltwise_binary<BinaryOpType::BIAS_GELU>{};
 constexpr auto logaddexp = make_eltwise_binary<BinaryOpType::LOGADDEXP>{};
 constexpr auto ldexp = make_eltwise_binary<BinaryOpType::LDEXP>{};
 constexpr auto logaddexp2 = make_eltwise_binary<BinaryOpType::LOGADDEXP2>{};
+constexpr auto div_fast = make_eltwise_binary<BinaryOpType::DIV_FAST>{};
 
 // comparative binary ops
 constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
