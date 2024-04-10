@@ -188,6 +188,7 @@ from ttnn.decorators import (
 )
 
 import ttnn.experimental
+import ttnn.experimental.golden_functions
 
 from ttnn.operations.core import (
     from_torch,
