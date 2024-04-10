@@ -12,8 +12,6 @@ from models.utility_functions import torch_random, skip_for_wormhole_b0
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
