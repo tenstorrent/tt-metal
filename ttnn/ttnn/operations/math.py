@@ -191,7 +191,7 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
     )
     def math_binary_function(
         input_tensor_a: ttnn.Tensor,
-        input_tensor_b: Union[ttnn.Tensor, int, float],
+        input_tensor_b: ttnn.Tensor,
         *,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
@@ -220,7 +220,7 @@ def register_ttl_math_binary_function(name, ttl_math_binary_function, op_name):
             Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
 
             .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i  \\; \\; or \\; \\; \\mathrm{{scalar}})
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
 
             Args:
                 * :attr:`input_tensor_a`
