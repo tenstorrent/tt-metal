@@ -251,22 +251,72 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
-const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
-    // Calculate size of command
-    // TODO: Would be nice if we could pull this out of program
+const DeviceCommand EnqueueProgramCommand::assemble_preamble_commands() {
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
         CQ_PREFETCH_CMD_BARE_MIN_SIZE; // CQ_PREFETCH_CMD_STALL
 
-    for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
-        uint32_t num_packed_cmds = transfer_info.size();
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
+    DeviceCommand command_sequence(cmd_sequence_sizeB);
 
+    // Wait for Noc Write Barrier
+    // wait for binaries to commit to dram, also wait for previous program to be done
+    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+    // Stall to allow binaries to commit to DRAM first
+    // TODO: this can be removed for all but the first program run
+    command_sequence.add_dispatch_wait_with_prefetch_stall(
+        true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+
+    return command_sequence;
+}
+
+const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_commands() {
+    program.update_runtime_args_transfer_info(this->device);
+
+    vector<DeviceCommand> runtime_args_command_sequences;
+
+    for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
+        uint32_t cmd_sequence_sizeB = 0;
+        uint32_t num_packed_cmds = transfer_info.size();
         uint32_t runtime_args_len = transfer_info[0].data.size();
-        uint32_t aligned_runtime_data_sizeB = align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+
+        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
+        uint32_t aligned_runtime_data_sizeB = 0;
+        for (int i = 0; i < num_packed_cmds; i++) {
+            TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
+            runtime_args_len = std::max(runtime_args_len, (uint32_t)transfer_info[i].data.size());
+        }
+        aligned_runtime_data_sizeB += num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
 
         uint32_t rt_payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
+
+        DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+        std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
+        std::vector<const void *> rt_data_and_sizes;
+
+        for (int i = 0; i < num_packed_cmds; i++) {
+            unicast_sub_cmds.emplace_back(
+                CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = transfer_info[i].dst_noc_info[0].first});
+            rt_data_and_sizes.emplace_back(transfer_info[i].data.data());
+        }
+
+        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+            num_packed_cmds,
+            dst,
+            runtime_args_len * sizeof(uint32_t),
+            rt_payload_sizeB,
+            unicast_sub_cmds,
+            rt_data_and_sizes);
+        runtime_args_command_sequences.emplace_back(command_sequence);
     }
+
+    return runtime_args_command_sequences;
+}
+
+const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
+    // Calculate size of command
+    // TODO: Would be nice if we could pull this out of program
+    uint32_t cmd_sequence_sizeB = 0;
 
     for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
         uint32_t num_packed_cmds = 0;
@@ -336,43 +386,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
 
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
-    // Wait for Noc Write Barrier
-    // wait for binaries to commit to dram, also wait for previous program to be done
-    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-    // Stall to allow binaries to commit to DRAM first
-    // TODO: this can be removed for all but the first program run
-    command_sequence.add_dispatch_wait_with_prefetch_stall(true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
-
-    // Runtime Args
-    // Runtime Args Cmd
-    program.update_runtime_args_transfer_info(this->device);
-    for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
-        uint32_t num_packed_cmds = transfer_info.size();
-        uint32_t runtime_args_len = transfer_info[0].data.size();
-
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-        uint32_t aligned_runtime_data_sizeB = align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
-
-        std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-        std::vector<const void *> rt_data;
-
-        for (int i = 0; i < num_packed_cmds; i++) {
-            TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
-            unicast_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = transfer_info[i].dst_noc_info[0].first});
-            rt_data.emplace_back(transfer_info[i].data.data());
-        }
-
-        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-            num_packed_cmds,
-            dst,
-            runtime_args_len * sizeof(uint32_t), // TODO: assume runtime args always at least one data vector. Maybe we can assert that all runtime args length are the same
-            payload_sizeB,
-            unicast_sub_cmds,
-            rt_data
-        );
-    }
-
     // Semaphores
     // Multicast Semaphore Cmd
     for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
@@ -437,7 +450,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         );
     }
 
-    // CB Configs commands already programmed, just populate data
+    // CB Configs commands
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const CoreRange& core_range : cb->core_ranges().ranges()) {
             CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
@@ -471,7 +484,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
     }
 
     // Program Binaries
-    // already programmed, offset idx
     for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
         const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
         for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
@@ -515,7 +527,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
     }
 
     // Go Signals
-    // already programmed, offset idx
     for (const auto& transfer_info : program.program_transfer_info.go_signals) {
         for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
             command_sequence.add_dispatch_write_linear(
@@ -541,27 +552,126 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
 }
 
 void EnqueueProgramCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
+    // Calculate all commands size and determine how many fetch q entries to use
 
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    // Preamble, some waits and stalls
+    DeviceCommand preamble_command_sequence = this->assemble_preamble_commands();
+    uint32_t preamble_fetch_size_bytes = preamble_command_sequence.size_bytes();
 
-    // move this into the command queue interface
-    TT_ASSERT(fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
-
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    // Wrap issue queue
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
-        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+    // Runtime Args Command Sequence
+    vector<DeviceCommand> runtime_args_command_sequences = this->assemble_runtime_args_commands();
+    uint32_t runtime_args_fetch_size_bytes = 0;
+    for (const auto& cmds : runtime_args_command_sequences) {
+        // BRISC, NCRISC, TRISC...
+        runtime_args_fetch_size_bytes += cmds.size_bytes();
     }
 
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+    // Main Command Sequence
+    DeviceCommand program_command_sequence = this->assemble_device_commands();
+    uint32_t program_fetch_size_bytes = program_command_sequence.size_bytes();
 
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    uint32_t total_fetch_size_bytes =
+        preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
+
+    if (total_fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE) {
+        // move this into the command queue interface
+        TT_ASSERT(
+            total_fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE,
+            "Generated prefetcher command exceeds max command size");
+        TT_ASSERT((total_fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+        this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+        uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+        // Wrap issue queue
+        uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+        if (write_ptr + align(total_fetch_size_bytes, 32) > command_issue_limit) {
+            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        }
+
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+        this->manager.cq_write(preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
+
+        for (const auto& cmds : runtime_args_command_sequences) {
+            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
+            this->manager.issue_queue_push_back(cmds.size_bytes(), this->command_queue_id);
+        }
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+        this->manager.cq_write(program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
+        this->manager.issue_queue_push_back(program_fetch_size_bytes, this->command_queue_id);
+
+        // One fetch queue entry for entire program
+        this->manager.fetch_queue_write(total_fetch_size_bytes, this->command_queue_id);
+    } else {
+        // move this into the command queue interface
+        TT_ASSERT(
+            preamble_fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE,
+            "Generated prefetcher command exceeds max command size");
+        TT_ASSERT(
+            (preamble_fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+        this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+        uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+        // Wrap issue queue
+        uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+        if (write_ptr + align(preamble_fetch_size_bytes, 32) > command_issue_limit) {
+            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        }
+
+        this->manager.cq_write(preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
+
+        // One fetch queue entry for just the wait and stall, very inefficient
+        this->manager.fetch_queue_write(preamble_fetch_size_bytes, this->command_queue_id);
+
+        for (const auto& cmds : runtime_args_command_sequences) {
+            uint32_t fetch_size_bytes = cmds.size_bytes();
+            // move this into the command queue interface
+            TT_ASSERT(
+                fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
+            TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+            this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+            uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+            // Wrap issue queue
+            uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+            if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
+                this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+            }
+
+            this->manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
+            this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+
+            // One fetch queue entry for each runtime args write location, e.g. BRISC/NCRISC/TRISC/ERISC
+            this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+        }
+
+        // move this into the command queue interface
+        TT_ASSERT(
+            program_fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE,
+            "Generated prefetcher command exceeds max command size");
+        TT_ASSERT(
+            (program_fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+        this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+        // Wrap issue queue
+        command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+        if (write_ptr + align(program_fetch_size_bytes, 32) > command_issue_limit) {
+            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        }
+
+        this->manager.cq_write(program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
+        this->manager.issue_queue_push_back(program_fetch_size_bytes, this->command_queue_id);
+
+        // One fetch queue entry for rest of program commands
+        this->manager.fetch_queue_write(program_fetch_size_bytes, this->command_queue_id);
+    }
 }
 
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
