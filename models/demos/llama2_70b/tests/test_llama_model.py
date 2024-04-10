@@ -18,10 +18,11 @@ from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimi
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+
+# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+#     comp_allclose,
+#     comp_pcc,
+# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.demos.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -30,6 +31,7 @@ from models.demos.llama2_70b.tt.llama_common import (
     BASE_URL,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
+    comp_pcc,
 )
 
 
