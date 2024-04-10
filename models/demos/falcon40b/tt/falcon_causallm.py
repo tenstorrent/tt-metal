@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import pytest
-from torch import nn
 from typing import Optional, Tuple
 
 import tt_lib
 
 from models.demos.falcon40b.tt.falcon_model import TtFalconModelShared
 from models.utility_functions import torch2tt_tensor
+
+from models.demos.falcon40b.tt.model_utils import falcon_prefill_matmul
 
 
 class TtFalconCausalLM(TtFalconModelShared):
@@ -71,6 +71,83 @@ class TtFalconCausalLM(TtFalconModelShared):
                 )
 
     def __call__(
+        self,
+        input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
+        attention_mask: tt_lib.tensor.Tensor = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past_len: int = 0,
+        use_cache: bool = False,
+    ) -> tt_lib.tensor.Tensor:
+        if llm_mode == "prefill":
+            return self.fwd_prefill_causallm(
+                input_embeddings=input_embeddings,
+                attention_mask=attention_mask,
+                llm_mode=llm_mode,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                use_cache=use_cache,
+            )
+        elif llm_mode == "decode":
+            return self.fwd_decode_causallm(
+                input_embeddings=input_embeddings,
+                attention_mask=attention_mask,
+                llm_mode=llm_mode,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                use_cache=use_cache,
+            )
+        else:
+            assert False
+
+    def fwd_prefill_causallm(
+        self,
+        input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
+        attention_mask: tt_lib.tensor.Tensor = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past_len: int = 0,
+        use_cache: bool = False,
+    ) -> tt_lib.tensor.Tensor:
+        hidden_states, presents = super().__call__(
+            input_embeddings=input_embeddings,
+            attention_mask=attention_mask,
+            llm_mode=llm_mode,
+            user_id=user_id,
+            layer_past=layer_past,
+            layer_past_len=layer_past_len,
+            use_cache=use_cache,
+        )
+
+        need_low_l1_workaround = hidden_states[0].shape[2] > 1024
+
+        lm_logits = []
+        for i in range(len(hidden_states)):
+            lm_logits.append(
+                falcon_prefill_matmul(
+                    hidden_states[i],
+                    self.lm_head_weights[i],
+                    self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"]
+                    if need_low_l1_workaround
+                    else self.model_config[
+                        "COMPUTE_KERNEL_CONFIG"
+                    ],  # FP16 accumulation format leads to lower PCC! But can't fit 2k S otherwise atm
+                    output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+                    output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+                    overwrite_per_core_k=1,  # TODO: can we increase this?
+                    overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+                    overwrite_subblock_h=1,
+                )
+            )
+            hidden_states[i].deallocate(True)
+
+        return lm_logits, presents
+
+    def fwd_decode_causallm(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         llm_mode: str,

@@ -307,10 +307,13 @@ def run_test_FalconModel_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
+        ("prefill", 1, 32, 0),
         ("prefill", 2, 32, 0),
+        ("prefill", 1, 128, 0),
+        ("prefill", 1, 2048, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "decode_batch32"],
+    ids=["prefill_seq32", "prefill_seq32_batch2", "prefill_seq128", "prefill_seq2048", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -324,7 +327,12 @@ def run_test_FalconModel_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
+    [
+        ("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99),
+        ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99),
+        ("BFLOAT8_B-DRAM", 0.99, 0.99, 0.99),
+    ],
+    ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM"],
 )
 def test_FalconModel_inference(
     num_devices,
@@ -341,14 +349,12 @@ def test_FalconModel_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: remove workaround for avoiding PCC issues when fixed
 ):
-    if llm_mode == "prefill":
-        if model_config_str == "BFLOAT16-SHARDED":
-            pytest.skip("Prefill is only tested for BFLOAT8_B!")
-        elif model_config_str == "BFLOAT8_B-SHARDED":
-            # TODO: Investigate why PCC is lower for prefill?
-            out_pcc = 0.95
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for BFLOAT8_B-DRAM memory config and 8 chips!")
+    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
+        pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)

@@ -31,15 +31,18 @@ pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
 
-# Falcon40B 4 chip tests
-pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-prefill_seq32-4chips]
+# Falcon40B 4 chip decode tests
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-decode_batch32-4chips]
 pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-4chips]
 
-# Falcon40B 8 chip tests
-pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-prefill_seq32-8chips]
+# Falcon40B 8 chip decode tests
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-decode_batch32-8chips]
 pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-8chips]
+
+# Falcon40B 8 chip prefill tests
+pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips]
+pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq128-8chips]
+pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips]
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest tests/ttnn/unit_tests/test_multi_device_async.py
