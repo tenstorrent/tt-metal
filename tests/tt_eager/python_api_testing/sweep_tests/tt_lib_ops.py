@@ -1026,6 +1026,26 @@ def eltwise_addalpha(
 
 
 @setup_host_and_device
+def eltwise_div(
+    x,
+    y,
+    *args,
+    accurate_mode,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttl.tensor.div(t0, t1, accurate_mode, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
 def lamb_optimizer(
     x,
     y,
