@@ -10,8 +10,8 @@ from loguru import logger
 from pathlib import Path
 from typing import Callable, Optional
 
-from models.experimental.mamba.tt_opt.residual_block import TtResidualBlock
-from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
+from models.demos.mamba.tt.residual_block import TtResidualBlock
+from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtTensorLoader:
@@ -96,7 +96,7 @@ class MambaTT(torch.nn.Module):
         self.lm_head_weights = load_fn(
             "lm_head.weight",
             lambda x: x.transpose(-1, -2),
-            tt_dtype=ttnn.bfloat8_b,
+            tt_dtype=ttnn.bfloat16,
         )
 
     def forward(self, x):
