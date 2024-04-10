@@ -288,60 +288,60 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
+        cache_name = lambda name: self.cache_path / (f"{name}")
+
+        as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
+            tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.devices[device_id],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_name(name) if name is not None else None,
+        )
+
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
-            x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
+            x = x.unsqueeze(1)
+            assert x.size() == (batch, 1, seq_len, self.hidden_size)
+            xs = []
+            for device_id in range(self.num_devices):
+                xs.append(as_tensor(x.clone(), None, device_id))
+
             cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
             cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
-            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-            attn_mask = torch.triu(attn_mask, diagonal=1)
-            attn_mask = attn_mask.expand(batch, self.n_local_heads, -1, -1)
-
-            as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
-                tensor,
-                dtype=ttnn.bfloat16,
-                device=self.devices[device_id],
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=get_weight_cache_path(self.cache_path, name, device_id, self.num_devices),
-            )
-            # expected shapes:
-            # x: [batch, 1, seq_len, hidden_dim]
-            # start_pos: int
-            # cos_gathered: [1, 1, seq_len, head_dim]
-            # sin_gathered: [1, 1, seq_len, head_dim]
-            # attn_mask: [batch, self.n_heads, seq_len, seq_len]
-            assert x.size() == (batch, 1, seq_len, self.hidden_size)
             assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
-            assert attn_mask.size() == (batch, self.n_local_heads, seq_len, seq_len)
-            xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
-            for i in range(self.num_devices):
-                xs.append(
-                    ttnn.as_tensor(
-                        x.clone(),
-                        dtype=ttnn.bfloat16,
-                        device=self.devices[i],
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                )
-                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
-                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
-                attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", i))
+
+            cos_gathereds, sin_gathereds = [], []
+            for device_id in range(self.num_devices):
+                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", device_id))
+                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", device_id))
+
             rot_mats = [cos_gathereds, sin_gathereds]
+
+            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+            attn_mask = torch.triu(attn_mask, diagonal=1)
+            attn_mask = attn_mask.expand(batch, 1, -1, -1)
+
+            attn_masks = []
+            for device_id in range(self.num_devices):
+                attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", device_id))
+
+            repeat_shape = (1, self.n_local_heads, 1, 1)
+            for i in range(self.num_devices):
+                attn_masks[i] = tt_lib.tensor.repeat(
+                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+                )
 
             if self.emulated:
                 # save l1 space by sharing the same input across "devices"
                 for i in range(1, self.num_devices):
-                    # x_multichip[i].deallocate(True)
                     rot_mats[0][i].deallocate(True)
                     rot_mats[1][i].deallocate(True)
                     attn_masks[i].deallocate(True)
-                    # x_multichip[i] = x_multichip[0]
                     rot_mats[0][i] = rot_mats[0][0]
                     rot_mats[1][i] = rot_mats[1][0]
                     attn_masks[i] = attn_masks[0]
@@ -350,8 +350,12 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
             rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-            rot_mat = get_rotation_mat(rot_mat, start_pos=start_pos, seqlen=seq_len, batch=batch)
-            rot_mat = rot_mat[:, :1]
+            rot_mat = get_rotation_mat(
+                rot_mat=rot_mat,
+                start_pos=start_pos,
+                seqlen=seq_len,
+                batch=1,  # use batch=1 because we assume all users use same rot_mat
+            )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
             if self.batched_attn:
