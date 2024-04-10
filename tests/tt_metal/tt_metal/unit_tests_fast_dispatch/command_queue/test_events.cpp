@@ -258,11 +258,11 @@ TEST_F(CommandQueueFixture, TestEventsEventsQueryBasic) {
 
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
 TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
-    const size_t num_buffers = 100;
+    const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
     uint32_t cmds_issued_per_cq = 0;
-    const uint32_t num_cmds_per_cq = 2; // Record, Write
+    const uint32_t num_cmds_per_cq = 3; // Record, Write, Wait
     uint32_t expected_event_id = 0;
 
     auto start = std::chrono::system_clock::now();

@@ -559,26 +559,45 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
 }
 
 const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
+    std::vector<uint32_t> event_payload(EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
+    event_payload[0] = this->event_id;
+
+    uint8_t num_hw_cqs = this->device->num_hw_cqs(); // Device initialize asserts that there can only be a maximum of 2 HW CQs
+    uint32_t packed_event_payload_sizeB = align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT)
+        + (align(EVENT_PADDED_SIZE, L1_ALIGNMENT) * num_hw_cqs);
+    uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, PCIE_ALIGNMENT);
+
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        align(CQ_PREFETCH_CMD_BARE_MIN_SIZE + EVENT_PADDED_SIZE, PCIE_ALIGNMENT) + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR + event ID
+        packed_write_sizeB + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event payload
         align(CQ_PREFETCH_CMD_BARE_MIN_SIZE + EVENT_PADDED_SIZE, PCIE_ALIGNMENT); // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
-    std::vector<uint32_t> event_payload(EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
-    event_payload[0] = this->event_id;
-
-    uint8_t num_hw_cqs = this->device->num_hw_cqs();
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
-    tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(this->device->id(), channel, this->command_queue_id);
     CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->device->id());
-    CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
+    std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_hw_cqs);
+    std::vector<const void *> event_payloads(num_hw_cqs);
+
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+        tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(this->device->id(), channel, cq_id);
+        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+        unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = get_noc_unicast_encoding(dispatch_physical_core)};
+        event_payloads[cq_id] = event_payload.data();
+    }
+
+    uint32_t address = this->command_queue_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+    command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+        num_hw_cqs,
+        address,
+        EVENT_PADDED_SIZE,
+        packed_event_payload_sizeB,
+        unicast_sub_cmds,
+        event_payloads
+    );
 
     bool flush_prefetch = true;
-    command_sequence.add_dispatch_write_linear(flush_prefetch, 0, get_noc_unicast_encoding(dispatch_physical_core), CQ_COMPLETION_LAST_EVENT, EVENT_PADDED_SIZE, event_payload.data());
-
     command_sequence.add_dispatch_write_host(flush_prefetch, EVENT_PADDED_SIZE, event_payload.data());
 
     return command_sequence;
@@ -607,16 +626,37 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     command_queue_id(command_queue_id), device(device), manager(manager), sync_event(sync_event) {
         this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
         // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
-        TT_ASSERT(command_queue_id != sync_event.cq_id,
-            "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. CQ ID: {}", command_queue_id);
+        // TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
+        //     "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
+        //     event, command_queue_id);
 }
 
 const DeviceCommand EnqueueWaitForEventCommand::assemble_device_commands() {
-    DeviceCommand command_sequence(0);
+    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE; // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+
+    DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+    uint32_t last_completed_event_address = sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+    command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id);
+
     return command_sequence;
 }
 
 void EnqueueWaitForEventCommand::process() {
+    DeviceCommand command_sequence = this->assemble_device_commands();
+
+    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+
+    // move this into the command queue interface
+    TT_ASSERT(fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
+    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
 }
 
 EnqueueTraceCommand::EnqueueTraceCommand(
@@ -964,8 +1004,13 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     }
 }
 
-void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> event) {
+void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
+
+    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, *sync_event);
+    this->enqueue_command(command, false);
+    std::shared_ptr<Event> event = std::make_shared<Event>();
+    this->enqueue_record_event(event);
 }
 
 

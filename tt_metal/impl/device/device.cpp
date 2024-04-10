@@ -539,7 +539,8 @@ void Device::configure_command_queue_programs() {
                 vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
                 detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, zero);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ0_COMPLETION_LAST_EVENT, zero);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ1_COMPLETION_LAST_EVENT, zero);
 
                 // Initialize address where workers signal to completion to dispatch core
                 // This value is always increasing
