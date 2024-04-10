@@ -46,7 +46,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat, einsum
 
-from models.experimental.mamba.reference.args import ModelArgs
+from models.demos.mamba.reference.args import ModelArgs
 
 from typing import Literal, cast
 

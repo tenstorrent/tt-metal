@@ -5,76 +5,75 @@
 import torch
 import pytest
 from loguru import logger
-
+from typing import Optional
 import ttnn
-from models.experimental.mamba.tt_opt.full_model import TtTensorLoader, MambaSsmBlockTransformer
-from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.tt_opt.mamba_one_step_ssm import TtMambaSSM
-from models.experimental.mamba.tt_opt import model_config
+from models.demos.mamba.tt.full_model import TtTensorLoader, MambaSsmBlockTransformer
+from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.tt.residual_block import TtResidualBlock
+from models.demos.mamba.tt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
 
 
-class PytorchMambaSSM(torch.nn.Module):
+class PytorchResidualBlock(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
-        self.block = hf_reference_model.layers[layer_num].mixer
+        self.block = hf_reference_model.layers[layer_num]
         self.block.eval()
 
     def forward(self, x):
-        result = self.block.ssm(x)
+        result = self.block(x)
         return result
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, pcc, enable_cache",
+    "model_version, batch, pcc, cache_dir",
     (
         (
             "state-spaces/mamba-2.8b",
             32,
             0.99,
-            False,
+            None,
         ),
     ),
 )
-def test_mamba_ssm_inference(
+def test_mamba_residual_block_inference(
     device: ttnn.Device,
     use_program_cache,
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    enable_cache: bool,
+    cache_dir: Optional[str],
 ):
     torch.manual_seed(0)
 
     LAYER_NUM = 0
 
-    reference_model = MambaDecode.from_pretrained(model_version)
+    reference_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
     reference_model.args.batch_size = batch
 
-    d_in = reference_model.args.d_model * reference_model.args.expand
-    input = torch.rand(batch, 1, d_in)
+    d_model = reference_model.args.d_model
+    input = torch.rand(batch, 1, d_model)
 
-    reference_output = PytorchMambaSSM(reference_model, LAYER_NUM)(input)
+    reference_output = PytorchResidualBlock(reference_model, LAYER_NUM)(input)
 
     residual_block = reference_model.layers[LAYER_NUM]
     assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
 
-    if enable_cache:
-        cache_path = f"/tmp/{model_version}"
-        ttnn.enable_program_cache(device)
+    if cache_dir:
+        cache_path = model_config.get_weights_cache_path(model_version, cache_dir)
     else:
         cache_path = None
 
-    config = model_config.create_model_config(batch, reference_model.args.d_model)
+    config = model_config.create_model_config(batch, d_model)
 
     loader = TtTensorLoader(reference_model.state_dict(), device, tt_cache_path=cache_path)
     transformer = MambaSsmBlockTransformer(device, reference_model.args.d_inner, reference_model.args.d_state)
 
-    model = TtMambaSSM(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM), transformer)
-    tt_input = input.view(1, 1, batch, d_in)
+    model = TtResidualBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM), transformer)
+    tt_input = input.view(1, 1, batch, d_model)
     tt_input = ttnn.to_device(
         ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
         device=device,
