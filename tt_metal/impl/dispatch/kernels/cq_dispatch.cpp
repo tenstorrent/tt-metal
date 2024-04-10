@@ -16,6 +16,8 @@
 #include "debug/dprint.h"
 #include "debug/assert.h"
 
+#define ENABLE_DISPATCH_DPRINTS 0
+
 // The command queue write interface controls writes to the completion region, host owns the completion region read interface
 // Data requests from device and event states are written to the completion region
 
@@ -284,7 +286,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint32_t dst_addr = cmd->write_linear.addr;
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "dispatch_write: " << length << " num_mcast_dests: " << num_mcast_dests << ENDL();
+#endif
     while (length != 0) {
         uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
@@ -374,8 +378,10 @@ void process_write_paged() {
     addr_gen.page_size = page_size;
     uint64_t dst_addr_offset = 0; // Offset into page.
 
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size << " dispatch_cb_page_size: " << dispatch_cb_page_size;
     DPRINT << " start_page: " << page_id << " base_addr: " << HEX() << base_addr << DEC() << ENDL();
+#endif
 
     while (write_length != 0) {
 
@@ -469,7 +475,9 @@ void process_write_packed() {
     data_ptr = (data_ptr + L1_NOC_ALIGNMENT - 1) & ~(L1_NOC_ALIGNMENT - 1);
     uint32_t stride = (xfer_size + L1_NOC_ALIGNMENT - 1) & ~(L1_NOC_ALIGNMENT - 1);
 
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
+#endif
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ?
@@ -480,7 +488,9 @@ void process_write_packed() {
 
         // Get a page if needed
         if (data_ptr + xfer_size > cb_fence) {
+#if ENABLE_DISPATCH_DPRINTS
             DPRINT << data_ptr << " " << cb_fence << ENDL();
+#endif
             // Check for block completion
             uint32_t remainder_xfer_size = 0;
             uint32_t remainder_dst_addr;
@@ -561,7 +571,9 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     uint32_t checksum = 0;
     uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQDispatchCmd));
     uint32_t size = cmd->debug.size;
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "checksum: " << cmd->debug.size << ENDL();
+#endif
 
     // Dispatch checksum only handles running checksum on a single page
     // Host code prevents larger from flowing through
@@ -622,13 +634,17 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
     switch (cmd->base.cmd_id) {
     case CQ_DISPATCH_CMD_WRITE_LINEAR:
         DEBUG_STATUS('D', 'W', 'B');
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_write\n";
+#endif
         process_write();
         DEBUG_STATUS('D', 'W', 'D');
         break;
 
     case CQ_DISPATCH_CMD_WRITE_LINEAR_HOST:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_write_host\n";
+#endif
         if (is_h_variant) {
             process_write_host_h();
         } else {
@@ -637,7 +653,9 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     case CQ_DISPATCH_CMD_WRITE_PAGED:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_write_paged is_dram: " << (uint32_t) cmd->write_paged.is_dram << ENDL();
+#endif
         if (cmd->write_paged.is_dram) {
             process_write_paged<true>();
         } else {
@@ -646,7 +664,9 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     case CQ_DISPATCH_CMD_WRITE_PACKED:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_write_packed" << ENDL();
+#endif
         if (cmd->write_packed.is_multicast) {
             process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>();
         } else {
@@ -655,31 +675,43 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     case CQ_DISPATCH_CMD_WAIT:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_wait" << ENDL();
+#endif
         process_wait();
         break;
 
     case CQ_DISPATCH_CMD_GO:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_go" << ENDL();
+#endif
         break;
 
     case CQ_DISPATCH_CMD_SINK:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_sink" << ENDL();
+#endif
         break;
 
     case CQ_DISPATCH_CMD_DEBUG:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_debug" << ENDL();
+#endif
         cmd_ptr = process_debug_cmd(cmd_ptr);
         goto re_run_command;
         break;
 
     case CQ_DISPATCH_CMD_DELAY:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "cmd_delay" << ENDL();
+#endif
         process_delay_cmd();
         break;
 
     case CQ_DISPATCH_CMD_TERMINATE:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "dispatch terminate\n";
+#endif
         if (is_d_variant && !is_h_variant) {
             relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
         }
@@ -687,11 +719,13 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     default:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << "xx" << ENDL();
         DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
+#endif
         DEBUG_STATUS('!', 'C', 'M', 'D');
         ASSERT(0);
     }
@@ -711,16 +745,20 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
         break;
 
     case CQ_DISPATCH_CMD_TERMINATE:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "dispatch_h terminate\n";
+#endif
         done = true;
         break;
 
     default:
+#if ENABLE_DISPATCH_DPRINTS
         DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << "xx" << ENDL();
         DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
+#endif
         DEBUG_STATUS('!', 'C', 'M', 'D');
         ASSERT(0);
     }
@@ -729,7 +767,9 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 }
 
 void kernel_main() {
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": start" << ENDL();
+#endif
 
     for (uint32_t i = 0; i < dispatch_cb_blocks; i++) {
         uint32_t next_block = i + 1;
@@ -786,5 +826,7 @@ void kernel_main() {
                                                         wr_block_idx);
     noc_async_write_barrier();
 
+#if ENABLE_DISPATCH_DPRINTS
     DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": out" << ENDL();
+#endif
 }
