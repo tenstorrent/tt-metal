@@ -49,6 +49,10 @@
         <h2>{{ operation.operation_id }}: {{ operation.name }}</h1> <br>
     </div>
     <div>
+        <pre><code class="python">{{ stack_trace }}</code></pre>
+        <a href=" /operation_stack_trace/{{operation.operation_id}}">Open Full Stack Trace</a>
+        </div>
+        <div>
         <h3>Arguments</h3>
         <table>
             <tr>
@@ -67,9 +71,7 @@
         <table>
             <tr>
                 <th>Index</th>
-                <th>Shape</th>
-                <th>Dtype</th>
-                <th>Layout</th>
+                <th>Attributes</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
                 <th>File Name</th>
@@ -77,9 +79,7 @@
             {% for tensor_record, tensor in input_tensors %}
             <tr>
                 <td>{{loop.index0}}</td>
-                <td>{{tensor_record.shape}}</td>
-                <td>{{tensor_record.dtype}}</td>
-                <td>{{tensor_record.layout}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
                 <td>{{get_tensor_statistics(tensor)| safe}} </td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
@@ -96,9 +96,7 @@
         <table>
             <tr>
                 <th>Index</th>
-                <th>Shape</th>
-                <th>Dtype</th>
-                <th>Layout</th>
+                <th>Attributes</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
                 <th>Matches Locally</th>
@@ -108,9 +106,7 @@
             {% for tensor_record, tensor in output_tensors %}
             <tr>
                 <td>{{loop.index0}}</td>
-                <td>{{tensor_record.shape}}</td>
-                <td>{{tensor_record.dtype}}</td>
-                <td>{{tensor_record.layout}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
                 <td>{{get_tensor_statistics(tensor)| safe}} </td>
 
                 <td>
@@ -142,9 +138,7 @@
         <table>
             <tr>
                 <th>Index</th>
-                <th>Shape</th>
-                <th>Dtype</th>
-                <th>Layout</th>
+                <th>Attributes</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
                 <th>File Name</th>
@@ -153,9 +147,7 @@
             local_golden_tensors.items() %}
             <tr>
                 <td>{{output_tensor_index}}</td>
-                <td>{{tensor_record.shape}}</td>
-                <td>{{tensor_record.dtype}}</td>
-                <td>{{tensor_record.layout}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
                 <td>{{get_tensor_statistics(tensor)| safe}} </td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
@@ -171,9 +163,7 @@
         <table>
             <tr>
                 <th>Index</th>
-                <th>Shape</th>
-                <th>Dtype</th>
-                <th>Layout</th>
+                <th>Attributes</th>
                 <th>Statistics</th>
                 <th>1024x1024 Chunk of Face 0</th>
                 <th>File Name</th>
@@ -182,9 +172,7 @@
             global_golden_tensors.items() %}
             <tr>
                 <td>{{output_tensor_index}}</td>
-                <td>{{tensor_record.shape}}</td>
-                <td>{{tensor_record.dtype}}</td>
-                <td>{{tensor_record.layout}}</td>
+                <td> {{get_tensor_attributes(tensor_record) | safe }} </td>
                 <td>{{get_tensor_statistics(tensor)| safe}}</td>
                 <td>
                     {% set tensor_script, tensor_div = plot_tensor(tensor) %}
@@ -195,7 +183,7 @@
             {% endfor %}
         </table>
         {% endif %}
-        </div>
+    </div>
 </body>
 
 </html>

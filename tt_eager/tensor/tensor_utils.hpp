@@ -112,6 +112,26 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
     }
     return transformed_tensors;
 }
+
+inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+
+inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE;
+}
+
+inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
+    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
+}
+
+inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
+    for (const auto& tensor : tensors) {
+        if (is_tensor_on_multi_device(tensor)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace tt_metal
 
 } // namespace tt

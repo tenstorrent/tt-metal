@@ -80,6 +80,7 @@ class Tensor:
     shape: str
     dtype: str
     layout: str
+    memory_config: str
     device_id: int
     address: int
     buffer_type: ttnn.BufferType
@@ -120,8 +121,6 @@ class OperationArgument:
 
 def delete_reports():
     global SQLITE_CONNECTION
-    if not ttnn.CONFIG.delete_reports_on_start:
-        return
     logger.debug(f"Deleting reports from {ttnn.CONFIG.reports_path} and closing the sqlite connection.")
     if SQLITE_CONNECTION is not None:
         SQLITE_CONNECTION.close()
@@ -135,7 +134,6 @@ def get_or_create_sqlite_db():
     if SQLITE_CONNECTION is not None:
         return SQLITE_CONNECTION
 
-    delete_reports()
     logger.debug(
         f"Creating reports path at {ttnn.CONFIG.reports_path} and sqlite database at {ttnn.CONFIG.sqlite_db_path}."
     )
@@ -168,7 +166,7 @@ def get_or_create_sqlite_db():
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS tensors
-                (tensor_id int UNIQUE, shape text, dtype text, layout text, device_id int, address int, buffer_type int)"""
+                (tensor_id int UNIQUE, shape text, dtype text, layout text, memory_config text, device_id int, address int, buffer_type int)"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS local_tensor_comparison_records
@@ -255,9 +253,11 @@ def insert_devices(devices):
         DEVICE_IDS_IN_DATABASE.add(device.id())
 
 
-def optional_value(value):
+def optional_value(value, text=False):
     if value is None:
         return "NULL"
+    if text:
+        return f"'{value}'"
     return value
 
 
@@ -304,10 +304,12 @@ def insert_tensor(tensor):
     if ttnn.is_tensor_storage_on_device(tensor) and tensor.is_allocated():
         address = tensor.buffer_address()
         device_id = tensor.device().id()
-        buffer_type = ttnn.get_memory_config(tensor).buffer_type.value
+        memory_config = ttnn.get_memory_config(tensor)
+        buffer_type = memory_config.buffer_type.value
     else:
         address = None
         device_id = None
+        memory_config = None
         buffer_type = None
 
     cursor.execute(
@@ -317,6 +319,7 @@ def insert_tensor(tensor):
             '{tensor.shape}',
             '{tensor.dtype}',
             '{tensor.layout}',
+            {optional_value(memory_config, text=True)},
             {optional_value(device_id)},
             {optional_value(address)},
             {optional_value(buffer_type)})"""
@@ -494,14 +497,14 @@ def get_tensor_file_name_by_id(tensor_id):
     return None
 
 
-def load_tensor_by_id(tensor_id):
+def load_tensor_by_id(tensor_id, device=None):
     import torch
 
     tensors_path = ttnn.CONFIG.reports_path / "tensors"
     tensors_path.mkdir(parents=True, exist_ok=True)
     tensor_path = tensors_path / f"{tensor_id}.bin"
     if tensor_path.exists():
-        return ttnn.load_tensor(tensor_path)
+        return ttnn.load_tensor(tensor_path, device=device)
     tensor_path = tensors_path / f"{tensor_id}.pt"
     if tensor_path.exists():
         return torch.load(tensor_path)
@@ -577,10 +580,11 @@ def insert_tensor_comparison_records(table_name, tensor_comparison_records, gold
         )
     sqlite_connection.commit()
 
-    for tensor in golden_tensors:
-        insert_tensor(tensor)
-        if ttnn.CONFIG.enable_detailed_tensor_report:
-            store_tensor(tensor)
+    if golden_tensors is not None:
+        for tensor in golden_tensors:
+            insert_tensor(tensor)
+            if ttnn.CONFIG.enable_detailed_tensor_report:
+                store_tensor(tensor)
 
 
 def query_device_by_id(device_id):

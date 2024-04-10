@@ -309,6 +309,17 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
     )
 
 
+def _golden_function(tensor, *, torch_rank=None, **kwargs):
+    if torch_rank is None:
+        return tensor
+
+    while len(tensor.shape) != torch_rank:
+        if tensor.shape[0] != 1:
+            raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+        tensor = tensor.squeeze()
+    return tensor
+
+
 class TorchTensor(torch.Tensor):
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -319,7 +330,9 @@ class TorchTensor(torch.Tensor):
         return super().__torch_function__(func, types, args, kwargs)
 
 
-@ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
+@ttnn.register_operation(
+    name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors, golden_function=_golden_function
+)
 def to_torch(
     tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensor] = None
 ) -> "torch.Tensor":
@@ -877,7 +890,7 @@ def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwar
 
 
 @ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=_load_tensor_validate_input_tensors)
-def load_tensor(file_name: Union[str, pathlib.Path]) -> ttnn.Tensor:
+def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
@@ -885,7 +898,7 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> ttnn.Tensor:
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
 
     def impl(file_name):
-        return ttl.tensor.load_tensor(str(file_name))
+        return ttl.tensor.load_tensor(str(file_name), device)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) load_tensor")(file_name)
 

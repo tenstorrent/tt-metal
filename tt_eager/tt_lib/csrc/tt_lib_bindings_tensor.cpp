@@ -252,14 +252,14 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def(
         "dump_memory_config",
-        &dump_memory_config,
+        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
         R"doc(
             Dump memory config to file
         )doc");
 
     m_tensor.def(
         "load_memory_config",
-        &load_memory_config,
+        py::overload_cast<const std::string&>(&load_memory_config),
         R"doc(
             Load memory config to file
         )doc");
@@ -769,10 +769,11 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def(
         "load_tensor",
         &load_tensor,
+        py::arg("file_name"),
+        py::arg("device") = nullptr,
         R"doc(
             Load tensor to file
-        )doc"
-    );
+        )doc");
 
     m_tensor.def(
         "num_cores_to_corerange_set",

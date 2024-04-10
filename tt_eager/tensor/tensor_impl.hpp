@@ -877,10 +877,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             layout);
     }
 
-    if (tensor.storage_type() == StorageType::DEVICE) {
-        return to_string<T>(to_host<T>(tensor));
-    }
-    if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
+    if (is_tensor_on_device_or_multidevice(tensor)) {
         return to_string<T>(to_host<T>(tensor));
     }
 
