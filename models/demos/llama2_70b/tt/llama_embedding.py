@@ -5,8 +5,6 @@
 import torch
 import ttnn
 
-from models.demos.llama2_70b.tt.llama_common import get_weight_cache_path
-
 
 class TtLlamaEmbedding(torch.nn.Module):
     def __init__(
@@ -24,13 +22,14 @@ class TtLlamaEmbedding(torch.nn.Module):
         base_name = "tok_embeddings.weight"
         torch_weights = torch.chunk(self.state_dict[base_name], self.num_devices, dim=-1)
 
+        cache_name = lambda name, device_id: cache_path / (f"{name}_{device_id}_{self.num_devices}")
         as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
             tensor,
             dtype=ttnn.bfloat16,  # row_major has to be bfloat16 for now
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.devices[device_id],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_weight_cache_path(cache_path, name, device_id, self.num_devices),
+            cache_file_name=cache_name(name, device_id),
         )
 
         self.embd_weights = [
