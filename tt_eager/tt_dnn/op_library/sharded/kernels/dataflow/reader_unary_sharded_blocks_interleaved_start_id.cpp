@@ -68,16 +68,23 @@ void kernel_main() {
         }
         l1_write_addr += padded_offset_bytes;
         curr_tile_id += input_width_offset_tiles;
+        if constexpr (convert_df && reserving_kernel) {
+            // push back early for data to be converted as soon as possible
+            cb_push_back(cb_id_in0, block_width_tiles);
+        }
     }
     noc_async_read_barrier();
-    if (convert_df) {
-        if (reserving_kernel) {
+    if constexpr (convert_df) {
+        if constexpr (reserving_kernel) {
             cb_reserve_back(cb_id_sync, 1);
             cb_push_back(cb_id_sync, 1);
         } else {
             cb_wait_front(cb_id_sync, 2);
             cb_pop_front(cb_id_sync, 2);
-            cb_push_back(cb_id_in0, all_block_num_tiles);
+            // push back per row to avoid issues with odd heights not dividing the CB size evenly
+            for (uint32_t h = 0; h < block_height_tiles; h++) {
+                cb_push_back(cb_id_in0, block_width_tiles);
+            }
         }
     }
 }
