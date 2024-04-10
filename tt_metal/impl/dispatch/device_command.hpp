@@ -46,7 +46,7 @@ class DeviceCommand {
         uint16_t packed_data_sizeB,
         uint32_t payload_sizeB,
         const std::vector<PackedSubCmd> &sub_cmds,
-        const std::vector<std::pair<const void *, uint32_t>> &data_and_size_descriptors) {
+        const std::vector<const void *> &data_collection) {
         static_assert(std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
         bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
@@ -71,8 +71,8 @@ class DeviceCommand {
         this->write_to_cmd_sequence(sub_cmds.data(), sub_cmds_sizeB, L1_ALIGNMENT);
 
         // copy the actual data
-        for (const std::pair<const void *, uint32_t> &data_and_size : data_and_size_descriptors) {
-            this->write_to_cmd_sequence(data_and_size.first, data_and_size.second, L1_ALIGNMENT);
+        for (const void *data : data_collection) {
+            this->write_to_cmd_sequence(data, packed_data_sizeB, L1_ALIGNMENT);
         }
 
         this->cmd_write_idx += (align(this->cmd_write_idx, PCIE_ALIGNMENT / sizeof(uint32_t)) - this->cmd_write_idx);
