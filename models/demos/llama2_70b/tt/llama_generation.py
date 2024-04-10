@@ -55,6 +55,7 @@ class TtLlamaModelForGeneration:
         # First, determine whether this is decode or prefill based on shape of the input
         assert len(tokens.shape) == 2
         batch, seq_len = tokens.shape
+        seq_len = 1 if kwargs.get("decode_only", False) else seq_len
         if seq_len == 1:
             # Decode
             # if current model config is not for decode, change it to decode
@@ -79,7 +80,7 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos, *args, **kwargs)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
-        logger.info(f"Decoding {start_pos+1}th tokens")
+        logger.info(f"Decoding {start_pos+1}th tokens...")
 
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
 
