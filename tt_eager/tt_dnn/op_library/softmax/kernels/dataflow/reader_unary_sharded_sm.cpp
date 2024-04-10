@@ -43,11 +43,14 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
     #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
-        uint32_t fused_head = get_compile_time_arg_val(4);
+
+        constexpr uint32_t fused_head = get_compile_time_arg_val(4);
+        constexpr uint32_t mask_block_ht = get_compile_time_arg_val(6);
+
         for (uint32_t f = 0; f<fused_head; f++) {
             mask_id = mask_start_tile_id;
 
-            for (uint32_t h = 0; h<block_wt; h++) {
+            for (uint32_t h = 0; h<mask_block_ht; h++) {
                 cb_reserve_back(cb_attn, block_wt);
                 uint32_t l1_write_addr = get_write_ptr(cb_attn);
                 for (uint32_t w = 0; w<block_wt; w++) {
