@@ -5,8 +5,8 @@
 import pytest
 import torch
 
-from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.benchmarks.loglikelihood import (
+from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.benchmarks.loglikelihood import (
     compute_loglikelihood,
     compute_loglikelihood_given_prompt_and_target,
 )

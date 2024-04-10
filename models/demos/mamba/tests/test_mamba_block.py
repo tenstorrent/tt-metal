@@ -5,12 +5,12 @@
 import torch
 import pytest
 from loguru import logger
-
+from typing import Optional
 import ttnn
-from models.experimental.mamba.tt_opt.full_model import TtTensorLoader, MambaSsmBlockTransformer
-from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.tt_opt.mamba_block import TtMambaBlock
-from models.experimental.mamba.tt_opt import model_config
+from models.demos.mamba.tt.full_model import TtTensorLoader, MambaSsmBlockTransformer
+from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.mamba.tt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -29,18 +29,23 @@ class PytorchMambaBlock(torch.nn.Module):
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, pcc, enable_cache",
+    "model_version, batch, pcc, cache_dir",
     (
         (
             "state-spaces/mamba-2.8b",
             32,
             0.99,
-            False,
+            None,
         ),
     ),
 )
 def test_mamba_block_inference(
-    device: ttnn.Device, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool
+    device: ttnn.Device,
+    use_program_cache,
+    model_version: MambaPretrainedModelName,
+    batch: int,
+    pcc: float,
+    cache_dir: Optional[str],
 ):
     torch.manual_seed(0)
 
@@ -57,9 +62,8 @@ def test_mamba_block_inference(
     residual_block = reference_model.layers[LAYER_NUM]
     assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
 
-    if enable_cache:
-        cache_path = f"/tmp/{model_version}"
-        ttnn.enable_program_cache(device)
+    if cache_dir:
+        cache_path = model_config.get_weights_cache_path(model_version, cache_dir)
     else:
         cache_path = None
 

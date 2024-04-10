@@ -9,8 +9,8 @@ import torch
 
 from transformers import AutoTokenizer
 
-from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
+from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
 
 from lm_eval.api.model import LM
 from lm_eval.api.instance import Instance

@@ -8,9 +8,9 @@ import ttnn
 
 from typing import Callable
 
-from models.experimental.mamba.reference.args import ModelArgs
-from models.experimental.mamba.tt_opt.mamba_block import TtMambaBlock
-from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
+from models.demos.mamba.reference.args import ModelArgs
+from models.demos.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtResidualBlock(torch.nn.Module):
@@ -28,10 +28,11 @@ class TtResidualBlock(torch.nn.Module):
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba residual block expects inputs to be rank 4"
 
-        mamba_input = x
+        residual = x
         rms_norm_weights = ttnn.to_memory_config(self.rms_norm_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        mamba_input = ttnn.rms_norm(x, rms_norm_weights, epsilon=self.args.eps)
+        mamba_x = ttnn.rms_norm(x, rms_norm_weights, epsilon=self.args.eps)
         ttnn.deallocate(rms_norm_weights)
 
-        mamba_input = self.tt_mamba_block(mamba_input)
-        return ttnn.add(x, mamba_input)
+        mamba_x = self.tt_mamba_block(mamba_x)
+
+        return ttnn.add(residual, mamba_x)

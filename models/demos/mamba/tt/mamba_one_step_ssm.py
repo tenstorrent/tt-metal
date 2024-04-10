@@ -8,8 +8,8 @@ import ttnn
 import tt_lib as ttl
 from typing import Callable
 
-from models.experimental.mamba.reference.args import ModelArgs
-from models.experimental.mamba.tt_opt.transforms import MambaSsmBlockTransformer
+from models.demos.mamba.reference.args import ModelArgs
+from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtMambaSSM(torch.nn.Module):

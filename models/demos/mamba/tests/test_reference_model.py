@@ -5,12 +5,29 @@
 import torch
 import pytest
 from loguru import logger
-
+from typing import Optional
 from transformers import AutoTokenizer
 
-from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.experimental.mamba.reference.model import Mamba
-from models.experimental.mamba.reference.mamba_decode import generate_through_decode, generate_through_selective_scan
+from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.mamba.reference.model import Mamba
+
+
+def generate_through_selective_scan(
+    model, tokenizer, prompt: str, n_tokens_to_gen: int = 30, sample: bool = False, top_k: Optional[int] = None
+):
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    model.eval()
+    with torch.no_grad():
+        output = model.generate(input_ids, n_tokens_to_gen, sample=sample, top_k=top_k)
+    return [tokenizer.decode(out.tolist()) for out in output][0]
+
+
+def generate_through_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int = 51):
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    model.eval()
+    with torch.no_grad():
+        output = model.generate(input_ids, n_tokens_to_gen)
+    return tokenizer.batch_decode(output)[0]
 
 
 @pytest.mark.parametrize(
