@@ -17,7 +17,7 @@ class DeviceCommand {
     DeviceCommand(uint32_t cmd_sequence_sizeB);
 
     // Constants
-    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048; // TODO: Move this somewhere else
+    static constexpr uint32_t PROGRAM_PAGE_SIZE = 256; // TODO: Move this somewhere else
 
     uint32_t size_bytes() const { return this->cmd_sequence.size() * sizeof(uint32_t); }
 
