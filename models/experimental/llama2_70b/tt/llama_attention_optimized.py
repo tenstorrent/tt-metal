@@ -836,12 +836,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         fused_query_key_value = []
         # x: [1, 1, 128, 8192]
         # QKV: [8192,1280]
+        cores_y = 8 if (xs[0].shape[2] // 32) % 8 == 0 else 4
+        fused_qkv_prog_cfg = self.model_config["FUSED_QKV_MM_PROGCFG_LAMBDA"](cores_y)
         for i in range(len(xs)):
             fused_query_key_value.append(
                 tt_lib.operations.primary.matmul(
                     xs[i],
                     self.qkv_list[i],
-                    program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
+                    program_config=fused_qkv_prog_cfg,
                     # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"], # TODO: Spill to DRAM for now
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
@@ -912,7 +914,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         seq_len = query_layer[0].shape[2]
-        slice_size = 128
+        slice_size = 256 if seq_len == 2048 else 128
+        cores_y = 4 if slice_size == 128 else 8
         num_slices = seq_len // slice_size  # we do q_lens of 128 per iteration (slice), then we concat the result.
         attn_output_cat = []  # this is the output we write to. Initiate as empty tensors
         for i in range(len(query_layer)):
@@ -966,7 +969,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 q_slices.append(
                     tt_lib.tensor.interleaved_to_sharded_partial(
                         query_layer[i],
-                        (8, 4),
+                        (8, cores_y),
                         [32, self.head_dim],  # each slice is [1,8,128,128], we use 32 cores
                         num_slices,  # num_slices
                         slice_i,  # slice_index
@@ -977,7 +980,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_mask_slices.append(
                     tt_lib.tensor.interleaved_to_sharded_partial(
                         attn_masks[i],
-                        (8, 4),
+                        (8, cores_y),
                         [32, seq_len],  # each slice is [1,8,128,128], we use 32 cores
                         num_slices,  # num_slices
                         slice_i,  # slice_index
@@ -1078,12 +1081,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         #     attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
         #         attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
         #     )
-
+        seq_tiles = attn_output[0].shape[2] // 32
+        cores_y = 8 if seq_tiles % 8 == 0 else 4
+        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](seq_tiles, cores_y)
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.operations.primary.matmul(
                 attn_output[i],
                 self.wo_list[i],
-                program_config=self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](attn_output[i].shape[2] // 32),
+                program_config=dense_out_prog_cfg,
                 # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
