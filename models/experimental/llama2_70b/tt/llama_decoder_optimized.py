@@ -187,8 +187,8 @@ class TtLlamaDecoder_optimized:
             as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
                 tensor,
                 dtype=ttnn.bfloat16,
-                device=self.devices[device_id],
                 layout=ttnn.TILE_LAYOUT,
+                device=self.devices[device_id],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_weight_cache_path(self.cache_path, name, device_id, self.num_devices),
             )
@@ -210,8 +210,8 @@ class TtLlamaDecoder_optimized:
                     ttnn.as_tensor(
                         x_fractured[i],
                         dtype=ttnn.bfloat16,
-                        device=self.devices[i],
                         layout=ttnn.TILE_LAYOUT,
+                        device=self.devices[i],
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                 )
