@@ -108,7 +108,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         // Need to update the expected strings based on each core.
         for (string waypoint : {"AAAA", "BBBB", "CCCC"}) {
             if (is_eth_core) {
-                int k_id = 5 + 3 * (fixture->NumDevices()-1) + 4 * (device->id() + 1);
+                //     blank | prefetch, dispatch kernels | 4 kernels/prev device | brisc,ncrisc,trisc kernels on current device
+                int k_id = 1 + 2 * fixture->NumDevices() + 4 * device->id() + 3;
                 // Different k_ids for slow dispatch
                 if (fixture->IsSlowDispatch()) {
                     k_id = 4 * (device->id() + 1);
@@ -125,7 +126,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s
                 );
             } else {
-                int k_id = 5 + 3 * (fixture->NumDevices()-1) + 4 * device->id() + 1;
+                //     blank | prefetch, dispatch kernels | 4 kernels/prev device
+                int k_id = 1 + 4 * fixture->NumDevices() + 4 * device->id();
                 // Different k_ids for single chip
                 if (fixture->NumDevices() == 1) {
                     k_id = 3;
