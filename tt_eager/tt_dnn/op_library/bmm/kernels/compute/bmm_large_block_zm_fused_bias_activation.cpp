@@ -8,7 +8,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
-//#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -23,7 +23,6 @@ FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, 
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
-    tile_regs_acquire();
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
@@ -142,11 +141,9 @@ void MAIN {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
+                    tile_regs_acquire();
                     if (enable_reload) {
                         reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles, out_subblock_w, out_subblock_h, in0_block_w);
-                    } else {
-                        // just acquire
-                        tile_regs_acquire();
                     }
 
                     // Compute output sub-block
@@ -210,7 +207,7 @@ void MAIN {
                         #ifdef PACKER_L1_ACC
                             if (block == 0) { // no accumulation for first iteration
                                 PACK((  llk_pack_reconfig_l1_acc(0) ));
-                            } else if (block == 1){
+                            } else if (block == 1) {
                                 PACK((  llk_pack_reconfig_l1_acc(1) ));
                             }
                         #endif
@@ -227,20 +224,27 @@ void MAIN {
                 in0_index_subblock_offset += in0_subblock_num_tiles;
             }
 
+
             #ifdef PACKER_L1_ACC
                 #ifdef FUSE_BIAS
                     if (block < num_blocks - 1) {
+                        //Wait for l1 accumulation to populate interm buffer,
+                        //then pop to update fifo rd pointer
+                        cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
                         cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
                     }
-                    enable_reload = false; // never reload when with bias
+                    // never reload when with bias, bias uses interm buffer
+                    enable_reload = false;
                 #else
+                    //Last iteration does spill and reload to output buffer
                     if (block < num_blocks - 2) {
+                        cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
                         cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
                     }
-                    if (spill and block == num_blocks - 2) enable_reload = true; // reload when last iteration
+                    if (block == num_blocks - 2) { enable_reload = true; } // reload when last iteration
                 #endif
             #else
-                if (spill) enable_reload = true;
+                if constexpr (spill) { enable_reload = true; }
             #endif
 
             cb_pop_front(in0_cb_id, in0_block_num_tiles);

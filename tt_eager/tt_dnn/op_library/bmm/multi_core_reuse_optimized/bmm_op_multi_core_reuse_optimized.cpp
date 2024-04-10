@@ -33,11 +33,19 @@ operation::ProgramWithCallbacks create_program(
     bool untilize_out
 
 ) {
-
     tt_metal::Program program{};
+    uint32_t batch_scale_factor = per_core_M / M;
+    uint32_t num_blocks = (K/in0_block_w);
+
+    uint32_t in0_block_tiles = per_core_M * in0_block_w;
+    uint32_t in0_CB_tiles = in0_block_tiles;
+
+    //Only enable packer l1 accumulation when there are spills, otherwise
+    //unnecessary overhead for reconfigs are added
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -51,11 +59,6 @@ operation::ProgramWithCallbacks create_program(
     bool in1_is_sharded = in1.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    uint32_t batch_scale_factor = per_core_M / M;
-    uint32_t num_blocks = (K/in0_block_w);
-
-    uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles;
     if (in0_is_sharded) {
         in0_CB_tiles *= num_blocks;
     } else {
@@ -187,7 +190,7 @@ operation::ProgramWithCallbacks create_program(
     };
 
     std::map<string, string> mm_kernel_defines;
-    if (packer_l1_acc) {
+    if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
