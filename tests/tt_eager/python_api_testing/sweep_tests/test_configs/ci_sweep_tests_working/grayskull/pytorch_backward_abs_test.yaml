@@ -1,6 +1,6 @@
 ---
 test-list:
-  - unary-add-bw:
+  - abs-bw:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -18,13 +18,13 @@ test-list:
       args-gen: gen_scalar_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: backward_unary_add_sweep.csv
+      output-file: backward_abs_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
-  - unary-add-bw:
+  - abs-bw:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -45,6 +45,6 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: backward_unary_add_sweep.csv
+      output-file: backward_abs_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
