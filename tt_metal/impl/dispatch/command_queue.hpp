@@ -269,7 +269,9 @@ class EnqueueProgramCommand : public Command {
    public:
     EnqueueProgramCommand(uint32_t command_queue_id, Device* device, Program& program, SystemMemoryManager& manager, uint32_t expected_num_workers_completed);
 
+    const DeviceCommand assemble_preamble_commands();
     const DeviceCommand assemble_device_commands();
+    const vector<DeviceCommand> assemble_runtime_args_commands();
 
     void process();
 
