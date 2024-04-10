@@ -7,8 +7,8 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.demos.llama2_70b.reference.llama.llama import Llama
-from models.demos.llama2_70b.tt.model_config import (
+from models.experimental.llama2_70b.reference.llama.llama import Llama
+from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

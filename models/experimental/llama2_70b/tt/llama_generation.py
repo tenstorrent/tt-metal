@@ -9,8 +9,8 @@ import ttnn
 
 import copy
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
-from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
-from models.demos.llama2_70b.tt.llama_common import BASE_URL
+from models.experimental.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
+from models.experimental.llama2_70b.tt.llama_common import BASE_URL
 
 
 class TtLlamaModelForGeneration:
