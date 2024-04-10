@@ -41,9 +41,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
+    //Only enable packer l1 accumulation when there are spills, otherwise
+    //unnecessary overhead for reconfigs are added
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -259,7 +262,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
         }
     }
-    if (packer_l1_acc) {
+    if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
@@ -632,9 +635,12 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
+    //Only enable packer l1 accumulation when there are spills, otherwise
+    //unnecessary overhead for reconfigs are added
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -832,7 +838,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
         }
     }
-    if (packer_l1_acc) {
+    if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {

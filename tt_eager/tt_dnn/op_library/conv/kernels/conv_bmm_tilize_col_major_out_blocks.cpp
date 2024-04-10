@@ -279,25 +279,32 @@ void MAIN {
                 #ifdef PACKER_L1_ACC
                     #ifdef FUSE_BIAS
                         if (in0_block_w_i < in0_num_blocks_w  - 1) {
+                            //Wait for l1 accumulation to populate interm buffer,
+                            //then pop to update fifo rd pointer
+                            cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                             cb_pop_front(matmul_partials_cb, out_block_num_tiles);
                         }
-                        enable_reload = false; // never reload when with bias
+                        // never reload when with bias, bias uses interm buffer
+                        enable_reload = false;
                     #else
+                        //Last iteration does spill and reload to output buffer
                         if (in0_block_w_i < in0_num_blocks_w  - 2) {
+                            cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                             cb_pop_front(matmul_partials_cb, out_block_num_tiles);
                         }
-                        if (spill and (in0_block_w_i == in0_num_blocks_w - 2)) enable_reload = true; // reload when last iteration
+                        if (in0_block_w_i == in0_num_blocks_w - 2) { enable_reload = true; }
                     #endif
                 #else
-                    if (spill) enable_reload = true;
+                    if constexpr (spill) { enable_reload = true; }
                 #endif
 
-                if(spill) {
+                if constexpr (spill) {
                     if (!last_out) {
                         UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
                         PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
                     }
                 }
+
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
