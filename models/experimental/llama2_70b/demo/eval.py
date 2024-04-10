@@ -188,6 +188,7 @@ class Args:
         n_devices=8,
         emulated=False,
         cache_path=None,
+        decode_only=False,
         # Dataset args
         dataset="wikitext",
         split="test",
@@ -214,6 +215,7 @@ class Args:
         self.n_devices = n_devices
         self.emulated = emulated
         self.cache_path = cache_path
+        self.decode_only = decode_only
         self.dataset = dataset
         self.split = split
         self.config = config
