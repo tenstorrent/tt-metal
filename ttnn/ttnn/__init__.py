@@ -365,6 +365,7 @@ from ttnn.operations.activation import (
     geglu,
     reglu,
     swiglu,
+    celu,
 )
 
 from ttnn.operations.math import (

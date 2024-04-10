@@ -82,6 +82,7 @@ Pointwise Unary
    ttnn/atan2
    ttnn/atanh
    ttnn/cbrt
+   ttnn/celu
    ttnn/clip
    ttnn/clone
    ttnn/cos

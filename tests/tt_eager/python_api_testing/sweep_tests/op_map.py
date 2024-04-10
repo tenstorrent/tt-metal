@@ -546,6 +546,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_addcmul,
         "pytorch_op": pytorch_ops.addcmul,
     },
+    "eltwise-celu": {
+        "tt_lib_op": tt_lib_ops.eltwise_celu,
+        "pytorch_op": pytorch_ops.celu,
+    },
     "eltwise-addcdiv": {
         "tt_lib_op": tt_lib_ops.eltwise_addcdiv,
         "pytorch_op": pytorch_ops.addcdiv,

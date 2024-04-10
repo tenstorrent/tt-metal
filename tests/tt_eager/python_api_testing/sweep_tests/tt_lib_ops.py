@@ -936,6 +936,24 @@ def eltwise_subalpha(
 
 
 @setup_host_and_device
+def eltwise_celu(
+    x,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t2 = ttl.tensor.celu(t0, alpha, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
 def eltwise_logit(x, *args, eps, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.logit(t0, eps, output_mem_config=output_mem_config)
