@@ -207,7 +207,13 @@ class TtLlamaDecoder_optimized:
             xs, cos_gathereds, sin_gathereds, attn_masks = [], [], [], []
             for i in range(self.num_devices):
                 xs.append(
-                    ttnn.as_tensor(x_fractured[i], dtype=ttnn.bfloat16, device=self.devices[i], layout=ttnn.TILE_LAYOUT)
+                    ttnn.as_tensor(
+                        x_fractured[i],
+                        dtype=ttnn.bfloat16,
+                        device=self.devices[i],
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 )
                 cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", i))
                 sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", i))
