@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/serialization.hpp"
-#include "tensor/borrowed_buffer_functions.hpp"
-#include "tensor/owned_buffer_functions.hpp"
 
 #include <fstream>
 #include <iostream>
 #include <string>
+
+#include "tensor/borrowed_buffer_functions.hpp"
+#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/tensor_utils.hpp"
 
 namespace tt {
 
@@ -163,6 +165,20 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     output_stream.write(reinterpret_cast<const char*>(&layout), sizeof(Layout));
     output_stream.write(reinterpret_cast<const char*>(&storage_type), sizeof(StorageType));
 
+    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
+    bool has_memory_config = is_on_device;
+    if (VERSION_ID >= 2) {
+        output_stream.write(reinterpret_cast<const char*>(&has_memory_config), sizeof(bool));
+        if (has_memory_config) {
+            tt::tt_metal::dump_memory_config(output_stream, tensor.memory_config());
+        }
+    }
+
+    Tensor tensor_to_dump = tensor;
+    if (is_on_device) {
+        tensor_to_dump = tensor_to_dump.cpu();
+    }
+
     std::visit(
         [&output_stream](const auto& storage) {
 
@@ -186,10 +202,10 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
                 raise_unsupported_storage<StorageType>();
             }
         },
-        tensor.get_storage());
+        tensor_to_dump.get_storage());
 }
 
-Tensor load_tensor(const std::string& file_name) {
+Tensor load_tensor(const std::string& file_name, Device* device) {
     ifstream input_stream(file_name, ios::in | ios::binary);
     if (not input_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
@@ -212,8 +228,26 @@ Tensor load_tensor(const std::string& file_name) {
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
         input_stream.read(reinterpret_cast<char*>(&storage_type), sizeof(StorageType));
 
+        bool has_memory_config = false;
+        MemoryConfig memory_config = MemoryConfig{
+            .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+
+        if (version_id >= 2) {
+            input_stream.read(reinterpret_cast<char*>(&has_memory_config), sizeof(bool));
+            if (has_memory_config) {
+                memory_config = tt::tt_metal::load_memory_config(input_stream);
+            }
+        }
+
         auto storage = detail::load_storage(input_stream, data_type, storage_type);
-        return Tensor(std::move(storage), shape, data_type, layout);
+
+        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        if (device != nullptr) {
+            tensor = tensor.to(device, memory_config);
+        } else if (has_memory_config) {
+            tt::log_warning("Memory config is ignored when loading the tensor because device is not provided");
+        }
+        return tensor;
 
     } else {
         input_stream.seekg(0, ios::beg); // No sentinel found, assume it's an older format and rewind
@@ -226,10 +260,9 @@ Tensor load_tensor(const std::string& file_name) {
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 
         auto storage = detail::load_owned_storage(input_stream, data_type);
-        return Tensor(std::move(storage), shape, data_type, layout);
+        return Tensor(std::move(storage), shape, data_type, layout).to(device);
     }
 }
-
 
 }  // namespace tt_metal
 

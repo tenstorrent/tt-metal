@@ -105,6 +105,10 @@ def run_functional_t5_question_and_answering_inference(
 
     decoded_tt_output = []
 
+    convert_to_ttnn = (
+        ttnn_optimized_functional_t5.convert_to_ttnn if use_optimized_version else ttnn_functional_t5.convert_to_ttnn
+    )
+
     custom_preprocessor = (
         ttnn_optimized_functional_t5.custom_preprocessor
         if use_optimized_version
@@ -115,6 +119,7 @@ def run_functional_t5_question_and_answering_inference(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
+        convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
@@ -169,6 +174,11 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     decoded_tt_output = []
 
     tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name
+
+    convert_to_ttnn = (
+        ttnn_optimized_functional_t5.convert_to_ttnn if use_optimized_version else ttnn_functional_t5.convert_to_ttnn
+    )
+
     custom_preprocessor = (
         ttnn_optimized_functional_t5.custom_preprocessor
         if use_optimized_version
@@ -178,6 +188,7 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
+        convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )

@@ -74,7 +74,7 @@ def comparison_percentages(table_name, operation_id):
             percentages.append(tensor_comparison_record.actual_pcc / tensor_comparison_record.desired_pcc)
 
     if not percentages:
-        return "Couldn't compare (Does the operation have a golden function?)"
+        return "Comparison N/A"
 
     percentage = sum(percentages) / len(percentages)
     return f"{percentage:.6f}"
@@ -616,7 +616,7 @@ def operation_tensor_report(operation_id):
         if tensor.dtype == torch.bfloat16:
             tensor = tensor.float()
 
-        tensor = tensor.numpy()
+        tensor = tensor.detach().numpy()
 
         if tensor.ndim == 1:
             tensor = tensor.reshape(1, -1)
@@ -639,6 +639,22 @@ def operation_tensor_report(operation_id):
 
         return components(plot)
 
+    def get_tensor_attributes(tensor_record):
+        output = "<table>"
+        output += f"""
+            <tr><th>Shape</th><th>{tensor_record.shape}</th></tr>
+            <tr><th>Dtype<t/h><th>{tensor_record.dtype}</th></tr>
+            <tr><th>Layout</th><th>{tensor_record.layout}</th></tr>
+        """
+        if tensor_record.memory_config is not None:
+            tensor_memory_config = tensor_record.memory_config.replace("(", "(<br>").replace(",", ",<br>")
+            output += f"""
+                <tr><th>Device<t/h><th>{tensor_record.device_id}</th></tr>
+                <tr><th>Memory Config</th><th>{tensor_memory_config}</th></tr>
+            """
+        output += "</table>"
+        return output
+
     def get_tensor_statistics(tensor):
         if tensor is None:
             return ""
@@ -656,7 +672,14 @@ def operation_tensor_report(operation_id):
             "Var": tensor.var().item(),
         }
 
-        return pd.DataFrame(statistics, index=[0]).to_html(index=False, justify="center")
+        output = "<table>"
+        for key, value in statistics.items():
+            output += f"<tr><th>{key}</th><th>{value}</th></tr>"
+        output += "</table>"
+        return output
+
+    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    stack_trace = shorten_stack_trace(stack_trace)
 
     return render_template(
         "operation_tensor_report.html",
@@ -671,7 +694,9 @@ def operation_tensor_report(operation_id):
         display_tensor_comparison_record=display_tensor_comparison_record,
         plot_tensor=plot_tensor,
         get_tensor_file_name_by_id=ttnn.database.get_tensor_file_name_by_id,
+        get_tensor_attributes=get_tensor_attributes,
         get_tensor_statistics=get_tensor_statistics,
+        stack_trace=stack_trace,
     )
 
 
