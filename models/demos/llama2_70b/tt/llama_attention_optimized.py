@@ -326,7 +326,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", device_id))
                 sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", device_id))
 
-            rot_mats = [cos_gathereds, sn_gathereds]
+            rot_mats = [cos_gathereds, sin_gathereds]
 
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
