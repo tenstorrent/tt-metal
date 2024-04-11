@@ -17,7 +17,7 @@ class DeviceCommand {
     DeviceCommand(uint32_t cmd_sequence_sizeB);
 
     // Constants
-    static constexpr uint32_t PROGRAM_PAGE_SIZE = 256; // TODO: Move this somewhere else
+    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;  // TODO: Move this somewhere else
 
     uint32_t size_bytes() const { return this->cmd_sequence.size() * sizeof(uint32_t); }
 
@@ -29,7 +29,7 @@ class DeviceCommand {
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 
-    void add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages);
+    void add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, uint16_t length_adjust = 0);
 
     void add_dispatch_write_linear(bool flush_prefetch, uint8_t num_mcast_dests, uint32_t noc_xy_addr, uint32_t addr, uint32_t data_sizeB, const void *data = nullptr);
 
