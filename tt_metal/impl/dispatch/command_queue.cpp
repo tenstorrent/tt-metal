@@ -489,12 +489,15 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
             for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
                 command_sequence.add_dispatch_write_linear(
-                    false, // flush_prefetch
-                    dst_noc_info.second, // num_mcast_dests
-                    dst_noc_info.first, // noc_xy_addr
+                    false,                // flush_prefetch
+                    dst_noc_info.second,  // num_mcast_dests
+                    dst_noc_info.first,   // noc_xy_addr
                     kg_transfer_info.dst_base_addrs[kernel_idx],
-                    align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE)
-                );
+                    align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
+                // Difference between prefetch total relayed pages and dispatch write linear
+                uint32_t relayed_bytes = align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE);
+                // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
+                uint16_t length_adjust = uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
 
                 uint32_t base_address, page_offset;
                 if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
@@ -508,12 +511,12 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                 }
 
                 command_sequence.add_prefetch_relay_paged(
-                    true, // is_dram
+                    true,  // is_dram
                     page_offset,
                     base_address,
                     this->program.kg_buffers[buffer_idx]->page_size(),
-                    align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE) / this->program.kg_buffers[buffer_idx]->page_size()
-                );
+                    relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
+                    length_adjust);
             }
         }
     }
