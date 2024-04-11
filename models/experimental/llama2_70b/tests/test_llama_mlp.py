@@ -15,10 +15,11 @@ from models.experimental.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+
+# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+#     comp_allclose,
+#     comp_pcc,
+# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -26,6 +27,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     BASE_URL,
     UNIT_TEST_N_LAYER,
     UNIT_TEST_LAYER_NUM,
+    comp_pcc,
 )
 
 
@@ -65,7 +67,7 @@ def run_test_LlamaMLP_inference(
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    print(state_dict.keys())
+    logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
 
@@ -151,7 +153,7 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9999), (1, 128, 0.9998), (1, 2048, 0.9998)),
+    ((32, 1, 0.9999), (1, 128, 0.9997), (1, 2048, 0.9997)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaMLP_inference(

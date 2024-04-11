@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+from typing import List
 import torch
 from torch import nn
 import tt_lib
@@ -21,7 +22,6 @@ class TtLlamaMLP_optimized(nn.Module):
         hidden_size: int,
         model_config,
         emulated=False,
-        load_weights=True,
         cache_path=None,
     ):
         super().__init__()
@@ -29,28 +29,18 @@ class TtLlamaMLP_optimized(nn.Module):
         self.state_dict = state_dict
         self.devices = devices
         self.num_devices = len(devices)
-        self.hidden_size = hidden_size
         self.model_config = model_config
         self.emulated = emulated
-        self.cache_path = cache_path
+
+        self.hidden_size = hidden_size
 
         self.layer_name = f"{base_url}.{layer_num}"
+        self.cache_path = cache_path
 
-        if load_weights:
-            self.load_weights()
+        self.load_weights()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-
-    def free_weights(self):
-        # Free weights
-        for i in range(self.num_devices):
-            self.w1_list[i].deallocate(True)
-            self.w3_list[i].deallocate(True)
-            self.w2_list[i].deallocate(True)
-        del self.w1_list
-        del self.w3_list
-        del self.w2_list
 
     def load_weights(self):
         assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
@@ -144,8 +134,6 @@ class TtLlamaMLP_optimized(nn.Module):
 
     def prepare_inputs(self, x):
         if self.model_config["LLM_MODE"] == "decode":
-            batch, seq_len = 32, 1
-            assert x.size() == (seq_len, 1, batch, self.hidden_size)
             x_multichip = []
             for i in range(self.num_devices):
                 x_multichip.append(
@@ -173,17 +161,17 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
             return x_multichip
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
+        # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
         elif self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(x)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def prefill_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
         w1_outs = []
         w3_outs = []
@@ -254,7 +242,7 @@ class TtLlamaMLP_optimized(nn.Module):
 
         return hidden_states
 
-    def decode_forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def decode_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
         w1_outs = []
         w3_outs = []
@@ -265,7 +253,7 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w1_list[i],
                     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
@@ -276,7 +264,7 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w3_list[i],
                     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
@@ -317,7 +305,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 self.w2_list[i],
                 program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
                 output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
+                output_dtype=self.model_config["BFP8_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 

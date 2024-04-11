@@ -11,10 +11,7 @@ import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, pad_by_zero
 from models.experimental.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
     gather_rotary_emb,
-    get_weight_cache_path,
     generate_rot_emb,
 )
 from models.experimental.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
@@ -29,10 +26,9 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         layer_num,
         model_config,
         configuration,
+        transformation_mats,
         emulated=False,
-        load_weights=True,
         cache_path=None,
-        kv_cache_dir=None,
     ):
         super().__init__()
 
@@ -76,9 +72,8 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
                 model_config,
                 configuration,
                 emulated,
-                load_weights,
+                transformation_mats,
                 cache_path,
-                kv_cache_dir,
                 batch_size=self.batch_size_per_device_group,
             )
             for i in range(self.num_device_groups)

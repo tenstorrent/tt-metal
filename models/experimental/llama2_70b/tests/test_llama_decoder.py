@@ -16,10 +16,11 @@ from models.experimental.llama2_70b.reference.llama.llama.model import precomput
 from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+
+# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+#     comp_allclose,
+#     comp_pcc,
+# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -30,6 +31,8 @@ from models.experimental.llama2_70b.tt.llama_common import (
     UNIT_TEST_LAYER_NUM,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
+    comp_pcc,
+    get_rot_transformation_mat,
 )
 
 
@@ -119,13 +122,16 @@ def run_test_LlamaDecoder_inference(
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    print(state_dict.keys())
+    logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
+    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
     if n_devices == 32:
         tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
             devices,
@@ -135,6 +141,7 @@ def run_test_LlamaDecoder_inference(
             model_config,
             configuration,
             batch,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )
@@ -147,6 +154,7 @@ def run_test_LlamaDecoder_inference(
             model_config,
             configuration,
             batch,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )
@@ -292,7 +300,7 @@ def run_test_LlamaDecoder_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9993), (1, 128, 0.9994), (1, 2048, 0.9992)),
+    ((32, 1, 0.9993), (1, 128, 0.9996), (1, 2048, 0.9994)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaDecoder_inference(
