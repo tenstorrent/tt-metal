@@ -136,10 +136,12 @@ void Tensor::deallocate(bool force) {
                                         std::visit([force, worker] (auto&& s) {
                                             using type = std::decay_t<decltype(s)>;
                                             if constexpr (std::is_same_v<type, MultiDeviceStorage>) {
-                                                if (force or s.buffers.at(worker->id()).use_count() == 1) {
-                                                    DeallocateBuffer(*(s.buffers.at(worker->id())));
+                                                if (s.num_buffers()) {
+                                                    if (force or s.buffers.at(worker->id()).use_count() == 1) {
+                                                        DeallocateBuffer(*(s.buffers.at(worker->id())));
+                                                    }
+                                                    s.buffers.at(worker->id()).reset();
                                                 }
-                                                s.buffers.at(worker->id()).reset();
                                             }
                                         }, this->tensor_attributes->storage);
                                     });
@@ -392,7 +394,12 @@ Tensor Tensor::cpu(bool blocking) const {
             else {
                 host_tensor.set_populated(target_device);
             }
-        }, blocking);
+        });
+    }
+    if (blocking) {
+        for (auto target_device : workers) {
+            target_device->synchronize();
+        }
     }
     // Update main_thread_ref_count for tensor after pushing to queue.
     this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);

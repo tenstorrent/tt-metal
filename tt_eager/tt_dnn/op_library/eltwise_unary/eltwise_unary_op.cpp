@@ -339,12 +339,6 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 //unary op version tie
 template<BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-  if (is_multi_device_tensor(input_tensor)) {
-    return transform(input_tensor, [&](const Tensor& tensor) {
-        return tie_binop_to_unary<OP>(tensor, value, output_mem_config);
-    });
-  }
-
   Tensor t_value = mk_tiled_scalar(value);
   return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }

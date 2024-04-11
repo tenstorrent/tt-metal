@@ -74,42 +74,48 @@ inline Tensor bcast(
     BcastOpMath bcast_op,
     BcastOpDim bcast_dim,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
 
-    if (bcast_dim == BcastOpDim::W) {
-        TT_FATAL(input_tensor_a.get_legacy_shape()[2] == input_tensor_b.get_legacy_shape()[2]);
-        if (input_tensor_b.get_layout() == Layout::TILE) {
-            TT_FATAL(input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
-            TT_FATAL(input_tensor_b.get_legacy_shape()[3] == 1 || input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
-        } else {
-            TT_FATAL(false, "Unsupported layout");
-        }
-    } else if (bcast_dim == BcastOpDim::H) {
-        TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[3]);
-        if (input_tensor_b.get_layout() == Layout::TILE) {
-            TT_FATAL(input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
-            TT_FATAL(input_tensor_b.get_legacy_shape()[2] == 1 || input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
-        } else {
-            TT_FATAL(false, "Unsupported layout");
-        }
-    } else if (bcast_dim == BcastOpDim::HW) {
-        if (input_tensor_b.get_layout() == Layout::TILE) {
-            TT_FATAL(
-                input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
-                input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
-            TT_FATAL(
-                (input_tensor_b.get_legacy_shape()[2] == 1 && input_tensor_b.get_legacy_shape()[3] == 1) ||
-                (input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
-                 input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH));
-        }
-    }
-    return operation::run_with_autoformat(
-               EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config, false}, {input_tensor_a, input_tensor_b})
-        .at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_with_autoformat(
+        [bcast_op, bcast_dim, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            using tt::constants::TILE_HEIGHT;
+            using tt::constants::TILE_WIDTH;
+            auto& input_tensor_a = input_tensors.at(0);
+            auto& input_tensor_b = input_tensors.at(1);
+            if (bcast_dim == BcastOpDim::W) {
+                TT_FATAL(input_tensor_a.get_legacy_shape()[2] == input_tensor_b.get_legacy_shape()[2]);
+                if (input_tensor_b.get_layout() == Layout::TILE) {
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[3] == 1 || input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                } else {
+                    TT_FATAL(false, "Unsupported layout");
+                }
+            } else if (bcast_dim == BcastOpDim::H) {
+                TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[3]);
+                if (input_tensor_b.get_layout() == Layout::TILE) {
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
+                } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[2] == 1 || input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
+                } else {
+                    TT_FATAL(false, "Unsupported layout");
+                }
+            } else if (bcast_dim == BcastOpDim::HW) {
+                if (input_tensor_b.get_layout() == Layout::TILE) {
+                    TT_FATAL(
+                        input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
+                        input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+                    TT_FATAL(
+                        (input_tensor_b.get_legacy_shape()[2] == 1 && input_tensor_b.get_legacy_shape()[3] == 1) ||
+                        (input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
+                        input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH));
+                }
+            }
+            return operation::run_with_autoformat(
+                    EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config}, {input_tensor_a, input_tensor_b});
+        }, {input_tensor_a, input_tensor_b}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

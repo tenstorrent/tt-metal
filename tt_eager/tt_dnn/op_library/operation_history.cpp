@@ -20,6 +20,7 @@ OperationHistory::~OperationHistory() {
 }
 
 void OperationHistory::append(OperationRecord&& record) {
+    std::scoped_lock<std::mutex> lock(op_history_mutex);
     TT_ASSERT(record.input_tensor_records.size() <= 5);
     this->records.push_back(std::move(record));
 }
@@ -126,7 +127,10 @@ void OperationHistory::dump_to_csv() {
     }
 }
 
-void OperationHistory::clear() { this->records.clear(); }
+void OperationHistory::clear() {
+    std::scoped_lock<std::mutex> lock(op_history_mutex);
+    this->records.clear();
+}
 
 }  // namespace detail
 

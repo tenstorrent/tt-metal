@@ -205,21 +205,27 @@ Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config
 
 namespace transformers {
 Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-    FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
-    std::optional<FormatParams> mask_format_params = std::nullopt;
-    if (mask.has_value()) {
-        TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1]);
-        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0]);
-        TT_FATAL(mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT);
-        for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-            TT_FATAL(mask.value().get_legacy_shape()[i] == 1);
-        }
-        Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
-        mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
-    }
-    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val, .is_scale_causal_mask_hw_dims_softmax=false}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_with_autoformat(
+        [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor = input_tensors.at(0);
+            Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+            FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
+            std::optional<FormatParams> mask_format_params = std::nullopt;
+            if (mask.has_value()) {
+                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1]);
+                TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0]);
+                TT_FATAL(mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT);
+                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.value().get_legacy_shape()[i] == 1);
+                }
+                Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
+                mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
+            }
+            auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+            return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params});
+        }, {input_tensor}, output_tensors);
+    return output_tensors.at(0);
 }
 }  // namespace transformers
 }  // namespace tt_metal
