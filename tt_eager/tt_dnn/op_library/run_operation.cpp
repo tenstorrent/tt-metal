@@ -152,6 +152,7 @@ OutputTensors run_device_operation(
 
     auto& program_cache = input_tensors[0].device()->program_cache;
 
+
     tt::stl::hash::hash_t program_hash = 0;
     if (program_cache.is_enabled()) {
         get_or_create_program = [&program_cache, &program_hash](
@@ -238,7 +239,7 @@ OutputTensors run_device_operation(
         },
         program);
 
-    TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);
+    TracyOpTTNNDevice(TTNN_OPERATION_ID, op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);
 
     return output_tensors;
 }

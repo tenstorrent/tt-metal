@@ -37,6 +37,6 @@ PYBIND11_MODULE(_ttnn, m_ttnn) {
     auto m_operations = m_ttnn.def_submodule("operations", "ttnn Operations");
     ttnn::operations::py_module(m_operations);
 
-    m_ttnn.def("get_operation_id", []() { return ttnn::OPERATION_ID; }, "Get operation id");
-    m_ttnn.def("increment_operation_id", []() { ttnn::OPERATION_ID++; }, "Increment operation id");
+    m_ttnn.def("get_operation_id", []() { return ttnn::TTNN_OPERATION_ID; }, "Get operation id");
+    m_ttnn.def("increment_operation_id", []() { ttnn::TTNN_OPERATION_ID++; }, "Increment operation id");
 }
