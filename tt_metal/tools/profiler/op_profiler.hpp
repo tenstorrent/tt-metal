@@ -36,6 +36,7 @@ namespace op_profiler {
 
 
 #if defined(TRACY_ENABLE)
+    inline std::unordered_map<tt::tt_metal::operation::Hash, std::string> cached_ops {};
     inline stack<TracyCZoneCtx> call_stack;
 #endif
 
@@ -246,7 +247,7 @@ namespace op_profiler {
         auto j = get_base_json<true>(opID, op, input_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::python_fallback);
         std::string ser = j.dump(4);
-        return fmt::format("`TT_DNN_FALL_BACK_OP:{}\n{}`",j["op_code"], ser);
+        return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`",j["op_code"], ser);
     }
 
     template<typename OutputTensors, template<typename> typename HostOperationType>
@@ -259,12 +260,14 @@ namespace op_profiler {
         auto j = get_base_json(opID, op, input_tensors, output_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_cpu);
         std::string ser = j.dump(4);
-        return fmt::format("`TT_DNN_HOST_OP:{}\n{}`",j["op_code"], ser);
+        return fmt::format("`TT_DNN_HOST_OP:{} ->\n{}`",j["op_code"], ser);
     }
 
     template<typename OutputTensors, template<typename> typename DeviceOperationType>
     inline std::string op_meta_data_serialized_json(
             uint32_t opID,
+            tt::tt_metal::operation::Hash opHash,
+            bool isProgramCached,
             uint32_t device_id,
             const DeviceOperationType<OutputTensors>& op,
             const std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>& program,
@@ -272,39 +275,50 @@ namespace op_profiler {
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             OutputTensors& output_tensors)
     {
-        ZoneScoped;
 
-        auto j = get_base_json(opID, op, input_tensors, output_tensors);
-        j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
-        j["device_id"] = device_id;
-        if (std::holds_alternative<std::reference_wrapper<Program>>(program))
+        const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
+        if (!useCachedOps || !isProgramCached || (cached_ops.find(opHash) == cached_ops.end()))
         {
-            j["kernel_info"] = get_kernels_json(std::get<std::reference_wrapper<Program>>(program));
-        }
-        else if (std::holds_alternative<std::shared_ptr<Program>>(program))
-        {
-            auto prg = std::get<std::shared_ptr<Program>>(program);
-            if (prg != nullptr)
+            auto j = get_base_json(opID, op, input_tensors, output_tensors);
+            j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
+            j["device_id"] = device_id;
+            j["op_hash"] = opHash;
+            if (std::holds_alternative<std::reference_wrapper<Program>>(program))
             {
-                j["kernel_info"] = get_kernels_json(*prg);
+                j["kernel_info"] = get_kernels_json(std::get<std::reference_wrapper<Program>>(program));
             }
+            else if (std::holds_alternative<std::shared_ptr<Program>>(program))
+            {
+                auto prg = std::get<std::shared_ptr<Program>>(program);
+                if (prg != nullptr)
+                {
+                    j["kernel_info"] = get_kernels_json(*prg);
+                }
+            }
+
+            j["optional_input_tensors"] = get_tensors_json(optional_input_tensors);
+
+            auto perfModel = op.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors);
+            j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
+            j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
+            j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
+            j["performance_model"]["input_bws"] = perfModel.get_input_bws();
+            j["performance_model"]["output_bws"] = perfModel.get_output_bws();
+
+            std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, ",j["op_code"], opHash);
+            cached_ops.emplace(opHash, short_str);
+
+            std::string ser = j.dump(4);
+            return fmt::format("{}{} ->\n{}`", short_str, opID, ser);
         }
-
-        j["optional_input_tensors"] = get_tensors_json(optional_input_tensors);
-
-        auto perfModel = op.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors);
-        j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
-        j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
-        j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
-        j["performance_model"]["input_bws"] = perfModel.get_input_bws();
-        j["performance_model"]["output_bws"] = perfModel.get_output_bws();
-
-        std::string ser = j.dump(4);
-        return fmt::format("`TT_DNN_DEVICE_OP:{}\n{}`",j["op_code"], ser);
+        else
+        {
+            return fmt::format("{}{}`", cached_ops[opHash], opID);
+        }
     }
 
-#define TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)\
-    std::string op_message = op_profiler::op_meta_data_serialized_json(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);\
+#define TracyOpTTNNDevice(op_id, op_hash, is_cached, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)\
+    std::string op_message = op_profiler::op_meta_data_serialized_json(op_id, op_hash, is_cached, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);\
     std::string op_text = fmt::format("id:{}", op_id);\
     ZoneText(op_text.c_str(), op_text.size());\
     TracyMessage(op_message.c_str(), op_message.size());
@@ -323,7 +337,7 @@ namespace op_profiler {
 
 #else
 
-#define TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)
+#define TracyOpTTNNDevice(op_id, op_hash, is_cached, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)
 #define TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors)
 #define TracyOpTTNNExternal(op_id, op, input_tensors)
 
