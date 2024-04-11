@@ -149,17 +149,21 @@ OutputTensors run_device_operation(
         const OptionalConstTensors&,
         OutputTensors&)>
         get_or_create_program;
-    auto& program_cache = input_tensors[0].device()->program_cache;
-    if (program_cache.is_enabled()) {
-        get_or_create_program = [&program_cache](const DeviceOperation<OutputTensors>& operation,
-                                   const Tensors& input_tensors,
-                                   const OptionalConstTensors& optional_input_tensors,
-                                   OutputTensors& output_tensors) -> std::reference_wrapper<Program> {
 
-            auto program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
+    auto& program_cache = input_tensors[0].device()->program_cache;
+
+    tt::stl::hash::hash_t program_hash = 0;
+    if (program_cache.is_enabled()) {
+        get_or_create_program = [&program_cache, &program_hash](
+                                    const DeviceOperation<OutputTensors>& operation,
+                                    const Tensors& input_tensors,
+                                    const OptionalConstTensors& optional_input_tensors,
+                                    OutputTensors& output_tensors) -> std::reference_wrapper<Program> {
+            program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
             auto program_ptr = program_cache.find(program_hash);
 
             bool cache_hit = program_ptr.has_value();
+            log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, cache_hit ? "HIT" : "MISS");
             if (not cache_hit) {
                 program_ptr = std::make_shared<operation::CacheableProgram<OutputTensors>>(operation.create_program(input_tensors, optional_input_tensors, output_tensors));
                 program_cache.insert(program_hash, program_ptr.value());

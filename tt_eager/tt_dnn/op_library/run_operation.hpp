@@ -228,15 +228,6 @@ inline void log_operation(
         operation.get_type_name(),
         detail::operation_type_to_string<OperationType>());
 
-    if constexpr (std::is_same_v<OperationType, DeviceOperation<typename OperationType::OutputTensors>>) {
-        auto& program_cache = input_tensors[0].device()->program_cache;
-        if (program_cache.is_enabled()) {
-            auto program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-            auto program_pointer = program_cache.find(program_hash);
-            log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, program_pointer.has_value() ? "HIT" : "MISS");
-        }
-    }
-
     if (run_operation_state::is_composite_operation()) {
         tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
     }
