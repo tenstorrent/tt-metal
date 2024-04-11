@@ -39,7 +39,7 @@ constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_PACKETIZED_PATH_TIMEOUT_EN = 0;
 
 // constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-// constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+// constexpr uint32_t PCIE_ALIGNMENT = ((1 << PREFETCH_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << PREFETCH_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
@@ -276,12 +276,16 @@ void add_prefetcher_paged_read_cmd(vector<uint32_t>& cmds,
                              uint32_t base_addr,
                              uint32_t page_size,
                              uint32_t pages,
-                             bool is_dram) {
+                             bool is_dram,
+                             uint32_t length_adjust) {
 
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-    cmd.relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) | (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+    cmd.relay_paged.packed_page_flags =
+        (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+        (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+    cmd.relay_paged.length_adjust = length_adjust;
     cmd.relay_paged.base_addr = base_addr;
     cmd.relay_paged.page_size = page_size;
     cmd.relay_paged.pages = pages;
@@ -506,12 +510,13 @@ void gen_dram_read_cmd(Device *device,
                        uint32_t start_page,
                        uint32_t base_addr,
                        uint32_t page_size,
-                       uint32_t pages) {
+                       uint32_t pages,
+                       uint32_t length_adjust) {
 
     vector<uint32_t> dispatch_cmds;
     const bool is_dram = true;
 
-    uint32_t worker_data_size = page_size * pages;
+    uint32_t worker_data_size = page_size * pages - length_adjust;
     log_trace(tt::LogTest, "Starting {} with worker_core: {} dst_addr: 0x{:x} start_page: {} base_addr: 0x{:x} page_size: {} pages: {}. worker_data_size: 0x{:x}",
         __FUNCTION__, worker_core.str(), dst_addr, start_page, base_addr, page_size, pages, worker_data_size);
 
@@ -519,7 +524,7 @@ void gen_dram_read_cmd(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
-    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages, is_dram);
+    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages, is_dram, length_adjust);
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
@@ -651,7 +656,7 @@ void gen_paged_read_dram_test(Device *device,
         uint32_t base_addr = (pages_read / num_dram_banks_g) * dram_page_size_g;
 
         gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
 
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_read += dram_pages_to_read_g;
@@ -688,7 +693,7 @@ void gen_paged_write_read_dram_test(Device *device,
                           start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
         gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
         gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, write_addr,
-                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
 
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_written += dram_pages_to_read_g;
@@ -761,8 +766,11 @@ void gen_rnd_dram_paged_cmd(Device *device,
     if (size < page_size) size = page_size;
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
+    uint32_t length_adjust = std::rand() % page_size;
+    length_adjust = (length_adjust >> 5) << 5;
+    if (length_adjust > 64 * 1024) length_adjust = 64 * 1024;
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      start_page, base_addr, page_size, pages);
+                      start_page, base_addr, page_size, pages, length_adjust);
 }
 
 void gen_rnd_inline_cmd(Device *device,
@@ -960,20 +968,20 @@ void gen_smoke_test(Device *device,
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 32, num_dram_banks_g);
+                      0, 0, 32, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 32, num_dram_banks_g);
+                      0, 0, 32, num_dram_banks_g, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      4, 32, 64, num_dram_banks_g);
+                      4, 32, 64, num_dram_banks_g, 0);
 
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      0, 0, 128, 128);
+                      0, 0, 128, 128, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      4, 32, 2048, num_dram_banks_g * 8);
+                      4, 32, 2048, num_dram_banks_g * 8, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      5, 32, 2048, num_dram_banks_g * 8 + 1);
+                      5, 32, 2048, num_dram_banks_g * 8 + 1, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      3, 128, 6144, num_dram_banks_g * 8 + 7);
+                      3, 128, 6144, num_dram_banks_g * 8 + 7, 0);
 
     // Send inline data to (maybe) multiple cores
     dispatch_cmds.resize(0);
@@ -1753,6 +1761,7 @@ int main(int argc, char **argv) {
              split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
+             dev_hugepage_base_g,
              dev_hugepage_completion_buffer_base,
              DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
@@ -1764,8 +1773,8 @@ int main(int argc, char **argv) {
         CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
         if (split_dispatcher_g) {
             // dispatch_hd and dispatch_d
-            dispatch_compile_args[11] = dispatch_downstream_cb_sem;
-            dispatch_compile_args[12] = dispatch_h_cb_sem;
+            dispatch_compile_args[12] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[13] = dispatch_h_cb_sem;
             configure_kernel_variant<true, false>(program_r,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
@@ -1776,8 +1785,8 @@ int main(int argc, char **argv) {
 
             // dispatch_h
             dispatch_compile_args[3] = dispatch_h_cb_sem;
-            dispatch_compile_args[11] = dispatch_h_cb_sem;
-            dispatch_compile_args[12] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[12] = dispatch_h_cb_sem;
+            dispatch_compile_args[13] = dispatch_downstream_cb_sem;
             configure_kernel_variant<false, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
