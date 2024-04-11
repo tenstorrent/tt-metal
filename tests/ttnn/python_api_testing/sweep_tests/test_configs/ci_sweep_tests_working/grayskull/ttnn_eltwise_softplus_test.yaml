@@ -13,10 +13,10 @@ test-list:
         function: gen_rand
         args:
           low: -100
-          high: 100
+          high: 0.1
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_softplus_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
