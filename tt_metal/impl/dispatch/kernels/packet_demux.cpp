@@ -172,6 +172,14 @@ constexpr uint32_t output_depacketize_local_sem[MAX_SWITCH_FAN_OUT] =
         (get_compile_time_arg_val(29) >> 16) & 0xFF
     };
 
+constexpr uint32_t output_depacketize_remove_header[MAX_SWITCH_FAN_OUT] =
+    {
+        (get_compile_time_arg_val(26) >> 24) & 0x1,
+        (get_compile_time_arg_val(27) >> 24) & 0x1,
+        (get_compile_time_arg_val(28) >> 24) & 0x1,
+        (get_compile_time_arg_val(29) >> 24) & 0x1
+    };
+
 
 
 inline uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
@@ -192,10 +200,11 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < demux_fan_out; i++) {
         output_queues[i].init(i, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
-                             remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
-                             &input_queue, 1,
-                             output_depacketize[i], output_depacketize_log_page_size[i],
-                             output_depacketize_downstream_sem[i], output_depacketize_local_sem[i]);
+                              remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
+                              &input_queue, 1,
+                              output_depacketize[i], output_depacketize_log_page_size[i],
+                              output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
+                              output_depacketize_remove_header[i]);
     }
     input_queue.init(demux_fan_out, rx_queue_start_addr_words, rx_queue_size_words,
                      remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type);
