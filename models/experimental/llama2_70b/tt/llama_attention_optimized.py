@@ -42,8 +42,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.model_config = model_config
         self.emulated = emulated
 
-        assert self.num_devices == 8, "Only 8 devices supported"
-
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.n_kv_heads = configuration.n_kv_heads
@@ -201,10 +199,10 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
         cache_name = lambda name: self.cache_path / (f"{name}")
 
-        as_tensor = lambda tensor, dtype, name, device_id: ttnn.as_tensor(
+        as_tensor = lambda tensor, dtype, layout, name, device_id: ttnn.as_tensor(
             tensor,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             device=self.devices[device_id],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name) if name is not None else None,
@@ -219,7 +217,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             assert x.size() == (batch, 1, seq_len, self.hidden_size)
             xs = []
             for device_id in range(self.num_devices):
-                xs.append(as_tensor(x.clone(), None, device_id))
+                xs.append(as_tensor(x.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, device_id))
 
             cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
             cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
@@ -228,8 +226,24 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
             cos_gathereds, sin_gathereds = [], []
             for device_id in range(self.num_devices):
-                cos_gathereds.append(as_tensor(cos_gathered.clone(), f"cos_gathered_prefill_{seq_len}", device_id))
-                sin_gathereds.append(as_tensor(sin_gathered.clone(), f"sin_gathered_prefill_{seq_len}", device_id))
+                cos_gathereds.append(
+                    as_tensor(
+                        cos_gathered.clone(),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        f"cos_gathered_prefill_{seq_len}",
+                        device_id,
+                    )
+                )
+                sin_gathereds.append(
+                    as_tensor(
+                        sin_gathered.clone(),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        f"sin_gathered_prefill_{seq_len}",
+                        device_id,
+                    )
+                )
 
             rot_mats = [cos_gathereds, sin_gathereds]
 
@@ -239,7 +253,11 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
             attn_masks = []
             for device_id in range(self.num_devices):
-                attn_masks.append(as_tensor(attn_mask.clone(), f"attn_mask_prefill_{seq_len}", device_id))
+                attn_masks.append(
+                    as_tensor(
+                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_prefill_{seq_len}", device_id
+                    )
+                )
 
             repeat_shape = (1, self.n_local_heads, 1, 1)
             for i in range(self.num_devices):
@@ -261,24 +279,31 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
             x = x.transpose(0, 1).unsqueeze(1)
             assert x.shape == (seq_len, 1, batch, self.hidden_size)
-            xs = [as_tensor(x.clone(), ttnn.bfloat16, None, device_id) for device_id in range(self.num_devices)]
+            xs = [
+                as_tensor(x.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, device_id)
+                for device_id in range(self.num_devices)
+            ]
 
             for i in range(self.num_devices):
                 xs[i] = tt_lib.tensor.interleaved_to_sharded(
                     xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
                 )
 
-            rot_mat = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+            rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(rot_mat, start_pos, seq_len, batch=1)
+            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
             assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
 
             rot_mats = []
             for device_id in range(self.num_devices):
-                rot_mats.append(as_tensor(rot_mat.clone(), ttnn.bfloat16, f"rot_mat_decode_{seq_len}", device_id))
+                rot_mats.append(
+                    as_tensor(
+                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
+                    )
+                )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
+            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
@@ -286,9 +311,16 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             for device_id in range(self.num_devices):
                 # BFLOAT16_DTYPE currently pushes faster
                 attn_masks.append(
-                    as_tensor(attn_mask.clone(), ttnn.bfloat16, f"attn_mask_decode_{start_pos}", device_id)
+                    as_tensor(
+                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_decode_{start_pos}", device_id
+                    )
                 )
 
+            repeat_shape = (batch, 1, 1, 1)
+            for i in range(self.num_devices):
+                attn_masks[i] = tt_lib.tensor.repeat(
+                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+                )
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
             if attention_mask_memconfig.is_sharded():
