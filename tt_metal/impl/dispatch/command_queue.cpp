@@ -554,9 +554,18 @@ void EnqueueProgramCommand::process() {
 }
 
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event_id, uint32_t expected_num_workers_completed):
-    command_queue_id(command_queue_id), device(device), manager(manager), event_id(event_id), expected_num_workers_completed(expected_num_workers_completed) {
-}
+    uint32_t command_queue_id,
+    Device* device,
+    SystemMemoryManager& manager,
+    uint32_t event_id,
+    uint32_t expected_num_workers_completed,
+    bool clear_count) :
+    command_queue_id(command_queue_id),
+    device(device),
+    manager(manager),
+    event_id(event_id),
+    expected_num_workers_completed(expected_num_workers_completed),
+    clear_count(clear_count) {}
 
 const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
     std::vector<uint32_t> event_payload(EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
@@ -573,7 +582,8 @@ const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
 
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
-    command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+    command_sequence.add_dispatch_wait(
+        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
 
     CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -622,13 +632,21 @@ void EnqueueRecordEventCommand::process() {
 }
 
 EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, const Event& sync_event):
-    command_queue_id(command_queue_id), device(device), manager(manager), sync_event(sync_event) {
-        this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
-        // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
-        // TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
-        //     "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
-        //     event, command_queue_id);
+    uint32_t command_queue_id,
+    Device* device,
+    SystemMemoryManager& manager,
+    const Event& sync_event,
+    bool clear_count) :
+    command_queue_id(command_queue_id),
+    device(device),
+    manager(manager),
+    sync_event(sync_event),
+    clear_count(clear_count) {
+    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
+    // TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
+    //     "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
+    //     event, command_queue_id);
 }
 
 const DeviceCommand EnqueueWaitForEventCommand::assemble_device_commands() {
@@ -637,7 +655,7 @@ const DeviceCommand EnqueueWaitForEventCommand::assemble_device_commands() {
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
     uint32_t last_completed_event_address = sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
-    command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id);
+    command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
 
     return command_sequence;
 }
@@ -660,13 +678,26 @@ void EnqueueWaitForEventCommand::process() {
 }
 
 EnqueueTraceCommand::EnqueueTraceCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, Buffer& buffer) :
-    command_queue_id(command_queue_id), buffer(buffer), device(device), manager(manager) {
-}
+    uint32_t command_queue_id,
+    Device* device,
+    SystemMemoryManager& manager,
+    Buffer& buffer,
+    uint32_t expected_num_workers_completed) :
+    command_queue_id(command_queue_id),
+    buffer(buffer),
+    device(device),
+    manager(manager),
+    expected_num_workers_completed(expected_num_workers_completed) {}
 
 const DeviceCommand EnqueueTraceCommand::assemble_device_commands() {
-    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    uint32_t cmd_sequence_sizeB =
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_EXEC_BUF
+
     DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+    command_sequence.add_dispatch_wait(
+        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, true);
 
     uint32_t page_size = buffer.page_size();
     uint32_t page_size_log2 = __builtin_ctz(page_size);
@@ -963,6 +994,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 void HWCommandQueue::enqueue_program(
     Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
+
     if (not program.loaded_onto_device) {
         TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
         for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
@@ -970,14 +1002,18 @@ void HWCommandQueue::enqueue_program(
         }
         program.loaded_onto_device = true;
     }
-    tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
 
     auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, this->expected_num_workers_completed);
     this->enqueue_command(command, blocking);
-    this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
+
+    if (this->manager.get_bypass_mode()) {
+        this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
+    } else {
+        this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
+    }
 }
 
-void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
+void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool clear_count) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
 
     // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
@@ -992,9 +1028,12 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
         TT_FATAL(this->trace_ctx != nullptr, "A trace context must be present in bypass mode!");
         event->event_id = this->trace_ctx->relative_event_id(event->event_id);
     }
-    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event->event_id, this->expected_num_workers_completed);
+    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event->event_id, this->expected_num_workers_completed, clear_count);
     this->enqueue_command(command, false);
 
+    if (clear_count) {
+        this->expected_num_workers_completed = 0;
+    }
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->traced_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
         this->trace_ctx->num_completion_q_reads++;
@@ -1004,21 +1043,24 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     }
 }
 
-void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event) {
+void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event, bool clear_count) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
 
-    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, *sync_event);
+    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, *sync_event, clear_count);
     this->enqueue_command(command, false);
+
+    if (clear_count) {
+        this->manager.reset_event_id(this->id);
+    }
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event);
 }
-
 
 void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_trace");
 
     auto trace_inst = Trace::get_instance(trace_id);
-    auto command = EnqueueTraceCommand(this->id, this->device, this->manager, *trace_inst.buffer);
+    auto command = EnqueueTraceCommand(this->id, this->device, this->manager, *trace_inst.buffer, this->expected_num_workers_completed);
 
     // Emit the completion queue entries from the trace
     auto& cmpl_q = trace_inst.desc->traced_completion_q_reads;
@@ -1041,7 +1083,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     }
     // Increment the global event counter due to trace emitting events in a batch
-    this->manager.increment_event(this->id, num_events);
+    this->manager.increment_event_id(this->id, num_events);
+
+    // Increment the exepected worker cores counter due to trace programs completions
+    this->expected_num_workers_completed += trace_inst.desc->num_completion_worker_cores;
 
     this->enqueue_command(command, false);
 
@@ -1266,7 +1311,7 @@ void HWCommandQueue::read_completion_queue() {
                             TT_ASSERT(event_completed == read_descriptor.event_id, "Event Order Issue: expected to read back completion signal for event {} but got {}!", read_descriptor.event_id, event_completed);
                             this->manager.completion_queue_pop_front(1, this->id);
                             this->manager.set_last_completed_event(this->id, read_descriptor.get_global_event_id());
-                            log_debug(LogAlways, "DEBUG completed event {} (global: {})", event_completed, read_descriptor.get_global_event_id());
+                            log_trace(LogAlways, "Completion queue popped event {} (global: {})", event_completed, read_descriptor.get_global_event_id());
                         }
                     },
                     read_descriptor
@@ -1577,7 +1622,6 @@ void EnqueueRecordEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
     cq.hw_command_queue().enqueue_record_event(event);
 }
 
-
 void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
 
     detail::DispatchStateCheck(true);
@@ -1594,7 +1638,6 @@ void EnqueueWaitForEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
         event->device->id(), event->cq_id, event->event_id, cq.device()->id(), cq.id());
     cq.hw_command_queue().enqueue_wait_for_event(event);
 }
-
 
 void EventSynchronize(std::shared_ptr<Event> event) {
     detail::DispatchStateCheck(true);

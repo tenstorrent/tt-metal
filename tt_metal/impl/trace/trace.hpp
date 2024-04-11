@@ -34,6 +34,7 @@ struct TraceDescriptor {
     std::optional<uint32_t> initial_event_id;
     CompletionReaderQueue traced_completion_q_reads;
     uint32_t num_completion_q_reads;
+    uint32_t num_completion_worker_cores;
 
     TraceDescriptor() {
         this->reset();
@@ -43,6 +44,7 @@ struct TraceDescriptor {
         this->initial_event_id.reset();
         this->traced_completion_q_reads.clear();
         this->num_completion_q_reads = 0;
+        this->num_completion_worker_cores = 0;
     }
 
     // Calculate relative offset to the initial event ID of the trace

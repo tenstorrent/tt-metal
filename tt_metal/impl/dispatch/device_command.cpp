@@ -13,7 +13,7 @@ DeviceCommand::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_write_idx(0) {
     this->cmd_sequence.resize(cmd_sequence_sizeB / sizeof(uint32_t), 0);
 }
 
-void DeviceCommand::add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count) {
+void DeviceCommand::add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count) {
     TT_ASSERT(this->cmd_write_idx + (sizeof(CQPrefetchCmd) / sizeof(uint32_t)) < this->cmd_sequence.size()); // turn to api
 
     CQPrefetchCmd relay_wait;
@@ -29,12 +29,13 @@ void DeviceCommand::add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_
     wait_cmd.wait.notify_prefetch = false;
     wait_cmd.wait.addr = address;
     wait_cmd.wait.count = count;
+    wait_cmd.wait.clear_count = clear_count;
 
     this->write_to_cmd_sequence(&wait_cmd, sizeof(CQDispatchCmd));
 }
 
-void DeviceCommand::add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count) {
-    this->add_dispatch_wait(barrier, address, count);
+void DeviceCommand::add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count) {
+    this->add_dispatch_wait(barrier, address, count, clear_count);
 
     uint32_t dispatch_wait_idx = this->cmd_write_idx - (sizeof(CQDispatchCmd) / sizeof(uint32_t));
     CQDispatchCmd *wait_cmd = (CQDispatchCmd*)(this->cmd_sequence.data() + dispatch_wait_idx);
