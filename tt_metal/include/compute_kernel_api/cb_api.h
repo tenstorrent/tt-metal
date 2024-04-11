@@ -57,6 +57,12 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
  * that are visible to the consumer by random access of the valid section of
  * the CB
  *
+ * Important note: This operation updates the read pointer of the CB, the CB pointer
+ * can only be updated from one thread at a time. Example: if compute kernel has cb_pop_front(input_id, 1)
+ * and writer kernel also has cb_pop_front(input_id, 1), these calls will produce non-deterministic behavior because
+ * cb pointers are not synchronized across threads. Per circular buffer index, only have one thread pop tiles
+ * to update the read pointer
+ *
  * Return value: None
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
@@ -102,6 +108,12 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
  * to allow the producer to: 1) write the tile data to the CB via multiple
  * writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the
  * valid section of the CB
+ *
+ * Important note: This operation updates the write pointer of the CB, the CB pointer
+ * can only be updated from one thread at a time. Example: if compute kernel has cb_push_back(output_id, 1)
+ * and reader kernel also has cb_push_back(output_id, 1), these calls will produce non-deterministic behavior because
+ * cb pointers are not synchronized across threads. Per circular buffer index, only have one thread push tiles
+ * to update the write pointer
  *
  * Return value: None
  *
