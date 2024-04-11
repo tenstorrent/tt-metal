@@ -19,7 +19,7 @@
 
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;
 constexpr uint32_t WORKER_DATA_SIZE = 768 * 1024;
-constexpr uint32_t MAX_PAGE_SIZE = 64 * 1024;
+constexpr uint32_t MAX_PAGE_SIZE = 256 * 1024; // bigger than scratch_db_page_size
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 
@@ -101,6 +101,7 @@ bool perf_test_g = false;
 
 uint32_t max_xfer_size_bytes_g = dispatch_buffer_page_size_g;
 uint32_t min_xfer_size_bytes_g = 4;
+uint32_t l1_buf_base_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -759,7 +760,7 @@ void gen_rnd_dram_paged_cmd(Device *device,
     uint32_t start_page = std::rand() % num_dram_banks_g;
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(DRAM_DATA_ALIGNMENT - 1);
-    if (page_size == 0) page_size = DRAM_DATA_ALIGNMENT;
+    if (page_size < DRAM_DATA_ALIGNMENT) page_size = DRAM_DATA_ALIGNMENT;
     uint32_t max_data = big_g ? WORKER_DATA_SIZE : WORKER_DATA_SIZE / 8;
     uint32_t max = WORKER_DATA_SIZE - worker_data_size(worker_data) * sizeof(uint32_t);
     max = (max > max_data) ? max_data : max;
@@ -769,9 +770,17 @@ void gen_rnd_dram_paged_cmd(Device *device,
     if (size < page_size) size = page_size;
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
+
     uint32_t length_adjust = std::rand() % page_size;
     length_adjust = (length_adjust >> 5) << 5;
-    if (length_adjust > 64 * 1024) length_adjust = 64 * 1024;
+    if (length_adjust > 64 * 1024) length_adjust = 63 * 1024;
+
+    if (worker_data_size(worker_data) * sizeof(uint32_t) + page_size * pages - length_adjust + l1_buf_base_g >=
+        device->l1_size_per_core()) {
+        // try try again
+        return;
+    }
+
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
                       start_page, base_addr, page_size, pages, length_adjust);
 }
@@ -984,7 +993,7 @@ void gen_smoke_test(Device *device,
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
                       5, 32, 2048, num_dram_banks_g * 8 + 1, 0);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      3, 128, 6144, num_dram_banks_g + 7, 0);
+                      3, 128, 6144, num_dram_banks_g - 1, 0);
 
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
                       0, 0, 128, 128, 32);
@@ -993,7 +1002,13 @@ void gen_smoke_test(Device *device,
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
                       5, 32, 2048, num_dram_banks_g * 2 + 1, 256);
     gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      3, 128, 6144, num_dram_banks_g + 7, 640);
+                      3, 128, 6144, num_dram_banks_g - 1, 640);
+
+    // Large pages
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      0, 0, scratch_db_size_g / 2 + 32, 2, 128); // just a little larger than the scratch_db, length_adjust backs into prior page
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+                      0, 0, scratch_db_size_g, 2, 0); // exactly the scratch db size
 
     // Forces length_adjust to back into prior read.  Device reads pages, shouldn't be a problem...
     uint32_t page_size = 256 + 32;
@@ -1308,13 +1323,13 @@ int main(int argc, char **argv) {
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
-        uint32_t l1_buf_base = l1_unreserved_base_aligned + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
-        TT_ASSERT((l1_buf_base & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
+        l1_buf_base_g = l1_unreserved_base_aligned + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
+        TT_ASSERT((l1_buf_base_g & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
-        uint32_t dispatch_buffer_base = l1_buf_base;
-        uint32_t prefetch_d_buffer_base = l1_buf_base;
+        uint32_t dispatch_buffer_base = l1_buf_base_g;
+        uint32_t prefetch_d_buffer_base = l1_buf_base_g;
         uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        uint32_t prefetch_q_base = l1_buf_base;
+        uint32_t prefetch_q_base = l1_buf_base_g;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
         dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
         vector<uint32_t>zero_data(0);
@@ -1329,7 +1344,6 @@ int main(int argc, char **argv) {
         // stall on the prefetch_q
         TT_ASSERT(hugepage_issue_buffer_size_g > prefetch_q_entries_g * max_prefetch_command_size_g, "Shrink the max command size or grow the hugepage buffer size or shrink the prefetch_q size");
         TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
-        TT_ASSERT(scratch_db_size_g >= MAX_PAGE_SIZE);
 
         // NOTE: this test hijacks hugepage
         void *host_hugepage_base;
@@ -1732,19 +1746,21 @@ int main(int argc, char **argv) {
                 cmds.resize(0);
                 cmd_sizes.resize(0);
                 reset_worker_data(worker_data);
-                gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base);
+                gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
+                TT_FATAL(worker_data_size(worker_data) * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
+                         "Test overflowed L1 memory");
                 run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
                 if (test_type_g == 6) {
                     pass &= validate_host_results(device, cmds, host_hugepage_completion_buffer);
                 } else {
-                    pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base);
+                    pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base_g);
                 }
                 if (!pass) {
                     break;
                 }
             }
         } else {
-            gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base);
+            gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
             gen_terminate_cmds(terminate_cmds, terminate_sizes);
             auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
 
