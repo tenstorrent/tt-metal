@@ -16,6 +16,7 @@ from loguru import logger
 from functools import partial
 import tt_lib
 from itertools import permutations, product
+from tracy import signpost
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -290,10 +291,12 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
 
             test_profiling_key = f"test_sweep_separator - {run_id}"
             logger.info(f"Starting profiling test {test_profiling_key}")
+            signpost(header=test_profiling_key)
 
             test_pass = run_sweep_test(parameters, device, results_csv_writer)
 
             tt_lib.device.Synchronize(device)
+            signpost(header=f"{test_profiling_key} - end")
             logger.info(f"Stopped profiling test {test_profiling_key}")
             run_id += 1
 
