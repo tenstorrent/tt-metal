@@ -31,6 +31,17 @@ protected:
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
 
+        // By default, exclude dispatch cores from printing
+        auto num_cqs_str = getenv("TT_METAL_NUM_HW_CQS");
+        int num_cqs = (num_cqs_str != nullptr)? std::stoi(num_cqs_str) : 1;
+        std::map<CoreType, std::unordered_set<CoreCoord>> disabled;
+        for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+            for (auto core : tt::get_logical_dispatch_cores(id, num_cqs)) {
+                disabled[CoreType::WORKER].insert(core);
+            }
+        }
+        tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
+
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
