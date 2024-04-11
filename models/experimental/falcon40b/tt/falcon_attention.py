@@ -509,48 +509,71 @@ class TtFalconAttention:
         return attn_output, layer_present
 
     def scaled_product_attention(self, q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len):
+        q_slices = convert_to_layout(  # TODO: remove when PCC issue fixed
+            q_slices, self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
+        )
+
         # Q * KˆT
         attn_weights = []
+        program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
+        # program_config.out_subblock_h = 1
+        # program_config.out_subblock_w = 1
         for i in range(len(q_slices)):
             attn_weights.append(
-                # tt_lib.tensor.matmul(
                 tt_lib.operations.primary.matmul(
                     q_slices[i],
                     key_layer_transposed[i],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_PROGCFG"],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
+                    # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                    # program_config=self.model_config["ATTENTION_MM_PROGCFG"],
+                    program_config=program_config,
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
                 )
             )
 
+        attn_weights = convert_to_layout(  # TODO: remove when PCC issue fixed
+            attn_weights, self.model_config["DRAM_MEMCFG"], self.model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"]
+        )
+
         # Softmax
-        softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
-        softmax_progcfg.block_w = q_len // 32
         for i in range(len(attn_weights)):
             attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
                 attn_weights[i],
                 self.scalar,
                 attn_mask_slices[i],
-                program_config=softmax_progcfg,
+                program_config=self.model_config["SOFTMAX_PROGCFG"],
                 is_causal_mask=True,
             )
 
+        attn_weights = convert_to_layout(  # TODO: remove when PCC issue fixed
+            attn_weights, self.model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
+        )
+
         # Attention score * V
         attn_output_slice = []
+        program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
+        # program_config.out_subblock_h = 1
+        # program_config.out_subblock_w = 1
         for i in range(len(attn_weights)):
             attn_output_slice.append(
-                # tt_lib.tensor.matmul(
                 tt_lib.operations.primary.matmul(
                     attn_weights[i],
                     value_layer[i],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
+                    # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+                    # program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
+                    program_config=program_config,
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
                 )
             )
             attn_weights[i].deallocate(True)
+
+        attn_output_slice = convert_to_layout(  # TODO: remove when PCC issue fixed
+            attn_output_slice, self.model_config["DRAM_MEMCFG"], self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"]
+        )
+
         return attn_output_slice
 
     def fwd_decode(

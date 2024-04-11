@@ -909,7 +909,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         in0_block_w=head_dim // 32,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
+        per_core_M=attetnion_mm_M,
         per_core_N=row_height // 32,
         fuse_batch=True,
         fused_activation=None,
@@ -918,15 +918,15 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=attetnion_mm_grid_size,
         subblock_w=1,
-        block_h=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
-        block_w=1,  # Dynamic
+        block_h=attetnion_mm_M,
+        block_w=row_height // 32,
     )
     model_config["ATTENTION_MM_2_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=attetnion_mm_grid_size,
         in0_block_w=row_height // 32,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=attetnion_slice_size * 16 // 32 // 32,  # attetnion_slice_size * 16 qheads // 32 cores // TILE_SIZE
+        per_core_M=attetnion_mm_M,
         per_core_N=head_dim // 32,
         fuse_batch=True,
         fused_activation=None,
@@ -939,7 +939,18 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
             attn_shard_spec,
-            [16 * row_height // attention_num_cores, head_dim],
+            [16 * attetnion_slice_size // attention_num_cores, head_dim],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * attetnion_slice_size // attention_num_cores, row_height],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
@@ -950,7 +961,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
             attn_shard_spec,
-            [16 * row_height // attention_num_cores, head_dim],
+            [16 * attetnion_slice_size // attention_num_cores, head_dim],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
@@ -961,7 +972,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
             attn_shard_spec,
-            [16 * row_height // attention_num_cores, row_height],
+            [16 * attetnion_slice_size // attention_num_cores, row_height],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),

@@ -10,19 +10,26 @@ import ttnn
 from models.utility_functions import torch2tt_tensor
 
 
-def convert_to_layout(tensor, input_memory_layout, output_memory_layout):
+def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=False):
     if input_memory_layout == output_memory_layout:
         return tensor
     else:  # Convert layout
         if isinstance(
             tensor, list
         ):  # if input is a list of tensors call convert_to_layout for each tensor individually
-            return [convert_to_layout(t, input_memory_layout, output_memory_layout) for t in tensor]
+            return [convert_to_layout(t, input_memory_layout, output_memory_layout, clone=clone) for t in tensor]
         else:
             if input_memory_layout.is_sharded() and not output_memory_layout.is_sharded():  # sharded_to_interleaved
                 tensor = ttl.tensor.sharded_to_interleaved(tensor, output_mem_config=output_memory_layout)
             elif not input_memory_layout.is_sharded() and output_memory_layout.is_sharded():  # interleaved_to_sharded
                 tensor = ttl.tensor.interleaved_to_sharded(tensor, sharded_mem_config=output_memory_layout)
+            elif (
+                not input_memory_layout.is_sharded() and not output_memory_layout.is_sharded()
+            ):  # interleaved to interleaved with different memory location
+                if clone:
+                    tensor = ttl.tensor.clone(tensor, output_mem_config=output_memory_layout)
+                else:
+                    tensor = ttl.tensor.move(tensor, output_mem_config=output_memory_layout)
             else:  # reshard
                 tensor = ttl.tensor.sharded_to_interleaved(
                     tensor,
