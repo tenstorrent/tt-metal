@@ -23,9 +23,9 @@ class DeviceCommand {
 
     const void* data() const { return this->cmd_sequence.data(); }
 
-    void add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count);
+    void add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count);
+    void add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 
