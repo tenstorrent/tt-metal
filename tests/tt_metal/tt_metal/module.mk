@@ -15,7 +15,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_dispatcher \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_prefetcher \
-		 tests/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_multichip \
 		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data \
 		 tests/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional \
  		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_bidirectional_bandwidth_no_edm \
