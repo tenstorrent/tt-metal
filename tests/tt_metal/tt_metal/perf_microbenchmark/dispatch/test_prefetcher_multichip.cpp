@@ -248,7 +248,7 @@ bool validate_host_results(
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
-    constexpr uint32_t align_mask = HUGEPAGE_ALIGNMENT - 1;
+    constexpr uint32_t align_mask = PCIE_ALIGNMENT - 1;
 
     return (size + align_mask) & ~align_mask;
 }
@@ -281,9 +281,7 @@ void add_prefetcher_paged_read_cmd(vector<uint32_t>& cmds,
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-    cmd.relay_paged.pad1 = 0;
-    cmd.relay_paged.is_dram = is_dram;
-    cmd.relay_paged.start_page = start_page;
+    cmd.relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) | (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
     cmd.relay_paged.base_addr = base_addr;
     cmd.relay_paged.page_size = page_size;
     cmd.relay_paged.pages = pages;
