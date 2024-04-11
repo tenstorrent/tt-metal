@@ -25,7 +25,6 @@ class TtLlamaMLP_galaxy(nn.Module):
         hidden_size: int,
         model_config,
         emulated=True,
-        load_weights=True,
         cache_path=None,
     ):
         super().__init__()
@@ -61,18 +60,7 @@ class TtLlamaMLP_galaxy(nn.Module):
         # [2, 6, 10, 14, 18, 22, 26, 30],
         # [3, 7, 11, 15, 19, 23, 27, 31]]
 
-        if load_weights:
-            self.load_weights()
-
-    def free_weights(self):
-        # Free weights
-        for i in range(self.num_devices):
-            self.w1_list[i].deallocate(True)
-            self.w3_list[i].deallocate(True)
-            self.w2_list[i].deallocate(True)
-        del self.w1_list
-        del self.w3_list
-        del self.w2_list
+        self.load_weights()
 
     def load_weights(self):
         assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"

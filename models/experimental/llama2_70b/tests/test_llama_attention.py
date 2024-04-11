@@ -32,6 +32,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
     comp_pcc,
+    get_rot_transformation_mat,
 )
 
 
@@ -124,10 +125,12 @@ def run_test_LlamaAttention_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
+    transformation_mat = [torch2tt_tensor(get_rot_transformation_mat(head_dim), device) for device in devices]
     if n_devices == 32:
         tt_LlamaAttention_model = TtLlamaAttention_galaxy(
             devices,
@@ -136,6 +139,7 @@ def run_test_LlamaAttention_inference(
             UNIT_TEST_LAYER_NUM,
             model_config,
             configuration,
+            transformation_mat,
             emulated=emulated,
             cache_path=cache_path,
         )
@@ -147,6 +151,7 @@ def run_test_LlamaAttention_inference(
             UNIT_TEST_LAYER_NUM,
             model_config,
             configuration,
+            transformation_mat,
             emulated=emulated,
             cache_path=cache_path,
         )
