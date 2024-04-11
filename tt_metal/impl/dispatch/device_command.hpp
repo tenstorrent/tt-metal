@@ -90,6 +90,7 @@ class DeviceCommand {
 
     void write_to_cmd_sequence(const void *data, uint32_t data_sizeB, std::optional<uint32_t> alignmentB = std::nullopt) {
         this->validate_cmd_write(data_sizeB);
+        tt::log_debug(tt::LogDispatch, "Command sequence construction: writing {} B at index {}", data_sizeB, this->cmd_write_idx);
         memcpy(this->cmd_sequence.data() + this->cmd_write_idx, data, data_sizeB);
         uint32_t increment_sizeB = alignmentB.has_value() ? align(data_sizeB, alignmentB.value()) : data_sizeB;
         this->cmd_write_idx += (increment_sizeB / sizeof(uint32_t));

@@ -353,6 +353,18 @@ TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
     }
 }
 
+TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPage) {
+    constexpr uint32_t num_round_robins = 2;
+    for (Device *device : devices_) {
+        TestBufferConfig config = {
+            .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
+            .page_size = TRANSFER_PAGE_SIZE + 32,
+            .buftype = BufferType::DRAM
+        };
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
@@ -598,6 +610,8 @@ TEST_F(CommandQueueSingleCardFixture, TestNonblockingReads) {
 }  // end namespace basic_tests
 
 namespace stress_tests {
+
+// TODO: Add stress test that vary page size
 
 TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
     BufferStressTestConfig config = {
