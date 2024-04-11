@@ -199,16 +199,16 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     id = []
 
     index = 0
+    iter = 0
     while index < batch_size:
-        answer = validation_split["answers"][index]
+        answer = validation_split["answers"][iter]
         if len(answer["text"]) > 0:
-            question.append(validation_split["question"][index])
-            context.append(validation_split["context"][index])
-            answers.append(validation_split["answers"][index])
-            id.append(validation_split["id"][index])
+            question.append(validation_split["question"][iter])
+            context.append(validation_split["context"][iter])
+            answers.append(validation_split["answers"][iter])
+            id.append(validation_split["id"][iter])
             index += 1
-        else:
-            continue
+        iter += 1
 
     input_sentance = [f"question: {q} context: {c}" for q, c in zip(question, context)]
 
@@ -265,8 +265,8 @@ def run_functional_t5_question_and_answering_inference_squadv2(
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
     (
-        (8, 384, 5, "t5-small", False),
-        (8, 384, 5, "google/flan-t5-small", False),
+        (8, 128, 5, "t5-small", True),
+        (8, 128, 5, "google/flan-t5-small", True),
     ),
 )
 def test_functional_t5_demo(
@@ -282,7 +282,7 @@ def test_functional_t5_demo(
 
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
-    ((3, 384, 5, "t5-small", False), (3, 384, 5, "google/flan-t5-small", False)),
+    ((8, 128, 5, "t5-small", True), (8, 128, 5, "google/flan-t5-small", True)),
 )
 def test_functional_t5_demo_squadv2(device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version):
     disable_persistent_kernel_cache()
