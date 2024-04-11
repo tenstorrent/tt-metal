@@ -40,7 +40,11 @@ struct SplitFusedQKVAndSplitHeads {
 };
 
 inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, const uint32_t num_heads = 16) {
-    auto output_tensors = operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, {input_tensor});
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [compute_with_storage_grid_size, mem_config, num_heads] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, input_tensors);
+        }, {input_tensor}, output_tensors);
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
 }
 
@@ -56,7 +60,12 @@ struct ConcatenateHeads {
 };
 
 inline Tensor concatenate_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config) {
-    return operation::run(ConcatenateHeads{compute_with_storage_grid_size, mem_config}, {input_tensor}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [compute_with_storage_grid_size, mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(ConcatenateHeads{compute_with_storage_grid_size, mem_config}, input_tensors);
+        }, {input_tensor}, output_tensors);
+    return output_tensors.at(0);
 }
 
 struct AttnMatmul {

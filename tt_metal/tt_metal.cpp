@@ -44,8 +44,7 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
     std::optional<uint32_t> address = nullopt;
-    static std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    std::fill(semaphore_histogram.begin(), semaphore_histogram.end(), 0);
+    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             CoreCoord logical_core(x, y);

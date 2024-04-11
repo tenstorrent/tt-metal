@@ -105,20 +105,20 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
 }
 
 Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
-    if (is_multi_device_tensor(a)) {
-        return transform(a, [&](const Tensor& tensor) {
-            return permute(tensor, dims, output_mem_config);
-        });
-    }
-
-    std::vector<uint32_t> normalized_dims(dims.size());
-    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
-    std::vector<uint32_t> seq_dims(dims.size());
-    std::iota(seq_dims.begin(), seq_dims.end(), 0);
-    if (normalized_dims == seq_dims) {
-        return AutoFormat::move_tensor_to_mem_config(a, output_mem_config);
-    }
-    return operation::decorate_as_composite(__func__, permute_)(a, normalized_dims, output_mem_config);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a}))};
+    operation::launch_with_autoformat(
+        [dims, output_mem_config]  (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            auto& a = input_tensors.at(0);
+            std::vector<uint32_t> normalized_dims(dims.size());
+            std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
+            std::vector<uint32_t> seq_dims(dims.size());
+            std::iota(seq_dims.begin(), seq_dims.end(), 0);
+            if (normalized_dims == seq_dims) {
+                return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
+            }
+            return {operation::decorate_as_composite(__func__, permute_)(a, normalized_dims, output_mem_config)};
+        }, {a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

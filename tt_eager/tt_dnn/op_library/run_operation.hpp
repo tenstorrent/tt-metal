@@ -49,22 +49,27 @@ struct RunOperationState {
     RunOperationState() {}
 
     void push_composite_parent_name(const char* parent_name) {
+        std::scoped_lock<std::mutex> lock(parent_name_mutex);
         this->composite_parent_names.push_back(parent_name);
     }
 
     void pop_composite_parent_name() {
+        std::scoped_lock<std::mutex> lock(parent_name_mutex);
         this->composite_parent_names.pop_back();
     }
 
     bool is_composite_operation() const {
+        std::scoped_lock<std::mutex> lock(parent_name_mutex);
         return not composite_parent_names.empty();
     }
 
     const auto& get_composite_parent_names() const {
+        std::scoped_lock<std::mutex> lock(parent_name_mutex);
         return this->composite_parent_names;
     }
 
   private:
+    mutable std::mutex parent_name_mutex;
     std::vector<const char*> composite_parent_names{};
 };
 
