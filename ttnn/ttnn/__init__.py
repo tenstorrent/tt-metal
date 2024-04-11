@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import pprint
+from typing import Optional
 
 from loguru import logger
 
@@ -26,10 +27,14 @@ class Config:
     enable_detailed_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
-    delete_reports_on_start: bool = True
-    reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
-    sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
-    operation_history_csv_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "operation_history.csv"
+    root_report_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
+    report_name: Optional[str] = None
+
+    @property
+    def report_path(self):
+        if self.report_name is None:
+            return None
+        return self.root_report_path / f"{hash(self.report_name)}"
 
 
 CONFIG = Config()
@@ -40,13 +45,19 @@ if "TTNN_CONFIG_PATH" in os.environ:
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
 
 
-def load_config_from_dictionary(config):
+def load_config_from_dictionary(config, from_file=False):
     global CONFIG
     for key, value in config.items():
         if hasattr(CONFIG, key):
-            setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
+            if getattr(CONFIG, key) is not None:
+                value = type(getattr(CONFIG, key))(value)
+            setattr(CONFIG, key, value)
+        elif from_file:
+            logger.warning(
+                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
+            )
         else:
-            logger.error(f"Unknown configuration key: {key}")
+            raise ValueError(f"Unknown configuration key: {key}")
 
 
 def load_config_from_json_file(json_path):
@@ -54,8 +65,8 @@ def load_config_from_json_file(json_path):
     try:
         with open(json_path, "r") as f:
             config = json.load(f)
-        load_config_from_dictionary(config)
-    except:
+        load_config_from_dictionary(config, from_file=True)
+    except Exception as e:
         logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
 
 

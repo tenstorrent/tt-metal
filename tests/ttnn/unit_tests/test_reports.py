@@ -4,9 +4,12 @@
 
 import pytest
 
+import sqlite3
+
 import torch
 
 import ttnn
+import ttnn.database
 
 
 @pytest.mark.parametrize("height", [1024])
@@ -31,7 +34,7 @@ def test_enable_logging(device, height, width):
         ttnn.deallocate(input_tensor_b)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
     cursor.execute("SELECT * FROM operations")
     operations = []
@@ -90,7 +93,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
         ttnn.deallocate(input_tensor_b)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffers")
@@ -131,7 +134,7 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
         output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
     cursor.execute("SELECT * FROM operations")
     operations = []

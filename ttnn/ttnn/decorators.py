@@ -303,7 +303,10 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             if object_value.tensor_id is None:
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
             if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
-                if ttnn.database.query_output_tensor_by_tensor_id(object_value.tensor_id) is not None:
+                if (
+                    ttnn.database.query_output_tensor_by_tensor_id(ttnn.CONFIG.report_path, object_value.tensor_id)
+                    is not None
+                ):
                     logger.warning(
                         f"Intermediate tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
                     )
@@ -335,7 +338,8 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             new_value = recursive_preprocess_golden_function_inputs(value)
             new_kwargs[key] = new_value
         return new_args, new_kwargs
-    except:
+    except Exception as e:
+        logger.warning(f"Failed to preprocess global golden function inputs: {e}")
         return None
 
 
@@ -433,13 +437,12 @@ class Operation:
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
                 original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
-                os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.operation_history_csv_path)
-                output = function(*function_args, **function_kwargs)
-                try:
-                    ttnn._tt_lib.operations.dump_operation_history_to_csv()
+                os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_CSV)
+                if hasattr(ttnn._tt_lib.operations, "clear_operation_history"):
                     ttnn._tt_lib.operations.clear_operation_history()
-                except:
-                    ...
+                output = function(*function_args, **function_kwargs)
+                if hasattr(ttnn._tt_lib.operations, "dump_operation_history_to_csv"):
+                    ttnn._tt_lib.operations.dump_operation_history_to_csv()
                 if original_operation_history_csv is not None:
                     os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
                 else:
@@ -495,7 +498,7 @@ class Operation:
                     )
 
                 if local_golden_function_output is not None:
-                    set_tensor_id(local_golden_function_output, force=True)
+                    set_tensor_id(local_golden_function_output)
                     local_tensor_comparison_records = compare_tensors_using_pcc(
                         self.name,
                         local_golden_function_output,
@@ -505,7 +508,7 @@ class Operation:
                     )
 
                 if global_golden_function_output is not None:
-                    set_tensor_id(global_golden_function_output, force=True)
+                    set_tensor_id(global_golden_function_output)
                     posprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.name,
@@ -595,14 +598,15 @@ class Operation:
                     for device in devices:
                         ttnn.synchronize_device(device)
 
-                    decorated_function = operation_history_decorator(decorated_function)
-
                     logger.debug(f"Started {self.name:50}")
 
-                    ttnn.database.insert_operation(operation_id, self, None)
-                    ttnn.database.insert_operation_arguments(operation_id, function_args, function_kwargs)
-
-                    ttnn.database.insert_input_tensors(operation_id, input_tensors)
+                    if ttnn.CONFIG.report_path is not None:
+                        decorated_function = operation_history_decorator(decorated_function)
+                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
+                        ttnn.database.insert_operation_arguments(
+                            ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
+                        )
+                        ttnn.database.insert_input_tensors(ttnn.CONFIG.report_path, operation_id, input_tensors)
 
                     decorated_function = duration_decorator(decorated_function)
 
@@ -632,29 +636,36 @@ class Operation:
 
                     output_tensors = get_all_tensors(output)
 
-                    ttnn.database.insert_devices(devices)
-                    ttnn.database.insert_operation(operation_id, self, duration)
-                    ttnn.database.store_operation_history_records(operation_id)
-                    ttnn.database.insert_stack_trace(operation_id, traceback.format_stack())
-                    ttnn.database.insert_output_tensors(operation_id, output_tensors)
-                    ttnn.database.insert_tensor_comparison_records(
-                        "local_tensor_comparison_records", local_tensor_comparison_records, local_golden_function_output
-                    )
-                    ttnn.database.insert_tensor_comparison_records(
-                        "global_tensor_comparison_records",
-                        global_tensor_comparison_records,
-                        global_golden_function_output,
-                    )
-                    ttnn.database.insert_buffers(operation_id)
-                    if ttnn.CONFIG.enable_detailed_buffer_report:
-                        ttnn.database.insert_buffer_pages(operation_id)
-
-                    if ttnn.CONFIG.enable_graph_report:
-                        ttnn.tracer.visualize(
-                            ttnn.tracer.GRAPH_STACK[-1],
-                            file_name=ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg",
+                    if ttnn.CONFIG.report_path is not None:
+                        ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
+                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
+                        ttnn.database.store_operation_history_records(ttnn.CONFIG.report_path, operation_id)
+                        ttnn.database.insert_stack_trace(
+                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
                         )
-                        # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+                        ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
+                        ttnn.database.insert_tensor_comparison_records(
+                            ttnn.CONFIG.report_path,
+                            "local_tensor_comparison_records",
+                            local_tensor_comparison_records,
+                            local_golden_function_output,
+                        )
+                        ttnn.database.insert_tensor_comparison_records(
+                            ttnn.CONFIG.report_path,
+                            "global_tensor_comparison_records",
+                            global_tensor_comparison_records,
+                            global_golden_function_output,
+                        )
+                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id)
+                        if ttnn.CONFIG.enable_detailed_buffer_report:
+                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id)
+
+                        if ttnn.CONFIG.enable_graph_report:
+                            ttnn.tracer.visualize(
+                                ttnn.tracer.GRAPH_STACK[-1],
+                                file_name=ttnn.CONFIG.report_path / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg",
+                            )
+                            # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)

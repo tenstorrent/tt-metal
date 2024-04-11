@@ -264,18 +264,20 @@ Set the following environment variables as needed
 
 .. code-block:: bash
 
-    # enable_logging - Synchronize main thread after every operation and log the operation start, end and duration
-    # enable_detailed_buffer_report (optional) - Enable to visualize the detailed buffer report after every operation
-    # enable_graph_report (optional) - Enable to visualize the graph after every operation
-    # enable_detailed_tensor_report (optional) - Enable to visualize the values of input and output tensors of every operation
-    # enable_comparison_mode (optional) - Enable to test the output of operations against their golden implementaiton
+    # enable_logging - Synchronize main thread after every operation and log the operation
+    # report_name (optional) - Name of the report used by the visualizer. If not provided, then no data will be dumped to disk
+    # enable_detailed_buffer_report (if report_name is set) - Enable to visualize the detailed buffer report after every operation
+    # enable_graph_report (if report_name is set) - Enable to visualize the graph after every operation
+    # enable_detailed_tensor_report (if report_name is set) - Enable to visualize the values of input and output tensors of every operation
+    # enable_comparison_mode (if report_name is set) - Enable to test the output of operations against their golden implementaiton
 
     export TTNN_CONFIG_OVERRIDES='{
         "enable_logging": true,
+        "report_name": "whatever_name_you_want",
         "enable_graph_report": false,
         "enable_detailed_buffer_report": false,
         "enable_detailed_tensor_report": false,
-        "enable_comparison_mode": false
+        "enable_comparison_mode": false,
     }'
 
     # Or modify ~/.config/ttnn/config.json

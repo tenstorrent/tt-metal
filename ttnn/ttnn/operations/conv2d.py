@@ -128,7 +128,9 @@ class Conv2d:
         self.out_channels = out_channels
 
     @ttnn.register_operation(
-        name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
+        name="ttnn.Conv2d.__call__",
+        validate_input_tensors=lambda *args, **kwargs: None,
+        is_method=True,
     )
     def __call__(self, activation: ttnn.Tensor):
         return self.conv(activation)

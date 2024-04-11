@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
+import pathlib
 
 from bokeh.embed import components
 from bokeh.models import Plot, ColumnDataSource, LinearAxis, CustomJSTickFormatter, NumeralTickFormatter, Rect, Range1d
 from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool, ZoomInTool, ZoomOutTool, HoverTool
 from bokeh.palettes import Category20
 from bokeh.plotting import figure
-from flask import Flask, render_template
+from flask import Flask, render_template, session
 from loguru import logger
 import numpy as np
 import pandas as pd
@@ -18,12 +20,18 @@ import ttnn
 import ttnn.database
 
 ttnn.CONFIG.enable_logging = False
-ttnn.CONFIG.delete_reports_on_start = False
 
 logger.info(f"Visualizer ttnn.CONFIG {ttnn.CONFIG}")
 
 BUFFER_TO_COLOR_INDEX = {}
 COLORS = Category20[20]
+
+
+def get_report_path():
+    report_path = session.get("report_path")
+    if report_path is not None:
+        return pathlib.Path(report_path)
+    raise ValueError("report_path is not set in session")
 
 
 def shorten_stack_trace(stack_trace, num_lines=12):
@@ -55,7 +63,8 @@ def tensor_comparison_record_to_percentage(record):
 
 
 def comparison_percentages(table_name, operation_id):
-    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    report_path = get_report_path()
+    output_tensor_records = ttnn.database.query_output_tensors(report_path, operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
 
     if not output_tensor_records:
@@ -64,7 +73,7 @@ def comparison_percentages(table_name, operation_id):
     percentages = []
     for output_tensor_record in output_tensor_records:
         tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
-            table_name, tensor_id=output_tensor_record.tensor_id
+            report_path, table_name, tensor_id=output_tensor_record.tensor_id
         )
         if tensor_comparison_record is None:
             continue
@@ -81,7 +90,8 @@ def comparison_percentages(table_name, operation_id):
 
 
 def comparison_color(table_name, operation_id):
-    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    report_path = get_report_path()
+    output_tensor_records = ttnn.database.query_output_tensors(report_path, operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
 
     if not output_tensor_records:
@@ -90,7 +100,7 @@ def comparison_color(table_name, operation_id):
     percentages = []
     for output_tensor_record in output_tensor_records:
         tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
-            table_name, tensor_id=output_tensor_record.tensor_id
+            report_path, table_name, tensor_id=output_tensor_record.tensor_id
         )
         if tensor_comparison_record is None:
             continue
@@ -104,11 +114,18 @@ def comparison_color(table_name, operation_id):
 
 
 app = Flask(__name__)
+app.secret_key = "BAD_SECRET_KEY"
 
 
 @app.route("/")
 def root():
-    return operations()
+    report_dirs = ttnn.CONFIG.root_report_path.glob("*")
+    reports = []
+    for report_dir in report_dirs:
+        with open(report_dir / ttnn.database.CONFIG_PATH) as f:
+            config = json.load(f)
+        reports.append((report_dir.name, config["report_name"]))
+    return render_template("root.html", root_report_path=ttnn.CONFIG.root_report_path, reports=reports)
 
 
 @app.route("/apis")
@@ -130,14 +147,25 @@ def apis():
     )
 
 
-@app.route("/operations")
-def operations():
-    operations = list(ttnn.database.query_operations())
+@app.route("/operations/", defaults={"report_hash": None})
+@app.route("/operations/<report_hash>")
+def operations(report_hash):
+    if report_hash is None:
+        report_path = get_report_path()
+    else:
+        report_path = ttnn.CONFIG.root_report_path / report_hash
+        session["report_hash"] = report_hash
+        session["report_path"] = str(report_path)
+        with open(report_path / ttnn.database.CONFIG_PATH) as f:
+            config = json.load(f)
+        session["report_name"] = config["report_name"]
+
+    operations = list(ttnn.database.query_operations(get_report_path()))
 
     def load_underlying_operations(operation_id):
         try:
             operation_history = pd.read_csv(
-                ttnn.CONFIG.reports_path / "operation_history" / f"{operation_id}.csv", index_col=False
+                report_path / ttnn.database.OPERATION_HISTORY_PATH / f"{operation_id}.csv", index_col=False
             )
 
             def normalize_program_cache_hit(value):
@@ -176,13 +204,13 @@ def operations():
 
 @app.route("/operations_with_l1_buffer_report")
 def operations_with_l1_buffer_report():
-    operations = list(ttnn.database.query_operations())
+    operations = list(ttnn.database.query_operations(get_report_path()))
 
     l1_reports = {}
     stack_traces = {}
     for operation in operations:
         l1_reports[operation.operation_id] = create_summarized_l1_buffer_plot(operation.operation_id)
-        stack_trace = ttnn.database.query_stack_trace(operation_id=operation.operation_id)
+        stack_trace = ttnn.database.query_stack_trace(get_report_path(), operation_id=operation.operation_id)
         stack_traces[operation.operation_id] = shorten_stack_trace(stack_trace)
 
     return render_template(
@@ -197,14 +225,14 @@ def create_summarized_l1_buffer_plot(operation_id):
     glyph_y_location = 0
     glyph_height = 1
 
-    buffers = list(ttnn.database.query_buffers(operation_id))
+    buffers = list(ttnn.database.query_buffers(get_report_path(), operation_id))
     if len(buffers) == 0:
         return "", "There are no L1 Buffers!"
     device_ids = set(buffer.device_id for buffer in buffers)
     if len(device_ids) != 1:
         return "", "Cannot visualize buffer plot for multiple devices!"
     device_id = device_ids.pop()
-    device = ttnn.database.query_device_by_id(device_id)
+    device = ttnn.database.query_device_by_id(get_report_path(), device_id)
 
     l1_size = device.worker_l1_size
 
@@ -234,7 +262,7 @@ def create_summarized_l1_buffer_plot(operation_id):
     buffers_max_size_per_bank = []
     buffers_address = []
 
-    for buffer in ttnn.database.query_buffers(operation_id):
+    for buffer in ttnn.database.query_buffers(get_report_path(), operation_id):
         if (buffer.device_id, buffer.address, buffer.buffer_type) not in BUFFER_TO_COLOR_INDEX:
             BUFFER_TO_COLOR_INDEX[(buffer.device_id, buffer.address, buffer.buffer_type)] = len(BUFFER_TO_COLOR_INDEX)
 
@@ -307,14 +335,14 @@ def create_summarized_l1_buffer_plot(operation_id):
 
 
 def create_detailed_l1_buffer_plot(operation_id):
-    buffers = list(ttnn.database.query_buffers(operation_id))
+    buffers = list(ttnn.database.query_buffers(get_report_path(), operation_id))
     device_ids = set(buffer.device_id for buffer in buffers)
     if len(buffers) == 0:
         return "", "There are no L1 Buffers!"
     if len(device_ids) != 1:
         return "", "Cannot visualize buffer plot for multiple devices!"
     device_id = device_ids.pop()
-    device = ttnn.database.query_device_by_id(device_id)
+    device = ttnn.database.query_device_by_id(get_report_path(), device_id)
     l1_size = device.worker_l1_size
 
     core_grid = [device.num_y_cores, device.num_x_cores]
@@ -357,7 +385,7 @@ def create_detailed_l1_buffer_plot(operation_id):
     buffer_pages_color = []
 
     num_buffer_pages = 0
-    for buffer_page in ttnn.database.query_buffer_pages(operation_id):
+    for buffer_page in ttnn.database.query_buffer_pages(get_report_path(), operation_id):
         if (buffer_page.device_id, buffer_page.address, buffer_page.buffer_type) not in BUFFER_TO_COLOR_INDEX:
             BUFFER_TO_COLOR_INDEX[(buffer_page.device_id, buffer_page.address, buffer_page.buffer_type)] = len(
                 BUFFER_TO_COLOR_INDEX
@@ -466,7 +494,7 @@ def create_detailed_l1_buffer_plot(operation_id):
 @app.route("/operation_buffer_report/<operation_id>")
 def operation_buffer_report(operation_id):
     operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
-        operation_id=operation_id
+        get_report_path(), operation_id=operation_id
     )
 
     current_summarized_l1_report_script, current_summarized_l1_report_div = create_summarized_l1_buffer_plot(
@@ -487,15 +515,21 @@ def operation_buffer_report(operation_id):
         color_index = BUFFER_TO_COLOR_INDEX[(tensor.device_id, tensor.address, tensor.buffer_type)] % len(COLORS)
         return COLORS[color_index]
 
-    input_tensor_records = ttnn.database.query_input_tensors(operation_id=operation_id)
+    input_tensor_records = ttnn.database.query_input_tensors(get_report_path(), operation_id=operation_id)
     input_tensor_records = sorted(input_tensor_records, key=lambda tensor: tensor.input_index)
-    input_tensors = [ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id) for tensor in input_tensor_records]
+    input_tensors = [
+        ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id)
+        for tensor in input_tensor_records
+    ]
 
-    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = ttnn.database.query_output_tensors(get_report_path(), operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
-    output_tensors = [ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id) for tensor in output_tensor_records]
+    output_tensors = [
+        ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id)
+        for tensor in output_tensor_records
+    ]
 
-    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    stack_trace = ttnn.database.query_stack_trace(get_report_path(), operation_id=operation_id)
     stack_trace = shorten_stack_trace(stack_trace)
 
     return render_template(
@@ -519,7 +553,7 @@ def operation_buffer_report(operation_id):
 @app.route("/operation_graph_report/<operation_id>")
 def operation_graph_report(operation_id):
     operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
-        operation_id=operation_id
+        get_report_path(), operation_id=operation_id
     )
 
     # graph = ttnn.database.load_graph(operation_id)
@@ -536,7 +570,7 @@ def operation_graph_report(operation_id):
     #         graphviz_graph.edge(f"{node}", f"{child}")
 
     # return graphviz_graph.pipe(format="svg").decode("utf-8")
-    svg_file = ttnn.CONFIG.reports_path / "graphs" / f"{operation_id}.svg"
+    svg_file = get_report_path() / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg"
     if not svg_file.exists():
         return "Graph not found! Was TTNN_CONFIG_OVERRIDES='{\"enable_graph_report\": true}' set?"
     with open(svg_file) as f:
@@ -553,27 +587,28 @@ def operation_graph_report(operation_id):
 @app.route("/operation_tensor_report/<operation_id>")
 def operation_tensor_report(operation_id):
     operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
-        operation_id=operation_id
+        get_report_path(), operation_id=operation_id
     )
 
-    operation_arguments = list(ttnn.database.query_operation_arguments(operation_id=operation_id))
+    operation_arguments = list(ttnn.database.query_operation_arguments(get_report_path(), operation_id=operation_id))
 
-    input_tensor_records = ttnn.database.query_input_tensors(operation_id=operation_id)
+    input_tensor_records = ttnn.database.query_input_tensors(get_report_path(), operation_id=operation_id)
     input_tensor_records = sorted(input_tensor_records, key=lambda tensor: tensor.input_index)
     input_tensors = [
         (
-            ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id),
-            ttnn.database.load_tensor_by_id(tensor.tensor_id),
+            ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id),
+            ttnn.database.load_tensor_by_id(get_report_path(), tensor.tensor_id),
         )
         for tensor in input_tensor_records
     ]
+    print(input_tensors)
 
-    output_tensor_records = ttnn.database.query_output_tensors(operation_id=operation_id)
+    output_tensor_records = ttnn.database.query_output_tensors(get_report_path(), operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
     output_tensors = [
         (
-            ttnn.database.query_tensor_by_id(tensor_id=tensor.tensor_id),
-            ttnn.database.load_tensor_by_id(tensor.tensor_id),
+            ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id),
+            ttnn.database.load_tensor_by_id(get_report_path(), tensor.tensor_id),
         )
         for tensor in output_tensor_records
     ]
@@ -582,18 +617,25 @@ def operation_tensor_report(operation_id):
         golden_tensors = {}
         for output_tensor_record in output_tensor_records:
             tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
-                table_name, tensor_id=output_tensor_record.tensor_id
+                get_report_path(), table_name, tensor_id=output_tensor_record.tensor_id
             )
 
             if tensor_comparison_record is None:
                 continue
-            tensor_record = ttnn.database.query_tensor_by_id(tensor_id=tensor_comparison_record.golden_tensor_id)
-            golden_tensor = ttnn.database.load_tensor_by_id(tensor_id=tensor_comparison_record.golden_tensor_id)
+            tensor_record = ttnn.database.query_tensor_by_id(
+                get_report_path(), tensor_id=tensor_comparison_record.golden_tensor_id
+            )
+            golden_tensor = ttnn.database.load_tensor_by_id(
+                get_report_path(), tensor_id=tensor_comparison_record.golden_tensor_id
+            )
             golden_tensors[output_tensor_record.output_index] = tensor_record, tensor_comparison_record, golden_tensor
         return golden_tensors
 
     local_golden_tensors = load_golden_tensors("local_tensor_comparison_records")
     global_golden_tensors = load_golden_tensors("global_tensor_comparison_records")
+
+    print(local_golden_tensors)
+    print(global_golden_tensors)
 
     def display_tensor_comparison_record(record):
         percentage = tensor_comparison_record_to_percentage(record)
@@ -640,6 +682,8 @@ def operation_tensor_report(operation_id):
         return components(plot)
 
     def get_tensor_attributes(tensor_record):
+        if tensor_record is None:
+            return ""
         output = "<table>"
         output += f"""
             <tr><th>Shape</th><th>{tensor_record.shape}</th></tr>
@@ -678,8 +722,11 @@ def operation_tensor_report(operation_id):
         output += "</table>"
         return output
 
-    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    stack_trace = ttnn.database.query_stack_trace(get_report_path(), operation_id=operation_id)
     stack_trace = shorten_stack_trace(stack_trace)
+
+    def get_tensor_file_name_by_id(*args, **kwargs):
+        return ttnn.database.get_tensor_file_name_by_id(get_report_path(), *args, **kwargs)
 
     return render_template(
         "operation_tensor_report.html",
@@ -693,7 +740,7 @@ def operation_tensor_report(operation_id):
         global_golden_tensors=global_golden_tensors,
         display_tensor_comparison_record=display_tensor_comparison_record,
         plot_tensor=plot_tensor,
-        get_tensor_file_name_by_id=ttnn.database.get_tensor_file_name_by_id,
+        get_tensor_file_name_by_id=get_tensor_file_name_by_id,
         get_tensor_attributes=get_tensor_attributes,
         get_tensor_statistics=get_tensor_statistics,
         stack_trace=stack_trace,
@@ -703,9 +750,9 @@ def operation_tensor_report(operation_id):
 @app.route("/operation_stack_trace/<operation_id>")
 def operation_stack_trace(operation_id):
     operation, previous_operation, next_operation = ttnn.database.query_operation_by_id_together_with_previous_and_next(
-        operation_id=operation_id
+        get_report_path(), operation_id=operation_id
     )
-    stack_trace = ttnn.database.query_stack_trace(operation_id=operation_id)
+    stack_trace = ttnn.database.query_stack_trace(get_report_path(), operation_id=operation_id)
     return render_template(
         "operation_stack_trace.html",
         operation=operation,
