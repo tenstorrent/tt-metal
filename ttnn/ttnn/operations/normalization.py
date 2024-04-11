@@ -314,14 +314,43 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
     return input_mask_tensor
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
+def get_group_norm_cores_accross_channel(memory_layout, core_grid):
+    if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
+        num_cores_across_channel = core_grid.y
+    elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_cores_across_channel = 1
+    else:
+        num_cores_across_channel = core_grid.x * core_grid.y
+
+    return num_cores_across_channel
+
+
+def _golden_function(
+    input_tensor: ttnn.Tensor,
+    *,
+    num_groups,
+    epsilon=1e-05,
+    weight=None,
+    bias=None,
+    memory_config=None,
+    core_grid=None,
+    input_mask=None,
+    **kwargs,
+):
     import torch
 
-    if len(weight.shape) == 2:
-        weight = weight[0]
-    if len(bias.shape) == 2:
-        bias = bias[0]
-    return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
+    num_channels = input_tensor.shape[-1]
+    num_cores_across_channel = get_group_norm_cores_accross_channel(memory_config.memory_layout, core_grid)
+    weight = weight.reshape((num_cores_across_channel, -1))
+    weight = weight[:, : num_channels // num_cores_across_channel].flatten()
+    if bias is not None:
+        bias = bias.reshape((num_cores_across_channel, -1))
+        bias = bias[:, : num_channels // num_cores_across_channel].flatten()
+
+    input_tensor = input_tensor.permute(0, 3, 1, 2)
+    output = torch.nn.functional.group_norm(input_tensor.float(), num_groups, weight.float(), bias.float(), eps=epsilon)
+    output = output.permute(0, 2, 3, 1)
+    return output
 
 
 def _postprocess_golden_function_outputs(output, args, kwargs):

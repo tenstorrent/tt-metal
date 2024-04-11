@@ -427,6 +427,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=No
     elif activation is not None:
         raise RuntimeError(f"{activation} is not supported as activation function")
 
+    while len(output_tensor.shape) > len(input_tensor_a.shape):
+        output_tensor = output_tensor.squeeze(0)
     return output_tensor
 
 

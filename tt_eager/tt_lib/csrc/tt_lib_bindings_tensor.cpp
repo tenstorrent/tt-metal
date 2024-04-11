@@ -119,7 +119,8 @@ void TensorModule(py::module &m_tensor) {
             [](std::pair<UnaryOpType, float> arg) {
                 return UnaryWithParam{.op_type=arg.first, .param=arg.second};
             }
-        ));
+        ))
+        .def_readonly("op_type", &UnaryWithParam::op_type);
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
     // Can take in just the op type, or sequence container of op type and param value
     py::implicitly_convertible<UnaryOpType, UnaryWithParam>();
