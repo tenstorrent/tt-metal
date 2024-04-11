@@ -484,10 +484,21 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                     align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE)
                 );
 
+                uint32_t base_address, page_offset;
+                if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+                    const uint32_t num_banks = this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
+                    page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
+                    uint32_t num_full_pages_written_per_bank = kg_transfer_info.page_offsets[kernel_idx] / num_banks;
+                    base_address = this->program.kg_buffers[buffer_idx]->address() + num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
+                } else {
+                    base_address = this->program.kg_buffers[buffer_idx]->address();
+                    page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                }
+
                 command_sequence.add_prefetch_relay_paged(
                     true, // is_dram
-                    kg_transfer_info.page_offsets[kernel_idx],
-                    this->program.kg_buffers[buffer_idx]->address(),
+                    page_offset,
+                    base_address,
                     this->program.kg_buffers[buffer_idx]->page_size(),
                     align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE) / this->program.kg_buffers[buffer_idx]->page_size()
                 );
