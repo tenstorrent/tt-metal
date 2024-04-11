@@ -32,6 +32,7 @@ class feedforward:
     def __init__(self, device, parameters):
         self.device = device
         self.parameters = parameters
+        self.parameters.net[2].weight = ttnn.unsqueeze_to_4D(self.parameters.net[2].weight)
         self.parameters.net[2].bias = ttnn.unsqueeze_to_4D(self.parameters.net[2].bias)
         self.geglu = geglu(device, parameters.net[0])
         self.block_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
