@@ -80,8 +80,8 @@ class WorkExecutor {
     }
 
     inline void synchronize() {
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
-            // Blocking = wait for queue flushed
+        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS and std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
+            // Blocking = wait for queue flushed. Only main thread can explcitly insert a synchronize, otherwise we have a deadlock.
             this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
             // Wait for queue empty, i.e. flush command picked up
             while(not this->worker_queue.empty()) {

@@ -50,6 +50,7 @@ struct OperationHistory {
     void clear();
 
    private:
+    std::mutex op_history_mutex;
     std::vector<OperationRecord> records;
 };
 

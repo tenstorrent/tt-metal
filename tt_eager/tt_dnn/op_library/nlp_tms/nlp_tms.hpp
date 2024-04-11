@@ -80,7 +80,12 @@ struct NlpConcatHeads {
 
 inline std::vector<Tensor> nlp_create_qkv_heads_falcon7b(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
   // TODO: hard-coded for falcon-7b; can delete if we switch to the more generic one (but perf may be worse)
-  return operation::run(NlpCreateHeadsFalcon7B{mem_config}, {input_tensor_a});
+  std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a})), Tensor(operation::get_workers_for_op_output({input_tensor_a})), Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+  operation::launch_op(
+    [mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        return operation::run(NlpCreateHeadsFalcon7B{mem_config}, input_tensors);
+    }, {input_tensor_a}, output_tensors);
+    return output_tensors;
 }
 inline std::vector<Tensor> nlp_create_qkv_heads(
     const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv,
@@ -105,7 +110,12 @@ inline std::vector<Tensor> nlp_create_qkv_heads(
     return operation::run(NlpCreateHeads{num_heads, num_kv_heads_val, head_dim, transpose_k_heads, mem_config}, {input_tensor}, {input_tensor_kv});
 }
 inline Tensor nlp_concat_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(NlpConcatHeads{mem_config}, {input_tensor_a}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(NlpConcatHeads{mem_config}, input_tensors);
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal
