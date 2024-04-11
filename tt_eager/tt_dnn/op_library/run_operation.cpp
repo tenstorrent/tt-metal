@@ -238,7 +238,7 @@ OutputTensors run_device_operation(
         },
         program);
 
-    TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);
+    TracyOpTTNNDevice(op_id, program_hash, program_cache.is_enabled(), device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);
 
     return output_tensors;
 }
