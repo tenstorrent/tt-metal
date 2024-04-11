@@ -384,8 +384,8 @@ void process_write_paged() {
 #endif
 
     while (write_length != 0) {
-
-        uint32_t xfer_size = page_size > dispatch_cb_page_size ? dispatch_cb_page_size : page_size;
+        // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes for one buffer page
+        uint32_t xfer_size = page_size > dispatch_cb_page_size ? min(dispatch_cb_page_size, page_size - dst_addr_offset) : page_size;
         uint64_t dst = addr_gen.get_noc_addr(page_id, dst_addr_offset); // XXXX replace this w/ walking the banks to save mul on GS
 
         // Get a Dispatch page if needed

@@ -82,6 +82,8 @@ echo "Running test_dispatcher tests now...";
 # Testcase: 256 Pages, Bigger CQDispatchWritePagedCmd.page_size than dispatch buffer page size. Write page size is 2048 Bytes dispatch buffer is 1024 Bytes
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128
+# Testcase: 4128 page size (not aligned to 4KB transfer page size)
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -wx 0 -wy 1 -min 4128 -max 4128 -lps 12 -pbs 1 -np 10 -c
 # Testcase: Arbitrary non-even numbers. This caught some test issues with overflowing start_page one test implementation.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 5 -pbs 275 -np 13
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 5 -pbs 275 -np 13
