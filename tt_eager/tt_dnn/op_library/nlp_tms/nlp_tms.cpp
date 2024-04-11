@@ -282,7 +282,8 @@ void CreateQKVHeads::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(this->num_q_heads % this->num_kv_heads == 0, "Number of q heads {} must fit evenly into number of kv heads {}", this->num_q_heads, this->num_kv_heads);
     TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", input_shape[3], num_w_cores, TILE_WIDTH));
 
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    // TODO: Add this back when output is HEIGHT sharded only!
+    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
 }
 
 std::vector<Shape> CreateQKVHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

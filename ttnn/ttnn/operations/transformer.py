@@ -210,6 +210,17 @@ def split_query_key_value_and_split_heads(
     if ttnn.is_sharded(input_tensor):
         if kv_input_tensor is not None:
             raise RuntimeError("kv_input_tensor cannot be passed in when input_tensor is sharded!")
+
+        if (
+            ttnn.get_memory_config(input_tensor).memory_layout
+            != ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
+        ):
+            raise RuntimeError("input_tensor memory config must be BLOCK sharded when input_tensor is sharded!")
+
+        # TODO: Add this back when output is HEIGHT sharded only!
+        # if memory_config != ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG:
+        #     raise RuntimeError("Output memory config must be HEIGHT sharded when input_tensor is sharded!")
+
         input_tensor = ttnn.reshape(
             input_tensor,
             ttnn.Shape(
@@ -218,12 +229,16 @@ def split_query_key_value_and_split_heads(
             ),
         )
 
-        query, key, value = ttnn.experimental.operations.primary.transformers.split_query_key_value_and_split_heads(
+        query, key, value = ttnn.experimental.tensor.create_qkv_heads(
             input_tensor,
-            input_tensor.device().compute_with_storage_grid_size(),
-            memory_config,
-            num_heads=num_heads,
+            num_q_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            output_mem_config=memory_config,
         )
+        if transpose_key:
+            key = ttnn.experimental.tensor.transpose(key, -2, -1, memory_config)
+
         return query, key, value
     else:
         if kv_input_tensor is not None:
