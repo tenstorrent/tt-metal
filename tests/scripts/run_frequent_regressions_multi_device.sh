@@ -21,9 +21,9 @@ pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
 
 # Llama2_70b related cached files and tests (the test should parse env variables similar to these)
-export LLAMA_CKPT_DIR=/opt/cache/llama2_70b_cache/llama-data-repacked-2/llama-2-70b/
-export LLAMA_TOKENIZER_PATH=/opt/cache/llama2_70b_cache/llama-data/tokenizer.model
-export LLAMA_CACHE_PATH=/opt/cache/llama2_70b_cache/llama-data-cache/weights-cache-2
+export LLAMA_CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/
+export LLAMA_TOKENIZER_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model
+export LLAMA_CACHE_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2
 
 pytest models/demos/llama2_70b/tests/test_llama_mlp.py::test_LlamaMLP_inference[decode-8chip-T3000]
 pytest models/demos/llama2_70b/tests/test_llama_attention.py::test_LlamaAttention_inference[decode-8chip-T3000]
