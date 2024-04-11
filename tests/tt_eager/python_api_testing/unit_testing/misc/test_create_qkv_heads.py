@@ -18,6 +18,8 @@ def run_create_qkv_heads_test(
     num_kv_heads,
     head_dim,
     dtype,
+    cores_h,
+    cores_w,
     device,
     transpose_k=False,
     in_mem_config=None,
@@ -46,13 +48,13 @@ def run_create_qkv_heads_test(
             {
                 ttl.tensor.CoreRange(
                     ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(num_kv_heads - 1, batch - 1),
+                    ttl.tensor.CoreCoord(cores_w - 1, cores_h - 1),
                 ),
             }
         ),
         [
             seq_len,
-            QKV.shape[-1] // num_kv_heads,
+            QKV.shape[-1] // cores_w,
         ],
         ttl.tensor.ShardOrientation.ROW_MAJOR,
         False,
@@ -119,10 +121,15 @@ def run_create_qkv_heads_test(
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
-    "batch, seq_len, num_q_heads, num_kv_heads, head_dim",
+    "batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w",
     (
-        (7, 224, 8, 8, 64),
-        (7, 384, 8, 8, 64),
+        (7, 224, 8, 8, 64, 7, 8),
+        (7, 384, 8, 8, 64, 7, 8),
+        (7, 224, 16, 16, 64, 7, 8),
+        (7, 384, 16, 16, 64, 7, 8),
+        (7, 384, 16, 8, 64, 7, 8),
+        (7, 384, 12, 6, 64, 7, 6),
+        (7, 384, 12, 12, 64, 7, 6),
     ),
 )
 def test_nlp_create_qkv_heads_test(
@@ -131,10 +138,12 @@ def test_nlp_create_qkv_heads_test(
     num_q_heads,
     num_kv_heads,
     head_dim,
+    cores_h,
+    cores_w,
     dtype,
     device,
 ):
     if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
-    run_create_qkv_heads_test(batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, device)
+    run_create_qkv_heads_test(batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device)

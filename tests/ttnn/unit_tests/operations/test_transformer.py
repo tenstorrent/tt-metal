@@ -284,19 +284,24 @@ def test_falcon_split_query_key_value_and_split_heads(
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("num_heads", [12])
-@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize("sequence_size", [224, 384])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize(
+    "batch_size, num_heads, core_grid",
+    (
+        (8, 12, ttnn.CoreGrid(y=8, x=12)),
+        (8, 16, ttnn.CoreGrid(y=8, x=8)),
+    ),
+)
 def test_sharded_split_query_key_value_and_split_heads(
-    batch_size, num_heads, sequence_size, head_size, input_dtype, *, device
+    batch_size, num_heads, sequence_size, head_size, input_dtype, core_grid, *, device
 ):
     torch.manual_seed(0)
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     input_memory_config = ttnn.create_sharded_memory_config(
-        input_shape, core_grid=ttnn.CoreGrid(y=batch_size, x=num_heads), strategy=ttnn.ShardStrategy.BLOCK
+        input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.BLOCK
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)

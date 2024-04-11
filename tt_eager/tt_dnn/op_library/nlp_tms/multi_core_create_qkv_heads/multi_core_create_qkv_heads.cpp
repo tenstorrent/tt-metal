@@ -62,20 +62,26 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
 
     Program program = CreateProgram();
     std::vector<uint32_t> reader_compile_time_args = {
+
         (std::uint32_t) heads_per_group[0], // q heads in group
         (std::uint32_t) heads_per_group[1], // k heads in group
         (std::uint32_t) heads_per_group[2], // v heads in group
+
         (std::uint32_t) head_dim / TILE_WIDTH * single_tile_size, // size of a q head
         (std::uint32_t) head_dim / TILE_WIDTH * single_tile_size, // size of a k head
         (std::uint32_t) head_dim / TILE_WIDTH * single_tile_size, // size of a v head
+
         (std::uint32_t) tiles_per_group * single_tile_size, // group size, used to skip past group to the rest of the three tensors
         (std::uint32_t) block_ht, // how many tiles to read along sequence dimension
         (std::uint32_t) groups_per_block, // groups per shard (kv heads per core)
+
         (std::uint32_t) block_ht * num_tiles_per_group[0] * groups_per_block, // number of pages in q output tensor
         (std::uint32_t) block_ht * num_tiles_per_group[1] * groups_per_block, // number of pages in k output tensor
         (std::uint32_t) block_ht * num_tiles_per_group[2] * groups_per_block, // number of pages in v output tensor
-        (std::uint32_t) num_tiles_per_group[0] * single_tile_size, // size of n*Q tiles in bytes to get to K heads
-        (std::uint32_t) (num_tiles_per_group[0] * single_tile_size) + (num_tiles_per_group[1] * single_tile_size), // size of n*Q + K tiles in bytes to get to V heads
+
+        (std::uint32_t) num_tiles_per_group[0] * single_tile_size, // size of n*Q tiles in each group, in bytes
+        (std::uint32_t) num_tiles_per_group[1] * single_tile_size, // size of K tiles in each group, in bytes
+        (std::uint32_t) num_tiles_per_group[2] * single_tile_size, // size of V tiles in each group, in bytes
     };
 
     auto reader_kernel_id = tt_metal::CreateKernel(

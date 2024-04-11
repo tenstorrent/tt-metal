@@ -632,7 +632,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
         TT_FATAL(false, "Unsupported sharding scheme");
     }
 
-    TT_ASSERT(num_shards == num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
+    TT_ASSERT(num_shards == num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
 
     if (layout == Layout::TILE) {
         TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
