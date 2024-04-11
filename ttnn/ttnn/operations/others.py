@@ -329,7 +329,10 @@ def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwar
 def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
     import torch
 
-    return torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
+    input_tensor = input_tensor.permute(0, 3, 1, 2)
+    ret = torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
+    ret = ret.permute(0, 2, 3, 1)
+    return ret
 
 
 @ttnn.register_operation(

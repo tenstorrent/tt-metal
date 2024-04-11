@@ -463,7 +463,15 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
     )
 
 
-@ttnn.register_operation(name="ttnn.from_device", validate_input_tensors=_from_device_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.from_device",
+    validate_input_tensors=_from_device_validate_input_tensors,
+    golden_function=_golden_function,
+)
 def from_device(tensor):
     """
     from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -835,7 +843,13 @@ def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
     )
 
 
-@ttnn.register_operation(name="ttnn.clone", validate_input_tensors=_clone_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.clone", validate_input_tensors=_clone_validate_input_tensors, golden_function=_golden_function
+)
 def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
     """
     clone(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: DataType) -> ttnn.Tensor
