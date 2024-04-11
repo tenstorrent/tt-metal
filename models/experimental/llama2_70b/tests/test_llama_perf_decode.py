@@ -137,12 +137,12 @@ def run_test_LlamaModel_end_to_end(
     for cur_pos in range(start_pos + 1, generation_length):
         logger.info(f"Generating token: {cur_pos}")
 
-        if cur_pos == 1 or cur_pos == 2046:  # Skip the first few iterations to warm up
+        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, start_pos:cur_pos], start_pos)
 
-        if cur_pos == 1 or cur_pos == 2046:  # Skip the first few iterations to warm up
+        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
             profiler.end(f"processing_of_decode_input_{cur_pos}")
             profiler.start(f"model_run_for_inference_{cur_pos}")
 
@@ -153,7 +153,7 @@ def run_test_LlamaModel_end_to_end(
             attn_mask,
         )
 
-        if cur_pos == 1 or cur_pos == 2046:  # Skip the first few iterations to warm up
+        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
             profiler.end(f"model_run_for_inference_{cur_pos}")
 
         del tt_inp_emb
@@ -185,8 +185,8 @@ def run_test_LlamaModel_end_to_end(
     comment = f"num_layers={n_layers}_n_devices={n_devices}_emulated={emulated}"
     cpu_time = profiler.get("hugging_face_reference_model")
 
-    decode_compile_time = profiler.get(f"model_run_for_inference_{0}")
-    decode_time = profiler.get(f"model_run_for_inference_{2046}")
+    decode_compile_time = profiler.get(f"model_run_for_inference_{start_pos + 1}")
+    decode_time = profiler.get(f"model_run_for_inference_{generation_length - 10}")
 
     prep_perf_report(
         model_name=f"Llama_{comment}",
