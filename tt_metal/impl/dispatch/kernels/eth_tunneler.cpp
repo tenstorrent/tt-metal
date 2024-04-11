@@ -123,7 +123,7 @@ void kernel_main() {
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
-
+    bool timeout = false;
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
@@ -158,7 +158,7 @@ void kernel_main() {
 
         //need to optimize this.
         //context switch to base fw is very costly.
-        //internal_::risc_context_switch();
+        internal_::risc_context_switch();
     }
 
     if (!timeout) {
