@@ -11,6 +11,7 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
 #include <cstdint>
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
@@ -32,6 +33,7 @@ class RunTimeOptions {
 
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
     std::map<CoreType, bool> dprint_all_cores;
+    std::map<CoreType, std::unordered_set<CoreCoord>> dprint_disabled_cores;
     bool dprint_enabled;
     std::vector<int> dprint_chip_ids;
     bool dprint_all_chips = false;
@@ -82,6 +84,12 @@ class RunTimeOptions {
     }
     inline void set_dprint_cores(std::map<CoreType, std::vector<CoreCoord>> cores) {
         dprint_cores = cores;
+    }
+    inline std::map<CoreType, std::unordered_set<CoreCoord>>& get_dprint_disabled_cores() {
+        return dprint_disabled_cores;
+    }
+    inline void set_dprint_disabled_cores(std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores) {
+        dprint_disabled_cores = disabled_cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
     inline void set_dprint_all_cores(CoreType core_type, bool all_cores) {
