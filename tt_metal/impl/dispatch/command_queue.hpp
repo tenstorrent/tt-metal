@@ -339,7 +339,8 @@ class EnqueueTraceCommand : public Command {
     Buffer& buffer;
     Device* device;
     SystemMemoryManager& manager;
-    uint32_t expected_num_workers_completed;
+    uint32_t& expected_num_workers_completed;
+    bool clear_count;
 
    public:
     EnqueueTraceCommand(
@@ -347,7 +348,7 @@ class EnqueueTraceCommand : public Command {
         Device* device,
         SystemMemoryManager& manager,
         Buffer& buffer,
-        uint32_t expected_num_workers_completed);
+        uint32_t& expected_num_workers_completed);
 
     const DeviceCommand assemble_device_commands();
 
