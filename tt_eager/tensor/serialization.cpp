@@ -260,7 +260,11 @@ Tensor load_tensor(const std::string& file_name, Device* device) {
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 
         auto storage = detail::load_owned_storage(input_stream, data_type);
-        return Tensor(std::move(storage), shape, data_type, layout).to(device);
+        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        if (device != nullptr) {
+            tensor = tensor.to(device);
+        }
+        return tensor;
     }
 }
 
