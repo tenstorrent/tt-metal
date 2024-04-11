@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 from loguru import logger
+from typing import List
 from tqdm import tqdm
 import torch
 from torch import nn
@@ -19,6 +19,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     get_rotation_mat,
     precompute_freqs,
     gather_cos_sin,
+    get_rot_transformation_mat,
 )
 
 
@@ -33,9 +34,7 @@ class TtLlamaModel_optimized(nn.Module):
         configuration,
         batch,
         emulated=False,
-        n_layers_per_group=None,
         cache_path=None,
-        start_layer_idx=0,
     ):
         super().__init__()
 
@@ -43,53 +42,37 @@ class TtLlamaModel_optimized(nn.Module):
         self.devices = devices
         self.num_devices = len(devices)
         self.model_config = model_config
+        self.emulated = emulated
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
+        self.n_local_heads = self.n_heads // self.num_devices
+        self.padded_local_heads = 32
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
-        self.n_kv_heads = configuration.n_kv_heads
-        self.n_local_heads = self.n_heads // self.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // self.num_devices
-
-        self.emulated = emulated
-        self.batched_attn = self.num_devices == 8
-        self.padded_local_heads = 32
-
-        self.norm_eps = configuration.norm_eps
         self.vocab_size = configuration.vocab_size
+        self.norm_eps = configuration.norm_eps
 
-        self.n_layers = n_layers
-        self.n_layers_per_group = n_layers_per_group if n_layers_per_group else n_layers
-        assert self.n_layers % self.n_layers_per_group == 0, "n_layers must be divisible by n_layers_per_group"
-        self.num_layer_groups = self.n_layers // self.n_layers_per_group
-
-        # If n_layers_per_group is not equal to n_layers, we need to reload weights
-        self.do_reload = self.n_layers_per_group != self.n_layers
-
-        # Need unique directory for each run's KV cache... unix time
         self.cache_path = cache_path
-        kv_unique_dir = str(int(time.time()))
-        kv_cache_path = cache_path / kv_unique_dir
-        # Ensure kv_cache_path exists
+        # Transformation matrix for rotary embeddings
+        transformation_mat = [torch2tt_tensor(get_rot_transformation_mat(self.head_dim), device) for device in devices]
+
         logger.info("Creating Layers")
-        kv_cache_path.mkdir(parents=True, exist_ok=True)
         self.layers = [
             TtLlamaDecoder_optimized(
                 devices,
                 state_dict,
                 base_url,
-                start_layer_idx + i,
+                layer_num,
                 model_config,
                 configuration,
                 batch,
+                transformation_mat,
                 emulated=emulated,
                 cache_path=cache_path,
-                kv_cache_dir=kv_unique_dir,
             )
-            for i in tqdm(range(n_layers))
+            for layer_num in tqdm(range(n_layers))
         ]
-
         logger.info("Done creating layers")
 
         # Rotary Embedding
@@ -162,29 +145,18 @@ class TtLlamaModel_optimized(nn.Module):
                     lm_head_host,
                 )
 
-    def free_layers(self, start_layer, end_layer):
-        # Save layer for each layer in layer_group
-        if self.do_reload:
-            for layer in self.layers[start_layer:end_layer]:
-                layer.free_layer()
-
-    def load_layers(self, start_layer, end_layer):
-        # Load layer for each layer in layer_group
-        if self.do_reload:
-            for layer in self.layers[start_layer:end_layer]:
-                layer.load_layer()
-
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
         """
         Prepare inputs for decode mode. Assume that current token is at
         start_pos, and KV cache has valid data up to start_pos.
-        x: (batch, seq)
+        inp_ids: (batch, seq)
         start_pos: int
+        valid_seq_len: int, optional for mask padding
 
-        returns
+        returns:
         xs: [(seq, batch, hidden_dim)] * num_devices
         start_pos: int
-        rot_mats: [(1, batch, head_dim, head_dim)] * num_devices  for decode
+        rot_mats: [(1, 1, head_dim, head_dim)] * num_devices  for decode
                   [(1, 1, seq, head_dim), (1, 1, seq, head_dim)] * num_devices  for prefill
         attn_masks: [(seq, n_local_heads, batch, max_seq_len)] * num_devices  for decode
                     [(1, n_local_heads, seq, seq)] * num_devices  for prefill
@@ -290,12 +262,8 @@ class TtLlamaModel_optimized(nn.Module):
                     xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
 
-            rot_mat = get_rotation_mat(
-                rot_mat=self.rot_emb,
-                start_pos=start_pos,
-                seqlen=seq_len,
-                batch=1,  # use batch=1 because we assume all users use same rot_mat
-            )
+            # Use batch=1 because we assume all users use same rot_mat
+            rot_mat = get_rotation_mat(rot_mat, start_pos, seq_len, batch=1)
             assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
 
             rot_mats = []
@@ -310,8 +278,8 @@ class TtLlamaModel_optimized(nn.Module):
             attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-            attn_masks = []
 
+            attn_masks = []
             for device_id in range(self.num_devices):
                 # BFLOAT16_DTYPE currently pushes faster
                 attn_masks.append(
@@ -345,10 +313,10 @@ class TtLlamaModel_optimized(nn.Module):
 
     def forward(
         self,
-        xs: list,
-        rot_mats: list,
+        xs: List[tt_lib.tensor.Tensor],
+        rot_mats: List[tt_lib.tensor.Tensor],
         start_pos: int,
-        attn_masks: list,
+        attn_masks: List[tt_lib.tensor.Tensor],
         user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
@@ -360,24 +328,14 @@ class TtLlamaModel_optimized(nn.Module):
 
     def decode_forward(
         self,
-        xs: list,
-        rot_mats: list,
+        xs: List[tt_lib.tensor.Tensor],
+        rot_mats: List[tt_lib.tensor.Tensor],
         start_pos: int,
-        attn_masks: list,
+        attn_masks: List[tt_lib.tensor.Tensor],
     ) -> tt_lib.tensor.Tensor:
         ### Run all layers
-        for i in range(self.num_layer_groups):
-            start_layer = i * self.n_layers_per_group
-            end_layer = start_layer + self.n_layers_per_group
-
-            # Prologue: Load weights and KV cache
-            self.load_layers(start_layer, end_layer)
-
-            for layer in self.layers[start_layer:end_layer]:
-                xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
-
-            # Epilogue: Save KV cache to disk and free weights
-            self.free_layers(start_layer, end_layer)
+        for layer in self.layers:
+            xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
 
         # Convert decoder_output to interleaved
         for i in range(self.num_devices):
@@ -403,6 +361,7 @@ class TtLlamaModel_optimized(nn.Module):
             )
         for i in range(self.num_devices):
             norm_out_replicated.append(
+                # In-pace RMSNorm
                 tt_lib.operations.primary.rmsnorm(
                     xs[i],
                     self.norm_eps,
@@ -412,7 +371,6 @@ class TtLlamaModel_optimized(nn.Module):
                     compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
                 )
             )
-            # xs[i].deallocate(True)
 
         ### Each device does an LM head fracture
         lm_head_out = []
@@ -422,8 +380,6 @@ class TtLlamaModel_optimized(nn.Module):
                     norm_out_replicated[i],
                     self.lm_head_list[i],
                     program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-                    # output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    # output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                     output_mem_config=self.model_config["DRAM_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
@@ -497,25 +453,15 @@ class TtLlamaModel_optimized(nn.Module):
 
     def prefill_forward(
         self,
-        xs: list,
-        rot_mats: list,
+        xs: List[tt_lib.tensor.Tensor],
+        rot_mats: List[tt_lib.tensor.Tensor],
         start_pos: int,
-        attn_masks: list,
+        attn_masks: List[tt_lib.tensor.Tensor],
         user_id: int = 0,
     ) -> tt_lib.tensor.Tensor:
         ### Run all layers
-        for i in range(self.num_layer_groups):
-            start_layer = i * self.n_layers_per_group
-            end_layer = start_layer + self.n_layers_per_group
-
-            # Prologue: Load weights and KV cache
-            self.load_layers(start_layer, end_layer)
-
-            for layer in self.layers[start_layer:end_layer]:
-                xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
-
-            # Epilogue: Save KV cache to disk and free weights
-            self.free_layers(start_layer, end_layer)
+        for layer in self.layers:
+            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
 
         ## Gather fractured layers output
         if self.emulated:
@@ -531,6 +477,7 @@ class TtLlamaModel_optimized(nn.Module):
         ## Duplicate layernorm
         norm_out_replicated = self.sharded_rmsnorm(xs, self.norm_eps, self.norm_list)
 
+        # Deallocate original input to rmsnorm
         for i in range(self.num_devices):
             xs[i].deallocate(True)
 
@@ -544,6 +491,7 @@ class TtLlamaModel_optimized(nn.Module):
                     norm_out_replicated[i],
                     self.lm_head_list[i],
                     program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                 )
             )
