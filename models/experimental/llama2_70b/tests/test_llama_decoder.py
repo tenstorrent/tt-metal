@@ -154,7 +154,7 @@ def run_test_LlamaDecoder_inference(
             model_config,
             configuration,
             batch,
-            transformation_mat,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )

@@ -264,7 +264,7 @@ class TtLlamaModel_optimized(nn.Module):
                 )
 
             # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(rot_mat, start_pos, seq_len, batch=1)
+            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
             assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
 
             rot_mats = []
