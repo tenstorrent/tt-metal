@@ -1029,8 +1029,8 @@ void kernel_main_d() {
 
     // Set upstream semaphore MSB to signal completion and path teardown
     // in case prefetch_d is connected to a depacketizing stage.
-    // This should be replaced with a signal similar to what packetized components
-    // use.
+    // TODO: This should be replaced with a signal similar to what packetized
+    // components use.
     DPRINT << "prefetch_d done" << ENDL();
     noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_cb_sem_id)), 0x80000000);
 }

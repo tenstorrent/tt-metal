@@ -1775,6 +1775,7 @@ int main(int argc, char **argv) {
              DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
              0, // unused on hd, filled in below for h and d
              0, // unused on hd, filled in below for h and d
+             0, // unused unless tunneler is between h and d
         };
 
         CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
