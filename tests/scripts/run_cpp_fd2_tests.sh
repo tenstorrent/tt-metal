@@ -29,6 +29,7 @@ run_test() {
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5"  # TrueSmoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5"  # Random Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -b" # Random Test, big data
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 3 -i 5"  # PCIE Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 5"  # Paged DRAM Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 5"  # Paged DRAM Write + Read Test
