@@ -663,9 +663,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
 
-    //Only enable packer l1 accumulation when there are spills, otherwise
-    //unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && (in0_num_blocks_w > 1);
+    //Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
+    //unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    //does a spill and reload, so need more than 2 blocks to use l1 acc for packer
+    //For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
+    bool packer_l1_acc_en = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
     // TODO: Moving this function call to after kernel logic causes pcc fails
     // There are additional CBs and semaphores created in 2D conv in kernel logic,
