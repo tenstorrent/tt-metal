@@ -285,9 +285,16 @@ class EnqueueRecordEventCommand : public Command {
     SystemMemoryManager& manager;
     uint32_t event_id;
     uint32_t expected_num_workers_completed;
+    bool clear_count;
 
    public:
-    EnqueueRecordEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event_id, uint32_t expected_num_workers_completed);
+    EnqueueRecordEventCommand(
+        uint32_t command_queue_id,
+        Device* device,
+        SystemMemoryManager& manager,
+        uint32_t event_id,
+        uint32_t expected_num_workers_completed,
+        bool clear_count = false);
 
     const DeviceCommand assemble_device_commands();
 
@@ -305,9 +312,15 @@ class EnqueueWaitForEventCommand : public Command {
     SystemMemoryManager& manager;
     const Event& sync_event;
     CoreType dispatch_core_type;
+    bool clear_count;
 
    public:
-    EnqueueWaitForEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, const Event& sync_event);
+    EnqueueWaitForEventCommand(
+        uint32_t command_queue_id,
+        Device* device,
+        SystemMemoryManager& manager,
+        const Event& sync_event,
+        bool clear_count = false);
 
     const DeviceCommand assemble_device_commands();
 
@@ -324,9 +337,15 @@ class EnqueueTraceCommand : public Command {
     Buffer& buffer;
     Device* device;
     SystemMemoryManager& manager;
+    uint32_t expected_num_workers_completed;
 
    public:
-    EnqueueTraceCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, Buffer& buffer);
+    EnqueueTraceCommand(
+        uint32_t command_queue_id,
+        Device* device,
+        SystemMemoryManager& manager,
+        Buffer& buffer,
+        uint32_t expected_num_workers_completed);
 
     const DeviceCommand assemble_device_commands();
 
@@ -444,9 +463,8 @@ class HWCommandQueue {
     void enqueue_write_buffer(std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<const Buffer>> buffer, HostDataType src, bool blocking);
     void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
     void enqueue_program(Program& program, bool blocking);
-    void enqueue_record_event(std::shared_ptr<Event> event);
-    void populate_record_event(std::shared_ptr<Event> event);
-    void enqueue_wait_for_event(std::shared_ptr<Event> sync_event);
+    void enqueue_record_event(std::shared_ptr<Event> event, bool clear_count = false);
+    void enqueue_wait_for_event(std::shared_ptr<Event> sync_event, bool clear_count = false);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish();
     void launch(launch_msg_t& msg);
@@ -538,11 +556,19 @@ class CommandQueue {
     template <typename Func>
     inline std::vector<uint32_t> trace_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
         auto& hwcq = hw_command_queue();
+
+        // Issue event as a barrier and a counter reset
+        std::shared_ptr<Event> event = std::make_shared<Event>();
+        hwcq.enqueue_record_event(event, true);
+
+        // Set the context for metadata recording
         hwcq.set_trace_context(ctx);
+
+        // Set bypass mode for issue queue recording
         hwcq.manager.set_bypass_mode(true /* enable bypass */, true /*clear buffer*/);
         run_commands();
         hwcq.manager.set_bypass_mode(false /* disable bypass */, false);
-        return std::move(hwcq.manager.get_bypass_data());
+        return std::move(hwcq.manager.get_bypass_data());  // recorded issue queue commands
     }
 
    private:
