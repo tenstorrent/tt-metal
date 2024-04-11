@@ -143,6 +143,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
         0,    // unused downstream_cb_size
         0,    // unused my_downstream_cb_sem_id
         0,    // unused downstream_cb_sem_id
+        0,    // unused split_dispatch_page_preamble_size
         true,
         true};
     std::vector<uint32_t> spoof_prefetch_compile_args = {
