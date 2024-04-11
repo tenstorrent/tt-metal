@@ -803,12 +803,13 @@ EnqueueTraceCommand::EnqueueTraceCommand(
     Device* device,
     SystemMemoryManager& manager,
     Buffer& buffer,
-    uint32_t expected_num_workers_completed) :
+    uint32_t& expected_num_workers_completed) :
     command_queue_id(command_queue_id),
     buffer(buffer),
     device(device),
     manager(manager),
-    expected_num_workers_completed(expected_num_workers_completed) {}
+    expected_num_workers_completed(expected_num_workers_completed),
+    clear_count(true) {}
 
 const DeviceCommand EnqueueTraceCommand::assemble_device_commands() {
     uint32_t cmd_sequence_sizeB =
@@ -818,7 +819,11 @@ const DeviceCommand EnqueueTraceCommand::assemble_device_commands() {
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
-        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, true);
+        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
+
+    if (this->clear_count) {
+        this->expected_num_workers_completed = 0;
+    }
 
     uint32_t page_size = buffer.page_size();
     uint32_t page_size_log2 = __builtin_ctz(page_size);
@@ -1203,13 +1208,13 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
             read_descriptor);
 
     }
+    this->enqueue_command(command, false);
+
     // Increment the global event counter due to trace emitting events in a batch
     this->manager.increment_event_id(this->id, num_events);
 
     // Increment the exepected worker cores counter due to trace programs completions
     this->expected_num_workers_completed += trace_inst.desc->num_completion_worker_cores;
-
-    this->enqueue_command(command, false);
 
     if (blocking) {
         this->finish();
