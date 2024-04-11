@@ -34,6 +34,7 @@ endif
 	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip install -r tt_metal/python_env/requirements-dev.txt"
 	echo "Installing editable dev version of tt_eager packages..."
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e ."
+	touch $@
 
 $(PYTHON_ENV)/.installed-dev-editable:
 	echo "Installing editable dev version of ttnn package..."
@@ -45,3 +46,4 @@ $(PYTHON_ENV)/.installed-stubs: $(PYTHON_ENV)/.installed-dev $(PYTHON_ENV)/.inst
 	bash -c "source $(PYTHON_ENV)/bin/activate && stubgen -m tt_lib -m tt_lib.device -m tt_lib.profiler -m tt_lib.tensor -m tt_lib.operations -m tt_lib.operations.primary -m tt_lib.operations.primary.transformers -o tt_eager"
 	bash -c "source $(PYTHON_ENV)/bin/activate && stubgen -p ttnn._ttnn -o ttnn"
 	bash -c "sed -i 's/\._C/tt_lib/g' tt_eager/tt_lib/__init__.pyi"
+	touch $@
