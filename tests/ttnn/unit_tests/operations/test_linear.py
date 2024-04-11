@@ -241,3 +241,40 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+def test_bloom_ff2_linear(device):
+    torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
+    torch_weight = torch_random((4096, 1024), -0.1, 0.1, dtype=torch.float32)
+    torch_bias = torch_random((1024,), -0.01, 0.01, dtype=torch.float32)
+
+    torch_output = torch_input_tensor @ torch_weight + torch_bias
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    weights = ttnn.from_torch(
+        torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    bias = ttnn.from_torch(
+        torch_bias.reshape((1, -1)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    output = ttnn.linear(
+        input_tensor,
+        weights,
+        bias=bias,
+        core_grid=device.core_grid,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
