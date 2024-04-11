@@ -303,6 +303,8 @@ const DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::Float16_b;
         } else if(output_format == DataFormat::UInt32){
             pack_src_format = DataFormat::UInt32;
+        } else if(output_format == DataFormat::Int32){
+            pack_src_format = DataFormat::Int32;
         } else if(output_format == DataFormat::UInt16){
             pack_src_format = DataFormat::UInt16;
         } else {
