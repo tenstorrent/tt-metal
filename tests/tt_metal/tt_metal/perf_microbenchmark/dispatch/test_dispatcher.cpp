@@ -449,12 +449,14 @@ int main(int argc, char **argv) {
              dispatch_buffer_size_blocks_g,
              prefetch_sync_sem,
              // Hugepage compile args aren't used in this test since WriteHost is not tested here
-             0,    // unused completion q
-             0,    // unused completion q
-             0,    // unused downstream_cb_base
-             0,    // unused downstream_cb_size
-             0,    // unused my_downstream_cb_sem_id
-             0,    // unused downstream_cb_sem_id
+             0,    // command_queue_base_addr
+             0,    // completion_queue_base_addr
+             0,    // completion_queue_size
+             0,    // downstream_cb_base
+             0,    // downstream_cb_size
+             0,    // my_downstream_cb_sem_id
+             0,    // downstream_cb_sem_id
+             0,    // split_dispatch_page_preamble_size
              true, // is_dram_variant
              true, // is_host_variant
             };

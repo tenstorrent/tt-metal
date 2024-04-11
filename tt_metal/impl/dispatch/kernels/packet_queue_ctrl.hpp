@@ -32,18 +32,6 @@ constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
 constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
 constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
-inline uint64_t get_64b_result(uint32_t* buf, uint32_t index) {
-    return (((uint64_t)buf[index]) << 32) | buf[index+1];
-}
-
-inline uint64_t get_64b_result(const std::vector<uint32_t>& vec, uint32_t index) {
-    return (((uint64_t)vec[index]) << 32) | vec[index+1];
-}
-
-inline void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
-    buf[index] = val >> 32;
-    buf[index+1] = val & 0xFFFFFFFF;
-}
 
 enum DispatchPacketFlag : uint32_t {
     PACKET_CMD_START = (0x1 << 1),
@@ -89,6 +77,11 @@ struct dispatch_packet_header_t {
 
 inline uint32_t packet_switch_4B_pack(uint32_t b0, uint32_t b1, uint32_t b2, uint32_t b3) {
     return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+}
+
+inline void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
+    buf[index] = val >> 32;
+    buf[index+1] = val & 0xFFFFFFFF;
 }
 
 static_assert(MAX_DEST_ENDPOINTS <= 32,

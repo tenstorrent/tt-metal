@@ -34,8 +34,8 @@ constexpr uint32_t PREFETCH_D_BUFFER_SIZE = 256 * 1024;
 constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
 constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
-// 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
-constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
+// make this 2^N as required by the packetized stages
+constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 512 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
 static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 

@@ -13,6 +13,7 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "debug/dprint.h"
 #include "debug/assert.h"
 
@@ -35,9 +36,9 @@ constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(10);
 constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(11);
 constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(12);
 constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(13);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(14);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(15);
-constexpr uint32_t split_dispatch_page_preamble_size = get_compile_time_arg_val(16);
+constexpr uint32_t split_dispatch_page_preamble_size = get_compile_time_arg_val(14);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(15);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(16);
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -207,6 +208,17 @@ FORCE_INLINE
 void relay_to_next_cb(uint32_t data_ptr,
                       uint32_t length) {
 
+    static_assert(
+        preamble_size == 0 || preamble_size == sizeof(dispatch_packet_header_t),
+        "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
+
+    // The downstream packetizing stage will initialize the other fields, but it needs info on
+    // the length of the transfer to be packetized.
+    if (preamble_size > 0) {
+        uint64_t downstream_noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
+        noc_inline_dw_write(downstream_noc_addr, length + preamble_size);
+    }
+
     while (length > 0) {
         uint32_t avail = downstream_cb_end - downstream_cb_data_ptr;
 
@@ -284,7 +296,7 @@ void relay_write_h() {
     uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
-    relay_to_next_cb(data_ptr, length);
+    relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
 
     // Move to next page
     downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
@@ -824,6 +836,14 @@ void kernel_main() {
                            dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
                                                         wr_block_idx);
     noc_async_write_barrier();
+
+    if (is_h_variant && !is_d_variant) {
+        // Set upstream semaphore MSB to signal completion and path teardown
+        // in case dispatch_h is connected to a depacketizing stage.
+        // TODO: This should be replaced with a signal similar to what packetized
+        // components use.
+        noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_dispatch_cb_sem_id)), 0x80000000);
+    }
 
     DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": out" << ENDL();
 }

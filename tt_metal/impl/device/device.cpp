@@ -454,6 +454,7 @@ void Device::compile_command_queue_programs() {
                         DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
                         0, // unused on hd, filled in below for h and d
                         0, // unused on hd, filled in below for h and d
+                        0, // unused unless tunneler is between h and d
                         true,   // is_dram_variant
                         true    // is_host_variant
                     };

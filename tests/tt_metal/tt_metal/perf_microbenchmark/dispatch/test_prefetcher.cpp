@@ -174,8 +174,8 @@ void init(int argc, char **argv) {
         exit(0);
     }
 
-    if (packetized_path_en_g && !split_prefetcher_g) {
-        tt::log_fatal("Packetized path requires split prefetcher");
+    if (packetized_path_en_g && !(split_prefetcher_g && split_dispatcher_g)) {
+        tt::log_fatal("Packetized path requires split prefetcher and dispatcher");
         exit(0);
     }
 
@@ -1331,9 +1331,9 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord prefetch_core = {0, 0};
-        CoreCoord prefetch_d_core = {1, 0};
+        CoreCoord prefetch_d_core = {3, 0};
         CoreCoord dispatch_core = {4, 0};
-        CoreCoord dispatch_h_core = {5, 0};
+        CoreCoord dispatch_h_core = {7, 0};
 
         phys_prefetch_core_g = device->worker_core_from_logical_core(prefetch_core);
         CoreCoord phys_prefetch_d_core = device->worker_core_from_logical_core(prefetch_d_core);
@@ -1341,11 +1341,15 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
 
         // Packetized relay nodes - instantiated only if packetized_path_en_g is set
-        CoreCoord relay_mux_core = {2, 0};
-        CoreCoord relay_demux_core = {3, 0};
+        CoreCoord prefetch_relay_mux_core = {1, 0};
+        CoreCoord prefetch_relay_demux_core = {2, 0};
+        CoreCoord dispatch_relay_mux_core = {5, 0};
+        CoreCoord dispatch_relay_demux_core = {6, 0};
 
-        CoreCoord phys_relay_mux_core = device->worker_core_from_logical_core(relay_mux_core);
-        CoreCoord phys_relay_demux_core = device->worker_core_from_logical_core(relay_demux_core);
+        CoreCoord phys_prefetch_relay_mux_core = device->worker_core_from_logical_core(prefetch_relay_mux_core);
+        CoreCoord phys_prefetch_relay_demux_core = device->worker_core_from_logical_core(prefetch_relay_demux_core);
+        CoreCoord phys_dispatch_relay_mux_core = device->worker_core_from_logical_core(dispatch_relay_mux_core);
+        CoreCoord phys_dispatch_relay_demux_core = device->worker_core_from_logical_core(dispatch_relay_demux_core);
 
         // Packetized components will write their status + a few debug values here:
         constexpr uint32_t packetized_path_test_results_addr = BRISC_L1_RESULT_BASE;
@@ -1417,8 +1421,8 @@ int main(int argc, char **argv) {
         tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
         if (packetized_path_en_g) {
-            tt_metal::CreateSemaphore(program, {relay_mux_core}, 0); // unused
-            tt_metal::CreateSemaphore(program, {relay_demux_core}, 0); // unused
+            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0); // unused
+            tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0); // unused
         }
         constexpr uint32_t prefetch_downstream_cb_sem = 1;
         if (split_prefetcher_g) {
@@ -1426,7 +1430,7 @@ int main(int argc, char **argv) {
             if (packetized_path_en_g) {
                 // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
                 // value only to update the rptr:
-                tt_metal::CreateSemaphore(program, {relay_demux_core}, 0);
+                tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
             }
         } else {
             tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
@@ -1438,7 +1442,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
         constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
         if (packetized_path_en_g) {
-            tt_metal::CreateSemaphore(program, {relay_mux_core}, 0);
+            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
         }
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
@@ -1449,9 +1453,15 @@ int main(int argc, char **argv) {
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
         tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
+        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+        // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
+        // value only to update the rptr:
+        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
 
         constexpr uint32_t dispatch_h_cb_sem = 0;
         tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
+        tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
 
         std::vector<uint32_t> prefetch_compile_args = {
             dispatch_buffer_base, // overridden below for prefetch_h
@@ -1492,7 +1502,7 @@ int main(int argc, char **argv) {
             prefetch_compile_args[12] = scratch_db_base;
 
             CoreCoord phys_prefetch_d_upstream_core =
-                packetized_path_en_g ? phys_relay_demux_core : phys_prefetch_core_g;
+                packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
             configure_kernel_variant<true, false>(program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
@@ -1512,7 +1522,7 @@ int main(int argc, char **argv) {
             prefetch_compile_args[12] = 0;
 
             CoreCoord phys_prefetch_h_downstream_core =
-                packetized_path_en_g ? phys_relay_mux_core : phys_prefetch_d_core;
+                packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
             configure_kernel_variant<false, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
@@ -1523,12 +1533,12 @@ int main(int argc, char **argv) {
 
             if (packetized_path_en_g) {
 
-                uint32_t relay_mux_queue_start_addr = prefetch_d_buffer_base;
-                uint32_t relay_mux_queue_size_bytes = prefetch_d_buffer_size_g;
+                uint32_t prefetch_relay_mux_queue_start_addr = prefetch_d_buffer_base;
+                uint32_t prefetch_relay_mux_queue_size_bytes = prefetch_d_buffer_size_g;
 
                 // Packetized path buffer, can be at any available address.
-                constexpr uint32_t relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
-                constexpr uint32_t relay_demux_queue_size_bytes = 0x10000;
+                constexpr uint32_t prefetch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+                constexpr uint32_t prefetch_relay_demux_queue_size_bytes = 0x10000;
 
                 // For tests with checkers enabled, packetized path may time out and
                 // cause the test to fail.
@@ -1545,11 +1555,11 @@ int main(int argc, char **argv) {
                 constexpr uint32_t num_src_endpoints = 1;
                 constexpr uint32_t num_dest_endpoints = 1;
 
-                std::vector<uint32_t> relay_mux_compile_args =
+                std::vector<uint32_t> prefetch_relay_mux_compile_args =
                 {
                     0, // 0: reserved
-                    (relay_mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
-                    (relay_mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                    (prefetch_relay_mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                    (prefetch_relay_mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
                     num_src_endpoints, // 3: mux_fan_in
                     packet_switch_4B_pack((uint32_t)phys_prefetch_core_g.x,
                                         (uint32_t)phys_prefetch_core_g.y,
@@ -1567,10 +1577,10 @@ int main(int argc, char **argv) {
                                         0,
                                         1,
                                         (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: src 3 info
-                    (relay_demux_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words
-                    (relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
-                    (uint32_t)phys_relay_demux_core.x, // 10: remote_tx_x
-                    (uint32_t)phys_relay_demux_core.y, // 11: remote_tx_y
+                    (prefetch_relay_demux_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words
+                    (prefetch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
+                    (uint32_t)phys_prefetch_relay_demux_core.x, // 10: remote_tx_x
+                    (uint32_t)phys_prefetch_relay_demux_core.y, // 11: remote_tx_y
                     num_dest_endpoints, // 12: remote_tx_queue_id
                     (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                     packetized_path_test_results_addr, // 14: test_results_addr
@@ -1581,8 +1591,8 @@ int main(int argc, char **argv) {
                     // 19: input 0 packetize info:
                     packet_switch_4B_pack(0x1,
                                         DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                                        prefetch_d_upstream_cb_sem, // local sem
-                                        prefetch_downstream_cb_sem), // upstream sem
+                                        prefetch_downstream_cb_sem, // upstream sem
+                                        prefetch_d_upstream_cb_sem), // local sem
                     packet_switch_4B_pack(0, 0, 0, 0), // 20: input 1 packetize info
                     packet_switch_4B_pack(0, 0, 0, 0), // 21: input 2 packetize info
                     packet_switch_4B_pack(0, 0, 0, 0), // 22: input 3 packetize info
@@ -1590,15 +1600,15 @@ int main(int argc, char **argv) {
                     packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0), // 24: packetized input dest id
                 };
 
-                log_info(LogTest, "run relay mux at x={},y={}", relay_mux_core.x, relay_mux_core.y);
+                log_info(LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
                 auto mux_kernel = tt_metal::CreateKernel(
                     program,
                     "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
-                    {relay_mux_core},
+                    {prefetch_relay_mux_core},
                     tt_metal::DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = relay_mux_compile_args,
+                        .compile_args = prefetch_relay_mux_compile_args,
                         .defines = {}
                     }
                 );
@@ -1608,8 +1618,8 @@ int main(int argc, char **argv) {
                 std::vector<uint32_t> demux_compile_args =
                     {
                         dest_endpoint_start_id, // 0: endpoint_id_start_index
-                        (relay_demux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
-                        (relay_demux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                        (prefetch_relay_demux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                        (prefetch_relay_demux_queue_size_bytes >> 4), // 2: rx_queue_size_words
                         num_dest_endpoints, // 3: demux_fan_out
                         packet_switch_4B_pack(phys_prefetch_d_core.x,
                                             phys_prefetch_d_core.y,
@@ -1635,8 +1645,8 @@ int main(int argc, char **argv) {
                         0, // 13: remote_tx_queue_size_words 2
                         0, // 14: remote_tx_queue_start_addr_words 3
                         0, // 15: remote_tx_queue_size_words 3
-                        (uint32_t)phys_relay_mux_core.x, // 16: remote_rx_x
-                        (uint32_t)phys_relay_mux_core.y, // 17: remote_rx_y
+                        (uint32_t)phys_prefetch_relay_mux_core.x, // 16: remote_rx_x
+                        (uint32_t)phys_prefetch_relay_mux_core.y, // 17: remote_rx_y
                         num_dest_endpoints, // 18: remote_rx_queue_id
                         (uint32_t)DispatchRemoteNetworkType::NOC0, // 19: tx_network_type
                         (uint32_t)(dest_endpoint_output_map >> 32), // 20: dest_endpoint_output_map_hi
@@ -1647,19 +1657,19 @@ int main(int argc, char **argv) {
                         0x1, // 25: output_depacketize_mask
                         // 26: output 0 packetize info:
                         packet_switch_4B_pack(DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                                            prefetch_downstream_cb_sem, // local sem
                                             prefetch_d_upstream_cb_sem, // downstream sem
-                                            0),
+                                            prefetch_downstream_cb_sem, // local sem
+                                            0), // remove header
                         packet_switch_4B_pack(0, 0, 0, 0), // 27: output 1 packetize info
                         packet_switch_4B_pack(0, 0, 0, 0), // 28: output 2 packetize info
                         packet_switch_4B_pack(0, 0, 0, 0), // 29: output 3 packetize info
                     };
 
-                log_info(LogTest, "run relay demux at x={},y={}", relay_demux_core.x, relay_demux_core.y);
+                log_info(LogTest, "run prefetch relay demux at x={},y={}", prefetch_relay_demux_core.x, prefetch_relay_demux_core.y);
                 auto demux_kernel = tt_metal::CreateKernel(
                     program,
                     "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
-                    {relay_demux_core},
+                    {prefetch_relay_demux_core},
                     tt_metal::DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt_metal::NOC::RISCV_0_default,
@@ -1704,28 +1714,189 @@ int main(int argc, char **argv) {
 
         CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
         if (split_dispatcher_g) {
+
+            log_info(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
+
             // dispatch_hd and dispatch_d
+            uint32_t dispatch_d_preamble_size =
+                packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
             dispatch_compile_args[12] = dispatch_downstream_cb_sem;
             dispatch_compile_args[13] = dispatch_h_cb_sem;
+            dispatch_compile_args[14] = dispatch_d_preamble_size;
+            CoreCoord phys_dispatch_d_downstream_core =
+                packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
             configure_kernel_variant<true, false>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
                 phys_dispatch_core,
                 phys_upstream_from_dispatch_core,
-                phys_dispatch_h_core);
+                phys_dispatch_d_downstream_core);
 
             // dispatch_h
             dispatch_compile_args[3] = dispatch_h_cb_sem;
             dispatch_compile_args[12] = dispatch_h_cb_sem;
             dispatch_compile_args[13] = dispatch_downstream_cb_sem;
+            dispatch_compile_args[14] = 0; // preamble size
+            CoreCoord phys_dispatch_h_upstream_core =
+                packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
             configure_kernel_variant<false, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_h_core,
                 phys_dispatch_h_core,
-                phys_dispatch_core,
+                phys_dispatch_h_upstream_core,
                 {0xffffffff,0xffffffff});
+
+
+            if (packetized_path_en_g) {
+
+                uint32_t dispatch_relay_mux_queue_start_addr = dispatch_buffer_base;
+                uint32_t dispatch_relay_mux_queue_size_bytes = dispatch_buffer_page_size_g*dispatch_buffer_pages;
+
+                // Packetized path buffer, can be at any available address.
+                constexpr uint32_t dispatch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+                constexpr uint32_t dispatch_relay_demux_queue_size_bytes = 0x10000;
+
+                // For tests with checkers enabled, packetized path may time out and
+                // cause the test to fail.
+                // To save inner loop cycles, presently the packetized components have
+                // a 32-bit timeout cycle counter so 4K cycles is the maximum timeout.
+                // Setting this to 0 disables the timeout.
+                uint32_t timeout_mcycles = packetized_path_timeout_en_g ? 4000 : 0;
+
+                // These could start from 0, but we assign values that are easy to
+                // identify for debug.
+                constexpr uint32_t src_endpoint_start_id = 0xcc;
+                constexpr uint32_t dest_endpoint_start_id = 0xdd;
+
+                constexpr uint32_t num_src_endpoints = 1;
+                constexpr uint32_t num_dest_endpoints = 1;
+
+                std::vector<uint32_t> dispatch_relay_mux_compile_args =
+                {
+                    0, // 0: reserved
+                    (dispatch_relay_mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                    (dispatch_relay_mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                    num_src_endpoints, // 3: mux_fan_in
+                    packet_switch_4B_pack((uint32_t)phys_dispatch_core.x,
+                                          (uint32_t)phys_dispatch_core.y,
+                                          1,
+                                          (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: src 0 info
+                    packet_switch_4B_pack(0,
+                                          0,
+                                          1,
+                                          (uint32_t)DispatchRemoteNetworkType::NOC0), // 5: src 1 info
+                    packet_switch_4B_pack(0,
+                                          0,
+                                          1,
+                                          (uint32_t)DispatchRemoteNetworkType::NOC0), // 6: src 2 info
+                    packet_switch_4B_pack(0,
+                                          0,
+                                          1,
+                                          (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: src 3 info
+                    (dispatch_relay_demux_queue_start_addr >> 4), // 8: remote_tx_queue_start_addr_words
+                    (dispatch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
+                    (uint32_t)phys_dispatch_relay_demux_core.x, // 10: remote_tx_x
+                    (uint32_t)phys_dispatch_relay_demux_core.y, // 11: remote_tx_y
+                    num_dest_endpoints, // 12: remote_tx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
+                    packetized_path_test_results_addr, // 14: test_results_addr
+                    packetized_path_test_results_size, // 15: test_results_size
+                    timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
+                    0x0,// 17: output_depacketize
+                    0x0,// 18: output_depacketize info
+                    // 19: input 0 packetize info:
+                    packet_switch_4B_pack(0x1,
+                                          DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                                          dispatch_downstream_cb_sem, // upstream sem
+                                          dispatch_h_cb_sem), // local sem
+                    packet_switch_4B_pack(0, 0, 0, 0), // 20: input 1 packetize info
+                    packet_switch_4B_pack(0, 0, 0, 0), // 21: input 2 packetize info
+                    packet_switch_4B_pack(0, 0, 0, 0), // 22: input 3 packetize info
+                    packet_switch_4B_pack(src_endpoint_start_id, 0, 0, 0), // 23: packetized input src id
+                    packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0), // 24: packetized input dest id
+                };
+
+                log_info(LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
+                auto mux_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
+                    {dispatch_relay_mux_core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = dispatch_relay_mux_compile_args,
+                        .defines = {}
+                    }
+                );
+
+                uint32_t dest_map_array[4] = {0, 1, 2, 3};
+                uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+                std::vector<uint32_t> demux_compile_args =
+                    {
+                        dest_endpoint_start_id, // 0: endpoint_id_start_index
+                        (dispatch_relay_demux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
+                        (dispatch_relay_demux_queue_size_bytes >> 4), // 2: rx_queue_size_words
+                        num_dest_endpoints, // 3: demux_fan_out
+                        packet_switch_4B_pack(phys_dispatch_h_core.x,
+                                              phys_dispatch_h_core.y,
+                                              0,
+                                              (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: remote_tx_0_info
+                        packet_switch_4B_pack(0,
+                                              0,
+                                              0,
+                                              (uint32_t)DispatchRemoteNetworkType::NOC0), // 5: remote_tx_1_info
+                        packet_switch_4B_pack(0,
+                                              0,
+                                              0,
+                                              (uint32_t)DispatchRemoteNetworkType::NOC0), // 6: remote_tx_2_info
+                        packet_switch_4B_pack(0,
+                                              0,
+                                              0,
+                                              (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: remote_tx_3_info
+                        (dispatch_buffer_base >> 4), // 8: remote_tx_queue_start_addr_words 0
+                        (dispatch_buffer_page_size_g*dispatch_buffer_pages) >> 4, // 9: remote_tx_queue_size_words 0
+                        0, // 10: remote_tx_queue_start_addr_words 1
+                        0, // 11: remote_tx_queue_size_words 1
+                        0, // 12: remote_tx_queue_start_addr_words 2
+                        0, // 13: remote_tx_queue_size_words 2
+                        0, // 14: remote_tx_queue_start_addr_words 3
+                        0, // 15: remote_tx_queue_size_words 3
+                        (uint32_t)phys_dispatch_relay_mux_core.x, // 16: remote_rx_x
+                        (uint32_t)phys_dispatch_relay_mux_core.y, // 17: remote_rx_y
+                        num_dest_endpoints, // 18: remote_rx_queue_id
+                        (uint32_t)DispatchRemoteNetworkType::NOC0, // 19: tx_network_type
+                        (uint32_t)(dest_endpoint_output_map >> 32), // 20: dest_endpoint_output_map_hi
+                        (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF), // 21: dest_endpoint_output_map_lo
+                        packetized_path_test_results_addr, // 22: test_results_addr
+                        packetized_path_test_results_size, // 23: test_results_size
+                        timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
+                        0x1, // 25: output_depacketize_mask
+                        // 26: output 0 packetize info:
+                        packet_switch_4B_pack(DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                                              dispatch_h_cb_sem, // downstream sem
+                                              dispatch_downstream_cb_sem, // local sem
+                                              1), // remove header
+                        packet_switch_4B_pack(0, 0, 0, 0), // 27: output 1 packetize info
+                        packet_switch_4B_pack(0, 0, 0, 0), // 28: output 2 packetize info
+                        packet_switch_4B_pack(0, 0, 0, 0), // 29: output 3 packetize info
+                    };
+
+                log_info(LogTest, "run dispatch relay demux at x={},y={}", dispatch_relay_demux_core.x, dispatch_relay_demux_core.y);
+                auto demux_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
+                    {dispatch_relay_demux_core},
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = demux_compile_args,
+                        .defines = {}
+                    }
+                );
+            }
+
         } else {
             configure_kernel_variant<true, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
@@ -1812,17 +1983,29 @@ int main(int argc, char **argv) {
         }
 
         if (packetized_path_en_g) {
-            vector<uint32_t> mux_results =
+            vector<uint32_t> prefetch_relay_mux_results =
                 tt::llrt::read_hex_vec_from_core(
-                    device->id(), phys_relay_mux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
-            log_info(LogTest, "relay mux status = {}", packet_queue_test_status_to_string(mux_results[PQ_TEST_STATUS_INDEX]));
-            pass &= (mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+                    device->id(), phys_prefetch_relay_mux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
+            log_info(LogTest, "prefetch relay mux status = {}", packet_queue_test_status_to_string(prefetch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (prefetch_relay_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
-            vector<uint32_t> demux_results =
+            vector<uint32_t> prefetch_relay_demux_results =
                 tt::llrt::read_hex_vec_from_core(
-                    device->id(), phys_relay_demux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
-            log_info(LogTest, "relay demux status = {}", packet_queue_test_status_to_string(demux_results[PQ_TEST_STATUS_INDEX]));
-            pass &= (demux_results[0] == PACKET_QUEUE_TEST_PASS);
+                    device->id(), phys_prefetch_relay_demux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
+            log_info(LogTest, "prefetch relay demux status = {}", packet_queue_test_status_to_string(prefetch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (prefetch_relay_demux_results[0] == PACKET_QUEUE_TEST_PASS);
+
+            vector<uint32_t> dispatch_relay_mux_results =
+                tt::llrt::read_hex_vec_from_core(
+                    device->id(), phys_dispatch_relay_mux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
+            log_info(LogTest, "dispatch relay mux status = {}", packet_queue_test_status_to_string(dispatch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (dispatch_relay_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+
+            vector<uint32_t> dispatch_relay_demux_results =
+                tt::llrt::read_hex_vec_from_core(
+                    device->id(), phys_dispatch_relay_demux_core, packetized_path_test_results_addr, packetized_path_test_results_size);
+            log_info(LogTest, "dispatch relay demux status = {}", packet_queue_test_status_to_string(dispatch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
+            pass &= (dispatch_relay_demux_results[0] == PACKET_QUEUE_TEST_PASS);
         }
 
         pass &= tt_metal::CloseDevice(device);
