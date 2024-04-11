@@ -598,6 +598,7 @@ static void process_wait() {
     uint32_t notify_prefetch = cmd->wait.notify_prefetch;
     uint32_t addr = cmd->wait.addr;
     uint32_t count = cmd->wait.count;
+    uint32_t clear_count = cmd->wait.clear_count;
 
     if (barrier) {
         noc_async_write_barrier();
@@ -608,6 +609,10 @@ static void process_wait() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     while (*sem_addr < count); // XXXXX use a wrapping compare
     DEBUG_STATUS('P', 'W', 'D');
+
+    if (clear_count) {
+        *sem_addr = 0;
+    }
 
     if (notify_prefetch) {
         noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_sync_sem)), 1);
