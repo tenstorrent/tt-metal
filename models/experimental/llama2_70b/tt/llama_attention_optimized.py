@@ -811,7 +811,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
                 output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                output_dtype=self.model_config["BFP8_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size
 

@@ -220,6 +220,7 @@ class TtLlamaModel_optimized(nn.Module):
             for i in range(self.num_devices):
                 xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
                 xs[i] = ttnn.reshape(xs[i], (batch, 1, seq_len, self.hidden_size // self.num_devices))
+                xs[i] = tt_lib.tensor.typecast(xs[i], ttnn.bfloat8_b)
             assert xs[0].shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
             cos_gathered, sin_gathered = gather_cos_sin(
