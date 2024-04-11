@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -283,7 +283,7 @@ def test_falcon_split_query_key_value_and_split_heads(
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
-@pytest.mark.skip(reason="This test is failing due to the issue in the implementation")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])
 @pytest.mark.parametrize("num_heads", [12])
@@ -295,9 +295,8 @@ def test_sharded_split_query_key_value_and_split_heads(
     torch.manual_seed(0)
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
-    # needs to be shuffled
     input_memory_config = ttnn.create_sharded_memory_config(
-        input_shape, core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK
+        input_shape, core_grid=ttnn.CoreGrid(y=batch_size, x=num_heads), strategy=ttnn.ShardStrategy.BLOCK
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
@@ -307,8 +306,20 @@ def test_sharded_split_query_key_value_and_split_heads(
         torch_value_tensor,
     ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
 
+    # Sharded inputs requires the groups of heads to be interleaved (ie. {q1, k1, v1}, {q2, k2, v2}, ..., {qn, kn, vn})
+    (torch_q, torch_k, torch_v) = torch.split(
+        torch_input_tensor, [num_heads * head_size, num_heads * head_size, num_heads * head_size], dim=-1
+    )
+    torch_input_tensor_interleaved = torch.concat(
+        [
+            torch_q.reshape(batch_size, sequence_size, num_heads, head_size),
+            torch_k.reshape(batch_size, sequence_size, num_heads, head_size),
+            torch_v.reshape(batch_size, sequence_size, num_heads, head_size),
+        ],
+        dim=-1,
+    ).reshape(input_shape)
     input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensor_interleaved,
         device=device,
         dtype=input_dtype,
         memory_config=input_memory_config,
