@@ -130,7 +130,8 @@ def run_test_LlamaAttention_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
-    transformation_mat = [torch2tt_tensor(get_rot_transformation_mat(head_dim), device) for device in devices]
+    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
     if n_devices == 32:
         tt_LlamaAttention_model = TtLlamaAttention_galaxy(
             devices,
@@ -139,7 +140,7 @@ def run_test_LlamaAttention_inference(
             UNIT_TEST_LAYER_NUM,
             model_config,
             configuration,
-            transformation_mat,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )

@@ -55,7 +55,8 @@ class TtLlamaModel_optimized(nn.Module):
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
-        transformation_mat = [torch2tt_tensor(get_rot_transformation_mat(self.head_dim), device) for device in devices]
+        transformation_mat_torch = get_rot_transformation_mat(self.head_dim)
+        transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
 
         logger.info("Creating Layers")
         self.layers = [
@@ -67,7 +68,7 @@ class TtLlamaModel_optimized(nn.Module):
                 model_config,
                 configuration,
                 batch,
-                transformation_mat,
+                transformation_mats,
                 emulated=emulated,
                 cache_path=cache_path,
             )

@@ -26,7 +26,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         layer_num,
         model_config,
         configuration,
-        transformation_mat,
+        transformation_mats,
         emulated=False,
         cache_path=None,
     ):
@@ -72,7 +72,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
                 model_config,
                 configuration,
                 emulated,
-                transformation_mat,
+                transformation_mats,
                 cache_path,
                 batch_size=self.batch_size_per_device_group,
             )
