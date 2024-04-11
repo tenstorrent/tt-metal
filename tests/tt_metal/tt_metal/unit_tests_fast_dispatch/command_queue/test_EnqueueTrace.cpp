@@ -229,25 +229,29 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
     CommandQueue& command_queue = this->device_->command_queue();
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = i;
+    vector<uint32_t> input_first(input.size() / sizeof(uint32_t), 0xfaceface);
+    vector<uint32_t> input_last(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_last.size(); i++) {
+        input_last[i] = i;
     }
 
     // Capture trace on a trace queue
     Trace trace;
     BeginTrace(trace);
-    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
-    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
+    EnqueueWriteBuffer(trace.queue(), input, input_first.data(), kNonBlocking);
+    EnqueueWriteBuffer(trace.queue(), input, input_last.data(), kNonBlocking);
     EndTrace(trace);
 
     // Instantiate a trace on a device bound command queue
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
 
-    EnqueueTrace(command_queue, trace_id, true);
-    vector<uint32_t> input_readback(input_data.size());
-    EnqueueReadBuffer(command_queue, input, input_readback.data(), kBlocking);
-    EXPECT_EQ(input_data, input_readback);
+    // Repeat traces, check that last write occurs correctly during each iteration
+    vector<uint32_t> readback(input.size() / sizeof(uint32_t), 0);
+    for (int i = 0; i < 10; i++) {
+        EnqueueTrace(command_queue, trace_id, true);
+        EnqueueReadBuffer(command_queue, input, readback.data(), kBlocking);
+        EXPECT_EQ(input_last, readback);
+    }
 
     ReleaseTrace(trace_id);
 }
