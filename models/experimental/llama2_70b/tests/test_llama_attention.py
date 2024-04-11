@@ -152,7 +152,7 @@ def run_test_LlamaAttention_inference(
             UNIT_TEST_LAYER_NUM,
             model_config,
             configuration,
-            transformation_mat,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )
