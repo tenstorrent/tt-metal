@@ -39,8 +39,11 @@
 
 <body>
     <header>
+        {{session['report_name']}}
         <a class="header_class" , href=" /">Home</a>
-        <a class="header_class" , href=" /apis">APIs</a>
+        <a class="header_class" , href=" /operations">Operations</a>
+        <a class="header_class" , href=" /operations_with_l1_buffer_report">Operations With L1 Buffer
+            Report</a>
     </header>
 
     {% block content %}{% endblock %}
