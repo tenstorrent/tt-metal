@@ -265,7 +265,7 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w1_list[i],
                     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
@@ -276,7 +276,7 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w3_list[i],
                     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
@@ -317,7 +317,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 self.w2_list[i],
                 program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
                 output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
+                output_dtype=self.model_config["BFP8_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 
