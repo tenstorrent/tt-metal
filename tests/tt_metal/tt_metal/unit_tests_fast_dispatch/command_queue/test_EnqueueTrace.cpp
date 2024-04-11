@@ -252,6 +252,46 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
     ReleaseTrace(trace_id);
 }
 
+TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    Program simple_program = create_simple_unary_program(input, output);
+    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    vector<uint32_t> eager_output_data;
+    eager_output_data.resize(input_data.size());
+    vector<uint32_t> trace_output_data;
+    trace_output_data.resize(input_data.size());
+
+    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+    EnqueueProgram(command_queue, simple_program, true);
+    EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
+
+    // Trace mode
+    Trace trace;
+    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+
+    BeginTrace(trace);
+    EnqueueProgram(trace.queue(), simple_program, false);
+    EndTrace(trace);
+
+    // Instantiate a trace on a device queue
+    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+
+    EnqueueTrace(command_queue, trace_id, true);
+    EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
+    EXPECT_TRUE(eager_output_data == trace_output_data);
+
+    // Done
+    Finish(command_queue);
+}
+
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     GTEST_SKIP();
     // Get command queue from device for this test, since its running in async mode
