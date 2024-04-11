@@ -372,6 +372,7 @@ class TtLlamaDecoder_optimized:
                     self.attn_norm_list[i],
                     program_config=self.model_config["LN_ATTN_PROGCFG"],
                     output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                    compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
                 )
             )  # attn_norm_replicated is sharded
             # xs_replicated[i].deallocate(True) # !!! Cant deallocate here, will drop PCC
@@ -426,6 +427,7 @@ class TtLlamaDecoder_optimized:
                     self.ffn_norm_list[i],
                     program_config=self.model_config["LN_MLP_PROGCFG"],
                     output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+                    compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
                 )
             )  # ffn_norm_replicated is sharded
         # attn_resid_replicated[i].deallocate(True) # !!! Cant deallocate here, will drop PCC
@@ -522,7 +524,9 @@ class TtLlamaDecoder_optimized:
         ### xs (residual stream) is fractured on all chips
         xs_replicated = []
         for i in range(self.num_devices):
-            xs_replicated.append(tt_lib.tensor.clone(xs[i]))
+            xs_replicated.append(
+                tt_lib.tensor.typecast(tt_lib.tensor.clone(xs[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+            )
 
         ### Duplicate inputs for layernorm
         if self.emulated:
@@ -559,7 +563,9 @@ class TtLlamaDecoder_optimized:
 
         attn_resid_replicated = []
         for i in range(self.num_devices):
-            attn_resid_replicated.append(tt_lib.tensor.clone(output[i]))
+            attn_resid_replicated.append(
+                tt_lib.tensor.typecast(tt_lib.tensor.clone(output[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+            )
 
         ### Duplicate attention residual on all chips
         if self.emulated:

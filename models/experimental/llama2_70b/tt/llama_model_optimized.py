@@ -408,6 +408,7 @@ class TtLlamaModel_optimized(nn.Module):
                     self.norm_list[i],
                     program_config=self.model_config["LN_F_PROGCFG"],
                     output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+                    compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
                 )
             )
             # xs[i].deallocate(True)
