@@ -41,9 +41,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    //Only enable packer l1 accumulation when there are spills, otherwise
-    //unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    //Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+    //unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    //does a spill and reload, so need more than 2 blocks to use l1 acc for packer
+    //For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
+    bool packer_l1_acc_en = packer_l1_acc && (((bias_buffer != nullptr) && num_blocks > 1) || (num_blocks > 2));
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);

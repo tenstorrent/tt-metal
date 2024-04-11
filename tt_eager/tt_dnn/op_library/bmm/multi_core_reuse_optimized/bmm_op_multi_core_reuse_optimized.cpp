@@ -40,9 +40,10 @@ operation::ProgramWithCallbacks create_program(
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
 
-    //Only enable packer l1 accumulation when there are spills, otherwise
-    //unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    //Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+    //unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    //does a spill and reload, so need more than 2 blocks to use l1 acc for packer
+    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
