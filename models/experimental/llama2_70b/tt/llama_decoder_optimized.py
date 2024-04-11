@@ -31,7 +31,7 @@ class TtLlamaDecoder_optimized:
         model_config,
         configuration,
         batch,
-        transformation_mat,
+        transformation_mats,
         emulated=False,
         cache_path=None,
     ):
@@ -60,7 +60,7 @@ class TtLlamaDecoder_optimized:
             layer_num,
             model_config,
             configuration,
-            transformation_mat,
+            transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
         )
