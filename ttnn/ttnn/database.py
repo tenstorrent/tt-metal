@@ -564,7 +564,7 @@ def insert_operation_arguments(report_path, operation_id, function_args, functio
     sqlite_connection.commit()
 
 
-def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_records, golden_tensors):
+def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_records):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
@@ -580,11 +580,12 @@ def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_
         )
     sqlite_connection.commit()
 
-    if golden_tensors is not None:
-        for tensor in golden_tensors:
-            insert_tensor(report_path, tensor)
-            if ttnn.CONFIG.enable_detailed_tensor_report:
-                store_tensor(report_path, tensor)
+
+def store_tensors(report_path, tensors):
+    for tensor in tensors:
+        insert_tensor(report_path, tensor)
+        if ttnn.CONFIG.enable_detailed_tensor_report:
+            store_tensor(report_path, tensor)
 
 
 def query_device_by_id(report_path, device_id):
@@ -771,3 +772,30 @@ def query_tensor_comparison_record(report_path, table_name, tensor_id):
     sqlite_connection.close()
 
     return tensor_comparison_record
+
+
+def query_producer_operation_id(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
+    operation_id = None
+    for row in cursor.fetchall():
+        operation_id, *_ = row
+        break
+
+    sqlite_connection.close()
+
+    return operation_id
+
+
+def query_consumer_operation_ids(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM input_tensors WHERE tensor_id = ?", (tensor_id,))
+    for row in cursor.fetchall():
+        operation_id, *_ = row
+        yield operation_id
+
+    sqlite_connection.close()

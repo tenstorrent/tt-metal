@@ -648,14 +648,16 @@ class Operation:
                             ttnn.CONFIG.report_path,
                             "local_tensor_comparison_records",
                             local_tensor_comparison_records,
-                            local_golden_function_output,
                         )
+                        if global_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
                             "global_tensor_comparison_records",
                             global_tensor_comparison_records,
-                            global_golden_function_output,
                         )
+                        if global_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
                         ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
                             ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id)

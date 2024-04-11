@@ -62,7 +62,7 @@ def tensor_comparison_record_to_percentage(record):
     return percentage
 
 
-def comparison_percentages(table_name, operation_id):
+def get_actual_pccs(table_name, operation_id):
     report_path = get_report_path()
     output_tensor_records = ttnn.database.query_output_tensors(report_path, operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
@@ -70,23 +70,20 @@ def comparison_percentages(table_name, operation_id):
     if not output_tensor_records:
         return "No output tensors"
 
-    percentages = []
+    actual_pccs = []
     for output_tensor_record in output_tensor_records:
         tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
             report_path, table_name, tensor_id=output_tensor_record.tensor_id
         )
         if tensor_comparison_record is None:
             continue
-        if tensor_comparison_record.matches:
-            percentages.append(1)
-        else:
-            percentages.append(tensor_comparison_record.actual_pcc / tensor_comparison_record.desired_pcc)
+        actual_pccs.append(tensor_comparison_record.actual_pcc)
 
-    if not percentages:
+    if not actual_pccs:
         return "Comparison N/A"
 
-    percentage = sum(percentages) / len(percentages)
-    return f"{percentage:.6f}"
+    actual_pccs = ", ".join([f"{pcc:.5f}" for pcc in actual_pccs])
+    return f"Actual PCCs: {actual_pccs}"
 
 
 def comparison_color(table_name, operation_id):
@@ -197,7 +194,7 @@ def operations(report_hash):
         "operations.html",
         operations=operations,
         comparison_color=comparison_color,
-        comparison_percentages=comparison_percentages,
+        get_actual_pccs=get_actual_pccs,
         load_underlying_operations=load_underlying_operations,
     )
 
@@ -595,26 +592,47 @@ def operation_tensor_report(operation_id):
     input_tensor_records = ttnn.database.query_input_tensors(get_report_path(), operation_id=operation_id)
     input_tensor_records = sorted(input_tensor_records, key=lambda tensor: tensor.input_index)
     input_tensors = [
-        (
-            ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id),
-            ttnn.database.load_tensor_by_id(get_report_path(), tensor.tensor_id),
-        )
+        ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id)
         for tensor in input_tensor_records
     ]
-    print(input_tensors)
 
     output_tensor_records = ttnn.database.query_output_tensors(get_report_path(), operation_id=operation_id)
     output_tensor_records = sorted(output_tensor_records, key=lambda tensor: tensor.output_index)
     output_tensors = [
-        (
-            ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id),
-            ttnn.database.load_tensor_by_id(get_report_path(), tensor.tensor_id),
-        )
+        ttnn.database.query_tensor_by_id(get_report_path(), tensor_id=tensor.tensor_id)
         for tensor in output_tensor_records
     ]
 
-    def load_golden_tensors(table_name):
-        golden_tensors = {}
+    def query_producer_operation_id(tensor_record):
+        return ttnn.database.query_producer_operation_id(get_report_path(), tensor_record.tensor_id)
+
+    def query_consumer_operation_ids(tensor_record):
+        return ttnn.database.query_consumer_operation_ids(get_report_path(), tensor_record.tensor_id)
+
+    def display_operation_name(operation_id):
+        operation = ttnn.database.query_operation_by_id(get_report_path(), operation_id)
+        return f"{operation_id}: {operation.name}"
+
+    def load_golden_input_tensors(table_name):
+        golden_input_tensors = {}
+        for input_tensor_record in input_tensor_records:
+            tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
+                get_report_path(), table_name, tensor_id=input_tensor_record.tensor_id
+            )
+
+            if tensor_comparison_record is None:
+                continue
+            tensor_record = ttnn.database.query_tensor_by_id(
+                get_report_path(), tensor_id=tensor_comparison_record.golden_tensor_id
+            )
+            golden_input_tensors[input_tensor_record.input_index] = (
+                tensor_record,
+                tensor_comparison_record,
+            )
+        return golden_input_tensors
+
+    def load_golden_output_tensors(table_name):
+        golden_output_tensors = {}
         for output_tensor_record in output_tensor_records:
             tensor_comparison_record = ttnn.database.query_tensor_comparison_record(
                 get_report_path(), table_name, tensor_id=output_tensor_record.tensor_id
@@ -625,17 +643,15 @@ def operation_tensor_report(operation_id):
             tensor_record = ttnn.database.query_tensor_by_id(
                 get_report_path(), tensor_id=tensor_comparison_record.golden_tensor_id
             )
-            golden_tensor = ttnn.database.load_tensor_by_id(
-                get_report_path(), tensor_id=tensor_comparison_record.golden_tensor_id
+            golden_output_tensors[output_tensor_record.output_index] = (
+                tensor_record,
+                tensor_comparison_record,
             )
-            golden_tensors[output_tensor_record.output_index] = tensor_record, tensor_comparison_record, golden_tensor
-        return golden_tensors
+        return golden_output_tensors
 
-    local_golden_tensors = load_golden_tensors("local_tensor_comparison_records")
-    global_golden_tensors = load_golden_tensors("global_tensor_comparison_records")
-
-    print(local_golden_tensors)
-    print(global_golden_tensors)
+    global_golden_input_tensors = load_golden_input_tensors("global_tensor_comparison_records")
+    local_golden_output_tensors = load_golden_output_tensors("local_tensor_comparison_records")
+    global_golden_output_tensors = load_golden_output_tensors("global_tensor_comparison_records")
 
     def display_tensor_comparison_record(record):
         percentage = tensor_comparison_record_to_percentage(record)
@@ -646,11 +662,14 @@ def operation_tensor_report(operation_id):
             </td>
         """
 
-    def plot_tensor(tensor):
+    def plot_tensor(tensor_record):
         import torch
 
-        if tensor is None:
-            return "", ""
+        if tensor_record is None:
+            return "", "", ""
+
+        file_name = ttnn.database.get_tensor_file_name_by_id(get_report_path(), tensor_record.tensor_id)
+        tensor = ttnn.database.load_tensor_by_id(get_report_path(), tensor_record.tensor_id)
 
         if isinstance(tensor, ttnn.Tensor):
             tensor = ttnn.to_torch(tensor)
@@ -679,7 +698,8 @@ def operation_tensor_report(operation_id):
         # must give a vector of image data for image parameter
         plot.image(image=[tensor], x=0, y=0, dw=tensor.shape[-1], dh=tensor.shape[-2], palette="Viridis10")
 
-        return components(plot)
+        script, div = components(plot)
+        return script, div, file_name
 
     def get_tensor_attributes(tensor_record):
         if tensor_record is None:
@@ -699,9 +719,11 @@ def operation_tensor_report(operation_id):
         output += "</table>"
         return output
 
-    def get_tensor_statistics(tensor):
-        if tensor is None:
+    def get_tensor_statistics(tensor_record):
+        if tensor_record is None:
             return ""
+
+        tensor = ttnn.database.load_tensor_by_id(get_report_path(), tensor_record.tensor_id)
 
         if isinstance(tensor, ttnn.Tensor):
             tensor = ttnn.to_torch(tensor)
@@ -725,9 +747,6 @@ def operation_tensor_report(operation_id):
     stack_trace = ttnn.database.query_stack_trace(get_report_path(), operation_id=operation_id)
     stack_trace = shorten_stack_trace(stack_trace)
 
-    def get_tensor_file_name_by_id(*args, **kwargs):
-        return ttnn.database.get_tensor_file_name_by_id(get_report_path(), *args, **kwargs)
-
     return render_template(
         "operation_tensor_report.html",
         operation=operation,
@@ -736,14 +755,17 @@ def operation_tensor_report(operation_id):
         operation_arguments=operation_arguments,
         input_tensors=input_tensors,
         output_tensors=output_tensors,
-        local_golden_tensors=local_golden_tensors,
-        global_golden_tensors=global_golden_tensors,
+        global_golden_input_tensors=global_golden_input_tensors,
+        local_golden_output_tensors=local_golden_output_tensors,
+        global_golden_output_tensors=global_golden_output_tensors,
         display_tensor_comparison_record=display_tensor_comparison_record,
         plot_tensor=plot_tensor,
-        get_tensor_file_name_by_id=get_tensor_file_name_by_id,
         get_tensor_attributes=get_tensor_attributes,
         get_tensor_statistics=get_tensor_statistics,
         stack_trace=stack_trace,
+        query_producer_operation_id=query_producer_operation_id,
+        query_consumer_operation_ids=query_consumer_operation_ids,
+        display_operation_name=display_operation_name,
     )
 
 
