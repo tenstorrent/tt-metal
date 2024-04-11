@@ -263,6 +263,136 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     return pass;
 }
 
+bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+    Device* device,
+    CommandQueue& cq,
+    const DummyProgramConfig& program_config,
+    uint32_t num_runtime_args_for_cr0,
+    uint32_t num_runtime_args_for_cr1,
+    uint32_t num_iterations) {
+    Program program;
+    bool pass = true;
+
+    CoreRangeSet cr_set = program_config.cr_set;
+
+    auto dummy_kernel0 = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel0.cpp",
+        cr_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto dummy_kernel1 = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel1.cpp",
+        cr_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+
+    vector<uint32_t> dummy_cr0_args;
+    vector<uint32_t> dummy_cr1_args;
+    bool terminate = false;
+
+    auto it = program_config.cr_set.ranges().begin();
+    CoreRange core_range_0 = *it;
+    std::advance(it, 1);
+    CoreRange core_range_1 = *it;
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        dummy_cr0_args.clear();
+        dummy_cr1_args.clear();
+        uint32_t idx;
+        for (idx = 0; idx < num_runtime_args_for_cr0; idx++) {
+            dummy_cr0_args.push_back(idx * (i + 1));
+        }
+
+        for (; idx < num_runtime_args_for_cr0 + num_runtime_args_for_cr1; idx++) {
+            dummy_cr1_args.push_back(idx * (i + 1));
+        }
+
+        CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
+
+        do {
+            auto [core_coord, terminate_] = core_range_generator_0();
+
+            SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr0_args);
+            SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr0_args);
+
+            terminate = terminate_;
+        } while (not terminate);
+
+        CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
+
+        terminate = false;
+        do {
+            auto [core_coord, terminate_] = core_range_generator_1();
+
+            SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr1_args);
+            SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr1_args);
+
+            terminate = terminate_;
+        } while (not terminate);
+
+        tt::tt_metal::detail::CompileProgram(device, program);
+        EnqueueProgram(cq, program, false);
+    }
+    Finish(cq);
+
+    terminate = false;
+    CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
+    CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
+    do {
+        auto [core_coord, terminate_] = core_range_generator_0();
+
+        vector<uint32_t> dummy_kernel0_args_readback;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device,
+            core_coord,
+            BRISC_L1_ARG_BASE,
+            dummy_cr0_args.size() * sizeof(uint32_t),
+            dummy_kernel0_args_readback);
+        pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
+
+        vector<uint32_t> dummy_kernel1_args_readback;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device,
+            core_coord,
+            NCRISC_L1_ARG_BASE,
+            dummy_cr0_args.size() * sizeof(uint32_t),
+            dummy_kernel1_args_readback);
+        pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
+
+        terminate = terminate_;
+    } while (not terminate);
+
+    terminate = false;
+    do {
+        auto [core_coord, terminate_] = core_range_generator_1();
+
+        vector<uint32_t> dummy_kernel0_args_readback;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device,
+            core_coord,
+            BRISC_L1_ARG_BASE,
+            dummy_cr1_args.size() * sizeof(uint32_t),
+            dummy_kernel0_args_readback);
+        pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
+
+        vector<uint32_t> dummy_kernel1_args_readback;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device,
+            core_coord,
+            NCRISC_L1_ARG_BASE,
+            dummy_cr1_args.size() * sizeof(uint32_t),
+            dummy_kernel1_args_readback);
+        pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
+
+        terminate = terminate_;
+    } while (not terminate);
+
+    return pass;
+}
+
 bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
@@ -591,6 +721,34 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) 
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 9, 12, 1));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
+    for (Device* device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+
+        CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
+        CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr0, cr1});
+
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 12, 1));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
+    for (Device* device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+
+        CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
+        CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr0, cr1});
+
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 12, 2));
     }
 }
 
