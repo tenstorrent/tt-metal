@@ -696,24 +696,22 @@ void Program::populate_dispatch_data(Device* device) {
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
                     binaries_data.resize(
                         align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
-
-                    kernel_bins_transfer_info kernel_bins_transfer_info = {
-                        .dst_base_addrs = dst_base_addrs,
-                        .page_offsets = page_offsets,
-                        .lengths = lengths,
-                        .dst_noc_info = dst_noc_multicast_info,
-                        .linked = false,
-                        .data = binaries_data};
-                    this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
-
-                    this->kg_buffers.push_back(std::make_unique<Buffer>(
-                        device,
-                        binaries_data.size() * sizeof(uint32_t),
-                        DeviceCommand::PROGRAM_PAGE_SIZE,
-                        BufferType::DRAM));
-
                     k++;
                 });
+                kernel_bins_transfer_info kernel_bins_transfer_info = {
+                    .dst_base_addrs = dst_base_addrs,
+                    .page_offsets = page_offsets,
+                    .lengths = lengths,
+                    .dst_noc_info = dst_noc_multicast_info,
+                    .linked = false,
+                    .data = binaries_data};
+                this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
+
+                this->kg_buffers.push_back(std::make_unique<Buffer>(
+                    device,
+                    binaries_data.size() * sizeof(uint32_t),
+                    DeviceCommand::PROGRAM_PAGE_SIZE,
+                    BufferType::DRAM));
                 sub_kernel_index++;
             }
         }
@@ -771,24 +769,22 @@ void Program::populate_dispatch_data(Device* device) {
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
                     binaries_data.resize(
                         align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
-
-                    kernel_bins_transfer_info kernel_bins_transfer_info = {
-                        .dst_base_addrs = dst_base_addrs,
-                        .page_offsets = page_offsets,
-                        .lengths = lengths,
-                        .dst_noc_info = dst_noc_unicast_info,
-                        .linked = false,
-                        .data = binaries_data};
-                    this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
-
-                    this->kg_buffers.push_back(std::make_unique<Buffer>(
-                        device,
-                        binaries_data.size() * sizeof(uint32_t),
-                        DeviceCommand::PROGRAM_PAGE_SIZE,
-                        BufferType::DRAM));
-
                     k++;
                 });
+                kernel_bins_transfer_info kernel_bins_transfer_info = {
+                    .dst_base_addrs = dst_base_addrs,
+                    .page_offsets = page_offsets,
+                    .lengths = lengths,
+                    .dst_noc_info = dst_noc_unicast_info,
+                    .linked = false,
+                    .data = binaries_data};
+                this->program_transfer_info.kernel_bins.push_back(kernel_bins_transfer_info);
+
+                this->kg_buffers.push_back(std::make_unique<Buffer>(
+                    device,
+                    binaries_data.size() * sizeof(uint32_t),
+                    DeviceCommand::PROGRAM_PAGE_SIZE,
+                    BufferType::DRAM));
                 sub_kernel_index++;
             }
         }
