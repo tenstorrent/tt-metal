@@ -165,7 +165,9 @@ class TtFalconModelShared:
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
 
-            attention_mask_heads_dim = self.config.num_attention_heads
+            # TODO: revert when we have a fix for sharded attention
+            # attention_mask_heads_dim = self.config.num_attention_heads # for sharded attention
+            attention_mask_heads_dim = self.num_devices  # for interleaved attention
 
             attention_mask_bool_chunks = torch.chunk(
                 (attention_mask_bool * -100000).expand(-1, attention_mask_heads_dim, -1, -1),

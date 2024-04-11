@@ -805,6 +805,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ),
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "L1_MEMCFG": L1_MEMCFG,
+        "BFP4_DTYPE": BFP4_DTYPE,
         "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
