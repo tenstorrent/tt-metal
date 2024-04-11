@@ -57,8 +57,8 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre" # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis" # Smoke Test
 
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -packetized_en" # TrueSmoke Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -packetized_en" # Smoke Test with packetized path
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
 
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
@@ -97,3 +97,14 @@ echo "Running test_dispatcher tests now...";
 # Packed Write
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 256 -max 256
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 1024 -max 1024
+
+
+#############################################
+# PACKETIZED PATH TESTS                     #
+#############################################
+echo "Running packetized path tests now...";
+# 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
+./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
+
+# 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
+./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level

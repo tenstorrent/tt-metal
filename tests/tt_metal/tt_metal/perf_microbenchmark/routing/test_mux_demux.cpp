@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_demux_y = 2;
 
     constexpr uint32_t default_prng_seed = 0x100;
-    constexpr uint32_t default_data_kb_per_tx = 16*1024;
+    constexpr uint32_t default_data_kb_per_tx = 1024*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_demux_queue_size_bytes = 0x20000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
-    constexpr uint32_t default_test_results_size = 0x40000;
+    constexpr uint32_t default_test_results_size = 0x1000;
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
