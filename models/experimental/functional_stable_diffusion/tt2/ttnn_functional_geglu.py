@@ -25,9 +25,13 @@ def split_linear_params(params):
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
 
+    while len(proj_weight.shape) < 4:
+        proj_weight = proj_weight.unsqueeze(0)
     proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     proj_weight = ttnn.to_device(proj_weight, device, memory_config=memory_config)
 
+    while len(gate_weight.shape) < 4:
+        gate_weight = gate_weight.unsqueeze(0)
     gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     gate_weight = ttnn.to_device(gate_weight, device, memory_config=memory_config)
 

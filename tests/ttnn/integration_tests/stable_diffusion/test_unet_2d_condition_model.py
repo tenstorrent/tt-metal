@@ -26,6 +26,7 @@ import math
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     post_process_output,
 )
+from ttnn.operations.core import unsqueeze_to_4D
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -49,6 +50,19 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     timesteps = timesteps.expand(batch_size)
     t_emb = time_proj(timesteps)
     return t_emb
+
+
+def unsqueeze_all_params_to_4d(params):
+    if isinstance(params, dict):
+        for key in params.keys():
+            params[key] = unsqueeze_all_params_to_4d(params[key])
+    elif isinstance(params, ttnn.ttnn.model_preprocessing.ParameterList):
+        for i in range(len(params)):
+            params[i] = unsqueeze_all_params_to_4d(params[i])
+    elif isinstance(params, ttnn.Tensor):
+        params = unsqueeze_to_4D(params)
+
+    return params
 
 
 @skip_for_grayskull()
@@ -143,6 +157,9 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
 
+    # unsqueeze weight tensors to 4D for generating perf dump
+    parameters = unsqueeze_all_params_to_4d(parameters)
+
     timestep_shape = [1, 1, 2, 320]
     encoder_hidden_states_shape = [1, 2, 77, 768]
     class_labels = None
@@ -202,3 +219,4 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)
     assert passing
+    print("EXIT UNET-2D TEST")

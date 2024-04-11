@@ -54,14 +54,24 @@ def pad_heads(tensor, num_heads=8, dim=-1):
         unpadded_len = tensor.shape[-1] // num_heads
         padding_needed = round_up_to_tile_dim(unpadded_len) - unpadded_len
         unpadded_tensors = torch.split(tensor, tensor.shape[dim] // num_heads, dim=dim)
-        padding = (
-            torch.zeros((tensor.shape[-4], tensor.shape[-3], tensor.shape[-2], padding_needed))
-            if dim == -1
-            else torch.zeros((tensor.shape[-4], tensor.shape[-3], padding_needed, tensor.shape[-1]))
-        )
+        if len(tensor.shape) == 2:
+            padding = (
+                torch.zeros((tensor.shape[-2], padding_needed))
+                if dim == -1
+                else torch.zeros((padding_needed, tensor.shape[-1]))
+            )
+        else:
+            padding = (
+                torch.zeros((1, 1, tensor.shape[-2], padding_needed))
+                if dim == -1
+                else torch.zeros((1, 1, padding_needed, tensor.shape[-1]))
+            )
         padded_tensor = torch.Tensor()
         for unpadded_tensor in unpadded_tensors:
             padded_tensor = torch.cat([padded_tensor, unpadded_tensor, padding], dim=dim)
+
+        while len(padded_tensor.shape) < 4:
+            padded_tensor = padded_tensor.unsqueeze(0)
 
         padded_tensor = ttnn.from_torch(padded_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         padded_tensor = ttnn.to_device(padded_tensor, device, memory_config=memory_config)
@@ -117,11 +127,16 @@ class cross_attention:
             parameters.qkv["weight"] = concatenate_qkv(
                 parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
             )
+            parameters.qkv.weight = ttnn.unsqueeze_to_4D(parameters.qkv.weight)
         else:
             parameters["kv"] = ttnn.model_preprocessing.ParameterDict()
             parameters.kv["weight"] = concatenate_qkv(None, parameters.to_k.weight, parameters.to_v.weight)
             parameters.to_q.weight = weight_to_bfp8(parameters.to_q.weight)
 
+            parameters.kv.weight = ttnn.unsqueeze_to_4D(parameters.kv.weight)
+            parameters.to_q.weight = ttnn.unsqueeze_to_4D(parameters.to_q.weight)
+
+        parameters.to_out[0].weight = ttnn.unsqueeze_to_4D(parameters.to_out[0].weight)
         parameters.to_out[0].bias = ttnn.unsqueeze_to_4D(parameters.to_out[0].bias)
         self.parameters = parameters
         self.device = device
