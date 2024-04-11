@@ -284,6 +284,7 @@ void CreateQKVHeads::validate(const std::vector<Tensor> &input_tensors) const {
 
     // TODO: Add this back when output is HEIGHT sharded only!
     // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    TT_FATAL(input_shape[0] == num_h_cores, fmt::format("Batch size  {} must be equal to num cores {}", input_shape[0], num_h_cores));
 }
 
 std::vector<Shape> CreateQKVHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
