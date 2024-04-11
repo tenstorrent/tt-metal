@@ -66,11 +66,11 @@ void DeviceCommand::add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t len
     this->write_to_cmd_sequence(&relay_linear_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
 
-void DeviceCommand::add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages) {
+void DeviceCommand::add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, uint16_t length_adjust) {
     CQPrefetchCmd relay_paged_cmd;
     relay_paged_cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
     relay_paged_cmd.relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) | (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
-    relay_paged_cmd.relay_paged.length_adjust = 0; // TODO: pass this in!
+    relay_paged_cmd.relay_paged.length_adjust = length_adjust;
     relay_paged_cmd.relay_paged.base_addr = base_addr;
     relay_paged_cmd.relay_paged.page_size = page_size;
     relay_paged_cmd.relay_paged.pages = pages;
