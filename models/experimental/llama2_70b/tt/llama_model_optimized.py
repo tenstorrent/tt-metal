@@ -167,6 +167,8 @@ class TtLlamaModel_optimized(nn.Module):
 
         cache_name = lambda name: self.cache_path / (f"{name}")
 
+        cache_file_name = lambda name, dtype, layout: f"{cache_name(name)}_dtype_{dtype}_layout_{layout}.bin"
+
         as_tensor = lambda tensor, dtype, layout, name, device_id: ttnn.as_tensor(
             tensor,
             dtype=dtype,
@@ -176,24 +178,29 @@ class TtLlamaModel_optimized(nn.Module):
             cache_file_name=cache_name(name) if name is not None else None,
         )
 
+        if self.model_config["LLM_MODE"] == "decode":
+            inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
+        else:
+            inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
+
         x = [
-            as_tensor(inp_ids.clone(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, None, device_id)
+            ttnn.from_torch(
+                inp_ids.clone(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.devices[device_id],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             for device_id in range(self.num_devices)
         ]
-        xs = self.tt_embd(x)  # [batch, seq, hidden_dim // num_devices]
-        assert len(xs[0].shape) == 3
-        assert xs[0].shape[2] == self.hidden_size // self.num_devices
+
+        xs = self.tt_embd(x)
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
-
-            for i in range(self.num_devices):
-                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
-                xs[i] = ttnn.reshape(xs[i], (batch, 1, seq_len, self.hidden_size // self.num_devices))
-                xs[i] = tt_lib.tensor.typecast(xs[i], ttnn.bfloat8_b)
             assert xs[0].shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
             cos_gathered, sin_gathered = gather_cos_sin(
@@ -252,10 +259,6 @@ class TtLlamaModel_optimized(nn.Module):
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-
-            for i in range(self.num_devices):
-                xs[i] = ttnn.reshape(xs[i], (seq_len, 1, batch, self.hidden_size // self.num_devices))
-                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
             assert xs[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
             for i in range(self.num_devices):
@@ -263,31 +266,49 @@ class TtLlamaModel_optimized(nn.Module):
                     xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
 
-            # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-
-            rot_mats = []
-            for device_id in range(self.num_devices):
-                rot_mats.append(
-                    as_tensor(
-                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
-                    )
+            try:
+                rot_mat_tt = ttnn.load_tensor(
+                    cache_file_name(f"rot_mat_decode_{start_pos}", ttnn.bfloat16, ttnn.TILE_LAYOUT)
                 )
-
-            padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
-            attn_mask = torch.zeros(*attn_mask_shape)
-            attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-
-            attn_masks = []
-            for device_id in range(self.num_devices):
-                # BFLOAT16_DTYPE currently pushes faster
-                attn_masks.append(
-                    as_tensor(
-                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_decode_{start_pos}", device_id
+                rot_mats = [
+                    ttnn.to_device(rot_mat_tt, self.devices[device_id]) for device_id in range(self.num_devices)
+                ]
+            except (FileNotFoundError, RuntimeError):
+                # Use batch=1 because we assume all users use same rot_mat
+                rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
+                assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+                rot_mats = []
+                for device_id in range(self.num_devices):
+                    rot_mats.append(
+                        as_tensor(
+                            rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
+                        )
                     )
+
+            try:
+                attn_mask_tt = ttnn.load_tensor(
+                    cache_file_name(f"attn_mask_decode_{start_pos}", ttnn.bfloat16, ttnn.TILE_LAYOUT)
                 )
+                attn_masks = [
+                    ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
+                ]
+            except (FileNotFoundError, RuntimeError):
+                padded_layer_past_len = nearest_32(start_pos + 1)
+                attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+                attn_mask = torch.zeros(*attn_mask_shape)
+                attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+                attn_masks = []
+                for device_id in range(self.num_devices):
+                    # BFLOAT16_DTYPE currently pushes faster
+                    attn_masks.append(
+                        as_tensor(
+                            attn_mask.clone(),
+                            ttnn.bfloat16,
+                            ttnn.TILE_LAYOUT,
+                            f"attn_mask_decode_{start_pos}",
+                            device_id,
+                        )
+                    )
 
             repeat_shape = (batch, 1, 1, 1)
             for i in range(self.num_devices):
