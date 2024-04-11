@@ -5,7 +5,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
@@ -16,7 +15,7 @@ using namespace tt;
 int main(int argc, char **argv) {
 
     constexpr uint32_t default_prng_seed = 0x100;
-    constexpr uint32_t default_data_kb_per_tx = 16*1024;
+    constexpr uint32_t default_data_kb_per_tx = 256*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
@@ -29,7 +28,7 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_demux_queue_size_bytes = 0x20000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
-    constexpr uint32_t default_test_results_size = 0x40000;
+    constexpr uint32_t default_test_results_size = 0x1000;
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
