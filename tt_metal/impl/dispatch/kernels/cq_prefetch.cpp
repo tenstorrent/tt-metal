@@ -355,6 +355,112 @@ static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
     return npages;
 }
 
+// This isn't the right way to handle large pages, but expedient for now
+// In the future, break them down into smaller pages...
+template<bool is_dram>
+uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
+                                       uint32_t& downstream__data_ptr,
+                                       uint32_t page_id,
+                                       uint32_t base_addr,
+                                       uint32_t page_size,
+                                       uint32_t pages,
+                                       uint32_t length_adjust) {
+
+#if ENABLE_PREFETCH_DPRINTS
+    DPRINT << "relay_paged_cmd_large: " << page_size << " " << pages << " " << length_adjust << ENDL();
+#endif
+
+    InterleavedAddrGen<is_dram> addr_gen;
+    addr_gen.bank_base_address = base_addr;
+    addr_gen.page_size = page_size;
+
+    // First step - read into DB0
+    uint32_t scratch_read_addr = scratch_db_top[0];
+    uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+    noc_async_read(noc_addr, scratch_read_addr, scratch_db_half_size);
+    uint32_t amt_read = scratch_db_half_size;
+    uint32_t page_length = page_size - amt_read;
+    uint32_t page_offset = amt_read;
+
+    // Second step - read into DB[x], write from DB[x], toggle x, iterate
+    // Writes are fast, reads are slow
+    uint32_t db_toggle = 0;
+    uint32_t scratch_write_addr;
+    uint32_t read_length = pages * page_size - amt_read;
+    uint32_t write_length = pages * page_size - length_adjust;
+
+    noc_async_read_barrier();
+    while (read_length != 0) {
+        // This ensures that writes from prior iteration are done
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_writes_flushed();
+
+        db_toggle ^= 1;
+        scratch_read_addr = scratch_db_top[db_toggle];
+        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+
+        uint32_t amt_to_write = amt_read;
+        uint64_t noc_addr = addr_gen.get_noc_addr(page_id, page_offset);
+        if (page_length <= scratch_db_half_size) {
+            noc_async_read(noc_addr, scratch_read_addr, page_length);
+            page_id++;
+            page_offset = 0;
+            amt_read = page_length;
+            page_length = page_size;
+
+            if (amt_read < scratch_db_half_size &&
+                read_length > amt_read) {
+                noc_addr = addr_gen.get_noc_addr(page_id, 0);
+                uint32_t amt_to_read = scratch_db_half_size - amt_read;
+                noc_async_read(noc_addr, scratch_read_addr + amt_read, amt_to_read);
+                page_length -= amt_to_read;
+                amt_read = scratch_db_half_size;
+                page_offset = amt_to_read;
+            }
+        } else {
+            noc_async_read(noc_addr, scratch_read_addr, scratch_db_half_size);
+            page_length -= scratch_db_half_size;
+            page_offset += scratch_db_half_size;
+            amt_read = scratch_db_half_size;
+        }
+
+        // Third step - write from DB
+        if (write_length < amt_to_write) {
+            amt_to_write = write_length;
+        }
+
+        write_length -= amt_to_write;
+        uint32_t npages = write_pages_to_dispatcher<0, false>
+            (downstream_data_ptr, scratch_write_addr, amt_to_write);
+        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+
+        read_length -= amt_read;
+
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_read_barrier();
+    }
+
+    // Third step - write from DB
+    if (write_length > 0) {
+        scratch_write_addr = scratch_db_top[db_toggle];
+        uint32_t amt_to_write = write_length;
+        ASSERT((amt_to_write & 0x1f) == 0);
+
+        uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+            (downstream_data_ptr, scratch_write_addr, amt_to_write);
+
+        // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
+        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    } else {
+        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);
+    }
+
+    uint32_t pad_to_page = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
+    downstream_data_ptr += pad_to_page;
+
+    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+}
+
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
 // Reading from DRAM has the following characteristics:
 //  - latency is moderately high ~400 cycles on WH
@@ -386,13 +492,17 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     uint32_t base_addr = cmd->relay_paged.base_addr;
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
-    uint32_t read_length = pages * page_size;
+
+    if (page_size > scratch_db_half_size) {
+        return process_relay_paged_cmd_large<is_dram>(cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, cmd->relay_paged.length_adjust);
+    }
 
     InterleavedAddrGen<is_dram> addr_gen;
     addr_gen.bank_base_address = base_addr;
     addr_gen.page_size = page_size;
 
     // First step - read into DB0
+    uint32_t read_length = pages * page_size;
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
     uint32_t amt_read = 0;
