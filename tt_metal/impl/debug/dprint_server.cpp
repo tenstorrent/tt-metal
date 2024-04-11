@@ -422,13 +422,26 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         }
     };
 
+    // Handle specifically disabled cores
+    std::unordered_set<CoreCoord> disabled_phys_cores;
+    for (auto &type_and_cores : tt::llrt::OptionsG.get_dprint_disabled_cores()) {
+        for (auto &core : type_and_cores.second) {
+            CoreCoord physical_core = device->physical_core_from_logical_core(core, type_and_cores.first);
+            disabled_phys_cores.insert(physical_core);
+        }
+    }
+
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         if (tt::llrt::OptionsG.get_dprint_all_cores(core_type)) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
-            for (CoreCoord phys_core: all_physical_printable_cores[core_type])
+            for (CoreCoord phys_core: all_physical_printable_cores[core_type]) {
+                // Don't print on specifically disabled cores.
+                if (disabled_phys_cores.find(phys_core) != disabled_phys_cores.end())
+                    continue;
                 print_cores_sanitized.push_back(phys_core);
+            }
             log_info(
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
@@ -451,6 +464,9 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                     valid_logical_core = false;
                 }
                 if (valid_logical_core && all_physical_printable_cores[core_type].count(phys_core) > 0) {
+                    // Don't print on specifically disabled cores.
+                    if (disabled_phys_cores.find(phys_core) != disabled_phys_cores.end())
+                        continue;
                     print_cores_sanitized.push_back(phys_core);
                     log_info(
                         tt::LogMetal,
