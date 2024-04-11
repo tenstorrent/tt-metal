@@ -158,8 +158,9 @@ class TtLlamaDecoder_optimized:
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
             x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            assert x_fractured.size() == (batch, 1, seq_len, self.hidden_size // self.num_devices)
+            assert x_fractured[0].size() == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
+            xs = []
             for device_id in range(self.num_devices):
                 xs.append(as_tensor(x_fractured[device_id], ttnn.bfloat16, ttnn.TILE_LAYOUT, None, device_id))
 
