@@ -344,6 +344,7 @@ void Device::compile_command_queue_programs() {
 
     constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
     constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
+    constexpr uint32_t prefetch_h_exec_buf_sem = 2;
 
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
@@ -409,6 +410,7 @@ void Device::compile_command_queue_programs() {
                     prefetch_downstream_cb_sem, // prefetch_d only
                     PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
                     PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+                    prefetch_h_exec_buf_sem,
                     true,   // is_dram_variant
                     true    // is_host_variant
                 };
@@ -425,6 +427,7 @@ void Device::compile_command_queue_programs() {
 
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0);
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, dispatch_buffer_pages);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0);
 
                 if (device_id == this->id()) {
                     std::map<string, string> dispatch_defines = {
