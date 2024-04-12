@@ -407,6 +407,7 @@ from ttnn.operations.normalization import (
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    get_group_norm_cores_accross_channel,
 )
 
 from ttnn.operations.ccl import all_gather
