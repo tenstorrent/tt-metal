@@ -18,9 +18,6 @@ from models.utility_functions import torch_random, skip_for_wormhole_b0, is_worm
 def test_mean(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
-    if is_wormhole_b0() and dim == -2:
-        pytest.skip("Issue #6991: Wormhole B0: mean operation fails for dim=-2")
-
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True, dtype=torch.bfloat16)
 

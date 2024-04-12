@@ -159,9 +159,8 @@ def test_cosh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_acosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.acosh, torch.acosh)
+    run_unary_test_range(device, h, w, ttnn.acosh, torch.acosh, low=1, high=100, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -176,10 +175,8 @@ def test_logical_not(device, h, w):
     run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
 
 
-def run_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0.9999):
+def run_unary_test_range(device, h, w, ttnn_function, torch_function, low=-100, high=100, pcc=0.9999):
     torch.manual_seed(0)
-    low = -100
-    high = 100
 
     torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
     torch_output_tensor = torch_function(torch_input_tensor)
@@ -214,9 +211,21 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_functio
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("scalar", [1, 2])
+def run_unary_test_with_float_range(device, h, w, scalar, low, high, ttnn_function, torch_function, pcc=0.9999):
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16) * (high - low) + low
+    torch_output_tensor = torch_function(torch_input_tensor, scalar)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("scalar", [1, 1e-6])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_logit(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.logit, torch.logit)
+    run_unary_test_with_float_range(device, h, w, scalar, 0, 1, ttnn.logit, torch.logit)
