@@ -4,11 +4,11 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ---
 
-### Step 1. Driver & Firmware
-
-Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com/tenstorrent).
+### Step 1. Driver & Firmware & Tools
 
 If you have purchased a Grayskull card, you will find the instructions [here](https://docs.tenstorrent.com/tenstorrent/add-in-boards-and-cooling-kits/grayskull-tm-e75-e150/software-setup).
+
+If you have purchased a Wormhole card, you can follow the instruction from scripts/install. It will install the correct versioning of all firmware and tools you need.
 
 Note the current compatability matrix:
 
