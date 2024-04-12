@@ -91,8 +91,7 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     auto desc = std::make_shared<detail::TraceDescriptor>();
 
     // Record the captured Host API as commands via trace_commands,
-    // extracted command data is returned as a vector of uint32_t
-    vector<uint32_t> data = cq.trace_commands(desc, [&]() {
+    vector<uint32_t> data = cq.hw_command_queue().record_commands(desc, [&]() {
         for (auto cmd : this->queue().worker_queue) {
             cq.run_command(cmd);
         }
@@ -126,14 +125,9 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     // Pin the trace buffer in memory until explicitly released by the user
     this->add_instance(tid, {desc, buffer});
     this->state = TraceState::READY;
-    log_trace(
-        LogMetalTrace,
+    log_trace(LogMetalTrace,
         "Trace {} instantiated with completion buffer num_entries={}, issue buffer unpadded size={}, padded size={}, num_pages={}",
-        tid,
-        desc->num_completion_q_reads,
-        unpadded_size,
-        padded_size,
-        padded_size / page_size);
+        tid, desc->num_completion_q_reads, unpadded_size, padded_size, padded_size / page_size);
     return tid;
 }
 
