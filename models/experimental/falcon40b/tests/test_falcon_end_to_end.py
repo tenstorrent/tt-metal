@@ -420,8 +420,8 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
-    ((1, 0.99, 0.99, 0.99), (60, 0.92, 0.99, 0.85)),
-    ids=["layers_1", "layers_60"],
+    ((1, 0.99, 0.99, 0.99), (12, 0.99, 0.98, 0.98), (60, 0.92, 0.99, 0.85)),
+    ids=["layers_1", "layers_12", "layers_60"],
 )
 @pytest.mark.parametrize(
     "model_version",

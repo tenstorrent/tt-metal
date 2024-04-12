@@ -380,85 +380,85 @@ class TtFalconAttention:
             )
             key_layer[i].deallocate(True)
 
-        attn_output = self.scaled_product_attention_whole_seqlen(
-            query_layer, key_layer_transposed, attention_mask, value_layer
-        )
+        # attn_output = self.scaled_product_attention_whole_seqlen(
+        #     query_layer, key_layer_transposed, attention_mask, value_layer
+        # )
 
-        # slice_size = 128
-        # num_slices = q_len // slice_size
+        slice_size = 128
+        num_slices = q_len // slice_size
 
-        # if num_slices > 1:
-        #     # Partially sliced and sharded attention
-        #     attn_output = []  # this is the output we write to. Initiate as empty tensors
-        #     for i in range(len(query_layer)):
-        #         attn_output.append(
-        #             torch2tt_tensor(
-        #                 torch.zeros([1, self.num_heads_per_device, q_len, self.head_dim]),
-        #                 self.devices[i],
-        #                 tt_memory_config=self.model_config["DRAM_MEMCFG"],
-        #                 tt_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-        #             )
-        #         )
+        if num_slices > 1:
+            # Partially sliced and sharded attention
+            attn_output = []  # this is the output we write to. Initiate as empty tensors
+            for i in range(len(query_layer)):
+                attn_output.append(
+                    torch2tt_tensor(
+                        torch.zeros([1, self.num_heads_per_device, q_len, self.head_dim]),
+                        self.devices[i],
+                        tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                        tt_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
+                    )
+                )
 
-        #     for slice_i in range(num_slices):
-        #         # Partially slice and convert activations to sharded
-        #         q_slices = []
-        #         attn_mask_slices = []
-        #         for i in range(len(query_layer)):
-        #             q_slices.append(
-        #                 tt_lib.tensor.interleaved_to_sharded_partial(
-        #                     query_layer[i],
-        #                     (8, 8),
-        #                     [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
-        #                     num_slices,  # num_slices
-        #                     slice_i,  # slice_index
-        #                     tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        #                     tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-        #                 )
-        #             )
+            for slice_i in range(num_slices):
+                # Partially slice and convert activations to sharded
+                q_slices = []
+                attn_mask_slices = []
+                for i in range(len(query_layer)):
+                    q_slices.append(
+                        tt_lib.tensor.interleaved_to_sharded_partial(
+                            query_layer[i],
+                            (8, 8),
+                            [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
+                            num_slices,  # num_slices
+                            slice_i,  # slice_index
+                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                        )
+                    )
 
-        #         for i in range(len(query_layer)):
-        #             attn_mask_slices.append(
-        #                 tt_lib.tensor.interleaved_to_sharded_partial(
-        #                     attention_mask[i],
-        #                     (8, 8),
-        #                     [slice_size * 16 // 64, q_len],  # each slice is [1,16,128,128], we use 64 cores
-        #                     num_slices,  # num_slices
-        #                     slice_i,  # slice_index
-        #                     tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        #                     tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-        #                 )
-        #             )
+                for i in range(len(query_layer)):
+                    attn_mask_slices.append(
+                        tt_lib.tensor.interleaved_to_sharded_partial(
+                            attention_mask[i],
+                            (8, 8),
+                            [slice_size * 16 // 64, q_len],  # each slice is [1,16,128,128], we use 64 cores
+                            num_slices,  # num_slices
+                            slice_i,  # slice_index
+                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                        )
+                    )
 
-        #         attn_output_slice = self.scaled_product_attention(
-        #             q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len
-        #         )
+                attn_output_slice = self.scaled_product_attention(
+                    q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len
+                )
 
-        #         # write output slices to attn_output
-        #         for i in range(len(attn_output_slice)):
-        #             tt_lib.tensor.sharded_to_interleaved_partial(
-        #                 attn_output_slice[i],
-        #                 attn_output[i],
-        #                 num_slices,
-        #                 slice_i,
-        #                 self.model_config["DRAM_MEMCFG"],
-        #             )
-        #             attn_output_slice[i].deallocate(True)
-        # else:
-        #     query_layer = convert_to_layout(
-        #         query_layer, self.model_config["DRAM_MEMCFG"], self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"]
-        #     )
-        #     attention_mask = convert_to_layout(
-        #         attention_mask, self.model_config["DRAM_MEMCFG"], self.model_config["ATTN_MASK_HEIGHT_SHARDED_MEMCFG"]
-        #     )
+                # write output slices to attn_output
+                for i in range(len(attn_output_slice)):
+                    tt_lib.tensor.sharded_to_interleaved_partial(
+                        attn_output_slice[i],
+                        attn_output[i],
+                        num_slices,
+                        slice_i,
+                        self.model_config["DRAM_MEMCFG"],
+                    )
+                    attn_output_slice[i].deallocate(True)
+        else:
+            query_layer = convert_to_layout(
+                query_layer, self.model_config["DRAM_MEMCFG"], self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"]
+            )
+            attention_mask = convert_to_layout(
+                attention_mask, self.model_config["DRAM_MEMCFG"], self.model_config["ATTN_MASK_HEIGHT_SHARDED_MEMCFG"]
+            )
 
-        #     attn_output = self.scaled_product_attention(
-        #         query_layer, key_layer_transposed, attention_mask, value_layer, q_len
-        #     )
+            attn_output = self.scaled_product_attention(
+                query_layer, key_layer_transposed, attention_mask, value_layer, q_len
+            )
 
-        #     attn_output = convert_to_layout(
-        #         attn_output, self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
-        #     )
+            attn_output = convert_to_layout(
+                attn_output, self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
+            )
 
         # Deallocate query, key, value
         for i in range(len(query_layer)):
@@ -536,7 +536,7 @@ class TtFalconAttention:
 
         # Q * KˆT
         attn_weights = []
-        program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
+        # program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
         # program_config.out_subblock_h = 1
         # program_config.out_subblock_w = 1
         for i in range(len(q_slices)):
@@ -547,8 +547,9 @@ class TtFalconAttention:
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     output_mem_config=self.model_config["DRAM_MEMCFG"],
                     # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    # program_config=self.model_config["ATTENTION_MM_PROGCFG"],
-                    program_config=program_config,
+                    program_config=self.model_config[
+                        "ATTENTION_MM_PROGCFG"
+                    ],  # TODO: comment this line to workaround the bad PCC issue!!
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
                 )
             )
@@ -573,7 +574,7 @@ class TtFalconAttention:
 
         # Attention score * V
         attn_output_slice = []
-        program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
+        # program_config = tt_lib.operations.primary.MatmulDefaultProgramConfig()
         # program_config.out_subblock_h = 1
         # program_config.out_subblock_w = 1
         for i in range(len(attn_weights)):
@@ -584,8 +585,7 @@ class TtFalconAttention:
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     output_mem_config=self.model_config["DRAM_MEMCFG"],
                     # output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    # program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-                    program_config=program_config,
+                    # program_config=self.model_config["ATTENTION_MM_2_PROGCFG"], # TODO: comment this line to workaround the bad PCC issue!!
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
                 )
             )
