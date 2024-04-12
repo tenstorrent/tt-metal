@@ -406,9 +406,8 @@ Tensor Tensor::cpu_sharded() const {
 
 
 Tensor Tensor::extract_shard(const CoreCoord & core) const{
-
-    auto buffer= this->buffer();
-    uint32_t core_id = buffer->core_to_core_id().at(core);
+    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
 
@@ -542,14 +541,15 @@ bool Tensor::is_allocated() const {
 }
 
 std::vector<uint32_t> Tensor::host_page_ordering(){
-    auto cores = buffer()->all_cores();
+    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    auto cores = buffer_page_mapping.all_cores_;
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(buffer()->get_dev_to_host_mapped_page_id(page_id));
+        ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id]);
     }
     return ret_vec;
 }

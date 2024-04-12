@@ -194,10 +194,12 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
         TT_ASSERT(buffer.buffer_type() == BufferType::L1 && "Only L1 Buffers support sharding");
 
+
+        auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         auto total_pages = buffer.num_pages();
         for(int host_page_id=0; host_page_id<total_pages; host_page_id++){
-            auto dev_page_id = buffer.get_host_to_dev_mapped_page_id(host_page_id);
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
+            auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
+            auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
             auto bank_id = device->bank_ids_from_logical_core(core)[0];
             auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
             auto data_index = host_page_id * num_entries_per_page;
@@ -362,10 +364,11 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
         host_buffer = std::vector<uint32_t>(total_pages * num_entries_per_page);
 
+        auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
+            auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
             auto bank_id = device->bank_ids_from_logical_core(core)[0];
-            auto host_page_id = buffer.get_dev_to_host_mapped_page_id(dev_page_id);
+            auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
             if(!shard_order){
                 read_pages_to_host_helper(
                     device,
@@ -443,11 +446,19 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_spec().size();
         host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
-        auto page_ids = buffer.dev_pages_in_shard(core_id);
+
+        std::vector<uint32_t> page_ids;
+        auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+        for(uint32_t i=0; i<buffer_page_mapping.dev_page_to_core_mapping_.size() ; i++) {
+           if(buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
+             page_ids.push_back(i);
+           }
+        }
+
 
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
+            auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
             auto bank_id = device->bank_ids_from_logical_core(core)[0];
             read_pages_to_host_helper(
                 device,

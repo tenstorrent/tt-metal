@@ -380,7 +380,8 @@ struct IssuedReadData {
         this->page_size = buffer.page_size();
         this->padded_page_size = padded_page_size;
         if (this->buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or this->buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            this->dev_page_to_host_page_mapping = buffer.get_dev_page_to_host_page_mapping();
+            auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+            this->dev_page_to_host_page_mapping = buffer_page_mapping.dev_page_to_host_page_mapping_;
         }
         this->dst = dst;
         this->dst_offset = dst_offset;

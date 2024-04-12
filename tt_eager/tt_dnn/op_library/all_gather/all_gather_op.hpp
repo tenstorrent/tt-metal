@@ -367,7 +367,8 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
             std::min(sharded_tensor_num_cores % num_workers, worker_index) :
             worker_index;
 
-        std::vector<CoreCoord> const& all_shard_cores = input_tensor.buffer()->all_cores();
+        auto buffer_page_mapping = generate_buffer_page_mapping(*input_tensor.buffer());
+        std::vector<CoreCoord> const& all_shard_cores = buffer_page_mapping.all_cores_;
         for (uint32_t c = worker_cores_start; c < worker_cores_start + this->args_struct.num_dest_cores; ++c) {
             CoreCoord const& worker_core = all_shard_cores.at(c);
             ccl::WorkerXY worker_xy(
