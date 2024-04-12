@@ -44,7 +44,7 @@ def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
     ground_truth_texts = []
     for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
         token_windows.append(tokenized[i : i + prefill_length])
-        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length])
+        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length + 1])
         ground_truth_texts.append(ground_truth_text)
         if len(token_windows) == 32:
             return token_windows, ground_truth_texts
