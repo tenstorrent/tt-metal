@@ -15,14 +15,35 @@ namespace {
 static constexpr bool kBlocking = true;
 static constexpr bool kNonBlocking = false;
 
-size_t interleaved_page_size(
-    const uint32_t total_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
-    // TODO #7110: Add logic to automatically figure out the trace buffer page size
-    // Calculate the page size for interleaved buffer that
-    // - is a power - of - 2 number (prefetch constraint),
-    // - AND is evenly distributed across the banks (start_page = 0)
-    // - AND falls inside min and max size constraints (optimal noc util),
-    return DeviceCommand::PROGRAM_PAGE_SIZE;
+// Min size is bounded by NOC transfer efficiency
+// Max size is bounded by Prefetcher CmdDatQ size
+static constexpr uint32_t kExecBufPageMin = 1024;
+static constexpr uint32_t kExecBufPageMax = 4096;
+
+// Assumes pages are interleaved across all banks starting at 0
+size_t interleaved_page_size(const uint32_t buf_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
+    // Populate power of 2 numbers within min and max as candidates
+    vector<uint32_t> candidates;
+    for (uint32_t size = 1; size <= max_size; size <<= 1) {
+        if (size >= min_size) {
+            candidates.push_back(size);
+        }
+    }
+    uint32_t min_waste = -1;
+    uint32_t pick = 0;
+    // Pick the largest size that minimizes waste
+    for (const auto& size : candidates) {
+        // Pad data to the next fully banked size
+        uint32_t fully_banked = num_banks * size;
+        uint32_t padded_size = (buf_size + fully_banked - 1) / fully_banked * fully_banked;
+        uint32_t waste = padded_size - buf_size;
+        if (waste <= min_waste) {
+            min_waste = waste;
+            pick = size;
+        }
+    }
+    TT_FATAL(pick >= min_size and pick <= max_size);
+    return pick;
 }
 }
 
@@ -87,7 +108,8 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     }
 
     uint64_t unpadded_size = data.size() * sizeof(uint32_t);
-    size_t page_size = interleaved_page_size(unpadded_size, cq.device()->num_banks(BufferType::DRAM), 0, 0);
+    size_t page_size = interleaved_page_size(
+        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
     size_t numel_page = page_size / sizeof(uint32_t);
     size_t numel_padding = numel_page - data.size() % numel_page;
     if (numel_padding > 0) {
