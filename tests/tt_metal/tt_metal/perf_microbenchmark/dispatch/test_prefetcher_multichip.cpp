@@ -216,7 +216,7 @@ bool validate_host_results(
         CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index];
 
         // Validate only works for packed write linear host commands
-        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_HOST);
+        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST);
 
         uint32_t length = cmd->write_linear_host.length;
         for (int i = 0; i < length / sizeof(uint32_t); i++) {

@@ -121,7 +121,7 @@ void DeviceCommand::add_dispatch_write_host(bool flush_prefetch, uint32_t data_s
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
     CQDispatchCmd write_cmd;
-    write_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_HOST;
+    write_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
     write_cmd.write_linear_host.length = payload_sizeB; // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
 
     this->write_to_cmd_sequence(&write_cmd, sizeof(CQDispatchCmd));

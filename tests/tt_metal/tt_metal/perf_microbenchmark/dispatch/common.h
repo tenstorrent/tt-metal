@@ -558,7 +558,7 @@ inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t lengt
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_HOST;
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
     // Include cmd in transfer
     cmd.write_linear_host.length = length + sizeof(CQDispatchCmd);
 
