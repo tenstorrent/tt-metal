@@ -165,7 +165,8 @@ def run_falcon_demo_kv(
     configuration = FalconConfig(**model_config_entries)
 
     profiler.start(f"loading_inputs")
-    assert len(user_input) % batch_size == 0, "Number of users must be a multiple of batch size"
+    if num_devices > 1:
+        assert len(user_input) == global_batch, "Number of users must be equal to batch size * number of devices!"
     if len(user_input) == 1:
         input_prompts = user_input
     else:
