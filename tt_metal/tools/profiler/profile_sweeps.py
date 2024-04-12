@@ -29,11 +29,11 @@ def main(directory, result):
     for txt_file in txt_files:
         basename = os.path.splitext(os.path.basename(txt_file))[0]
         outFolder = f"{result}/{basename}"
-        command = f"source build/python_env/bin/activate & python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {outFolder}"
+        command = f"pytest tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py --input-path {txt_file} --input-method cli --cli-input {outFolder}"
         profile_output_folder = f"{outFolder}/profile"
 
         if do_run:
-            print(command)
+            logger.info(f"Profiling: command")
 
             clear_profiler_runtime_artifacts()
 

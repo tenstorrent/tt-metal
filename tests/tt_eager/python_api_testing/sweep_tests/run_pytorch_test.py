@@ -311,48 +311,18 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
     logger.info(f"Tests run in {duration:.2f}s")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pytorch testing infra")
-    parser.add_argument(
-        "-i",
-        "--input-test-config",
-        help="Input pytorch test config",
-        required=True,
-    )
-    parser.add_argument(
-        "-o",
-        "--output-folder-path",
-        default="pytorch_test_folder",
-        help="Output pytorch test folder",
-    )
-    parser.add_argument(
-        "-s",
-        "--device-id",
-        default=0,
-        type=int,
-        help="Id of the device to run on",
-    )
-    parser.add_argument(
-        "-e",
-        "--env",
-        type=str,
-        default="",
-        help="Env variables to set",
-    )
-    parser.add_argument(
-        "--run-tests-for-ci",
-        action="store_true",
-        help="If set, assert on test result after every test.",
-    )
-    args = parser.parse_args()
+def test_sweep_run(device, input_path, user_input):
+    """
+    Example for running sweep test:
 
-    device_id = args.device_id
-    device = tt_lib.device.CreateDevice(device_id)
-    tt_lib.device.SetDefaultDevice(device)
+    pytest tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py --input-path tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/pytorch_eltwise_add_unary_test.yaml --input-method cli --cli-input results_add
+    """
 
-    logger.info(f"Running on device {device_id} for test.")
+    if len(user_input) < 1:
+        logger.error(f"Please pass user input. First user input should be output_folder_path")
+        return
 
-    test_sweep_parameters, output_file = generate_test_sweep_parameters(args.input_test_config, args.env)
-    run_sweep_tests(test_sweep_parameters, args.output_folder_path, output_file, args.run_tests_for_ci, device)
+    output_folder_path = user_input[0]
 
-    tt_lib.device.CloseDevice(device)
+    test_sweep_parameters, output_file = generate_test_sweep_parameters(input_path, env="")
+    run_sweep_tests(test_sweep_parameters, output_folder_path, output_file, run_tests_for_ci=False, device=device)
