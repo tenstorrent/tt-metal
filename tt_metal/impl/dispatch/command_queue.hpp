@@ -445,7 +445,7 @@ class HWCommandQueue {
         return std::move(this->manager.get_bypass_data());
     }
 
-    // Force commands to be issued, overrides record_commands if called within
+    // Force commands to be issued, overrides tracing if this called within record_commands
     template <typename Func>
     inline void force_commands(Func run_commands) {
         bool bypass = this->manager.get_bypass_mode();
