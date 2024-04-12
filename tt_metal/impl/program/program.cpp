@@ -675,22 +675,23 @@ void Program::populate_dispatch_data(Device* device) {
             const auto& binaries = kernel->binaries(device->id());
 
             for (size_t j = 0; j < binaries.size(); j++) {
-                std::vector<uint32_t> dst_base_addrs;
-                std::vector<uint32_t> page_offsets;
-                std::vector<uint32_t> lengths;
-                vector<uint32_t> binaries_data;
                 const ll_api::memory& kernel_bin = binaries[j];
-
                 uint32_t k = 0;
                 uint32_t num_spans = kernel_bin.num_spans();
+
+                std::vector<uint32_t> dst_base_addrs(num_spans);
+                std::vector<uint32_t> page_offsets(num_spans);
+                std::vector<uint32_t> lengths(num_spans);
+                vector<uint32_t> binaries_data;
+
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                     linked &= (i != kernel_ids.size() - 1) or (j != binaries.size() - 1) or (k != num_spans - 1);
                     uint64_t relo_addr =
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
-                    dst_base_addrs.push_back((uint32_t)relo_addr);
-                    page_offsets.push_back(binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE);
-                    lengths.push_back(len * sizeof(uint32_t));
+                    dst_base_addrs[k] = (uint32_t)relo_addr;
+                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    lengths[k] = len * sizeof(uint32_t);
 
                     binaries_data.resize(binaries_data.size() + len);
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
@@ -749,21 +750,22 @@ void Program::populate_dispatch_data(Device* device) {
             uint32_t sub_kernel_index = 0;
             const auto& binaries = kernel->binaries(device->id());
             for (size_t j = 0; j < binaries.size(); j++) {
-                std::vector<uint32_t> dst_base_addrs(binaries.size());
-                std::vector<uint32_t> page_offsets(binaries.size());
-                std::vector<uint32_t> lengths(binaries.size());
-                vector<uint32_t> binaries_data;
                 const ll_api::memory& kernel_bin = binaries[j];
-
                 uint32_t k = 0;
                 uint32_t num_spans = kernel_bin.num_spans();
+
+                std::vector<uint32_t> dst_base_addrs(num_spans);
+                std::vector<uint32_t> page_offsets(num_spans);
+                std::vector<uint32_t> lengths(num_spans);
+                vector<uint32_t> binaries_data;
+
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                     uint64_t relo_addr =
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
-                    dst_base_addrs[j] = (uint32_t)relo_addr;
-                    page_offsets[j] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
-                    lengths[j] = len * sizeof(uint32_t);
+                    dst_base_addrs[k] = (uint32_t)relo_addr;
+                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    lengths[k] = len * sizeof(uint32_t);
 
                     binaries_data.resize(binaries_data.size() + len);
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
