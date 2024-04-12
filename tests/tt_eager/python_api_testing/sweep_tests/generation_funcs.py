@@ -1954,6 +1954,8 @@ def gen_softplus_args(
         high,
         dtype,
     ):
+        if input_info["beta"] == 0.0 and input_info["threshold"] > 0.0:
+            continue
         yield input_info
 
 
