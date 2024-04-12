@@ -261,7 +261,6 @@ class cross_attention:
                     ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
-                print(slice.memory_config())
                 program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=grid_size,
                     in0_block_w=2,
