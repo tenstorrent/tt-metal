@@ -430,8 +430,28 @@ class HWCommandQueue {
     CoreCoord completion_queue_writer_core;
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
-    void set_trace_context(std::shared_ptr<detail::TraceDescriptor> trace_ctx) {
-        this->trace_ctx = trace_ctx;
+
+    // Record all commands and metadata from run_commands function
+    template <typename Func>
+    inline std::vector<uint32_t> record_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
+        // Issue event as a barrier and a counter reset
+        std::shared_ptr<Event> event = std::make_shared<Event>();
+        this->enqueue_record_event(event, true);
+        // Record commands using bypass mode
+        this->trace_ctx = ctx;
+        this->manager.set_bypass_mode(true, true);  // start
+        run_commands();
+        this->manager.set_bypass_mode(false, false);  // stop
+        return std::move(this->manager.get_bypass_data());
+    }
+
+    // Force commands to be issued, overrides record_commands if called within
+    template <typename Func>
+    inline void force_commands(Func run_commands) {
+        bool bypass = this->manager.get_bypass_mode();
+        this->manager.set_bypass_mode(false, false);  // pause
+        run_commands();
+        this->manager.set_bypass_mode(bypass, false);  // resume
     }
 
    private:
@@ -555,24 +575,6 @@ class CommandQueue {
     }
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
-
-    template <typename Func>
-    inline std::vector<uint32_t> trace_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
-        auto& hwcq = hw_command_queue();
-
-        // Issue event as a barrier and a counter reset
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        hwcq.enqueue_record_event(event, true);
-
-        // Set the context for metadata recording
-        hwcq.set_trace_context(ctx);
-
-        // Set bypass mode for issue queue recording
-        hwcq.manager.set_bypass_mode(true /* enable bypass */, true /*clear buffer*/);
-        run_commands();
-        hwcq.manager.set_bypass_mode(false /* disable bypass */, false);
-        return std::move(hwcq.manager.get_bypass_data());  // recorded issue queue commands
-    }
 
    private:
     // Command queue constructor
