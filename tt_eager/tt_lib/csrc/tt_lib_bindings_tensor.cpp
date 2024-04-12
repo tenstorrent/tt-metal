@@ -246,7 +246,9 @@ void TensorModule(py::module& m_tensor) {
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
         .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
             return fmt::format("{}", core_range_set);
-        });
+        })
+        .def("bounding_box", &CoreRangeSet::bounding_box, "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
+        .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet");
 
     m_tensor.def(
         "num_cores_to_core_range_set",
