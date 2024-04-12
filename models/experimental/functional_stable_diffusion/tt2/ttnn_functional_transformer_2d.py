@@ -16,6 +16,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     pre_process_input,
     pad_group_norm_weight,
     permute_conv_parameters,
+    dealloc_input,
 )
 
 
@@ -225,8 +226,6 @@ class transformer_2d_model:
         height = self.input_height
         width = self.input_width
 
-        if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
-            hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
         residual = hidden_states
         spilled_residual = False
         if spilled_residual:
@@ -317,18 +316,22 @@ class transformer_2d_model:
                     assert False
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 hidden_states = self.proj_out(hidden_states)
-                if spilled_residual:
+                if ttnn.get_memory_config(residual) != self.proj_out.conv.input_sharded_memory_config:
                     residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
                 if output_bfloat16:
-                    hidden_states = ttnn.add(
+                    hidden_states = dealloc_input(
+                        ttnn.add,
                         hidden_states,
                         residual,
                         dtype=ttnn.bfloat16,
+                        memory_config=hidden_states.memory_config(),
                     )
                 else:
-                    hidden_states = ttnn.add(
+                    hidden_states = dealloc_input(
+                        ttnn.add,
                         hidden_states,
                         residual,
+                        memory_config=hidden_states.memory_config(),
                     )
             else:
                 hidden_states = ttnn.to_device(hidden_states, self.device)
@@ -347,4 +350,5 @@ class transformer_2d_model:
 
         if not return_dict:
             return (hidden_states,)
+        hidden_states = ttnn.reallocate(hidden_states)
         return hidden_states
