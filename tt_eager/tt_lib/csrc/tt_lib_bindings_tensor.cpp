@@ -276,7 +276,8 @@ void TensorModule(py::module &m_tensor) {
         .def("__repr__", [](const CoreRange &core_range) -> std::string {
             return fmt::format("{}", core_range);
         }
-        );
+        )
+        .def("grid_size", &CoreRange::grid_size, "Returns CoreCoord object which contains the grid size");
 
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
         Class defining a set of CoreRanges required for sharding)doc"
@@ -284,7 +285,9 @@ void TensorModule(py::module &m_tensor) {
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
         .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
             return fmt::format("{}", core_range_set);
-        });
+        })
+        .def("bounding_box", &CoreRangeSet::bounding_box, "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
+        .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet");
 
     m_tensor.def(
         "num_cores_to_core_range_set", &num_cores_to_core_range_set, py::arg().noconvert(), py::arg().noconvert(), py::arg("row_wise").noconvert() = false, R"doc(
