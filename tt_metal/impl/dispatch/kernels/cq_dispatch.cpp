@@ -264,7 +264,20 @@ FORCE_INLINE
 void process_write_host_d() {
 
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
-    uint32_t length = cmd->write_linear_host.length;
+    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear_host.length;
+    uint32_t data_ptr = cmd_ptr;
+
+    relay_to_next_cb(data_ptr, length);
+
+    // Move to next page
+    downstream_cb_data_ptr += (dispatch_cb_page_size - (downstream_cb_data_ptr & (dispatch_cb_page_size - 1))) & (dispatch_cb_page_size - 1);
+}
+
+FORCE_INLINE
+void relay_write_h() {
+
+    volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
+    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb(data_ptr, length);
@@ -632,8 +645,17 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         DEBUG_STATUS('D', 'W', 'D');
         break;
 
-    case CQ_DISPATCH_CMD_WRITE_LINEAR_HOST:
-        DPRINT << "cmd_write_host\n";
+    case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
+        DPRINT << "cmd_write_linear_h\n";
+        if (is_h_variant) {
+            process_write();
+        } else {
+            relay_write_h();
+        }
+        break;
+
+    case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
+        DPRINT << "cmd_write_linear_h_host\n";
         if (is_h_variant) {
             process_write_host_h();
         } else {
@@ -711,7 +733,13 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
     switch (cmd->base.cmd_id) {
-    case CQ_DISPATCH_CMD_WRITE_LINEAR_HOST:
+    case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
+        DPRINT << "dispatch_h write_linear_h\n";
+        process_write();
+        break;
+
+    case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
+        DPRINT << "dispatch_h linear_h_host\n";
         process_write_host_h();
         break;
 
