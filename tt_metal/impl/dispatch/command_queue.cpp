@@ -69,7 +69,8 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
 
     uint32_t num_cores = this->buffer.num_cores();
 
-    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    auto buffer_page_mapping = generate_buffer_page_mapping(this->buffer);
+    auto core_host_page_indices = buffer_page_mapping.core_host_page_indices_;
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
@@ -80,7 +81,7 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;
     core_id_y.reserve(num_cores);
-    auto all_cores = this->buffer.all_cores();
+    auto all_cores = buffer_page_mapping.all_cores_;
     for (const auto& core : all_cores) {
         CoreCoord physical_core = this->device->worker_core_from_logical_core(core);
         core_id_x.push_back(physical_core.x);
@@ -267,7 +268,8 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
     uint32_t src_page_index = 0;
 
     uint32_t num_cores = this->buffer.num_cores();
-    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    auto buffer_page_mapping = generate_buffer_page_mapping(this->buffer);
+    auto core_host_page_indices = buffer_page_mapping.core_host_page_indices_;
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
@@ -278,7 +280,7 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;
     core_id_y.reserve(num_cores);
-    auto all_cores = this->buffer.all_cores();
+    auto all_cores = buffer_page_mapping.all_cores_;
     for (const auto& core : all_cores) {
         CoreCoord physical_core = this->device->worker_core_from_logical_core(core);
         core_id_x.push_back(physical_core.x);
@@ -863,13 +865,14 @@ void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& bu
     void* swapped = malloc(size_in_bytes);
 
     std::set<uint32_t> pages_seen;
+    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
     uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
         uint32_t local_num_pages;
-        auto dev_page_id = page_id;
-        auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
+        auto host_page_id = page_id;
+        auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
         TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-        memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size);
+        memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
     }
     return swapped;
 }
