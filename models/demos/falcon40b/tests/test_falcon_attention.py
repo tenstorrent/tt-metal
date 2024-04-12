@@ -85,14 +85,18 @@ def run_test_FalconAttention_inference(
         layer_past = None
 
         tt_attention_input_host = torch2tt_tensor(
-            attention_input.unsqueeze(1), None, tt_dtype=model_config["LN_ATTN_OUTPUT_DTYPE"]
+            attention_input.unsqueeze(1), None, tt_dtype=model_config["ATTN_INPUT_DTYPE"]
         )
         tt_attention_input = []
         for device in devices:
-            tt_attention_input.append(tt_attention_input_host.to(device, model_config["LN_ATTN_OUTPUT_MEMCFG"]))
+            tt_attention_input.append(tt_attention_input_host.to(device, model_config["ATTN_INPUT_MEMCFG"]))
+
+        attention_mask_heads_dim = (
+            configuration.num_attention_heads if model_config["ATTN_MASK_MEMCFG"].is_sharded() else len(devices)
+        )
 
         attention_mask_bool_chunks = torch.chunk(
-            (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
+            (attention_mask_bool * -100000).expand(-1, attention_mask_heads_dim, -1, -1),
             len(devices),
             1,
         )
@@ -325,10 +329,11 @@ def run_test_FalconAttention_inference(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 1, 32, 0),
-        ("prefill", 1, 64, 0),
+        ("prefill", 1, 128, 0),
+        ("prefill", 1, 2048, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "prefill_seq64", "decode_batch32"],
+    ids=["prefill_seq32", "prefill_seq128", "prefill_seq2048", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version",
@@ -337,8 +342,12 @@ def run_test_FalconAttention_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
-    ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"],
+    [
+        ("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99),
+        ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99),
+        ("BFLOAT8_B-DRAM", 0.99, 0.99, 0.99),
+    ],
+    ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM"],
 )
 def test_FalconAttention_inference(
     num_devices,
@@ -354,10 +363,12 @@ def test_FalconAttention_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: remove workaround when low PCC issue 7159 is fixed
 ):
-    if llm_mode == "prefill" and model_config_str == "BFLOAT16-SHARDED":
-        pytest.skip("Prefill is only tested for BFLOAT8_B!")
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
+    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
+        pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)

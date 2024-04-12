@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 import tt_lib
 
 from typing import List
 from models.utility_functions import torch2tt_tensor
+from models.demos.falcon40b.tt.model_utils import falcon_prefill_matmul
 
 
 class TtFalconMLP:
@@ -97,7 +97,15 @@ class TtFalconMLP:
     def set_model_config(self, model_config):
         self.model_config = model_config
 
-    def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+    def __call__(self, x: List[tt_lib.tensor.Tensor], llm_mode: str) -> List[tt_lib.tensor.Tensor]:
+        if llm_mode == "prefill":
+            return self.fwd_prefill(x)
+        elif llm_mode == "decode":
+            return self.fwd_decode(x)
+        else:
+            assert False
+
+    def fwd_decode(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
         for i in range(len(x)):
             hidden_states.append(
@@ -133,6 +141,50 @@ class TtFalconMLP:
                 output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+            )
+
+        # return TT Tensor
+        return hidden_states
+
+    def fwd_prefill(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+        hidden_states = []
+        for i in range(len(x)):
+            hidden_states.append(
+                falcon_prefill_matmul(
+                    x[i],
+                    self.dense_h_to_4h_weights[i],
+                    self.model_config["COMPUTE_KERNEL_CONFIG"],
+                    output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+                    output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                    act=[tt_lib.tensor.FusibleActivation.GELU, True],
+                    overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+                    overwrite_subblock_h=1,
+                )
+            )
+            x[i].deallocate(True)
+        if self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"] != self.model_config["DEFAULT_MEMCFG"]:
+            for i in range(len(hidden_states)):
+                hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
+                    hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                )
+        hidden_states = tt_lib.tensor.all_gather(
+            hidden_states,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+        if self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"] != self.model_config["DEFAULT_MEMCFG"]:
+            for i in range(len(hidden_states)):
+                hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
+                    hidden_states[i], sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
+                )
+        for i in range(len(hidden_states)):
+            hidden_states[i] = falcon_prefill_matmul(
+                hidden_states[i],
+                self.dense_4h_to_h_weights[i],
+                self.model_config["COMPUTE_KERNEL_CONFIG"],
+                output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             )
 
         # return TT Tensor

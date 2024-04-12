@@ -12,9 +12,10 @@ from models.demos.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon40b.tt.falcon_attention import generate_cos_sin_cache
 from models.utility_functions import (
     torch2tt_tensor,
-    pad_by_zero,
     nearest_32,
 )
+
+from models.demos.falcon40b.tt.model_utils import convert_to_layout, partial_layernorm
 
 
 class TtFalconModelShared:
@@ -42,6 +43,8 @@ class TtFalconModelShared:
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
         self.num_layers = num_layers
+        self.hidden_size = config.hidden_size
+        self.num_devices = len(devices)
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
@@ -159,19 +162,17 @@ class TtFalconModelShared:
                 for i in range(len(self.devices))
             ]
 
-            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
+            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
 
-            attention_mask_bool_padded = torch.cat(
-                (
-                    attention_mask_bool,
-                    torch.ones(batch_size, 1, sequence_size, sequence_size - num_input_tokens, dtype=bool),
-                ),
-                dim=-1,
+            attention_mask_heads_dim = (
+                self.config.num_attention_heads
+                if self.model_config["ATTN_MASK_MEMCFG"].is_sharded()
+                else len(self.devices)
             )
 
             attention_mask_bool_chunks = torch.chunk(
-                (attention_mask_bool_padded * -1e3).expand(-1, self.config.num_attention_heads, -1, -1),
+                (attention_mask_bool * -100000).expand(-1, attention_mask_heads_dim, -1, -1),
                 len(self.devices),
                 1,
             )
@@ -231,6 +232,97 @@ class TtFalconModelShared:
 
     @abstractmethod
     def __call__(
+        self,
+        input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
+        attention_mask: tt_lib.tensor.Tensor = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past_len: int = 0,
+        use_cache: bool = False,
+    ) -> tt_lib.tensor.Tensor:
+        if llm_mode == "prefill":
+            return self.fwd_prefill(
+                input_embeddings=input_embeddings,
+                llm_mode=llm_mode,
+                attention_mask=attention_mask,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                use_cache=use_cache,
+            )
+        elif llm_mode == "decode":
+            return self.fwd_decode(
+                input_embeddings=input_embeddings,
+                llm_mode=llm_mode,
+                attention_mask=attention_mask,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                use_cache=use_cache,
+            )
+        else:
+            assert False
+
+    def fwd_prefill(
+        self,
+        input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
+        attention_mask: tt_lib.tensor.Tensor = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past_len: int = 0,
+        use_cache: bool = False,
+    ) -> tt_lib.tensor.Tensor:
+        layer_output = input_embeddings
+        presents = ()
+        for idx, layer in enumerate(self.layers):
+            layer_output = layer(
+                hidden_states=layer_output,
+                alibi=None,
+                attention_mask=attention_mask,
+                llm_mode=llm_mode,
+                user_id=user_id,
+                layer_past=layer_past[idx],
+                layer_past_len=layer_past_len,
+                use_cache=use_cache,
+            )
+            presents += layer_output[1:]
+            layer_output = layer_output[0]
+
+        layer_output = convert_to_layout(
+            layer_output, self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
+        )
+        layer_output = tt_lib.tensor.all_gather(
+            layer_output,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+        layer_output = convert_to_layout(
+            layer_output, self.model_config["DEFAULT_MEMCFG"], self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+        )
+
+        # apply final norm layer
+        layer_output = partial_layernorm(
+            layer_output,
+            self.layernorm_gamma,
+            self.layernorm_beta,
+            self.layernorm_eps,
+            self.model_config["layernorm_params"],
+            self.model_config["PARTIAL_LN_MEMCFG"],
+            self.model_config["PARTIAL_LN_INPLACE_PROGCFG"],
+            self.model_config["LN_MLP_OUTPUT_DTYPE"],
+            self.hidden_size,
+            self.devices,
+        )
+        layer_output = convert_to_layout(
+            layer_output, self.model_config["LN_F_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
+        )
+
+        return layer_output, presents
+
+    def fwd_decode(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         llm_mode: str,
