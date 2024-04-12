@@ -50,9 +50,6 @@ run_perf_models_other() {
     else
         echo "There are no other model perf tests for Javelin yet specified. Arch $tt_arch requested"
     fi
-
-    ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
 }
 
 run_perf_models_llm_javelin() {
@@ -62,9 +59,9 @@ run_perf_models_llm_javelin() {
     env pytest models/demos/falcon7b/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest models/demos/mamba/tests -m $test_marker        
+        env pytest models/demos/mamba/tests -m $test_marker
     fi
-    
+
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mistral7b/tests -m $test_marker  # -> hanging: issue #7540
 
     ## Merge all the generated reports
@@ -75,14 +72,9 @@ run_perf_models_cnn_javelin() {
     local tt_arch=$1
     local test_marker=$2
 
-    echo "There are no CNN tests for Javelin yet specified. Arch $tt_arch requested"
-
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_stable_diffusion/tests -m $test_marker
     fi
-
-    ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
@@ -157,6 +149,9 @@ main() {
         exit 1
     fi
 
+    # Try running all performance tests even at the risk of errors, as this is just performance
+    # and people need to see their results
+    set +e
     if [[ "$pipeline_type" == *"device_performance"* ]]; then
         run_device_perf_models "$test_marker"
     elif [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then
@@ -168,6 +163,13 @@ main() {
     else
         echo "$pipeline_type is not recoognized performance pipeline" 2>&1
         exit 1
+    fi
+    set -e
+
+    if [[ "$pipeline_type" == *"device"* ]]; then
+        env python models/perf/merge_device_perf_results.py
+    else
+        env python models/perf/merge_perf_results.py
     fi
 }
 
