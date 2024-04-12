@@ -95,6 +95,7 @@ CoreRange all_workers_g = {
     first_worker_g,
     {first_worker_g.x + 1, first_worker_g.y + 1},
 };
+CoreCoord phys_prefetch_core_g;
 
 bool send_to_all_g = false;
 bool perf_test_g = false;
@@ -102,6 +103,7 @@ bool perf_test_g = false;
 uint32_t max_xfer_size_bytes_g = dispatch_buffer_page_size_g;
 uint32_t min_xfer_size_bytes_g = 4;
 uint32_t l1_buf_base_g;
+uint32_t prefetch_h_exec_buf_sem_addr_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -213,7 +215,7 @@ bool validate_host_results(
         CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index];
 
         // Validate only works for packed write linear host commands
-        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_HOST);
+        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST);
 
         uint32_t length = cmd->write_linear_host.length;
         for (int i = 0; i < length / sizeof(uint32_t); i++) {
@@ -878,8 +880,36 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
 
-    // Add an end to the list of cmds to run from the buf
     CQPrefetchCmd cmd;
+
+    if (split_prefetcher_g) {
+        // Add the semaphore release for prefetch_h
+
+        CQDispatchCmd dcmd;
+        memset(&dcmd, 0, sizeof(CQDispatchCmd));
+
+        dcmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H;
+        dcmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y);
+        dcmd.write_linear.addr = prefetch_h_exec_buf_sem_addr_g;
+        dcmd.write_linear.length = 16;
+
+        vector<uint32_t> dispatch_cmds;
+        vector<uint16_t> empty_sizes;
+        add_bare_dispatcher_cmd(dispatch_cmds, dcmd);
+        dispatch_cmds.push_back(1);
+        dispatch_cmds.push_back(0);
+        dispatch_cmds.push_back(0);
+        dispatch_cmds.push_back(0);
+
+        // Put the new commands at the front of the set of commands
+        // This tests that back-pressure stall in prefetch_d works
+        vector<uint32_t> tmp_cmds;
+        add_prefetcher_cmd(tmp_cmds, empty_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        auto iter = buf_cmds.begin();
+        buf_cmds.insert(iter, tmp_cmds.begin(), tmp_cmds.end());
+    }
+
+    // Add an end to the list of cmds to run from the buf
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
     add_bare_prefetcher_cmd(buf_cmds, cmd);
 
@@ -1305,7 +1335,7 @@ int main(int argc, char **argv) {
         CoreCoord dispatch_core = {4, 0};
         CoreCoord dispatch_h_core = {5, 0};
 
-        CoreCoord phys_prefetch_core = device->worker_core_from_logical_core(prefetch_core);
+        phys_prefetch_core_g = device->worker_core_from_logical_core(prefetch_core);
         CoreCoord phys_prefetch_d_core = device->worker_core_from_logical_core(prefetch_d_core);
         CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
         CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
@@ -1383,7 +1413,8 @@ int main(int argc, char **argv) {
         tt::Cluster::instance().dram_barrier(device->id());
 
         constexpr uint32_t prefetch_sync_sem = 0;
-        tt_metal::CreateSemaphore(program, {prefetch_core}, 0); // ugly, unused on _h
+
+        tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
         if (packetized_path_en_g) {
             tt_metal::CreateSemaphore(program, {relay_mux_core}, 0); // unused
@@ -1400,6 +1431,9 @@ int main(int argc, char **argv) {
         } else {
             tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
         }
+
+        uint32_t prefetch_h_exec_buf_sem = 2;
+        prefetch_h_exec_buf_sem_addr_g = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
 
         constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
         constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
@@ -1440,6 +1474,7 @@ int main(int argc, char **argv) {
             prefetch_downstream_cb_sem, // prefetch_d only
             PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
             PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+            prefetch_h_exec_buf_sem,
         };
 
         if (split_prefetcher_g) {
@@ -1457,7 +1492,7 @@ int main(int argc, char **argv) {
             prefetch_compile_args[12] = scratch_db_base;
 
             CoreCoord phys_prefetch_d_upstream_core =
-                packetized_path_en_g ? phys_relay_demux_core : phys_prefetch_core;
+                packetized_path_en_g ? phys_relay_demux_core : phys_prefetch_core_g;
             configure_kernel_variant<true, false>(program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
@@ -1482,7 +1517,7 @@ int main(int argc, char **argv) {
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
                 prefetch_core,
-                phys_prefetch_core,
+                phys_prefetch_core_g,
                 {0, 0}, // upstream core unused
                 phys_prefetch_h_downstream_core);
 
@@ -1516,8 +1551,8 @@ int main(int argc, char **argv) {
                     (relay_mux_queue_start_addr >> 4), // 1: rx_queue_start_addr_words
                     (relay_mux_queue_size_bytes >> 4), // 2: rx_queue_size_words
                     num_src_endpoints, // 3: mux_fan_in
-                    packet_switch_4B_pack((uint32_t)phys_prefetch_core.x,
-                                        (uint32_t)phys_prefetch_core.y,
+                    packet_switch_4B_pack((uint32_t)phys_prefetch_core_g.x,
+                                        (uint32_t)phys_prefetch_core_g.y,
                                         1,
                                         (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: src 0 info
                     packet_switch_4B_pack(0,
@@ -1644,7 +1679,7 @@ int main(int argc, char **argv) {
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
                 prefetch_core,
-                phys_prefetch_core,
+                phys_prefetch_core_g,
                 {0, 0}, // upstream core unused
                 phys_dispatch_core);
         }
@@ -1666,7 +1701,7 @@ int main(int argc, char **argv) {
              0, // unused on hd, filled in below for h and d
         };
 
-        CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core;
+        CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
         if (split_dispatcher_g) {
             // dispatch_hd and dispatch_d
             dispatch_compile_args[12] = dispatch_downstream_cb_sem;
@@ -1729,8 +1764,8 @@ int main(int argc, char **argv) {
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
             std::thread t1 ([&]() {
-                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, false);
-                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, true);
+                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, false);
+                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, true);
             });
             tt_metal::detail::LaunchProgram(device, program);
             t1.join();
@@ -1749,7 +1784,7 @@ int main(int argc, char **argv) {
                 gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
                 TT_FATAL(worker_data_size(worker_data) * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
                          "Test overflowed L1 memory");
-                run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
                 if (test_type_g == 6) {
                     pass &= validate_host_results(device, cmds, host_hugepage_completion_buffer);
                 } else {
@@ -1762,7 +1797,7 @@ int main(int argc, char **argv) {
         } else {
             gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
             gen_terminate_cmds(terminate_cmds, terminate_sizes);
-            auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+            auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
 
             log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
             log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
