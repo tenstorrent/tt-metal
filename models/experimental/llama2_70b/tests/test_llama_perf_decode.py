@@ -36,17 +36,20 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 
-def load_prompts_file(tokenizer, prefill_length, gap=64):
-    # Load prompts
-    prompts = open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
-    tokenized = tokenizer.encode(prompts, bos=True, eos=False)
+def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
+    with open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
+        tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
 
-    token_ids = []
+    token_windows = []
+    ground_truth_texts = []
     for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
-        window = tokenized[i : i + prefill_length]
-        if len(token_ids) == 32:
-            return token_ids, tokenizer.decode(token_ids)
-        token_ids.append(window)
+        token_windows.append(tokenized[i : i + prefill_length])
+        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length])
+        ground_truth_texts.append(ground_truth_text)
+        if len(token_windows) == 32:
+            return token_windows, ground_truth_texts
+
+    return token_windows, ground_truth_texts
 
 
 def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
@@ -69,6 +72,37 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
 
     input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
     return tokens, input_text_mask
+
+
+def get_decode_time(profiler, start_token, end_token):
+    total_time = 0
+    num_tokens = end_token - start_token + 1
+
+    for token in range(start_token, end_token + 1):
+        total_time += profiler.get(f"model_run_for_inference_{token}")
+
+    average_time = total_time / num_tokens
+    return average_time
+
+
+# Define a dictionary to hold the profiling ranges for each generation length
+profiling_ranges = {32: [(20, 30)], 128: [(20, 30), (116, 126)], 2048: [(20, 30), (116, 126), (2036, 2046)]}
+
+
+def is_in_profiling_range(cur_pos, generation_length, profiling_ranges):
+    if generation_length in profiling_ranges:
+        for start, end in profiling_ranges[generation_length]:
+            if start <= cur_pos <= end:
+                return True
+    return False
+
+
+def calculate_decode_times(profiler, generation_length):
+    times = {}
+    for start, end in profiling_ranges[generation_length]:
+        label = f"decode_time_{end+2}"
+        times[label] = get_decode_time(profiler, start, end)
+    return times, times[f"decode_time_{generation_length}"]
 
 
 def run_test_LlamaModel_end_to_end(
@@ -103,7 +137,9 @@ def run_test_LlamaModel_end_to_end(
     # Prepare input -----------------------------------------------------------------------
     torch.manual_seed(0)
     total_len = min(MAX_SEQ_LEN, generation_length + 1)
-    prefill_ids, prefill_texts = load_prompts_file(tokenizer, prefill_length=32 if generation_length > 32 else 20)
+    prefill_ids, ground_truth_texts = load_prompts_file(
+        tokenizer, prefill_length=32 if generation_length > 32 else 20, generation_length=generation_length
+    )
     tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, num_users, total_len)
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -132,16 +168,21 @@ def run_test_LlamaModel_end_to_end(
 
     start_pos = 0
     prev_pos = start_pos
-    for cur_pos in range(start_pos + 1, generation_length):
+    for cur_pos in range(start_pos + 1, total_len):
         logger.info(f"Generating token: {cur_pos}")
 
-        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
+        # Initialize profiling based on specific intervals and generation lengths
+        should_profile = (cur_pos == start_pos + 1) or is_in_profiling_range(
+            cur_pos, generation_length, profiling_ranges
+        )
+
+        if should_profile:
             enable_persistent_kernel_cache()
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
         tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
 
-        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
+        if should_profile:
             profiler.end(f"processing_of_decode_input_{cur_pos}")
             profiler.start(f"model_run_for_inference_{cur_pos}")
 
@@ -152,7 +193,7 @@ def run_test_LlamaModel_end_to_end(
             attn_mask,
         )
 
-        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
+        if should_profile:
             profiler.end(f"model_run_for_inference_{cur_pos}")
 
         del tt_inp_emb
@@ -171,34 +212,34 @@ def run_test_LlamaModel_end_to_end(
 
         tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
 
-        if all(eos_reached):
-            break
-
         for user_id in range(3):
             text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
+    for user_id in range(3):
+        logger.info(f"Ground Truth Texts: User {user_id}: {ground_truth_texts[user_id]}")
+
     logger.info("Finished 1st run decode stage with compile!")
     profiler.print()
 
-    comment = f"num_layers={n_layers}_n_devices={n_devices}_emulated={emulated}"
-    cpu_time = profiler.get("hugging_face_reference_model")
-
+    comment = f"num_layers={n_layers}L_n_devices={n_devices}"
+    compile_time = profiler.get("TT_llama_model_setup")
     decode_compile_time = profiler.get(f"model_run_for_inference_{start_pos + 1}")
-    decode_time = profiler.get(f"model_run_for_inference_{generation_length - 10}")
+
+    decode_times, decode_time = calculate_decode_times(profiler, generation_length)
+    logger.info(decode_times)
 
     prep_perf_report(
-        model_name=f"Llama_{comment}",
+        model_name=f"llama2_70b_{comment}",
         batch_size=batch,
         inference_and_compile_time=decode_compile_time,
         inference_time=decode_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comment,
-        inference_time_cpu=cpu_time,
     )
 
-    logger.info(f"llama {comment} inference time: {decode_time}")
+    logger.info(f"llama2_70b_{comment} inference time: {decode_time}")
     tokens_per_s_per_user = 1 / decode_time
     tokens_per_s_overall = tokens_per_s_per_user * batch * seq_len
 
@@ -206,9 +247,8 @@ def run_test_LlamaModel_end_to_end(
     logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
     logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
 
-    # This script will assert since this is not a part of regular perf pipeline
-    # assert second_iter_time <= expected_inference_time
     # assert compile_time <= expected_compile_time
+    assert decode_time <= expected_inference_time
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -217,9 +257,9 @@ def run_test_LlamaModel_end_to_end(
 @pytest.mark.parametrize(
     "generation_length, expected_compile_time, expected_inference_time",
     (
-        (32, 552, 1.2),
-        (128, 552, 1.3),
-        (2048, 552, 1.5),
+        (32, 550, 1.2),
+        (128, 550, 1.4),
+        (2048, 550, 2.0),
     ),
     ids=["quick", "short", "long"],
 )
