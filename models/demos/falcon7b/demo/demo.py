@@ -15,7 +15,6 @@ from transformers import AutoTokenizer
 from transformers.generation.utils import top_k_top_p_filtering
 import os
 from tqdm import tqdm
-from models.utility_functions import is_wormhole_b0
 
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
@@ -28,7 +27,6 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     nearest_32,
-    get_devices_for_t3000,
 )
 
 END_OF_TEXT = 11
@@ -510,49 +508,3 @@ def run_falcon_demo_kv(
     )
 
     return generated_text, measurements
-
-
-@pytest.mark.parametrize("perf_mode", (False,))
-class TestParametrized:
-    def test_demo_singlechip(
-        self,
-        perf_mode,
-        user_input,
-        model_location_generator,
-        device,
-        use_program_cache,
-    ):
-        return run_falcon_demo_kv(
-            user_input=user_input,
-            batch_size=32,
-            max_seq_len=1024,
-            model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"]
-            if is_wormhole_b0()
-            else ["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
-            model_location_generator=model_location_generator,
-            devices=[device],
-            perf_mode=perf_mode,
-        )
-
-    @pytest.mark.parametrize("num_devices", (2, 4, 8))
-    def test_demo_multichip(
-        self,
-        perf_mode,
-        num_devices,
-        user_input,
-        model_location_generator,
-        all_devices,
-        use_program_cache,
-    ):
-        assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
-        devices = get_devices_for_t3000(all_devices, num_devices)
-
-        return run_falcon_demo_kv(
-            user_input=user_input,
-            batch_size=32,
-            max_seq_len=1024,
-            model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
-            model_location_generator=model_location_generator,
-            devices=devices,
-            perf_mode=perf_mode,
-        )
