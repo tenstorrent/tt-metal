@@ -162,16 +162,37 @@ class TtFalconModelShared(torch.nn.Module):
                     ),
                     dim=-1,
                 )
-                tt_attention_mask.append(
-                    torch2tt_tensor(
-                        (attention_mask_bool_padded.transpose(0, 2) * -1e3).expand(
-                            -1, self.config.num_attention_heads, -1, -1
-                        ),
-                        device,
-                        tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+
+                if self.model_config["l1_sharded"] == False:
+                    tt_attention_mask.append(
+                        torch2tt_tensor(
+                            (attention_mask_bool_padded.transpose(0, 2) * -1e3).expand(
+                                -1, self.config.num_attention_heads, -1, -1
+                            ),
+                            device,
+                            tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
+                            tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                        )
                     )
-                )
+                else:
+                    # keep attention_heads in dim[2]
+                    tt_attention_mask.append(
+                        torch2tt_tensor(
+                            (attention_mask_bool_padded * -1e3).expand(
+                                -1, -1, nearest_32(self.config.num_attention_heads), -1
+                            ),
+                            device,
+                            tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
+                            tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                        )
+                    )
+
+                    tt_attention_mask[i] = tt_lib.tensor.interleaved_to_sharded(
+                        tt_attention_mask[i],
+                        sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                            nearest_32(self.config.num_attention_heads), num_max_tokens
+                        ),
+                    )
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")

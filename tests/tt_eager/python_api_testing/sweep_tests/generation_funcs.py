@@ -7,6 +7,7 @@ import random
 from itertools import permutations, product
 from functools import lru_cache
 import tt_lib as ttl
+import ttnn
 import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
 from loguru import logger
@@ -50,8 +51,11 @@ def gen_func_with_cast_tt(gen_func, dtype):
             x = x.to(torch.bfloat16)
 
         elif dtype == ttl.tensor.DataType.BFLOAT8_B:
-            tt_tensor = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT8_B)
-            x = tt_tensor.to_torch()
+            tt_tensor = ttnn.from_torch(
+                x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+            )
+
+            x = ttnn.to_torch(tt_tensor)
 
         elif dtype == ttl.tensor.DataType.UINT32:
             x = x.to(torch.int32)
@@ -1976,6 +1980,41 @@ def gen_min_max_dim_args(
         choices = [(rank - 1,), (rank - 2,)]
         idx = np.random.choice(len(choices), 1)
         dims = choices[idx.item()]
+
+        input_info.update({"dim": dims})
+        yield input_info
+
+
+def gen_dim_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "dim",
+        low,
+        high,
+        dtype,
+    ):
+        rank = len(input_shapes[0])
+
+        # select one of the possible combnations
+        if rank == 4 or rank == 3:
+            choices = [(rank - 1,), (rank - 2,), (rank - 1, rank - 2)]
+            idx = np.random.choice(len(choices), 1)
+            dims = choices[idx.item()]
+        else:
+            choices = [(rank - 1,), (rank - 2,)]
+            idx = np.random.choice(len(choices), 1)
+            dims = choices[idx.item()]
 
         input_info.update({"dim": dims})
         yield input_info

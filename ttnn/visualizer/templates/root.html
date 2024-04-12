@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<style>
+    tr:nth-child(even) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(odd) {
+        background-color: #D0FFBC;
+    }
+
+    th {
+        background-color: white;
+
+    }
+
+    td {
+        padding: 15px;
+    }
+</style>
+
+<html>
+
+<body>
+
+    <h1> Visualizing reports from: {{root_report_path}} </h1>
+    <ul>
+        <div>
+            <table>
+                {% for report_hash, report_name in reports %}
+                <tr>
+                    <td>
+                        <h3> <a href="operations/{{report_hash}}"> {{report_name}} </a> </h3>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </ul>
+
+</body>
+
+</html>
+
+{% endblock %}

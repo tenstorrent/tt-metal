@@ -21,9 +21,10 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
-          make build PYTHON_ENV=$HOME/python_env
+          make build PYTHON_ENV=${{ github.workspace }}/python_env
           make tests
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test

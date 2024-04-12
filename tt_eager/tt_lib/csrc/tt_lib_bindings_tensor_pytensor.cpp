@@ -318,7 +318,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
-    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_shapes};
+    auto storage = MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_shapes);
 
     return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
 }
@@ -820,7 +820,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "to",
-                py::overload_cast<Device*, const MemoryConfig&>(&Tensor::to, py::const_),
+                py::overload_cast<Device *, const MemoryConfig &>(&Tensor::to, py::const_),
                 py::arg("device").noconvert(),
                 py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
                 py::keep_alive<0, 2>(),
@@ -844,7 +844,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
             .def(
-                "to", py::overload_cast<DeviceMesh*, const MemoryConfig&>(&Tensor::to, py::const_),
+                "to",
+                py::overload_cast<DeviceMesh *, const MemoryConfig &>(&Tensor::to, py::const_),
                 py::arg("device_mesh").noconvert(),
                 py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
                 py::keep_alive<0, 2>(),
@@ -1322,6 +1323,38 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
             )doc")
             .def(
+                "buffer_address",
+                [](const Tensor &self) -> uint32_t {
+                    return std::visit(
+                        [](auto &&storage) -> uint32_t {
+                            using T = std::decay_t<decltype(storage)>;
+                            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                                TT_THROW("OwnedStorage doesn't support buffer_address method");
+                            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                                return storage.buffer->address();
+                            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                                TT_THROW("BorrowedStorage doesn't support buffer_address method");
+                            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                                TT_THROW("MultiDeviceStorage doesn't support buffer_address method");
+                            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                                TT_THROW("MultiDeviceHostStorage doesn't support buffer_address method");
+                            } else {
+                                raise_unsupported_storage<T>();
+                            }
+                        },
+                        self.get_storage());
+                },
+                R"doc(
+                Get the address of the underlying buffer.
+
+                The tensor must be on the single device when calling this function.
+
+                .. code-block:: python
+
+                    address = tt_tensor.buffer_address()
+
+            )doc")
+            .def(
                 "get_layout", [](const Tensor &self) { return self.get_layout(); }, R"doc(
                 Get memory layout of TT Tensor.
 
@@ -1395,6 +1428,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         reshaped_tensor = tt_tensor.reshape((4, 3, 32))
-                )doc");
+                )doc")
+            .def_property(
+                "tensor_id",
+                [](const Tensor &self) { return self.tensor_id; },
+                [](Tensor &self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
     }
     }  // namespace tt::tt_metal::detail

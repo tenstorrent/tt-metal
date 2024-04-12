@@ -14,7 +14,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
@@ -344,7 +344,7 @@ def test_multi_core_matmul_2d(
     assert passing
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(

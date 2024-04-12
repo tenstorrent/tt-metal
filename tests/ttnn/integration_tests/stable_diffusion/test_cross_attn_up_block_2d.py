@@ -26,6 +26,7 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
+    weight_to_bfp8,
     post_process_output,
 )
 
@@ -250,8 +251,16 @@ def test_cross_attn_up_block_2d_512x512(
         upsample_size=upsample_size,
     )
 
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     N, _, H, W = input_shape
-    model = tt2_ttnn_cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W)
+    model = tt2_ttnn_cross_attention_upblock2d(
+        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
+    )
 
     timestep = (None,)
     class_labels = (None,)
@@ -275,7 +284,7 @@ def test_cross_attn_up_block_2d_512x512(
 
     hidden_state = ttnn.from_torch(hidden_state, ttnn.bfloat16)
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
-    hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     res0 = ttnn.from_torch(res0, ttnn.bfloat16)
     res0 = ttnn.to_layout(res0, ttnn.TILE_LAYOUT)
@@ -289,10 +298,12 @@ def test_cross_attn_up_block_2d_512x512(
     res2 = ttnn.to_layout(res2, ttnn.TILE_LAYOUT)
     res2 = ttnn.to_device(res2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
     ttnn_encoder_hidden_states = ttnn.to_layout(
         ttnn.to_device(ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat16), device), layout=ttnn.TILE_LAYOUT
     )
@@ -300,11 +311,11 @@ def test_cross_attn_up_block_2d_512x512(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    hidden_state = pre_process_input(device, hidden_state)
+    hidden_state = weight_to_bfp8(pre_process_input(device, hidden_state))
     res_hidden_states_tuple = (
-        pre_process_input(device, res0),
-        pre_process_input(device, res1),
-        pre_process_input(device, res2),
+        weight_to_bfp8(pre_process_input(device, res0)),
+        weight_to_bfp8(pre_process_input(device, res1)),
+        weight_to_bfp8(pre_process_input(device, res2)),
     )
     op = model(
         hidden_state,
@@ -348,4 +359,4 @@ def test_cross_attn_up_block_2d_512x512(
         op = torch.reshape(op, (N, H * 2, W * 2, Cout))
     op = op.permute(0, 3, 1, 2)
 
-    assert_with_pcc(torch_output, op, 0.84)
+    assert_with_pcc(torch_output, op, 0.92)

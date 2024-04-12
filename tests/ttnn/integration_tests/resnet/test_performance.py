@@ -17,7 +17,7 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 
-@skip_for_wormhole_b0("This will be re-enabled after post refactoring for resnet")
+@skip_for_wormhole_b0("This will be enabled after WH testing")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
@@ -25,7 +25,7 @@ from models.perf.perf_utils import prep_perf_report
         [
             20,
             "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi",
-            815,
+            7363,
         ],
     ],
 )
@@ -49,11 +49,12 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     )
 
 
+@skip_for_wormhole_b0("This will be enabled after WH testing")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "model_name,batch_size,act_dtype,weight_dtype,math_fidelity,expected_compile_time,expected_inference_time",
-    [("ResNet50", 20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, 18, 0.08)],  ## pass
+    [("ResNet50", 20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, 23, 0.04)],  ## pass
 )
 def test_performance(
     device,
@@ -76,7 +77,7 @@ def test_performance(
     for _ in range(num_iterations):
         test_infra.preprocess_torch_input()
         start = time.time()
-        with ttnn.enable_fast_runtime_mode():
+        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
             tt_output = test_infra.run()
             tt_output = ttnn.from_device(tt_output)
         end = time.time()

@@ -31,9 +31,11 @@ struct Tensor {
         ttnn::Shape shape;
         DataType dtype;
         Layout layout;
-        std::atomic<bool> metadata_populated = false;
+        std::mutex populated_mutex;
+        std::vector<bool> tensor_populated = {};
         uint32_t main_thread_ref_count = 0;
-        bool deallocated = false;
+        bool deallocated = false; // Set to true if device side storage was deallocated
+        bool dynamic_storage = false; // Storage type can change, depending on op behaviour
         TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) : storage(storage), shape(shape), dtype(dtype), layout(layout) {}
         TensorAttributes() : shape({0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
         ~TensorAttributes() = default;
@@ -41,23 +43,23 @@ struct Tensor {
         // Use these functions to manage the main_thread_ref_count for a tensor attr instance.
         // This variable is used for on device memory deallocation in async mode, where the main
         // thread owns all tensors and enqueues a deallocate command for each shard, when a tensor
-        // is implcitly or explictly dellocated.
-        // Call increment when a tensor is default, copy or assignment constructed, since an additonal
+        // is implicitly or explicitly dellocated.
+        // Call increment when a tensor is default, copy or assignment constructed, since an additional
         // object will own a tensor_attr instance.
         // Call decrement when a tensor is destroyed and the number of owners of the tensor_attr object
         // decreases.
         // Record the main thread ref count before pushing to a worker queue (number of owners in main thread).
         // Update the main thread ref count with the recorded value after the tensor is pushed to the queue(s),
         // since pushing to the queue requires an extra datacopy in the main thread, that gets balanced by the
-        // worker, howerver the worker cannot modify main_thread_ref_count.
+        // worker, however the worker cannot modify main_thread_ref_count.
         void increment_main_thread_ref_count(Device* worker) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count++;
             }
         }
 
         void decrement_main_thread_ref_count(Device* worker) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count--;
             }
         }
@@ -67,12 +69,13 @@ struct Tensor {
         }
 
         void update_main_thread_ref_count(Device* worker, uint32_t ref_count) {
-            if (worker->get_worker_mode() == Device::WorkerQueueMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count = ref_count;
             }
         }
     };
 
+    std::optional<std::size_t> tensor_id = std::nullopt;
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes;
@@ -85,18 +88,49 @@ struct Tensor {
     Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout);
     Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout);
 
-    // Default constructor to initialize empty tensor
-    Tensor(std::vector<Device*> workers = {}) : tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
+    // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor handles in async mode.
+    Tensor(std::vector<Device *> workers = {},
+        uint32_t num_buffers = 0) :
+        tensor_id(std::nullopt),
+        tensor_attributes(std::make_shared<TensorAttributes>()),
+        workers(workers),
+        deallocate_through_destructor(false) {
+        // When creating a device tensor, specify workers.
+        // When creating a host tensor, specify num_buffers.
+        // If neither are specified, a dummy tensor is being created. Do nothing.
         if (workers.size()) {
-            if (this->workers.at(0)->in_main_thread()) {
+            bool in_main_thread_based_on_first_worker = workers.at(0)->in_main_thread();
+            for (auto& worker : workers) {
+                bool in_main_thread_based_on_curr_worker = worker->in_main_thread();
+                TT_FATAL(in_main_thread_based_on_curr_worker == in_main_thread_based_on_first_worker, "in_main_thread() inconsistency found across worker threads. Some worker threads have incorrectly assigned main thread IDs.");
+            }
+            if (in_main_thread_based_on_first_worker) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
             }
+            if (workers.size() == 1) {
+                this->tensor_attributes->storage = DeviceStorage();
+            } else if (workers.size() > 1) {
+                this->tensor_attributes->storage = MultiDeviceStorage();
+            }
+            this->tensor_attributes->tensor_populated = std::vector<bool>(workers.size(), false);
+        } else if (num_buffers) {
+            if (num_buffers == 1) {
+                this->tensor_attributes->storage = OwnedStorage();
+            } else {
+                this->tensor_attributes->storage = MultiDeviceHostStorage();
+                // Preallocate buffer and shape vector for MultiDeviceHostStorage
+                std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers = std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
+                std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes = std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value());
+            }
+            this->tensor_attributes->tensor_populated = std::vector<bool>(num_buffers, false);
         }
     }
 
-    Tensor(const Tensor &other) {
-        this->workers = other.workers;
-        this->tensor_attributes = other.tensor_attributes;
+    Tensor(const Tensor &other) :
+        tensor_id(other.tensor_id),
+        workers(other.workers),
+        tensor_attributes(other.tensor_attributes),
+        deallocate_through_destructor(other.deallocate_through_destructor) {
         if (this->workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -105,8 +139,10 @@ struct Tensor {
     }
 
     Tensor &operator=(const Tensor &other) {
+        this->tensor_id = other.tensor_id;
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
+        this->deallocate_through_destructor = other.deallocate_through_destructor;
         if (this->workers.size()) {
             if (this->workers.at(0)->in_main_thread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -115,7 +151,7 @@ struct Tensor {
         return *this;
     }
 
-    Tensor(Tensor &&other) noexcept : tensor_attributes(std::move(other.tensor_attributes)), workers(std::move(other.workers)) {};
+    Tensor(Tensor &&other) noexcept = default;
     Tensor &operator=(Tensor &&other) = default;
 
     ~Tensor();
@@ -169,13 +205,11 @@ struct Tensor {
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    const TensorAttributes& get_attr() const;
     const Storage &get_storage() const;
     const Shape &get_legacy_shape() const;
     const ttnn::Shape &get_shape() const;
     const DataType& get_dtype() const;
     const Layout& get_layout() const;
-    bool metadata_populated() const;
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
@@ -183,11 +217,12 @@ struct Tensor {
     void set_shape (const ttnn::Shape& shape) { this->tensor_attributes->shape = shape; }
     void set_dtype(const DataType& dtype) { this->tensor_attributes->dtype = dtype; }
     void set_layout(const Layout& layout) { this->tensor_attributes->layout = layout; }
-    void set_metadata_populated();
+    void set_populated(Device* worker = nullptr);
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
-    void wait_for_metadata_populated() const;
+    void wait_for_tensor_data_populated() const;
+    void wait_for_tensor_metadata_populated() const;
     StorageType storage_type() const;
     const Shape strides() const;
     uint32_t volume() const;
@@ -212,6 +247,9 @@ struct Tensor {
             if (buffer == nullptr)
                 TT_THROW("Cannot get the device from a tensor without an allocated buffer");
             return buffer->device();
+        } else if (this->storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
+            auto& storage = std::get<MultiDeviceStorage>(this->get_storage());
+            return storage.buffers.at(0)->device();
         } else {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }
@@ -221,6 +259,8 @@ struct Tensor {
             [](const auto &storage) -> MemoryConfig {
                 using T = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<T, DeviceStorage>) {
+                    return storage.memory_config();
+                } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                     return storage.memory_config();
                 } else {
                     TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");
@@ -248,7 +288,7 @@ struct Tensor {
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, bool pad_to_same_shard_size=false);
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config);
 
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);

@@ -18,7 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
+operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();

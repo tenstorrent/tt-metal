@@ -18,6 +18,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/scan/scan_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
@@ -213,8 +214,7 @@ void TensorModule(py::module &m_tensor) {
             py::init<>(
                 [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
                     return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type, .shard_spec=shard_spec};
-                }
-            ),
+                }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
             py::arg("shard_spec") = std::nullopt,
@@ -228,22 +228,41 @@ void TensorModule(py::module &m_tensor) {
                 .. code-block:: python
 
                     mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
-            )doc"
-        )
-        .def("__repr__", [](const MemoryConfig &memory_config) -> std::string {
-            return fmt::format("{}", memory_config);
-        }
-        )
+            )doc")
+        .def(
+            "__repr__",
+            [](const MemoryConfig& memory_config) -> std::string { return fmt::format("{}", memory_config); })
+        .def(
+            "__hash__",
+            [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
+                return tt::stl::hash::hash_object(memory_config);
+            })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
-        .def_property_readonly("interleaved", [](const MemoryConfig &memory_config) {
-            return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
-        }, "Whether tensor data is interleaved across multiple DRAM channels"
-        )
+        .def_property_readonly(
+            "interleaved",
+            [](const MemoryConfig& memory_config) {
+                return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
+            },
+            "Whether tensor data is interleaved across multiple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
+
+    m_tensor.def(
+        "dump_memory_config",
+        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
+        R"doc(
+            Dump memory config to file
+        )doc");
+
+    m_tensor.def(
+        "load_memory_config",
+        py::overload_cast<const std::string&>(&load_memory_config),
+        R"doc(
+            Load memory config to file
+        )doc");
 
     auto py_owned_buffer_for_uint16_t =
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
@@ -278,24 +297,18 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     pyShardSpec
-        .def(
-            py::init<>(
-                [](const CoreRangeSet & core_sets,
-                    const std::array<uint32_t,2> & shard_shape,
-                    const ShardOrientation & shard_orientation,
-                    const bool & halo
-                     ) {
-                    return ShardSpec(core_sets, shard_shape, shard_orientation, halo);
-                }
-            )
-        )
+        .def(py::init<>([](const CoreRangeSet& core_sets,
+                           const std::array<uint32_t, 2>& shard_shape,
+                           const ShardOrientation& shard_orientation,
+                           const bool& halo) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo); }))
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        ;
+        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
+    ;
 
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
@@ -756,10 +769,11 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def(
         "load_tensor",
         &load_tensor,
+        py::arg("file_name"),
+        py::arg("device") = nullptr,
         R"doc(
             Load tensor to file
-        )doc"
-    );
+        )doc");
 
     m_tensor.def(
         "num_cores_to_corerange_set",
@@ -769,13 +783,27 @@ void TensorModule(py::module &m_tensor) {
         )doc"
     );
 
+    m_tensor.def(
+        "scan",
+        &scan,
+        py::arg().noconvert(),
+        R"doc(
+        Performs an inclusive prefix scan on the input tensor along the column axis, bottom to top,
+        using multiplication as reduction operation.
+
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+        | Argument          | Description                                                                       | Data type     | Valid range | Required |
+        +===================+===================================================================================+===============+=============+==========+
+        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+    )doc");
+
     detail::TensorModuleCompositeOPs( m_tensor);
     detail::TensorModuleBackwardOPs( m_tensor);
     detail::TensorModulePyTensor ( m_tensor);
     detail::TensorModuleDMOPs ( m_tensor);
     detail::TensorModuleCustomAndBMMOPs( m_tensor );
-    detail::TensorModuleXaryOPs( m_tensor );
-
+    detail::TensorModuleXaryOPs(m_tensor);
 }
 
 }

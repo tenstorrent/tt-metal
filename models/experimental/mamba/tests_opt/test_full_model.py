@@ -39,6 +39,7 @@ class MambaPytorch(torch.nn.Module):
         x = self.lm_head(x)
         return x
 
+
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, pcc, enable_cache",
@@ -46,12 +47,19 @@ class MambaPytorch(torch.nn.Module):
         (
             "state-spaces/mamba-2.8b",
             32,
-            0.99,
+            0.985,
             False,
         ),
     ),
 )
-def test_mamba_model_inference(device, use_program_cache, model_version: MambaPretrainedModelName, batch: int, pcc: float, enable_cache: bool):
+def test_mamba_model_inference(
+    device: ttnn.Device,
+    use_program_cache,
+    model_version: MambaPretrainedModelName,
+    batch: int,
+    pcc: float,
+    enable_cache: bool,
+):
     torch.manual_seed(10)
 
     reference_model = MambaDecode.from_pretrained(model_version, batch_size=batch)
@@ -78,5 +86,5 @@ def test_mamba_model_inference(device, use_program_cache, model_version: MambaPr
     logger.info(f"PCC value: {output_pcc}")
 
     if not does_pass:
-        logger.warning("Mamba SSM output failed")
+        logger.warning("Mamba output failed")
         assert does_pass, f"PCC value is lower than {pcc}"

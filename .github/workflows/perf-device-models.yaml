@@ -15,6 +15,7 @@ jobs:
       matrix:
         runner-info: [
           {arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
+          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -42,12 +43,14 @@ jobs:
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.runner-info.machine-type }}
       - name: Check device perf report exists
         id: check-device-perf-report
+        if: ${{ !cancelled() }}
         run: |
           ls -hal
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_$(date +%Y_%m_%d).csv
           ls -hal $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Upload device perf report
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: device-perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}

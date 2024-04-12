@@ -18,12 +18,14 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
     calculate_shard_grid,
+    calculate_memory_config,
 )
 from tt_lib.utils import (
     _nearest_32,
     _nearest_y,
     find_closest_largest_divisor,
     find_closest_largest_divisor_with_num_padding,
+    divup,
 )
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -41,7 +43,7 @@ def find_closest_common_largest_divisor(num1: int, num2: int, start_divisor: int
     return divisor
 
 
-def determine_largest_subblock_size(block_height, block_width):
+def determine_largest_subblock_size(block_height, block_width, fp32_accum=False):
     subblocks = [
         (2, 4),
         (4, 2),
@@ -65,6 +67,8 @@ def determine_largest_subblock_size(block_height, block_width):
         (1, 1),
     ]
     for subblock_height, subblock_width in subblocks:
+        if fp32_accum and subblock_height * subblock_width > 4:
+            continue
         if block_height % subblock_height == 0 and block_width % subblock_width == 0:
             if subblock_width != block_width and subblock_height != 1:
                 continue
@@ -101,21 +105,15 @@ def determine_parallel_config(
     input_width = sliding_window_op_params.input_w
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
-
-    # pad height to 32
-    conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
-    if is_out_tiled:
-        conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
-        conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
-    else:
-        conv_out_2d_matrix_height_ntiles = conv_out_2d_matrix_height
-        conv_out_2d_matrix_width_ntiles = output_channels
+    tile_size = 32 if is_out_tiled else 1
+    conv_out_2d_matrix_width_ntiles = divup(output_channels, tile_size)
 
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
     device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
     max_num_cores = device_grid_size[0] * device_grid_size[1]
 
     def calculate_num_cores_nhw(override):
+        conv_out_2d_matrix_height_ntiles = divup(conv_out_2d_matrix_height, tile_size)
         num_cores_nhw = (
             find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
             if is_1d_systolic
@@ -152,16 +150,18 @@ def determine_parallel_config(
         return grid_size
 
     def calculate_per_core_out_matrix_height_ntiles(logical_grid_x, override):
-        round_up = 0 if is_1d_systolic else (logical_grid_x - 1)
-        # per_core_out_matrix_height_ntiles = _nearest_32(conv_out_2d_matrix_height / num_cores_nhw) // 32
-        per_core_out_matrix_height_ntiles = (conv_out_2d_matrix_height_ntiles + round_up) // logical_grid_x
+        per_core_out_matrix_height_ntiles = divup(divup(conv_out_2d_matrix_height, logical_grid_x), tile_size)
+        total_padded_height = per_core_out_matrix_height_ntiles * tile_size * logical_grid_x
+        assert (
+            total_padded_height - conv_out_2d_matrix_height
+        ) <= per_core_out_matrix_height_ntiles * tile_size, f"total_padded_height({total_padded_height}) - original_height({conv_out_2d_matrix_height}) = {total_padded_height - conv_out_2d_matrix_height}, which exceeds the per-core shard shape height({per_core_out_matrix_height_ntiles * tile_size}).  This will result in cores doing work on padded data only which is illegal. This is a result of choosing override num_cores_nhw({num_cores_nhw}) that cannot satisfy this height after tile padding."
         if override is not None:
-            assert override % 32 == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
-            if (override // 32) != per_core_out_matrix_height_ntiles:
+            assert override % tile_size == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
+            if (override // tile_size) != per_core_out_matrix_height_ntiles:
                 warnings.warn(
-                    f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * 32} to user provided config={override}"
+                    f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * tile_size} to user provided config={override}"
                 )
-                per_core_out_matrix_height_ntiles = override // 32
+                per_core_out_matrix_height_ntiles = override // tile_size
         return per_core_out_matrix_height_ntiles
 
     def calculate_per_core_out_matrix_width_ntiles(logical_grid_y, override):
@@ -180,10 +180,10 @@ def determine_parallel_config(
     logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[0]
     logical_grid_y = 1 if is_1d_systolic else grid_size[1]
     per_core_out_matrix_height_ntiles = calculate_per_core_out_matrix_height_ntiles(
-        logical_grid_x, config_override.get("per_core_out_matrix_height_ntiles", None)
+        logical_grid_x, config_override.get("per_core_out_matrix_height", None)
     )
     per_core_out_matrix_width_ntiles = calculate_per_core_out_matrix_width_ntiles(
-        logical_grid_y, config_override.get("per_core_out_matrix_width_ntiles", None)
+        logical_grid_y, config_override.get("per_core_out_matrix_width", None)
     )
 
     # logger.debug(
@@ -208,6 +208,7 @@ def determine_per_core_block_config(
     use_shallow_conv_variant,
     padded_input_channels,
     config_override=None,
+    fp32_accum=False,
 ):
     if config_override is None:
         config_override = {}
@@ -239,7 +240,7 @@ def determine_per_core_block_config(
     assert out_block_h_ntiles % act_block_h_ntiles == 0, "act_block_h must evenly divide out_block_h"
     weight_block_w_ntiles = per_core_out_matrix_width_ntiles
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
-        act_block_h_ntiles, weight_block_w_ntiles
+        act_block_h_ntiles, weight_block_w_ntiles, fp32_accum
     )
     if use_shallow_conv_variant and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
         assert is_1d_systolic
@@ -361,6 +362,11 @@ class TTPyCompositeConv(TTPyOp):
         output_layout=ttl.tensor.Layout.TILE,
         use_dram_for_matmul=False,
     ):
+        fp32_accum = (
+            compute_kernel_config
+            and isinstance(compute_kernel_config, ttl.tensor.WormholeComputeKernelConfig)
+            and compute_kernel_config.fp32_dest_acc_en
+        )
         self.use_dram_for_matmul = use_dram_for_matmul
 
         if padded_input_channels is None:
@@ -422,6 +428,7 @@ class TTPyCompositeConv(TTPyOp):
             use_shallow_conv_variant,
             self.padded_input_channels,
             config_override=conv_blocking_and_parallelization_config_override,
+            fp32_accum=fp32_accum,
         )
 
         if not is_1d_systolic:  # 2D conv
@@ -538,101 +545,20 @@ class TTPyCompositeConv(TTPyOp):
             self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
                 device, self.sliding_window_op_params, reader_patterns_cache["halo"]
             )
-        self.set_input_sharded_memory_config()
-        self.set_output_sharded_memory_config()
-
-    def set_input_sharded_memory_config(self):
-        needs_reshard = self.sliding_window_op_params.act_reshard_num_cores_nhw > 0
-        if needs_reshard:
-            num_cores_nhw = self.sliding_window_op_params.act_reshard_num_cores_nhw
-            if self.is_1d_systolic:
-                num_cores_w = min(self.sliding_window_op_params.num_cores_w, num_cores_nhw)
-                num_cores_h = (num_cores_nhw + num_cores_w - 1) // num_cores_w
-            else:
-                num_cores_w = num_cores_nhw
-                num_cores_h = self.sliding_window_op_params.num_cores_h
-        else:
-            num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-            num_cores_w = self.sliding_window_op_params.num_cores_w
-            num_cores_h = self.sliding_window_op_params.num_cores_h
-
-        input_channels = self.input_tensor_shape[3]
-        padded_input_channels = (
-            _nearest_y(input_channels, 16) if self.use_shallow_conv_variant else _nearest_32(input_channels)
+        self.grid_size = (self.sliding_window_op_params.num_cores_w, self.sliding_window_op_params.num_cores_h)
+        self.input_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            self.is_1d_systolic,
+            self.padded_input_channels,
+            calc_input=True,
+            tile_size=32,
         )
-        assert padded_input_channels >= input_channels
-        act_c_num_blocks = (
-            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
-        )  ###will fix it at the time of merging
-        grid_size = (num_cores_w, num_cores_h)
-
-        input_size_to_shard_evenly = _nearest_y(
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
-        )
-        untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
-
-        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
-        self.input_shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
-        )
-        shard_halo = False
-        shard_shape = [
-            untilize_with_halo_input_shard_height,
-            padded_input_channels if self.is_1d_systolic else (int)(padded_input_channels / act_c_num_blocks),
-        ]
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.input_shard_orientation, shard_halo)
-        self.input_shard_scheme = (
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-        )
-        self.input_sharded_memory_config = ttl.tensor.MemoryConfig(
-            self.input_shard_scheme,
-            ttl.tensor.BufferType.L1,
-            shard_spec,
-        )
-        self.grid_size = (num_cores_w, num_cores_h)
-
-    def set_output_sharded_memory_config(self):
-        num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-        num_cores_w = self.sliding_window_op_params.num_cores_w
-        num_cores_h = self.sliding_window_op_params.num_cores_h
-
-        output_channels = self.conv_output_shape[3]
-        padded_output_channels = _nearest_32(output_channels)
-        assert padded_output_channels >= output_channels
-        act_c_num_blocks = (
-            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
-        )  ###will fix it at the time of merging
-
-        output_size_to_shard_evenly = _nearest_y(
-            self.conv_output_shape[0] * self.conv_output_shape[1] * self.conv_output_shape[2], num_cores_nhw * 32
-        )
-        output_shard_height = (int)(output_size_to_shard_evenly / num_cores_nhw)
-
-        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
-        self.output_shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
-        )
-        shard_halo = False
-        shard_shape = [
-            output_shard_height,
-            padded_output_channels if self.is_1d_systolic else (int)(padded_output_channels / act_c_num_blocks),
-        ]
-        assert shard_shape[0] == self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
-        if shard_shape[1] != self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32:
-            breakpoint()
-        assert shard_shape[1] == self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.output_shard_orientation, shard_halo)
-        self.output_shard_scheme = (
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-        )
-        self.output_sharded_memory_config = ttl.tensor.MemoryConfig(
-            self.output_shard_scheme,
-            ttl.tensor.BufferType.L1,
-            shard_spec,
+        self.output_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            self.is_1d_systolic,
+            _nearest_32(output_channels),
+            calc_input=False,
+            tile_size=32,
         )
 
     # override abstract methods from base class TTPyOp

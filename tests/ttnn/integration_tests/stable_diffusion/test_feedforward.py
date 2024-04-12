@@ -12,6 +12,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_feedforward import (
     feedforward as ttnn_feedforward,
 )
+from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import (
     feedforward as tt2_ttnn_feedforward,
 )
@@ -133,15 +134,20 @@ def test_feedforward_512x512(device, model_name, N, C, H, W, index, reset_seeds)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_model,
         device=device,
+        custom_preprocessor=custom_preprocessor,
     )
     model = tt2_ttnn_feedforward(device, parameters)
 
-    ttnn_hidden_state = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_hidden_state = torch_hidden_states.reshape(
+        (1, 1, torch_hidden_states.shape[-3] * torch_hidden_states.shape[-2], torch_hidden_states.shape[-1])
+    )
+    ttnn_hidden_state = ttnn.from_torch(ttnn_hidden_state, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device)
 
     output = model(config, ttnn_hidden_state)
     output = ttnn.from_device(output)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
+    output = output.reshape(torch_output.shape)
 
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.98)

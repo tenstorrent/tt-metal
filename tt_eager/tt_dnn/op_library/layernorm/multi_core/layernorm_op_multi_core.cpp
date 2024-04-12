@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_legacy_shape();
-    uint32_t W = shape[3], H = shape[2];
+    uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H*W;
     uint32_t NC = a.volume() / HW;
 
@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     };
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_legacy_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             reader_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_legacy_shape()[-1] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -766,7 +766,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     };
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_legacy_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
@@ -779,7 +779,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_legacy_shape()[-1] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
@@ -814,7 +814,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = writer_noc, .compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
     );
     KernelHandle writer_mcast_receiver_kernels_id = -1;
-    if (num_none_all_to_all_workers > 1) {
+    if (num_none_all_to_all_workers > 0) {
         writer_mcast_receiver_kernels_id = CreateKernel(
             program,
             writer_kernel,

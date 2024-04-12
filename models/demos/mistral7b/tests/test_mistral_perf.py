@@ -38,11 +38,11 @@ class Emb(torch.nn.Module):
     ((32, 12, 15, 0.16),),
 )
 def test_mistral_model_perf(
-    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache
+    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
     dtype = ttnn.bfloat8_b
 
-    run_ref_pt = True
+    run_ref_pt = False
 
     model_args = TtModelArgs(device)
     model_args.max_batch_size = batch
@@ -143,17 +143,22 @@ def test_mistral_model_perf(
             model_args.sliding_window,
             tt_model.device,
         )
+
         if i == 0 or i == 10:  # Skip the first few iterations to warm up
             profiler.end(f"input_processing_{i}")
             profiler.start(f"model_run_for_inference_{i}")
 
         # Run TT model
         tt_out = tt_model(decode_input, pos)
+
+        if i == 0 or i == 10:  # Skip the first few iterations to warm up
+            profiler.start(f"result_wait_for_inference_{i}")
         # Convert ttnn tensor to torch tensor
         tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         if i == 0 or i == 10:  # Skip the first few iterations to warm up
             profiler.end(f"model_run_for_inference_{i}")
+            profiler.end(f"result_wait_for_inference_{i}")
 
         if run_ref_pt:  # Run reference model
             if i == 0:  # Skip the first few iterations to warm up
@@ -213,7 +218,7 @@ def test_mistral_model_perf(
     "batch, iterations, expected_perf",
     ((32, 17, 0.16),),
 )
-def test_mistral_perf_device(batch, iterations, expected_perf):
+def test_mistral_perf_device(batch, iterations, expected_perf, reset_seeds):
     subdir = "ttnn_mistral7b"
     margin = 0.03
     command = f"pytest models/demos/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
@@ -229,5 +234,4 @@ def test_mistral_perf_device(batch, iterations, expected_perf):
         batch_size=batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
-        comments=test.replace("/", "_"),
     )

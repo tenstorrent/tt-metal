@@ -5,11 +5,18 @@
 import dataclasses
 import sqlite3
 import shutil
-from typing import Optional
 
 from loguru import logger
+import networkx as nx
 
 import ttnn
+
+SQLITE_DB_PATH = "db.sqlite"
+TENSORS_PATH = "tensors"
+OPERATION_HISTORY_CSV = "operation_history.csv"
+OPERATION_HISTORY_PATH = "operation_history"
+GRAPHS_PATH = "graph"
+CONFIG_PATH = "config.json"
 
 SQLITE_CONNECTION = None
 
@@ -41,9 +48,6 @@ class Operation:
     operation_id: int
     name: str
     duration: float
-    matches_golden: Optional[bool]
-    desired_pcc: Optional[float]
-    actual_pcc: Optional[float]
 
 
 @dataclasses.dataclass
@@ -52,7 +56,10 @@ class Buffer:
     device_id: int
     address: int
     max_size_per_bank: int
-    buffer_type: int
+    buffer_type: ttnn.BufferType
+
+    def __post_init__(self):
+        self.buffer_type = ttnn.BufferType(self.buffer_type) if self.buffer_type is not None else None
 
 
 @dataclasses.dataclass
@@ -66,44 +73,73 @@ class BufferPage:
     page_index: int
     page_address: int
     page_size: int
-    buffer_type: int
+    buffer_type: ttnn.BufferType
+
+    def __post_init__(self):
+        self.buffer_type = ttnn.BufferType(self.buffer_type) if self.buffer_type is not None else None
 
 
-def delete_reports():
+@dataclasses.dataclass
+class Tensor:
+    tensor_id: int
+    shape: str
+    dtype: str
+    layout: str
+    memory_config: str
+    device_id: int
+    address: int
+    buffer_type: ttnn.BufferType
+
+    def __post_init__(self):
+        self.buffer_type = ttnn.BufferType(self.buffer_type) if self.buffer_type is not None else None
+
+
+@dataclasses.dataclass
+class InputTensor:
+    operation_id: int
+    input_index: int
+    tensor_id: int
+
+
+@dataclasses.dataclass
+class OutputTensor:
+    operation_id: int
+    output_index: int
+    tensor_id: int
+
+
+@dataclasses.dataclass
+class TensorComparisonRecord:
+    tensor_id: int
+    golden_tensor_id: int
+    matches: bool
+    desired_pcc: bool
+    actual_pcc: float
+
+
+@dataclasses.dataclass
+class OperationArgument:
+    operation_id: int
+    name: str
+    value: str
+
+
+def get_or_create_sqlite_db(report_path):
     global SQLITE_CONNECTION
-    if SQLITE_CONNECTION is not None:
-        SQLITE_CONNECTION.close()
-    logger.info(f"Deleting reports from {ttnn.CONFIG.reports_path} and closing the sqlite connection.")
-    shutil.rmtree(ttnn.CONFIG.reports_path, ignore_errors=True)
-    SQLITE_CONNECTION = None
-
-
-def get_or_create_sqlite_db():
-    global SQLITE_CONNECTION
+    sqlite_db_path = report_path / SQLITE_DB_PATH
 
     if SQLITE_CONNECTION is not None:
         return SQLITE_CONNECTION
 
-    delete_reports()
-    logger.info(
-        f"Creating reports path at {ttnn.CONFIG.reports_path} and sqlite database at {ttnn.CONFIG.sqlite_db_path}."
-    )
-    ttnn.CONFIG.reports_path.mkdir(parents=True, exist_ok=True)
-    SQLITE_CONNECTION = sqlite3.connect(ttnn.CONFIG.sqlite_db_path)
+    report_path.mkdir(parents=True, exist_ok=True)
+    config_path = report_path / CONFIG_PATH
+    if not config_path.exists():
+        ttnn.save_config_to_json_file(config_path)
+    SQLITE_CONNECTION = sqlite_connection = sqlite3.connect(sqlite_db_path)
 
-    cursor = SQLITE_CONNECTION.cursor()
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS operations
-                (operation_id int, name text, duration float, matches_golden int, desired_pcc float, actual_pcc float)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS buffers
-                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS buffer_pages
-                (operation_id int, device_id int, address int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
-    )
+    logger.debug(f"Creating reports path at {report_path} and sqlite database at {sqlite_db_path}.")
+
+    cursor = sqlite_connection.cursor()
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS devices
                 (
@@ -127,15 +163,63 @@ def get_or_create_sqlite_db():
                     cb_limit int
                 )"""
     )
-    SQLITE_CONNECTION.commit()
-    return SQLITE_CONNECTION
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS tensors
+                (tensor_id int UNIQUE, shape text, dtype text, layout text, memory_config text, device_id int, address int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS local_tensor_comparison_records
+                (tensor_id int UNIQUE, golden_tensor_id int, matches bool, desired_pcc bool, actual_pcc float)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS global_tensor_comparison_records
+                (tensor_id int UNIQUE, golden_tensor_id int, matches bool, desired_pcc bool, actual_pcc float)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS operations
+                (operation_id int UNIQUE, name text, duration float)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS operation_arguments
+                (operation_id int, name text, value text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS stack_traces
+                (operation_id int, stack_trace text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS input_tensors
+                (operation_id int, input_index int, tensor_id int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS output_tensors
+                (operation_id int, output_index int, tensor_id int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS buffers
+                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS buffer_pages
+                (operation_id int, device_id int, address int, core_y int, core_x int, bank_id int, page_index int, page_address int, page_size int, buffer_type int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS nodes
+                (operation_id int, unique_id int, node_operation_id int, name text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS edges
+                (operation_id int, source_unique_id int, sink_unique_id int, source_output_index int, sink_input_index int, key int)"""
+    )
+    sqlite_connection.commit()
+    return sqlite_connection
 
 
 DEVICE_IDS_IN_DATABASE = set()
 
 
-def insert_devices(devices):
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+def insert_devices(report_path, devices):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     for device in devices:
@@ -168,45 +252,550 @@ def insert_devices(devices):
         DEVICE_IDS_IN_DATABASE.add(device.id())
 
 
-def optional_value(value):
+def optional_value(value, text=False):
     if value is None:
         return "NULL"
+    if text:
+        return f"'{value}'"
     return value
 
 
-def insert_operation(operation, operation_id, duration, matches_golden, desired_pcc, actual_pcc):
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+def insert_operation(report_path, operation_id, operation, duration):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
     cursor.execute(
-        f"INSERT INTO operations VALUES ({operation_id}, '{operation.name}', {duration}, {optional_value(matches_golden)}, {optional_value(desired_pcc)}, {optional_value(actual_pcc)})"
+        f"""INSERT INTO operations VALUES (
+            {operation_id}, '{operation.name}', {optional_value(duration)}
+            )
+        ON CONFLICT (operation_id)
+        DO UPDATE
+        SET
+            duration=EXCLUDED.duration;"""
     )
     sqlite_connection.commit()
 
-    if ttnn.CONFIG.enable_buffer_report:
-        for buffer in ttnn._ttnn.reports.get_buffers():
-            cursor.execute(
-                f"""INSERT INTO buffers VALUES (
-                    {operation_id},
-                    {buffer.device_id},
-                    {buffer.address},
-                    {buffer.max_size_per_bank},
-                    {buffer.buffer_type.value}
-                )"""
-            )
-        for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
-            cursor.execute(
-                f"""INSERT INTO buffer_pages VALUES (
-                    {operation_id},
-                    {buffer_page.device_id},
-                    {buffer_page.address},
-                    {buffer_page.core_y},
-                    {buffer_page.core_x},
-                    {buffer_page.bank_id},
-                    {buffer_page.page_index},
-                    {buffer_page.page_address},
-                    {buffer_page.page_size},
-                    {buffer_page.buffer_type.value}
-                )"""
-            )
-        sqlite_connection.commit()
+
+def store_operation_history_records(report_path, operation_id):
+    operation_history_csv = report_path / OPERATION_HISTORY_CSV
+    operation_history_path = report_path / OPERATION_HISTORY_PATH
+    operation_history_path.mkdir(parents=True, exist_ok=True)
+    if operation_history_csv:
+        shutil.copy(operation_history_csv, operation_history_path / f"{operation_id}.csv")
+
+
+def insert_stack_trace(report_path, operation_id, stack_trace):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
+
+    cursor.execute(f"INSERT INTO stack_traces VALUES ({operation_id}, '{formatted_stack_trace}')")
+    sqlite_connection.commit()
+
+
+def insert_tensor(report_path, tensor):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    if query_tensor_by_id(report_path, tensor.tensor_id) is not None:
+        return
+
+    if ttnn.is_tensor_storage_on_device(tensor) and tensor.is_allocated():
+        address = tensor.buffer_address()
+        device_id = tensor.device().id()
+        memory_config = ttnn.get_memory_config(tensor)
+        buffer_type = memory_config.buffer_type.value
+    else:
+        address = None
+        device_id = None
+        memory_config = None
+        buffer_type = None
+
+    cursor.execute(
+        f"""
+        INSERT INTO tensors VALUES (
+            {tensor.tensor_id},
+            '{tensor.shape}',
+            '{tensor.dtype}',
+            '{tensor.layout}',
+            {optional_value(memory_config, text=True)},
+            {optional_value(device_id)},
+            {optional_value(address)},
+            {optional_value(buffer_type)})"""
+    )
+    sqlite_connection.commit()
+
+
+def insert_input_tensors(report_path, operation_id, input_tensors):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    for input_index, tensor in enumerate(input_tensors):
+        insert_tensor(report_path, tensor)
+
+        cursor.execute(
+            f"""INSERT INTO input_tensors VALUES (
+                {operation_id},
+                {input_index},
+                {tensor.tensor_id}
+            )"""
+        )
+    sqlite_connection.commit()
+
+    if ttnn.CONFIG.enable_detailed_tensor_report:
+        for tensor in input_tensors:
+            store_tensor(report_path, tensor)
+
+
+def insert_output_tensors(report_path, operation_id, output_tensors):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    for output_index, tensor in enumerate(output_tensors):
+        insert_tensor(report_path, tensor)
+
+        cursor.execute(
+            f"""INSERT INTO output_tensors VALUES (
+                {operation_id},
+                {output_index},
+                {tensor.tensor_id}
+            )"""
+        )
+    sqlite_connection.commit()
+
+    if ttnn.CONFIG.enable_detailed_tensor_report:
+        for tensor in output_tensors:
+            store_tensor(report_path, tensor)
+
+
+def insert_buffers(report_path, operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    for buffer in ttnn._ttnn.reports.get_buffers():
+        cursor.execute(
+            f"""INSERT INTO buffers VALUES (
+                {operation_id},
+                {buffer.device_id},
+                {buffer.address},
+                {buffer.max_size_per_bank},
+                {buffer.buffer_type.value}
+            )"""
+        )
+    sqlite_connection.commit()
+
+
+def insert_buffer_pages(report_path, operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+    for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
+        cursor.execute(
+            f"""INSERT INTO buffer_pages VALUES (
+                {operation_id},
+                {buffer_page.device_id},
+                {buffer_page.address},
+                {buffer_page.core_y},
+                {buffer_page.core_x},
+                {buffer_page.bank_id},
+                {buffer_page.page_index},
+                {buffer_page.page_address},
+                {buffer_page.page_size},
+                {buffer_page.buffer_type.value}
+            )"""
+        )
+    sqlite_connection.commit()
+
+
+def store_graph(report_path, operation_id, graph):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    for node in graph.nodes:
+        node_attributes = graph.nodes[node]
+        node_operation = node_attributes["operation"]
+        node_name = str(node_operation)
+        node_operation_id = node_attributes.get("operation_id", None)
+        cursor.execute(
+            f"""INSERT INTO nodes VALUES (
+                {operation_id},
+                {node.unique_id},
+                {optional_value(node_operation_id)},
+                '{node_name}'
+            )"""
+        )
+    for source_node, sink_node, key, data in graph.edges(keys=True, data=True):
+        cursor.execute(
+            f"""INSERT INTO edges VALUES (
+                {operation_id},
+                {source_node.unique_id},
+                {sink_node.unique_id},
+                {data['source_output_index']},
+                {data['sink_input_index']},
+                {key}
+            )"""
+        )
+
+    sqlite_connection.commit()
+
+
+def load_graph(report_path, operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    graph = nx.MultiDiGraph()
+    cursor.execute("SELECT * FROM nodes WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, unique_id, node_operation_id, node_name = row
+        graph.add_node(unique_id, node_operation_id=node_operation_id, name=node_name)
+
+    cursor.execute("SELECT * FROM edges WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        _, source_unique_id, sink_unique_id, source_output_index, sink_input_index, key = row
+        graph.add_edge(
+            source_unique_id,
+            sink_unique_id,
+            source_output_index=source_output_index,
+            sink_input_index=sink_input_index,
+            key=key,
+        )
+
+    return graph
+
+
+def store_tensor(report_path, tensor):
+    import torch
+
+    tensors_path = report_path / TENSORS_PATH
+    tensors_path.mkdir(parents=True, exist_ok=True)
+    if isinstance(tensor, ttnn.Tensor):
+        tensor_file_name = tensors_path / f"{tensor.tensor_id}.bin"
+        if tensor_file_name.exists():
+            return
+        ttnn.dump_tensor(
+            tensor_file_name,
+            ttnn.from_device(tensor),
+        )
+    elif isinstance(tensor, torch.Tensor):
+        tensor_file_name = tensors_path / f"{tensor.tensor_id}.pt"
+        if tensor_file_name.exists():
+            return
+        torch.save(torch.Tensor(tensor), tensor_file_name)
+    else:
+        raise ValueError(f"Unsupported tensor type {type(tensor)}")
+
+
+def get_tensor_file_name_by_id(report_path, tensor_id):
+    tensors_path = report_path / TENSORS_PATH
+    tensors_path.mkdir(parents=True, exist_ok=True)
+    tensor_path = tensors_path / f"{tensor_id}.bin"
+    if tensor_path.exists():
+        return tensor_path
+    tensor_path = tensors_path / f"{tensor_id}.pt"
+    if tensor_path.exists():
+        return tensor_path
+    return None
+
+
+def load_tensor_by_id(report_path, tensor_id, device=None):
+    import torch
+
+    tensors_path = report_path / TENSORS_PATH
+    tensors_path.mkdir(parents=True, exist_ok=True)
+    tensor_path = tensors_path / f"{tensor_id}.bin"
+    if tensor_path.exists():
+        return ttnn.load_tensor(tensor_path, device=device)
+    tensor_path = tensors_path / f"{tensor_id}.pt"
+    if tensor_path.exists():
+        return torch.load(tensor_path)
+    return None
+
+
+def convert_arguments_to_strings(function_args, function_kwargs):
+    import torch
+
+    index = 0
+
+    def recursive_preprocess_golden_function_inputs(object):
+        nonlocal index
+        if isinstance(object, (ttnn.Tensor, torch.Tensor)):
+            output = f"{object}"
+            index += 1
+            return output
+        elif isinstance(object, (list, tuple)):
+            new_object = [recursive_preprocess_golden_function_inputs(element) for element in object]
+            return ", ".join(new_object)
+        else:
+            return f"{object}"
+
+    new_args = []
+    for arg in function_args:
+        new_arg = recursive_preprocess_golden_function_inputs(arg)
+        new_args.append(new_arg)
+    new_kwargs = {}
+    for key, value in function_kwargs.items():
+        new_value = recursive_preprocess_golden_function_inputs(value)
+        new_kwargs[key] = new_value
+    return new_args, new_kwargs
+
+
+def insert_operation_arguments(report_path, operation_id, function_args, function_kwargs):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    function_args, function_kwargs = convert_arguments_to_strings(function_args, function_kwargs)
+
+    for index, arg in enumerate(function_args):
+        cursor.execute(
+            f"""INSERT INTO operation_arguments VALUES (
+                {operation_id},
+                '{index}',
+                '{arg}'
+            )"""
+        )
+    for key, value in function_kwargs.items():
+        cursor.execute(
+            f"""INSERT INTO operation_arguments VALUES (
+                {operation_id},
+                '{key}',
+                '{value}'
+            )"""
+        )
+    sqlite_connection.commit()
+
+
+def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_records):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    for record in tensor_comparison_records:
+        cursor.execute(
+            f"""INSERT INTO {table_name} VALUES (
+                {record.tensor_id},
+                {record.golden_tensor_id},
+                {record.matches},
+                {record.desired_pcc},
+                {record.actual_pcc}
+            )"""
+        )
+    sqlite_connection.commit()
+
+
+def store_tensors(report_path, tensors):
+    for tensor in tensors:
+        insert_tensor(report_path, tensor)
+        if ttnn.CONFIG.enable_detailed_tensor_report:
+            store_tensor(report_path, tensor)
+
+
+def query_device_by_id(report_path, device_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
+    device = None
+    for row in cursor.fetchall():
+        device = ttnn.database.Device(*row)
+        break
+
+    sqlite_connection.close()
+
+    return device
+
+
+def query_operation_by_id(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM operations WHERE operation_id = ?", (operation_id,))
+    operation = None
+    for row in cursor.fetchall():
+        operation = ttnn.database.Operation(*row)
+        break
+
+    sqlite_connection.close()
+
+    return operation
+
+
+def query_operation_by_id_together_with_previous_and_next(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM operations WHERE operation_id = ?", (operation_id,))
+    operation = None
+    for row in cursor.fetchall():
+        operation = ttnn.database.Operation(*row)
+        break
+
+    cursor.execute(
+        "SELECT * FROM operations WHERE operation_id < ? ORDER BY operation_id DESC LIMIT 1", (operation_id,)
+    )
+    previous_operation = None
+    for row in cursor.fetchall():
+        previous_operation = ttnn.database.Operation(*row)
+        break
+
+    cursor.execute("SELECT * FROM operations WHERE operation_id > ? ORDER BY operation_id ASC LIMIT 1", (operation_id,))
+    next_operation = None
+    for row in cursor.fetchall():
+        next_operation = ttnn.database.Operation(*row)
+        break
+
+    sqlite_connection.close()
+
+    return operation, previous_operation, next_operation
+
+
+def query_operations(report_path):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM operations")
+    for row in cursor.fetchall():
+        operation = ttnn.database.Operation(*row)
+        yield operation
+
+    sqlite_connection.close()
+
+
+def query_operation_arguments(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM operation_arguments WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        operation_argument = ttnn.database.OperationArgument(*row)
+        yield operation_argument
+
+    sqlite_connection.close()
+
+
+def query_stack_trace(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
+    stack_trace = None
+    for row in cursor.fetchall():
+        _, stack_trace = row
+        break
+
+    sqlite_connection.close()
+    return stack_trace
+
+
+def query_buffers(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM buffers WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        yield ttnn.database.Buffer(*row)
+
+    sqlite_connection.close()
+
+
+def query_buffer_pages(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM buffer_pages WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        yield ttnn.database.BufferPage(*row)
+
+    sqlite_connection.close()
+
+
+def query_tensor_by_id(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM tensors WHERE tensor_id = ?", (tensor_id,))
+    tensor = None
+    for row in cursor.fetchall():
+        tensor = ttnn.database.Tensor(*row)
+        break
+
+    sqlite_connection.close()
+
+    return tensor
+
+
+def query_input_tensors(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM input_tensors WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        yield ttnn.database.InputTensor(*row)
+
+    sqlite_connection.close()
+
+
+def query_output_tensors(report_path, operation_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM output_tensors WHERE operation_id = ?", (operation_id,))
+    for row in cursor.fetchall():
+        yield ttnn.database.OutputTensor(*row)
+
+    sqlite_connection.close()
+
+
+def query_output_tensor_by_tensor_id(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
+    output_tensor = None
+    for row in cursor.fetchall():
+        output_tensor = ttnn.database.OutputTensor(*row)
+        break
+
+    sqlite_connection.close()
+
+    return output_tensor
+
+
+def query_tensor_comparison_record(report_path, table_name, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute(f"SELECT * FROM {table_name} WHERE tensor_id = ?", (tensor_id,))
+    tensor_comparison_record = None
+    for row in cursor.fetchall():
+        tensor_comparison_record = ttnn.database.TensorComparisonRecord(*row)
+        break
+
+    sqlite_connection.close()
+
+    return tensor_comparison_record
+
+
+def query_producer_operation_id(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM output_tensors WHERE tensor_id = ?", (tensor_id,))
+    operation_id = None
+    for row in cursor.fetchall():
+        operation_id, *_ = row
+        break
+
+    sqlite_connection.close()
+
+    return operation_id
+
+
+def query_consumer_operation_ids(report_path, tensor_id):
+    sqlite_connection = sqlite3.connect(report_path / SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM input_tensors WHERE tensor_id = ?", (tensor_id,))
+    for row in cursor.fetchall():
+        operation_id, *_ = row
+        yield operation_id
+
+    sqlite_connection.close()

@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 
+
 void kernel_main() {
     const std::uint32_t input_dram_buffer_src_addr  = get_arg_val<uint32_t>(0);
     const std::uint32_t weights_dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
@@ -86,8 +87,11 @@ void kernel_main() {
 
     cb_reserve_back(cb_id_in1, 1);
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
+    #if defined BFP16
+    volatile tt_l1_ptr uint16_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
+    #else
     volatile tt_l1_ptr uint32_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
-
+    #endif
     auto read_block = [&] (const uint32_t& token_idx, const uint32_t& width_size) {
         cb_reserve_back(cb_id_in0, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
@@ -106,7 +110,14 @@ void kernel_main() {
             src_noc_addr = one_noc_addr;
         }
         #else
-        src_noc_addr = get_noc_addr(token, weights);
+            #if defined BFP16
+            union { float f; uint32_t u; } u;
+            u.u = (uint32_t)input_l1_ptr[token_idx] << 16;
+            uint32_t token_casted = static_cast<uint32_t>(u.f);
+            src_noc_addr = get_noc_addr(token_casted, weights);
+            #else
+            src_noc_addr = get_noc_addr(token, weights);
+            #endif
         #endif
         noc_async_read(src_noc_addr, l1_write_addr, width_size);
         noc_async_read_barrier();

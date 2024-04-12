@@ -165,7 +165,14 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
-    model = cross_attention_down_block_2d(device, parameters, reader_patterns_cache, N, H, W)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = cross_attention_down_block_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.randn(hidden_states_shape)
@@ -194,6 +201,7 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
     encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -212,4 +220,4 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
     ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, 0.94)
+    assert_with_pcc(torch_output, ttnn_output, 0.96)

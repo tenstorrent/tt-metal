@@ -8,6 +8,7 @@ import pytest
 from tqdm.auto import tqdm
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
@@ -25,6 +26,7 @@ import math
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     post_process_output,
 )
+from ttnn.operations.core import unsqueeze_to_4D
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -48,6 +50,19 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     timesteps = timesteps.expand(batch_size)
     t_emb = time_proj(timesteps)
     return t_emb
+
+
+def unsqueeze_all_params_to_4d(params):
+    if isinstance(params, dict):
+        for key in params.keys():
+            params[key] = unsqueeze_all_params_to_4d(params[key])
+    elif isinstance(params, ttnn.ttnn.model_preprocessing.ParameterList):
+        for i in range(len(params)):
+            params[i] = unsqueeze_all_params_to_4d(params[i])
+    elif isinstance(params, ttnn.Tensor):
+        params = unsqueeze_to_4D(params)
+
+    return params
 
 
 @skip_for_grayskull()
@@ -137,9 +152,13 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")
 
+    ttnn.CONFIG.throw_exception_on_fallback = True
     parameters = preprocess_model_parameters(
         model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
+
+    # unsqueeze weight tensors to 4D for generating perf dump
+    parameters = unsqueeze_all_params_to_4d(parameters)
 
     timestep_shape = [1, 1, 2, 320]
     encoder_hidden_states_shape = [1, 2, 77, 768]
@@ -161,6 +180,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat16)
 
+    ttnn_timestep = ttnn_timestep.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_timestep = ttnn.from_torch(ttnn_timestep, ttnn.bfloat16)
     ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT)
     ttnn_timestep = ttnn.to_device(ttnn_timestep, device, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -183,5 +203,20 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
+
+    # for i in range(50):
+    #     ttnn_output = model(
+    #         input,
+    #         timestep=ttnn_timestep,
+    #         encoder_hidden_states=encoder_hidden_states,
+    #         class_labels=class_labels,
+    #         attention_mask=attention_mask,
+    #         cross_attention_kwargs=cross_attention_kwargs,
+    #         return_dict=return_dict,
+    #         config=config,
+    #     )
     ttnn_output = ttnn_to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.94)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
+    print(output)
+    assert passing
+    print("EXIT UNET-2D TEST")

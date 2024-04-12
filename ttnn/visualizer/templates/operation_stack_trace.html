@@ -1,0 +1,30 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<html>
+
+<style>
+    .fa {
+
+        color: black;
+        font-size: 48px;
+        padding-right: 15px;
+    }
+</style>
+
+<body>
+    <div>
+        <h1>Operation Stack Trace</h1>
+        {%if previous_operation %}
+        <a href=" /operation_stack_trace/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
+        {% endif %}
+        {%if next_operation %}
+        <a href=" /operation_stack_trace/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
+        <br>
+        {% endif %}
+        <h2>{{ operation.operation_id }}: {{ operation.name }}</h1> <br>
+    </div>
+    <pre><code class="python">{{ stack_trace }}</code></pre>
+</body>
+</html>
+{% endblock %}

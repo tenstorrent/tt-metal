@@ -1,5 +1,5 @@
-Tracy Host Profiler
-===================
+Tracy Profiler
+==============
 
 Overview
 --------
@@ -34,7 +34,7 @@ The application will start showing a window similar to the image below.
 
 .. image:: ../_static/tracy-get-started.png
     :alt: Tracy get started
-    :scale: 30%
+    :scale: 50%
 
 Set client address to the IP address of the remote machine, listen over port 8086 (e.g. 172.27.28.132:8086) and click connect.
 
@@ -133,6 +133,34 @@ Similar to the pytest setup, calling the parent script with ``-p`` option will p
 **Note**, it is recommended to sandwich the function call between the enable and disable calls rather than having them as first and last calls in the function being profiled.
 This is because ``settrace`` and ``setprofile`` trigger on more relevant events when the setup is done previous to the function call.
 
+Signposts in Python Code
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+``signpost(header, message)`` from the ``tracy`` module can be placed anywhere in the code path for your test. This call will produce a row in the op report CSV and a message in the tracy run.
+
+..  code-block:: python
+
+    from tracy import signpost
+
+    signpost(header="Run number 5", message="This is the run after 5 warmup runs")
+
+    run_inference()
+
+    signpost(header="Run result post proc")
+
+    post_proc()
+
+Above example will show up as follows.
+
+Op report CSV
+
+.. image:: ../_static/tracy-signpost-opreprot.png
+    :alt:
+
+Tracy run
+
+.. image:: ../_static/tracy-signpost-run.png
+    :alt: Tracy get started
 
 Line-level Profiling
 ^^^^^^^^^^^^^^^^^^^^

@@ -73,6 +73,10 @@ run_perf_models_cnn_javelin() {
 
     echo "There are no CNN tests for Javelin yet specified. Arch $tt_arch requested"
 
+    if [ "$tt_arch" == "wormhole_b0" ]; then
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_stable_diffusion/tests -m $test_marker
+    fi
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
@@ -80,21 +84,25 @@ run_perf_models_cnn_javelin() {
 run_device_perf_models() {
     local test_marker=$1
 
-    #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
-    #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
-    tests/scripts/run_profiler_regressions.sh PROFILER
+    env pytest models/experimental/functional_stable_diffusion/tests -m $test_marker
 
-    env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
+    if [ "$tt_arch" == "grayskull" ]; then
+        #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
+        #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
+        tests/scripts/run_profiler_regressions.sh PROFILER
 
-    env pytest models/demos/resnet/tests -m $test_marker
+        env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
-    env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
+        env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
 
-    env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
+        env pytest models/demos/bert/tests -m $test_marker
 
-    env pytest models/demos/bert/tests -m $test_marker
+        env pytest models/demos/mistral7b/tests -m $test_marker
 
-    env pytest models/demos/mistral7b/tests -m $test_marker
+        env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
+
+        env pytest models/demos/resnet/tests -m $test_marker
+    fi
 
     ## Merge all the generated reports
     env python models/perf/merge_device_perf_results.py

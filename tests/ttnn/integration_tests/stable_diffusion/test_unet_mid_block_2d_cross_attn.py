@@ -176,7 +176,16 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
     parameters = parameters.mid_block
-    model = tt2_ttnn_unet_mid_block_2d_cross_attn(device, parameters, reader_patterns_cache, N, H, W)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = tt2_ttnn_unet_mid_block_2d_cross_attn(
+        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
+    )
 
     # ttnn_temb = ttnn.from_torch(temb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     # ttnn_hidden_state = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
@@ -192,6 +201,7 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
     ttnn_encoder_hidden_states = ttnn.from_torch(ttnn_encoder_hidden_states, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_temb = ttnn.to_device(ttnn_temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -220,4 +230,4 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
 
     ttnn_output = post_process_output(device, ttnn_mid_block, N, H, W, in_channels)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.97)
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

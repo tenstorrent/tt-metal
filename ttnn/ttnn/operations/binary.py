@@ -16,12 +16,11 @@ __all__ = []
 
 
 def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _compute_golden_binary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
         name_to_torch_function = {"pow": torch.pow}
         torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, parameter)
 
     def _binary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -38,7 +37,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_binary_validate_input_tensors,
-        compute_golden=_compute_golden_binary,
+        golden_function=_golden_function,
     )
     def binary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -90,15 +89,11 @@ def _is_scalar(value):
     return isinstance(value, (int, float, complex))
 
 
-def _compute_golden_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    if not _is_scalar(input_tensor_b):
-        input_tensor_b = ttnn.to_torch(input_tensor_b)
-
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return input_tensor_a + input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.add", compute_golden=_compute_golden_add, is_cpp_function=True)
+@ttnn.register_operation(name="ttnn.add", golden_function=_golden_function, is_cpp_function=True)
 def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -157,27 +152,12 @@ def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, 
     )
 
 
-def _compute_golden_sub(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_shape_a = input_tensor_a.shape
-    slices = [slice(0, dim) for dim in input_shape_a]
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_a = input_tensor_a[slices]
-
-    if not _is_scalar(input_tensor_b):
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = ttnn.from_device(input_tensor_b)
-        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor_b = ttnn.to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
-
+def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
 @ttnn.register_operation(
-    name="ttnn.sub", validate_input_tensors=_sub_validate_input_tensors, compute_golden=_compute_golden_sub
+    name="ttnn.sub", validate_input_tensors=_sub_validate_input_tensors, golden_function=_golden_function
 )
 def sub(
     input_tensor_a: ttnn.Tensor,
@@ -301,27 +281,12 @@ def _mul_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, 
     )
 
 
-def _compute_golden_mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_shape_a = input_tensor_a.shape
-    slices = [slice(0, dim) for dim in input_shape_a]
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_a = input_tensor_a[slices]
-
-    if not _is_scalar(input_tensor_b):
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = ttnn.from_device(input_tensor_b)
-        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor_b = ttnn.to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
-
+def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
 @ttnn.register_operation(
-    name="ttnn.mul", validate_input_tensors=_mul_validate_input_tensors, compute_golden=_compute_golden_mul
+    name="ttnn.mul", validate_input_tensors=_mul_validate_input_tensors, golden_function=_golden_function
 )
 def mul(
     input_tensor_a: ttnn.Tensor,
@@ -456,13 +421,8 @@ def _add_and_apply_activation_validate_input_tensors(operation_name, input_tenso
     )
 
 
-def _compute_golden_add_and_apply_activation(
-    input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_
-):
+def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_):
     import torch
-
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_b = ttnn.to_torch(input_tensor_b)
 
     output_tensor = input_tensor_a + input_tensor_b
 
@@ -477,7 +437,7 @@ def _compute_golden_add_and_apply_activation(
 @ttnn.register_operation(
     name="ttnn.add_and_apply_activation",
     validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    compute_golden=_compute_golden_add_and_apply_activation,
+    golden_function=_golden_function,
 )
 def add_and_apply_activation(
     input_tensor_a: ttnn.Tensor,
@@ -528,7 +488,7 @@ def add_and_apply_activation(
 @ttnn.register_operation(
     name="ttnn.add_and_apply_activation_",
     validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    compute_golden=_compute_golden_add_and_apply_activation,
+    golden_function=_golden_function,
 )
 def add_and_apply_activation_(
     input_tensor_a: ttnn.Tensor,
@@ -577,7 +537,7 @@ def add_and_apply_activation_(
 
 
 def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
-    def _compute_golden_elt_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+    def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
         import torch
 
         name_to_torch_function = {
@@ -591,20 +551,6 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             "maximum": torch.maximum,
             "minimum": torch.minimum,
         }
-        input_shape_a = input_tensor_a.shape
-        slices = [slice(0, dim) for dim in input_shape_a]
-        input_tensor_a = ttnn.from_device(input_tensor_a)
-        input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor_a = ttnn.to_torch(input_tensor_a)
-        input_tensor_a = input_tensor_a[slices]
-
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = ttnn.from_device(input_tensor_b)
-        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor_b = ttnn.to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
-
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
 
@@ -631,7 +577,7 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
     @ttnn.register_operation(
         name=f"ttnn.{name}",
         validate_input_tensors=_elt_binary_validate_input_tensors,
-        compute_golden=_compute_golden_elt_binary,
+        golden_function=_golden_function,
     )
     def elt_binary_function(
         input_tensor_a: ttnn.Tensor,
@@ -718,11 +664,8 @@ def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tens
     )
 
 
-def _compute_golden_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     import torch
-
-    input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_b = ttnn.to_torch(input_tensor_b)
 
     return torch.nextafter(input_tensor_a, input_tensor_b)
 
@@ -730,7 +673,7 @@ def _compute_golden_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.
 @ttnn.register_operation(
     name="ttnn.nextafter",
     validate_input_tensors=_nextafter_validate_input_tensors,
-    compute_golden=_compute_golden_nextafter,
+    golden_function=_golden_function,
 )
 def nextafter(
     input_tensor_a: ttnn.Tensor,
@@ -766,13 +709,6 @@ def nextafter(
     return output
 
 
-def torch_polyval(input_tensor, coeff):
-    curVal = 0
-    for curValIndex in range(len(coeff) - 1):
-        curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
-    return curVal + coeff[len(coeff) - 1]
-
-
 def _polyval_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -785,18 +721,21 @@ def _polyval_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _compute_golden_polyval(input_tensor: ttnn.Tensor, coeff: List[float], **_):
-    import torch
+def torch_polyval(input_tensor, coeff):
+    curVal = 0
+    for curValIndex in range(len(coeff) - 1):
+        curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
+    return curVal + coeff[len(coeff) - 1]
 
-    input_tensor = ttnn.to_torch(input_tensor)
 
+def _golden_function(input_tensor: ttnn.Tensor, coeff: List[float], **_):
     return torch_polyval(input_tensor, coeff)
 
 
 @ttnn.register_operation(
     name="ttnn.polyval",
     validate_input_tensors=_polyval_validate_input_tensors,
-    compute_golden=_compute_golden_polyval,
+    golden_function=_golden_function,
 )
 def polyval(
     input_tensor: ttnn.Tensor,

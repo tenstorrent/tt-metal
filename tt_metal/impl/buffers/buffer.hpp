@@ -14,6 +14,7 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/common/math.hpp"
 #include <map>
+#include <mutex>
 #include <optional>
 
 namespace tt {
@@ -232,9 +233,7 @@ class Buffer {
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
-            auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = div_up(num_pages, this->shard_spec().size());
-            return shards_for_compute;
+            return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
 
@@ -308,7 +307,35 @@ class Buffer {
 namespace detail {
 using PageAddress = uint32_t;
 using Deviceid = uint32_t;
-inline std::map<std::tuple<Deviceid, PageAddress>, Buffer *> BUFFER_MAP;
+
+class buffer_map {
+    public:
+        void insert(std::tuple<Deviceid, PageAddress> buf_attr,  Buffer * buffer) {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            this->map.insert({buf_attr, buffer});
+        }
+
+        void erase(std::tuple<Deviceid, PageAddress> buf_attr) {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            this->map.erase(buf_attr);
+        }
+
+        void clear() {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            this->map.clear();
+        }
+
+        std::map<std::tuple<Deviceid, PageAddress>, Buffer *> value() {
+            std::scoped_lock<std::mutex> lock(this->map_mutex);
+            return this->map;
+        }
+
+    private:
+        std::mutex map_mutex;
+        std::map<std::tuple<Deviceid, PageAddress>, Buffer *> map = {};
+};
+
+inline buffer_map BUFFER_MAP;
 }  // namespace detail
 
 using HostDataType = std::variant<

@@ -106,7 +106,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         input_tensor.shape,
         grid_size,
         ttnn.ShardStrategy.HEIGHT,
-        ttnn.ShardOrientation.COLUMN_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
 
@@ -133,6 +133,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
 @pytest.mark.parametrize("num_groups", [32])
 def test_group_norm_with_block_sharded(device, N, C, H, W, num_groups):
     torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=8, x=4)
 
@@ -175,7 +177,7 @@ def test_group_norm_with_block_sharded(device, N, C, H, W, num_groups):
     #     input_tensor.shape,
     #     grid_size,
     #     ttnn.ShardStrategy.BLOCK,
-    #     ttnn.ShardOrientation.COLUMN_MAJOR,
+    #     ttnn.ShardOrientation.COL_MAJOR,
     # )
     grid_coord = ttnn.experimental.tensor.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.experimental.tensor.CoreRangeSet(
@@ -355,11 +357,8 @@ def test_group_norm_with_block_sharded_unet(device, shape, num_groups):
         is_height_sharded=False,
     )
     input_tensor = ttnn.reshape(input_tensor, (1, 1, N * H * W, C))
-    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    # breakpoint()
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # breakpoint()
     # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)

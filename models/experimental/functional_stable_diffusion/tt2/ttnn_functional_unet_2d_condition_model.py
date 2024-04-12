@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import tt_lib as ttl
 import torch.nn as nn
 import math
 import ttnn
@@ -154,6 +154,7 @@ class UNet2DConditionModel:
                     batch_size,
                     input_height,
                     input_width,
+                    conv_compute_kernel_config,
                 )
             elif down_block_type == "DownBlock2D":
                 down_block = downblock2d(
@@ -175,7 +176,13 @@ class UNet2DConditionModel:
 
         assert mid_block_type == "UNetMidBlock2DCrossAttn"
         self.mid_block = unet_mid_block_2d_cross_attn(
-            device, parameters.mid_block, reader_patterns_cache, batch_size, input_height, input_width
+            device,
+            parameters.mid_block,
+            reader_patterns_cache,
+            batch_size,
+            input_height,
+            input_width,
+            conv_compute_kernel_config,
         )
         input_height = self.mid_block.output_height
         input_width = self.mid_block.output_width
@@ -186,11 +193,23 @@ class UNet2DConditionModel:
         for i, up_block_type in enumerate(up_block_types):
             if up_block_type == "CrossAttnUpBlock2D":
                 up_block = cross_attention_upblock2d(
-                    device, parameters.up_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.up_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    conv_compute_kernel_config,
                 )
             elif up_block_type == "UpBlock2D":
                 up_block = upblock_2d(
-                    device, parameters.up_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.up_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    conv_compute_kernel_config,
                 )
             else:
                 assert False
@@ -392,10 +411,12 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
+        # TODO: Move to L1
         sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
         sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
         # sample in l1 interelaved and tiled and nhwc
+
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         sample = self.conv_in(sample)
         sample = ttnn.reallocate(sample)  # TODO: Test remove
@@ -413,6 +434,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
+            ttl.device.DumpDeviceProfiler(self.device)
             print(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -497,6 +519,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
+            ttl.device.DumpDeviceProfiler(self.device)
             print(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
@@ -571,8 +594,6 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
-
-        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
@@ -628,13 +649,12 @@ class UNet2DConditionModel:
                 self.conv_out.in_channels,
             ),
         )
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
-        sample = ttnn.silu(sample)
+        sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         sample = ttnn.reshape(
             sample,
             (
@@ -645,6 +665,6 @@ class UNet2DConditionModel:
             ),
         )
         sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
+        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
 
         return sample

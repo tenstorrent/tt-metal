@@ -76,18 +76,18 @@ run_eager_package_end_to_end_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    env pytest tests/end_to_end_tests --tt-arch $tt_arch -m $pipeline_type
+    # This is important for validating our wheel. Ideally end to end testing should
+    # be a diff repo
+    unset PYTHONPATH
+
+    cd tests/end_to_end_tests
+    env pytest -c conftest.py . -m $pipeline_type
 }
 
 run_frequent_models_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
-
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
 
     # Please put model runs in here from now on - thank you
     ./tests/scripts/run_models.sh
@@ -97,11 +97,6 @@ run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
-
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
 
     if [[ $dispatch_mode == "slow" ]]; then
         TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent
@@ -164,18 +159,25 @@ run_stress_post_commit_pipeline_tests() {
     local dispatch_mode=$3
 
     # Run for 23.5h to allow next run to kick off
-    RUNTIME_MAX=84600
-    suite_duration=4500
-    max_duration=$((RUNTIME_MAX-suite_duration))
+    max_duration=84600
     iter=1
-    while [ $SECONDS -lt $max_duration ]; do
+    cur_duration=0
+    expected_duration=0
+    while [ $expected_duration -lt $max_duration ]; do
         echo "Info: [stress] Doing iteration $iter"
+        start_time=$(date +%s%N) # capture nanoseconds
         if [[ $dispatch_mode == "slow" ]]; then
             ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
         else
             ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
         fi
+        end_time=$(date +%s%N)
+        elapsed=$((end_time - start_time))/1000000000
+        cur_duration=$((cur_duration + elapsed))
+        avg_duration=$((cur_duration / iter))
+        expected_duration=$((cur_duration + avg_duration))
         iter=$((iter+1))
+        echo "Info: [stress] expected elapsed time $expected_duration, elapsed time $cur_duration, avg iteration time $avg_duration"
     done
 }
 
@@ -289,7 +291,7 @@ set_up_chdir() {
         return
       fi
     done
-    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+      echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
     exit 1
 }
 
@@ -340,7 +342,10 @@ main() {
     fi
 
     validate_and_set_env_vars "$tt_arch" "$dispatch_mode"
-    set_up_chdir
+
+    if [[ $pipeline_type != "eager_"* ]]; then
+      set_up_chdir
+    fi
 
     if [[ -n $module ]]; then
         # Module invocation

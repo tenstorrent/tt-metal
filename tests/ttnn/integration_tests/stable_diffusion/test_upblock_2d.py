@@ -22,6 +22,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
+    weight_to_bfp8,
 )
 
 
@@ -106,7 +107,14 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     )
     parameters = parameters.up_blocks[0]
     N, _, H, W = hidden_states
-    model = tt2_ttnn_upblock_2d(device, parameters, reader_patterns_cache, N, H, W)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    model = tt2_ttnn_upblock_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
 
     # synthesize the input
     in_channels = hidden_states[1]
@@ -125,12 +133,13 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     hidden_state = pre_process_input(device, hidden_state)
-    res_hidden_states_tuple = (hidden_state, hidden_state, hidden_state)
+    res_hidden_states_tuple = (weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state))
     op = model(
         hidden_state,
         res_hidden_states_tuple,

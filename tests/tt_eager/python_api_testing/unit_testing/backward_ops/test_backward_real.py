@@ -8,6 +8,13 @@ import tt_lib
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
+def random_complex_tensor(shape, real_range=(-100, 100), imag_range=(-100, 100)):
+    torch.manual_seed(213919)
+    real_part = (real_range[1] - real_range[0]) * torch.rand(shape) + real_range[0]
+    imag_part = (imag_range[1] - imag_range[0]) * torch.rand(shape) + imag_range[0]
+    return torch.complex(real_part, imag_part)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -16,16 +23,16 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+# testing for Type 1 complex tensor
 def test_bw_real(input_shapes, device):
-    torch.manual_seed(0)
-    in_data = torch.randn(input_shapes, dtype=torch.complex64)
+    in_data = random_complex_tensor(input_shapes, (-90, 90), (-70, 70))
     in_data.requires_grad = True
 
-    torch.manual_seed(42)
-    grad_data = torch.randn(input_shapes, dtype=torch.complex64)
+    grad_data = random_complex_tensor(input_shapes, (-80, 80), (-20, 20))
     grad_data = grad_data.real
 
     in_data_cplx = torch.cat((in_data.real, in_data.imag), dim=3)
+
     input_tensor = (
         tt_lib.tensor.Tensor(in_data_cplx, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )

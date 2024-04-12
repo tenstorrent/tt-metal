@@ -176,6 +176,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_concat_heads.cpp \
+	tt_eager/tt_dnn/op_library/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/rotate_half_op.cpp \
 	tt_eager/tt_dnn/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp \
@@ -194,6 +195,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp \
 	tt_eager/tt_dnn/op_library/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp \
+	tt_eager/tt_dnn/op_library/scan/scan_op.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =
@@ -208,7 +210,7 @@ TT_DNN_DEPS = $(addprefix $(OBJDIR)/, $(TT_DNN_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_eager/tt_dnn: $(TT_DNN_LIB)
 
-$(TT_DNN_LIB): $(COMMON_LIB) $(DTX_LIB) $(TT_DNN_OBJS)
+$(TT_DNN_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_LIB) $(TT_DNN_OBJS)
 	@mkdir -p $(LIBDIR)
 	ar rcs -o $@ $(TT_DNN_OBJS)
 

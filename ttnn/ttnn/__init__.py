@@ -4,9 +4,11 @@
 
 import contextlib
 import dataclasses
+import json
 import os
 import pathlib
 import pprint
+from typing import Optional
 
 from loguru import logger
 
@@ -21,92 +23,88 @@ class Config:
     throw_exception_on_fallback: bool = False
     enable_logging: bool = False
     enable_graph_report: bool = False
-    enable_buffer_report: bool = False
-    enable_tensor_report: bool = False
+    enable_detailed_buffer_report: bool = False
+    enable_detailed_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
-    reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
-    sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
+    root_report_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
+    report_name: Optional[str] = None
+
+    @property
+    def report_path(self):
+        if self.report_name is None:
+            return None
+        return self.root_report_path / f"{hash(self.report_name)}"
 
 
 CONFIG = Config()
+CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
+if "TTNN_CONFIG_PATH" in os.environ:
+    CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
+
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
 
 
-def get_bool_env_var(name, default):
-    variable = os.environ.get(name, f"{default}")
-    if variable == "True":
-        return True
-    elif variable == "False":
-        return False
-    else:
-        raise RuntimeError(f'The value has to be either "True" or "False"')
+def load_config_from_dictionary(config, from_file=False):
+    global CONFIG
+    for key, value in config.items():
+        if hasattr(CONFIG, key):
+            if getattr(CONFIG, key) is not None:
+                value = type(getattr(CONFIG, key))(value)
+            setattr(CONFIG, key, value)
+        elif from_file:
+            logger.warning(
+                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
+            )
+        else:
+            raise ValueError(f"Unknown configuration key: {key}")
 
 
-CONFIG.enable_model_cache = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
-if CONFIG.enable_model_cache:
-    logger.info(f"ttnn: model cache was enabled")
-
-CONFIG.enable_fast_runtime_mode = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
-if CONFIG.enable_fast_runtime_mode:
-    logger.info(f"ttnn: fast runtime mode was enabled")
-
-CONFIG.reports_path = pathlib.Path("generated") / "ttnn" / "reports"
-
-CONFIG.throw_exception_on_fallback = get_bool_env_var("TTNN_THROW_EXCEPTION_ON_FALLBACK", "False")
-if CONFIG.throw_exception_on_fallback:
-    logger.info(f"ttnn: throw an exception if a fallback is used instead of logging a warning")
-
-CONFIG.enable_logging = get_bool_env_var("TTNN_ENABLE_LOGGING", "False")
-if CONFIG.enable_logging:
-    logger.info(f"ttnn: enabled logging (and disabled fast dispatch mode)")
+def load_config_from_json_file(json_path):
+    global CONFIG
+    try:
+        with open(json_path, "r") as f:
+            config = json.load(f)
+        load_config_from_dictionary(config, from_file=True)
+    except Exception as e:
+        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
 
 
-CONFIG.enable_graph_report = get_bool_env_var("TTNN_ENABLE_GRAPH_REPORT", "False")
-if CONFIG.enable_graph_report:
-    logger.info(f"ttnn: enabled graph report")
+def save_config_to_json_file(json_path):
+    with open(json_path, "w") as f:
+        normalized_config = dataclasses.asdict(CONFIG)
+        for key, value in normalized_config.items():
+            if isinstance(value, pathlib.Path):
+                value = str(value)
+            normalized_config[key] = value
+        json.dump(normalized_config, f, indent=4)
 
 
-CONFIG.enable_buffer_report = get_bool_env_var("TTNN_ENABLE_BUFFER_REPORT", "False")
-if CONFIG.enable_buffer_report:
-    logger.info(f"ttnn: enabled buffer report")
+if CONFIG_PATH.exists():
+    logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
+    load_config_from_json_file(CONFIG_PATH)
+else:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    save_config_to_json_file(CONFIG_PATH)
 
 
-CONFIG.enable_tensor_report = get_bool_env_var("TTNN_ENABLE_TENSOR_REPORT", "False")
-if CONFIG.enable_tensor_report:
-    logger.info(f"ttnn: enabled tensor report")
+if CONFIG_OVERRIDES:
+    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
+    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
 
-CONFIG.enable_comparison_mode = get_bool_env_var("TTNN_ENABLE_COMPARISON_MODE", "False")
-if CONFIG.enable_comparison_mode:
-    logger.info(f"ttnn: enabled tensor report")
-
-
-logger.info(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
+logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
 
 @contextlib.contextmanager
-def enable_fast_runtime_mode():
+def manage_config_attribute(name, value):
     global CONFIG
-    CONFIG.enable_fast_runtime_mode = True
+    original_value = getattr(CONFIG, name)
+    setattr(CONFIG, name, value)
+    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    CONFIG.enable_fast_runtime_mode = False
-
-
-@contextlib.contextmanager
-def enable_comparison_mode():
-    global CONFIG
-    CONFIG.enable_comparison_mode = True
-    yield
-    CONFIG.enable_comparison_mode = False
-
-
-@contextlib.contextmanager
-def override_pcc_of_comparison_mode(value):
-    global CONFIG
-    old_value = CONFIG.comparison_mode_pcc
-    CONFIG.comparison_mode_pcc = value
-    yield
-    CONFIG.comparison_mode_pcc = old_value
+    setattr(CONFIG, name, original_value)
+    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
 import tt_lib as _tt_lib
@@ -125,6 +123,8 @@ from ttnn.types import (
     float32,
     MathFidelity,
     MemoryConfig,
+    BufferType,
+    TensorMemoryLayout,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -182,8 +182,11 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    dump_memory_config,
+    load_memory_config,
 )
 
+import ttnn.reflection
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
@@ -196,6 +199,7 @@ from ttnn.decorators import (
 )
 
 import ttnn.experimental
+import ttnn.experimental.golden_functions
 
 from ttnn.operations.core import (
     from_torch,
@@ -229,6 +233,7 @@ from ttnn.operations.others import (
     # reduction operations
     mean,
     upsample,
+    pearson_correlation_coefficient,
 )
 
 from ttnn.operations.creation import (

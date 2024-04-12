@@ -425,7 +425,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
+    visualize(output, file_name=ttnn.CONFIG.root_report_path / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
@@ -517,7 +517,7 @@ def _initialize_model_and_preprocess_parameters(
     return make_parameter_dict(parameters)
 
 
-def preprocess_model(
+def from_torch(
     *,
     model_name: Optional[str] = None,
     version: Optional[str] = None,
@@ -552,7 +552,7 @@ def preprocess_model(
 
     if model_name is None and not ttnn.CONFIG.enable_model_cache:
         logger.warning(
-            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
         )
 
     elif model_name is None and ttnn.CONFIG.enable_model_cache:
@@ -561,7 +561,9 @@ def preprocess_model(
         )
 
     elif model_name is not None and not ttnn.CONFIG.enable_model_cache:
-        logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
+        logger.warning(
+            "ttnn: model cache can be enabled by setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
+        )
 
     if convert_to_ttnn is None:
 
@@ -598,14 +600,14 @@ def preprocess_model(
             version_matches = False
 
         if cache_exists and version_matches:
-            logger.info(f'Loading model weights from cache: {model_cache_path}  (version "{version}")')
+            logger.debug(f'Loading model weights from cache: {model_cache_path}  (version "{version}")')
             model = _load_parameters(model_cache_path)
-            logger.info(f'Loaded model weights from cache: {model_cache_path}  (version "{version}")')
+            logger.debug(f'Loaded model weights from cache: {model_cache_path}  (version "{version}")')
         else:
             if initialize_model is None:
                 raise RuntimeError(f'Cached weights for the model {model_name} (version "{version}") don\'t exist')
 
-            logger.info(f'Saving model weights to cache: {model_cache_path} (version "{version}")')
+            logger.debug(f'Saving model weights to cache: {model_cache_path} (version "{version}")')
 
             model = _initialize_model_and_preprocess_parameters(
                 initialize_model=initialize_model,
@@ -625,12 +627,12 @@ def preprocess_model(
             with open(version_file_path, "w") as f:
                 f.write(version)
 
-            logger.info(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
+            logger.debug(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
 
     if device is not None:
-        logger.info(f"Moving model weights to device")
+        logger.debug(f"Moving model weights to device")
         model = move_to_device(model, device)
-        logger.info(f"Moved model weights to device")
+        logger.debug(f"Moved model weights to device")
 
     def _convert_ttnn_module_args_to_modules(model):
         if isinstance(model, ParameterDict):
@@ -666,6 +668,52 @@ def preprocess_model(
     model = _convert_ttnn_module_args_to_modules(model)
 
     return model
+
+
+def preprocess_model(
+    *,
+    model_name: Optional[str] = None,
+    version: Optional[str] = None,
+    initialize_model: Optional[Callable[[], torch.nn.Module]] = None,
+    convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]] = None,
+    custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]] = None,
+    device: Optional[ttnn.Device] = None,
+    prefix: str = "",
+    run_model: Optional[Callable] = None,
+    reader_patterns_cache: Optional[dict] = None,
+) -> ParameterDict:
+    """
+
+    preprocess_model(initialize_model: Optional[Callable[[], torch.nn.Module]]=None, *, model_name: Optional[str]=None, version: Optional[str]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: Optional[str] = None, run_model: Optional[Callable], reader_patterns_cache: Optional[Dict]) -> ParameterDict
+
+    Preprocess modules and parameters of a given model.
+
+    Args:
+        * :attr:`model_name`: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        * :attr:`version`: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        * :attr:`initialize_model`: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        * :attr:`convert_to_ttnn`: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        * :attr:`custom_preprocessor`: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        * :attr:`device`: Device on which to put ttnn.Tensor parameters
+        * :attr:`prefix`: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        * :attr:`run_model`: Function for running the model. It's required for populating ttnn_module_args. If run_model is provided, the graph of the model will be dumped to /tmp/ttnn/model_graph.svg
+        * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
+    """
+
+    with ttnn.manage_config_attribute("enable_logging", False), ttnn.manage_config_attribute(
+        "enable_comparison_mode", False
+    ):
+        return from_torch(
+            model_name=model_name,
+            version=version,
+            initialize_model=initialize_model,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
+            prefix=prefix,
+            run_model=run_model,
+            reader_patterns_cache=reader_patterns_cache,
+        )
 
 
 def preprocess_model_parameters(

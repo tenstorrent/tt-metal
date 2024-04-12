@@ -32,11 +32,11 @@ def is_sharded(tensor) -> bool:
     return tensor.is_sharded()
 
 
-def get_memory_config(tensor) -> ttnn.MemoryConfig:
+def get_memory_config(tensor) -> Optional[ttnn.MemoryConfig]:
     if is_tensor_storage_on_device(tensor):
         return tensor.memory_config()
     else:
-        raise RuntimeError("Tensor is not on device!")
+        None
 
 
 def has_tile_padding(tensor):
@@ -93,7 +93,7 @@ def create_sharded_memory_config(
         shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     elif orientation == ShardOrientation.ROW_MAJOR:
         shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-    elif orientation == ShardOrientation.COLUMN_MAJOR:
+    elif orientation == ShardOrientation.COL_MAJOR:
         shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
     else:
         raise RuntimeError("Invalid shard orientation")
@@ -172,6 +172,10 @@ def create_sharded_memory_config(
     shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config
+
+
+dump_memory_config = ttnn._tt_lib.tensor.dump_memory_config
+load_memory_config = ttnn._tt_lib.tensor.load_memory_config
 
 
 __all__ = []

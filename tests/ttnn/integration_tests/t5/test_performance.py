@@ -41,15 +41,15 @@ def get_expected_times(model_name, functional_t5):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [64])
+@pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("functional_t5", [ttnn_functional_t5, ttnn_optimized_functional_t5])
 def test_t5_for_conditional_generation(device, use_program_cache, model_name, batch_size, sequence_size, functional_t5):
     disable_persistent_kernel_cache()
 
     config = transformers.T5Config.from_pretrained(model_name)
 
-    torch_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
-    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
+    torch_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
+    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
 
     if functional_t5 == ttnn_functional_t5:
         tt_model_name = f"ttnn_{model_name}"
@@ -61,6 +61,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval(),
+        convert_to_ttnn=functional_t5.convert_to_ttnn,
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
     )
@@ -71,7 +72,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
         decoder_input_ids = ttnn.from_torch(torch_decoder_input_ids, device=device)
 
         start = time.time()
-        with ttnn.enable_fast_runtime_mode():
+        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
             output, *_ = functional_t5.t5_for_conditional_generation(
                 config,
                 input_ids,

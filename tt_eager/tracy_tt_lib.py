@@ -6,7 +6,7 @@ import random
 
 import seaborn as sns
 
-from tt_lib.profiler import start_tracy_zone, stop_tracy_zone
+from tt_lib.profiler import start_tracy_zone, stop_tracy_zone, tracy_message
 
 
 def hex_to_int(color):
@@ -28,6 +28,10 @@ plotColorThree = hex_to_int(plotColorThree)
 plotColorFour = hex_to_int(plotColorFour)
 
 callStack = []
+
+
+def tracy_send_message(message):
+    tracy_message(message)
 
 
 def tracy_marker_line(frame, event, args):

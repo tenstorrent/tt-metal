@@ -12,6 +12,7 @@ import torch
 import tt_lib as ttl
 
 import ttnn
+import ttnn.decorators
 
 
 def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -26,23 +27,10 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _fallback_getitem(input_tensor: ttnn.Tensor, slices):
-    input_dtype = input_tensor.dtype
-    input_layout = input_tensor.layout
-    if ttnn.is_tensor_storage_on_device(input_tensor):
-        input_device = input_tensor.device()
-    else:
-        input_device = None
-
-    def torch_getitem(tensor, slices):
-        return tensor[slices]
-
-    output_tensor = input_tensor
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor[slices]
+def _golden_function(input_tensor: ttnn.Tensor, slices):
+    output_tensor = input_tensor[slices]
     if output_tensor.ndim == 0:
         raise RuntimeError("ttnn.Tensor.__getitem__: returned a scalar!")
-    output_tensor = ttnn.from_torch(output_tensor, dtype=input_dtype, layout=input_layout, device=input_device)
     return output_tensor
 
 
@@ -50,7 +38,8 @@ def _fallback_getitem(input_tensor: ttnn.Tensor, slices):
     name="ttnn.Tensor.__getitem__",
     validate_input_tensors=_getitem_validate_input_tensors,
     is_method=True,
-    fallback=_fallback_getitem,
+    golden_function=_golden_function,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
@@ -103,24 +92,13 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
 
         output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
-        padded_output_shape = list(output.shape)[-input_rank:]
+        padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 
     raise NotImplementedError
 
 
 ttnn.Tensor.__getitem__ = __getitem__
-
-
-def _compute_golden_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]], **_):
-    import torch
-
-    input_tensor = to_torch(input_tensor)
-
-    if isinstance(shape, ttnn.Shape):
-        shape = tuple(shape.with_tile_padding())
-
-    return torch.reshape(input_tensor, shape).contiguous().clone()
 
 
 def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -135,12 +113,12 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
+def _preprocess_shape(input_shape, shape):
     if isinstance(shape, tuple):
         if not (0 <= shape.count(-1) <= 1):
             raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
 
-        volume = math.prod(input_tensor.shape)
+        volume = math.prod(input_shape)
         new_volume = math.prod(shape)
         if new_volume < 0:
             index_of_negative_1 = shape.index(-1)
@@ -148,24 +126,30 @@ def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
             shape[index_of_negative_1] = volume // (-new_volume)
             shape = tuple(shape)
         shape = ttnn.Shape(shape)
+    return shape
 
-    layout = input_tensor.layout
 
-    device = None
-    if ttnn.is_tensor_storage_on_device(input_tensor):
-        device = input_tensor.device()
+def _preprocess_golden_function_inputs(args, kwargs):
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
+    shape = _preprocess_shape(input_tensor.shape, shape)
+    input_tensor = input_tensor.reshape(input_tensor.shape.with_tile_padding())
+    return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
 
-    tensor = input_tensor
-    # Reshape to full shape before reshaping to avoid padding issues
-    tensor = tensor.reshape(tensor.shape.with_tile_padding())
-    tensor = ttnn.to_torch(tensor)
-    tensor = tensor.reshape(tuple(shape.with_tile_padding())).contiguous().clone()
-    tensor = ttnn.from_torch(tensor, dtype=input_tensor.dtype, layout=layout, device=device)
-    # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
-    # tensor = _to_layout(tensor, layout)
+
+def _golden_function(input_tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
+    return input_tensor.reshape(shape).contiguous().clone()
+
+
+def _postprocess_golden_function_outputs(output, args, kwargs):
+    tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output, args, kwargs)
+
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
+    shape = _preprocess_shape(input_tensor.shape, shape)
 
     shape_with_tile_padding = shape.with_tile_padding()
-    if layout == ttnn.TILE_LAYOUT:
+    if tensor.layout == ttnn.TILE_LAYOUT:
         *_, height, width = shape_with_tile_padding
         if height % ttnn.TILE_SIZE != 0 or width % ttnn.TILE_SIZE != 0:
             raise RuntimeError(
@@ -179,10 +163,12 @@ def _fallback_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[
 
 @ttnn.register_operation(
     name="ttnn.reshape",
-    compute_golden=_compute_golden_reshape,
     is_cpp_function=True,
-    fallback=_fallback_reshape,
     validate_input_tensors=_reshape_validate_input_tensors,
+    golden_function=_golden_function,
+    preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
+    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
+    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
     r"""
@@ -236,7 +222,13 @@ def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
 
 
-@ttnn.register_operation(name="ttnn.from_torch", validate_input_tensors=_from_torch_validate_input_tensors)
+def _golden_function(input_tensor, *args, **kwargs):
+    return input_tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.from_torch", validate_input_tensors=_from_torch_validate_input_tensors, golden_function=_golden_function
+)
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
@@ -289,7 +281,7 @@ def from_torch(
             return ttl.tensor.Tensor(shards, dtype)
         return ttl.tensor.Tensor(tensor, dtype)
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype, mesh_mapper)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_torch")(tensor, dtype, mesh_mapper)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout)
@@ -299,7 +291,7 @@ def from_torch(
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
 
-    if shape_with_padding is not None:
+    if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
         tensor = ttnn.reshape(tensor, shape_with_padding)
 
     return tensor
@@ -317,6 +309,17 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
     )
 
 
+def _golden_function(tensor, *, torch_rank=None, **kwargs):
+    if torch_rank is None:
+        return tensor
+
+    while len(tensor.shape) != torch_rank:
+        if tensor.shape[0] != 1:
+            raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+        tensor = tensor.squeeze()
+    return tensor
+
+
 class TorchTensor(torch.Tensor):
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -327,7 +330,9 @@ class TorchTensor(torch.Tensor):
         return super().__torch_function__(func, types, args, kwargs)
 
 
-@ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
+@ttnn.register_operation(
+    name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors, golden_function=_golden_function
+)
 def to_torch(
     tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensor] = None
 ) -> "torch.Tensor":
@@ -358,7 +363,7 @@ def to_torch(
         def impl(tensor, layout):
             return tensor.to(layout)
 
-        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")
+        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")
         tensor = to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
     def impl(tensor):
@@ -383,7 +388,7 @@ def to_torch(
             tensor = tensor.squeeze()
         return tensor
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_torch")(tensor)
 
     return TorchTensor(tensor)
 
@@ -400,7 +405,13 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     )
 
 
-@ttnn.register_operation(name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors, golden_function=_golden_function
+)
 def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG):
     """
     to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
@@ -432,7 +443,7 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     if len(tensor.shape) < 4:
         tensor = ttnn.unsqueeze_to_4D(tensor)
 
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_device")(
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_device")(
         tensor, device, memory_config=memory_config
     )
     while len(tensor.shape) != original_rank:
@@ -474,7 +485,7 @@ def from_device(tensor):
     def impl(tensor):
         return tensor.cpu()
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)
+    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_device")(tensor)
 
 
 def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -511,7 +522,7 @@ def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
     def impl(tensor):
         tensor.deallocate(force=force)
 
-    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
+    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) deallocate")(tensor)
 
 
 def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -526,7 +537,15 @@ def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args
     )
 
 
-@ttnn.register_operation(name="ttnn.to_memory_config", validate_input_tensors=_to_memory_config_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_memory_config",
+    validate_input_tensors=_to_memory_config_validate_input_tensors,
+    golden_function=_golden_function,
+)
 def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[ttnn.DataType] = None):
     """
     to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: Optional[DataType] = None) -> ttnn.Tensor
@@ -601,7 +620,13 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     )
 
 
-@ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+@ttnn.register_operation(
+    name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors, golden_function=_golden_function
+)
 def to_layout(
     tensor,
     layout: ttnn.Layout,
@@ -684,11 +709,11 @@ def to_layout(
                 else:
                     return ttl.tensor.untilize(
                         tensor,
+                        use_multicore=use_multicore,
                         output_mem_config=ttnn.get_memory_config(tensor) if memory_config is None else memory_config,
                     )
             elif layout == ttnn.TILE_LAYOUT:
                 ## since the default of tilize is to use single core, set use_multicore if the input is sharded
-                use_multicore = False
                 if ttnn.is_sharded(tensor):
                     use_multicore = True
                     ## check if the shard shape is already tile sized, or needs padding
@@ -753,7 +778,7 @@ def to_layout(
                     output_tensor = input_tensor.unpad([0, 0, 0, 0], output_tensor_end)
                     return output_tensor
 
-                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(
+                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(
                     input_tensor
                 )
         else:
@@ -787,7 +812,7 @@ def to_layout(
             def impl(tensor):
                 return tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
 
-            tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(tensor)
+            tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(tensor)
 
         tensor = ttnn.reshape(
             tensor,
@@ -834,9 +859,8 @@ def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
     return ttl.tensor.clone(tensor, output_mem_config=memory_config, output_dtype=dtype)
 
 
-def _torch_identity(input_tensor):
-    input_tensor = to_torch(input_tensor)
-    return input_tensor.clone()
+def _golden_function(input_tensor):
+    return input_tensor
 
 
 def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -852,7 +876,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 
 
 @ttnn.register_operation(
-    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, compute_golden=_torch_identity
+    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, golden_function=_golden_function
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     if ttnn.is_sharded(input_tensor):
@@ -866,7 +890,7 @@ def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwar
 
 
 @ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=_load_tensor_validate_input_tensors)
-def load_tensor(file_name: Union[str, pathlib.Path]) -> ttnn.Tensor:
+def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
@@ -874,9 +898,9 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> ttnn.Tensor:
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
 
     def impl(file_name):
-        return ttl.tensor.load_tensor(str(file_name))
+        return ttl.tensor.load_tensor(str(file_name), device)
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
+    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) load_tensor")(file_name)
 
 
 def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwargs):
@@ -898,7 +922,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
     def impl(file_name, tensor):
         ttl.tensor.dump_tensor(str(file_name), tensor)
 
-    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.dump_tensor")(file_name, tensor)
+    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) dump_tensor")(file_name, tensor)
 
 
 def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -923,6 +947,7 @@ def as_tensor(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
     as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
@@ -936,6 +961,7 @@ def as_tensor(
         * :attr:`device`: the optional `ttnn` device.
         * :attr:`memory_config`: the optional `ttnn` memory configuration.
         * :attr:`cache_file_name`: the optional cache file name.
+        * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
 
     Example::
 
@@ -947,20 +973,27 @@ def as_tensor(
 
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
+    if device is not None and memory_config is None:
+        raise RuntimeError("memory_config must be specified when device is specified")
+
     if cache_file_name is None:
-        return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+        return ttnn.from_torch(
+            tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
+        )
     else:
 
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
-            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
-            logger.info(
+            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+            logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
             ttnn.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        storage_type = f"_multi_device_{device.get_num_devices()}" if mesh_mapper else ""
+        cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+
         try:
             tensor = ttnn.load_tensor(cache_file_name)
             if tuple(tensor.shape) != tuple(tensor.shape):
@@ -968,7 +1001,7 @@ def as_tensor(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
-            logger.info(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+            logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)

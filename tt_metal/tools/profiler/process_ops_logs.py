@@ -14,7 +14,6 @@ import json
 import yaml
 from datetime import datetime
 
-import plotly.graph_objects as go
 import click
 from loguru import logger
 
@@ -79,17 +78,25 @@ def import_tracy_op_logs():
     tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
 
     ops = {}
-    with open(tracyOpDataLog, "r") as csvFile:
-        csvFile.readline()
-        opsDataStrs = csvFile.read().split(";")
+    signposts = {}
+    signpostsCount = 0
+    with open(tracyOpDataLog, "r", newline="") as csvFile:
+        opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
         opsData = []
-        for opDataStr in opsDataStrs:
+        for opDataDict in opDataDicts:
+            opDataStr = opDataDict["MessageName"]
+            opDataTime = opDataDict["total_ns"]
             if "TT_DNN" in opDataStr:
                 tmpStrs = opDataStr.split("{", 1)
                 if len(tmpStrs) > 1:
                     jsonStr = tmpStrs[-1]
                     jsonStr = "{" + jsonStr
-                    opsData.append(json.loads(jsonStr))
+                    opData = json.loads(jsonStr)
+                    opData["tracy_time"] = opDataTime
+                    opsData.append(opData)
+            if "TT_SIGNPOST" in opDataStr:
+                signpostsCount += 1
+                signposts[f"sp_{signpostsCount}"] = {"data": opDataStr, "tracy_time": opDataTime}
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
@@ -100,9 +107,10 @@ def import_tracy_op_logs():
             assert opID in ops.keys(), f"Op time for op {opID} must present"
             ops[opID]["host_time"] = op
 
-    return ops
+    return ops, signposts
 
 
+# Generate a map of OP reference list per device.
 def get_device_op_data(ops):
     logger.info(f"Getting device ops")
     deviceOps = {}
@@ -123,6 +131,7 @@ def get_device_op_data(ops):
     return deviceOps
 
 
+# Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(ops, deviceLogFolder):
     deviceOps = get_device_op_data(ops)
     logger.info(f"Appending device data")
@@ -154,7 +163,7 @@ def append_device_data(ops, deviceLogFolder):
     return deviceOps
 
 
-def generate_reports(ops, deviceOps, outputFolder, date, nameAppend):
+def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
@@ -195,82 +204,151 @@ def generate_reports(ops, deviceOps, outputFolder, date, nameAppend):
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
     with open(allOpsCSVPath, "w") as allOpsCSV:
         rowDicts = []
-        maxInputCount = -1
-        maxOutputCount = -1
-        inputHeaders = []
-        outputHeaders = []
+
+        tensorCSVData = {
+            "INPUT": {
+                "maxCount": -1,
+                "headers": [],
+            },
+            "OUTPUT": {
+                "maxCount": -1,
+                "headers": [],
+            },
+        }
+
+        def io_tensor_to_csv(ioField, ioData):
+            headers = []
+            data = {}
+            if ioField == "shape":
+                for field in ["W", "Z", "Y", "X"]:
+                    headers.append(field)
+                    assert field in ioData.keys(), "Wrong io tensor shape data format"
+                    data[field] = ioData[field]
+            elif ioField == "dtype":
+                headers = ["DATATYPE"]
+                data["DATATYPE"] = ioData
+            elif ioField == "layout":
+                headers = ["LAYOUT"]
+                data["LAYOUT"] = ioData
+            elif ioField == "storage_type":
+                headers = ["MEMORY"]
+                if type(ioData) == str:
+                    data["MEMORY"] = ioData
+                else:
+                    assert "device_id" in ioData.keys(), "Wrong io tensor memory data format"
+                    deviceID = ioData["device_id"]
+                    assert "memory_config" in ioData.keys(), "Wrong io tensor memory data format"
+                    assert "buffer_type" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                    bufferType = ioData["memory_config"]["buffer_type"].upper()
+                    assert "memory_layout" in ioData["memory_config"].keys(), "Wrong io tensor memory data format"
+                    memoryLayout = ioData["memory_config"]["memory_layout"].upper()
+                    data["MEMORY"] = f"DEV_{deviceID}_{bufferType}_{memoryLayout}"
+
+            return headers, data
+
+        def add_io_data(tensors, ioType):
+            ioFields = ["shape", "layout", "dtype", "storage_type"]
+            for count, tensor in enumerate(tensors):
+                for ioField in ioFields:
+                    assert ioField in tensor.keys(), "Wrong io tensor fields"
+                    ioData = tensor[ioField]
+                    fields, data = io_tensor_to_csv(ioField, ioData)
+                    for field in fields:
+                        header = f"{ioType}_{count}_{field}".upper()
+                        rowDict[header] = data[field]
+                        if count > tensorCSVData[ioType]["maxCount"]:
+                            tensorCSVData[ioType]["headers"].append(header)
+                if count > tensorCSVData[ioType]["maxCount"]:
+                    tensorCSVData[ioType]["maxCount"] = count
 
         def csv_header_format(header):
             return header.replace("_", " ").upper()
 
-        for op, opData in ops.items():
+        def row_compare(row):
+            ret = 0
+            if type(row) is str and "sp" in row:
+                ret = signposts[row]["tracy_time"]
+            elif type(row) is int:
+                ret = ops[row]["tracy_time"]
+            ret = int(ret)
+            return ret
+
+        rowKeys = list(ops.keys()) + list(signposts.keys())
+        rowKeys.sort(key=row_compare)
+        for row in rowKeys:
             rowDict = {}
-            for field, fieldData in opData.items():
-                headerField = csv_header_format(field)
-                if headerField in OPS_CSV_HEADER:
-                    rowDict[headerField] = fieldData
+            if type(row) is str and "sp" in row:
+                headerAndMessage = signposts[row]["data"].split(": ")[-1].split("\n")
+                rowDict["OP CODE"] = headerAndMessage[0]
+                rowDict["OP TYPE"] = "signpost"
+                if len(headerAndMessage) > 1:
+                    rowDict["ATTRIBUTES"] = headerAndMessage[1]
+                rowDict["HOST START TS"] = int(signposts[row]["tracy_time"])
+            elif type(row) is int:
+                op = row
+                opData = ops[op]
+                for field, fieldData in opData.items():
+                    headerField = csv_header_format(field)
+                    if headerField in OPS_CSV_HEADER:
+                        rowDict[headerField] = fieldData
 
-            assert "host_time" in opData.keys(), "Corrupted op data"
-            rowDict["HOST START TS"] = opData["host_time"]["ns_since_start"]
-            rowDict["HOST END TS"] = opData["host_time"]["ns_since_start"] + opData["host_time"]["exec_time_ns"]
-            rowDict["HOST DURATION [ns]"] = opData["host_time"]["exec_time_ns"]
+                assert "host_time" in opData.keys(), "Corrupted op data"
+                rowDict["HOST START TS"] = int(opData["host_time"]["ns_since_start"])
+                rowDict["HOST END TS"] = int(opData["host_time"]["ns_since_start"]) + int(
+                    opData["host_time"]["exec_time_ns"]
+                )
+                rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
-            if "kernel_info" in opData.keys():
-                rowDict["COMPUTE KERNEL PATH"] = []
-                rowDict["COMPUTE KERNEL HASH"] = []
-                rowDict["DATA MOVEMENT KERNEL PATH"] = []
-                rowDict["DATA MOVEMENT KERNEL HASH"] = []
-                for computeKernel in opData["kernel_info"]["compute_kernels"]:
-                    rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
-                    rowDict["COMPUTE KERNEL PATH"].append(computeKernel["path"])
-                    rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
+                if "kernel_info" in opData.keys():
+                    rowDict["COMPUTE KERNEL PATH"] = []
+                    rowDict["COMPUTE KERNEL HASH"] = []
+                    rowDict["DATA MOVEMENT KERNEL PATH"] = []
+                    rowDict["DATA MOVEMENT KERNEL HASH"] = []
+                    for computeKernel in opData["kernel_info"]["compute_kernels"]:
+                        rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
+                        rowDict["COMPUTE KERNEL PATH"].append(computeKernel["path"])
+                        rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
 
-                for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
-                    rowDict["DATA MOVEMENT KERNEL PATH"].append(dmKernel["path"])
-                    rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
+                    for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
+                        rowDict["DATA MOVEMENT KERNEL PATH"].append(dmKernel["path"])
+                        rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
 
-            if "core_usage" in opData.keys():
-                rowDict["CORE COUNT"] = opData["core_usage"]["count"]
+                if "core_usage" in opData.keys():
+                    rowDict["CORE COUNT"] = opData["core_usage"]["count"]
 
-            if "device_time" in opData.keys():
-                for analysis, analysisData in opData["device_time"].items():
-                    headerField = f"{csv_header_format(analysis)} [ns]"
-                    assert len(analysisData) == 1, "Unexpected device data format"
-                    rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
-                rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
-                rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                if "device_time" in opData.keys():
+                    for analysis, analysisData in opData["device_time"].items():
+                        headerField = f"{csv_header_format(analysis)} [ns]"
+                        assert len(analysisData) == 1, "Unexpected device data format"
+                        rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
+                    rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
+                    rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
 
-            assert "input_tensors" in opData.keys(), "Ops must have input tensors"
-            for count, tensor in enumerate(opData["input_tensors"]):
-                for ioField, ioData in tensor.items():
-                    header = f"INPUT_{count}_{ioField}".upper()
-                    rowDict[header] = ioData
-                    if count > maxInputCount:
-                        inputHeaders.append(header)
-                if count > maxInputCount:
-                    maxInputCount = count
+                assert "input_tensors" in opData.keys(), "Ops must have input tensors"
+                if "optional_input_tensors" in opData.keys():
+                    add_io_data(opData["input_tensors"] + opData["optional_input_tensors"], "INPUT")
+                else:
+                    add_io_data(opData["input_tensors"], "INPUT")
 
-            if "output_tensors" in opData.keys():
-                for count, tensor in enumerate(opData["output_tensors"]):
-                    for ioField, ioData in tensor.items():
-                        header = f"OUTPUT_{count}_{ioField}".upper()
-                        rowDict[header] = ioData
-                        if count > maxOutputCount:
-                            outputHeaders.append(header)
-                    if count > maxOutputCount:
-                        maxOutputCount = count
+                if "output_tensors" in opData.keys():
+                    add_io_data(opData["output_tensors"], "OUTPUT")
 
-            if "performance_model" in opData.keys():
-                rowDict["PM IDEAL [ns]"] = opData["performance_model"]["compute_ns"]
-                rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["ideal_ns"]
-                rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
-                rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
-                rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
+                if "performance_model" in opData.keys():
+                    rowDict["PM IDEAL [ns]"] = opData["performance_model"]["compute_ns"]
+                    rowDict["PM COMPUTE [ns]"] = opData["performance_model"]["ideal_ns"]
+                    rowDict["PM BANDWIDTH [ns]"] = opData["performance_model"]["bandwidth_ns"]
+                    rowDict["PM REQ I BW"] = opData["performance_model"]["input_bws"]
+                    rowDict["PM REQ O BW"] = opData["performance_model"]["output_bws"]
 
             rowDicts.append(rowDict)
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
-        allHeaders = OPS_CSV_HEADER[:ioHeaderIndex] + inputHeaders + outputHeaders + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+        allHeaders = (
+            OPS_CSV_HEADER[:ioHeaderIndex]
+            + tensorCSVData["INPUT"]["headers"]
+            + tensorCSVData["OUTPUT"]["headers"]
+            + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+        )
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
         writer.writeheader()
         for rowDict in rowDicts:
@@ -281,11 +359,11 @@ def generate_reports(ops, deviceOps, outputFolder, date, nameAppend):
 
 
 def process_ops(output_folder, name_append, date):
-    ops = import_tracy_op_logs()
+    ops, signposts = import_tracy_op_logs()
 
     deviceOps = append_device_data(ops, PROFILER_LOGS_DIR)
 
-    generate_reports(ops, deviceOps, output_folder, date, name_append)
+    generate_reports(ops, deviceOps, signposts, output_folder, date, name_append)
 
 
 @click.command()

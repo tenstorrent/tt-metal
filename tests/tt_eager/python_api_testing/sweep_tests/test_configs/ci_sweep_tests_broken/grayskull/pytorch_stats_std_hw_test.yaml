@@ -25,7 +25,7 @@ test-list:
             data-layout: ["TILE"]
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - stats-std_hw:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -47,6 +47,6 @@ test-list:
       output-file: stats_std_hw_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]

@@ -19,7 +19,6 @@ class TtFalconAttention:
 
     def __init__(
         self,
-        device,
         hidden_size: int,
         num_heads: int,
         max_position_embeddings: int = 2048,
@@ -31,7 +30,6 @@ class TtFalconAttention:
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.device = device
         self.parameters = parameters
         self.model_config = model_config
 
@@ -52,6 +50,11 @@ class TtFalconAttention:
 
         self.scalar = 1 / math.sqrt(self.head_dim)
 
+        if is_wormhole_b0():
+            self.core_grid = ttnn.CoreGrid(y=7, x=8)
+        else:
+            self.core_grid = ttnn.CoreGrid(y=9, x=12)
+
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
@@ -68,7 +71,6 @@ class TtFalconAttention:
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
         """
-        device = self.device
 
         assert not output_attentions
 
@@ -98,6 +100,7 @@ class TtFalconAttention:
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
             use_1d_systolic_array=True,
+            core_grid=self.core_grid,
         )
         batch_size, _, sequence_size, fused_query_key_value_width = fused_query_key_value.shape
         fused_query_key_value = ttnn.reshape(
@@ -153,6 +156,7 @@ class TtFalconAttention:
                 input_tensor_a=query_layer,
                 input_tensor_b=key_layer_transposed,
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                core_grid=self.core_grid,
             )
 
         elif llm_mode == "decode":
@@ -161,7 +165,7 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.operations.primary.transformers.attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 7),
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -169,7 +173,7 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(12, 9),
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -224,7 +228,7 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.operations.primary.transformers.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 7),
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -232,7 +236,7 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(12, 9),
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -252,6 +256,7 @@ class TtFalconAttention:
             self.dense_weights,
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
             use_1d_systolic_array=True,
+            core_grid=self.core_grid,
         )
 
         return attn_output, layer_present

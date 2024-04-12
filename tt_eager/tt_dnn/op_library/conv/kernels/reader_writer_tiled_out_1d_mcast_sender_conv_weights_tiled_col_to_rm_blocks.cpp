@@ -3,50 +3,70 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "firmware_common.h"
 
 
 void kernel_main() {
+    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
+    uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
     // This writer is for output tensor in tile format
+
+    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
+
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+
+    // Bias arg. Unused if bias fusion is not enabled.
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
+
+    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
+    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(16);
+    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(18);
+    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(12); // == weight_next_block_stride_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(21);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(23);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(24);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(25);
+    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
+    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
+
+    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
+
+    // MCAST args
+    constexpr uint32_t act_block_h_datums                   = get_compile_time_arg_val(32);
+    constexpr uint32_t act_block_num_tiles                  = get_compile_time_arg_val(33);
+    constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(34);
+    constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(35);
+    constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(36);
+    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(37);
+
+    constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
+
     uint32_t i = 0;
-    uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+    i+=1;
+    const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
-
-    uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_tile_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_subblock_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_subblock_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_subblock_tile_count = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_subblocks_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_subblocks_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_num_blocks_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_block_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    i+=16;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
-
-    uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_height_num_outer = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_block_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
-
-    uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
-
-    // Bias arg. Unused if bias fusion is not enabled.
-    const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
-    const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
+    i+=9;
+    uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
@@ -63,19 +83,6 @@ void kernel_main() {
     uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
 
-
-    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
-    // bias args are 3 and 4
-    constexpr uint32_t act_block_h_datums                   = get_compile_time_arg_val(5);
-    constexpr uint32_t act_block_num_tiles                  = get_compile_time_arg_val(6);
-    constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(7);
-    constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(8);
-    constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(10);
-
-
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
@@ -85,6 +92,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
     uint32_t reader_idx = 0;
 
+    // Copy packed reader indices to local memory for faster access
+    constexpr bool cache_packed_reader_indices = act_block_h_datums_read <= LOCAL_PACKED_READER_INDICES_MAX_SIZE;
 
     #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -156,6 +165,11 @@ void kernel_main() {
 
         bool read_weights = true;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+            if constexpr (cache_packed_reader_indices) {
+                for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
+                    local_packed_reader_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
+                }
+            }
             // READ WEIGHTS + MCAST SEND WEIGHTS
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
@@ -176,7 +190,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
@@ -234,14 +248,14 @@ void kernel_main() {
                         weights_mcast_dest_noc_end_y,
                         weights_start_address);
                         // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores);
+                        noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, false, false);
 
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                         // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
+                        noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                         #endif
 
                         weight_current_block_start_tile_id += weight_next_block_stride_h;
@@ -267,7 +281,7 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                             // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                            uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
@@ -319,14 +333,14 @@ void kernel_main() {
                 weights_mcast_dest_noc_end_y,
                 bias_start_address);
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores);
+                noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, false, false);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                 // We should also multicast the flag to destinations
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
+                noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
 
                 cb_push_back(bias_cb_id, bias_ntiles);

@@ -9,6 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -288,7 +289,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
-            return eltwise_unary_multi_core_height_or_block_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
+            return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
             break;
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
@@ -338,6 +339,12 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 //unary op version tie
 template<BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
+  if (is_multi_device_tensor(input_tensor)) {
+    return transform(input_tensor, [&](const Tensor& tensor) {
+        return tie_binop_to_unary<OP>(tensor, value, output_mem_config);
+    });
+  }
+
   Tensor t_value = mk_tiled_scalar(value);
   return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }
@@ -391,7 +398,10 @@ Tensor div_unary(float value,const Tensor& input_tensor, const MemoryConfig& out
 
 //same as div_unary(value,tensor)
 Tensor rdiv(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config) {
-    return div_unary(value,input_tensor,output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor result = div_unary(value, input_tensor, output_mem_config);
+    result = where(eqz(input_tensor, output_mem_config), t_inf, result, output_mem_config);
+    return result;
 }
 
 

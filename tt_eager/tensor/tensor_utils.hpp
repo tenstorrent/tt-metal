@@ -55,7 +55,7 @@ namespace tt_metal {
    bool is_device_tensor(const Tensor& tensor);
 
 // Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(const Device* device, const Tensor& multi_device_tensor);
+Tensor get_device_tensor(Device* device, const Tensor& multi_device_tensor);
 
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_multi_device_tensor(const Tensor& tensor);
@@ -74,6 +74,14 @@ void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable);
 
 // Given a multi-device tensor, return all the devices it is mapped to.
 std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
+
+uint32_t num_buffers_in_tensor(const Tensor& tensor);
+
+Tensor get_shard_for_device(const Tensor& tensor, Device* target_device);
+
+void insert_buffer_and_shape_for_device(Device* target_device, const Tensor& shard, Tensor& tensor_to_modify);
+
+Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
 
 template<typename TensorContainer>
 auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
@@ -94,16 +102,36 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
     for (const auto& tensor : input_tensors) {
         if constexpr (IsOptional::value) {
             if (tensor.has_value()) {
-                transformed_tensors.push_back(get_device_tensor(device, *tensor));
+                transformed_tensors.emplace_back(get_device_tensor(device, tensor.value()));
             } else {
-                transformed_tensors.push_back(std::nullopt);
+                transformed_tensors.emplace_back(std::nullopt);
             }
         } else {
-            transformed_tensors.push_back(get_device_tensor(device, tensor));
+            transformed_tensors.emplace_back(get_device_tensor(device, tensor));
         }
     }
     return transformed_tensors;
 }
+
+inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+
+inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE;
+}
+
+inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
+    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
+}
+
+inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
+    for (const auto& tensor : tensors) {
+        if (is_tensor_on_multi_device(tensor)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace tt_metal
 
 } // namespace tt

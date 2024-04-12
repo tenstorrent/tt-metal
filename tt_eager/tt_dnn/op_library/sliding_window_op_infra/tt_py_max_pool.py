@@ -19,6 +19,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParams,
     get_hash_from_sliding_window_op_params,
     calculate_shard_grid,
+    calculate_memory_config,
 )
 
 from typing import Union
@@ -41,6 +42,7 @@ class TTPyMaxPool(TTPyOp):
         output_mem_config=None,
         deallocate_activation=True,
         act_dtype=None,
+        channels=None,
     ):
         if parallel_config_override is None:
             parallel_config_override = {}
@@ -54,6 +56,8 @@ class TTPyMaxPool(TTPyOp):
                 key == "max_pool" or key == "halo" or key == "conv"
             ), f"reader_patterns_cache should have 1 of the following keys - 'conv', 'max_pool' or 'halo'. Found key - {key}"
 
+        snap_to_tile = parallel_config_override.get("snap_to_tile", False)
+        df_needs_tiled = act_dtype is not None and act_dtype == ttl.tensor.DataType.BFLOAT8_B
         conv_parallel_config = determine_parallel_config(
             True,
             0,
@@ -61,7 +65,7 @@ class TTPyMaxPool(TTPyOp):
             sliding_window_op_params,
             device,
             config_override=parallel_config_override,
-            is_out_tiled=True if act_dtype is not None and act_dtype == ttl.tensor.DataType.BFLOAT8_B else False,
+            is_out_tiled=snap_to_tile or df_needs_tiled,
         )
         self.grid_size = (conv_parallel_config.grid_size.x, conv_parallel_config.grid_size.y)
         self.ncores_nhw = conv_parallel_config.num_cores_nhw
@@ -92,6 +96,25 @@ class TTPyMaxPool(TTPyOp):
 
         self.device = device
 
+        self.input_sharded_memory_config = calculate_memory_config(
+            self.sliding_window_op_params,
+            True,
+            0 if channels is None else channels,
+            calc_input=True,
+            tile_size=32 if snap_to_tile else 1,
+        )
+        self.output_sharded_memory_config = (
+            calculate_memory_config(
+                self.sliding_window_op_params,
+                True,
+                0 if channels is None else channels,
+                calc_input=False,
+                tile_size=32 if snap_to_tile else 1,
+            )
+            if output_mem_config is None
+            else output_mem_config
+        )
+
         self.set_op_configs(
             sliding_window_op_params_hash,
             reader_patterns_cache["max_pool"],
@@ -101,7 +124,6 @@ class TTPyMaxPool(TTPyOp):
 
         self.set_op_weights_biases(
             self.sliding_window_op_params,
-            output_mem_config,
             reader_indices,
         )
 
@@ -111,7 +133,7 @@ class TTPyMaxPool(TTPyOp):
             self.sliding_window_op_params,
             reader_patterns_cache["halo"],
             pad_val=self.pad_val,
-            is_out_tiled=False,
+            is_out_tiled=snap_to_tile,
         )
 
         self.deallocate_activation = deallocate_activation
@@ -128,25 +150,13 @@ class TTPyMaxPool(TTPyOp):
             batch_size = self.sliding_window_op_params.batch_size
             input_h = self.sliding_window_op_params.input_h
             input_w = self.sliding_window_op_params.input_w
-
             ncores_h = self.sliding_window_op_params.num_cores_h
             ncores_w = self.sliding_window_op_params.num_cores_w
             ncores_nhw = self.sliding_window_op_params.num_cores_nhw
 
             input_nchw_shape = [batch_size, 1, input_h, input_w]
-            input_volume = batch_size * input_h * input_w
-            output_h = ((int)((input_h + (2 * pad_h) - window_h) / stride_h)) + 1
-            output_w = ((int)((input_w + (2 * pad_w) - window_w) / stride_w)) + 1
-            output_volume = batch_size * output_h * output_w
-
-            # input_size_to_shard_evenly = _nearest_y(input_volume, ncores_nhw * 32)
-            assert input_volume % ncores_nhw == 0
-            input_shard_height = input_volume // ncores_nhw
-
-            # output_size_to_shard_evenly = _nearest_y(output_volume, ncores_nhw * 32)
-            assert output_volume % ncores_nhw == 0
-            output_shard_height = output_volume // ncores_nhw
-
+            input_shard_height = self.input_sharded_memory_config.shard_spec.shape[0]
+            output_shard_height = self.output_sharded_memory_config.shard_spec.shape[0]
             input_padded_width = input_w + 2 * pad_w
 
             pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
@@ -193,7 +203,7 @@ class TTPyMaxPool(TTPyOp):
 
         return
 
-    def set_op_weights_biases(self, op_params, output_mem_config, reader_indices):
+    def set_op_weights_biases(self, op_params, reader_indices):
         stride_h = op_params.stride_h
         stride_w = op_params.stride_w
         pad_h = op_params.pad_h
@@ -222,8 +232,9 @@ class TTPyMaxPool(TTPyOp):
                 stride_w,
                 pad_h,
                 pad_w,
-                output_mem_config=act_mem_config if output_mem_config is None else output_mem_config,
+                output_mem_config=self.output_sharded_memory_config,
             )
+            haloed_act.deallocate()
             return output
 
         self.max_pool = max_pool_
@@ -232,53 +243,38 @@ class TTPyMaxPool(TTPyOp):
         return self.max_pool(activation)
 
     def copy_input_to_device(self, input: ttl.tensor.Tensor):
-        interleaved_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
         in_shape = input.get_legacy_shape()
         in_c = in_shape[-1]
         in_n = self.sliding_window_op_params.batch_size
         in_h = self.sliding_window_op_params.input_h
         in_w = self.sliding_window_op_params.input_w
-        assert in_c % 16 == 0, "Input channels should be multiple of 32. General case is TODO"
+        assert in_c % 16 == 0, "Input channels should be multiple of 16. General case is TODO"
+        act_shape = (1, 1, in_n * in_h * in_w, in_c)
+        act_reshaped = input.reshape(act_shape)
+        padded_nhw = self.input_sharded_memory_config.shard_spec.shape[0] * self.sliding_window_op_params.num_cores_nhw
+        if padded_nhw != act_shape[-2]:
+            padded_shape = ttl.tensor.Shape(act_shape, (1, 1, padded_nhw, in_c))
+            act_reshaped = ttl.tensor.format_input_tensor(
+                act_reshaped,
+                self.device,
+                padded_shape,
+                -float("inf"),
+                act_reshaped.layout,
+            )
 
-        ## this op expects input tensor as { N, 1, H * W, C } or { 1, 1, N * H * W, C }
-
-        in_hw = in_h * in_w
-        if input.get_dtype() == ttl.tensor.DataType.BFLOAT8_B:
-            ## currently the case when the input is bfp8_b and height is not divible by tile height is not supported. TODO.
-            assert in_hw % 32 == 0, "For BFP8_B datatype, input height * width should be multiple of 32"
-            ## last two dims are multiple of tile size (padded if needed)
-            in_hw_padded = _nearest_32(in_hw)
-            assert in_hw_padded == in_shape[1] * in_shape[2] or in_hw_padded == in_shape[0] * in_shape[1] * in_shape[2]
-            act_shape = (in_n, 1, in_hw_padded, in_c)
-        else:
-            act_shape = (in_n, 1, in_hw, in_c)
-
-        act_reshaped = input.reshape(act_shape).to(self.device, interleaved_mem_config)
-
-        # padded_shape = ttl.tensor.pad_to_tile_shape(act_reshaped.get_legacy_shape(), False, False, False, True)
-        # act_reshaped = ttl.tensor.format_input_tensor(
-        #             act_reshaped,
-        #             self.device,
-        #             padded_shape,
-        #             0.0,
-        #             ttl.tensor.Layout.ROW_MAJOR,
-        #             interleaved_mem_config,
-        #         )
-
-        shard_shape = [in_n * in_hw // self.sliding_window_op_params.num_cores_nhw, in_c]
-        act_sharded = ttl.tensor.interleaved_to_sharded(
-            act_reshaped,
-            self.grid_size,
-            shard_shape,
-            self.shard_layout,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        interleaved_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
         )
-
-        if self.deallocate_activation:
-            act_reshaped.deallocate()
-        return act_sharded
+        mem_config = self.input_sharded_memory_config
+        shard_shape = mem_config.shard_spec.shape
+        shard_shape[1] = in_c
+        mem_config.shard_spec.shape = shard_shape
+        act_reshaped = act_reshaped.to(self.device, interleaved_mem_config)
+        return ttl.tensor.interleaved_to_sharded(
+            act_reshaped,
+            mem_config,
+            input.get_dtype(),
+        )
 
     def copy_output_from_device(self, output_d: ttl.tensor.Tensor):
         interleaved_mem_config = ttl.tensor.MemoryConfig(

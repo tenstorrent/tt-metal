@@ -5,7 +5,10 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+    compare_pcc,
+    data_gen_with_range,
+)
 
 
 @pytest.mark.parametrize(
@@ -26,12 +29,8 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
     ),
 )
 def test_bw_rpow(input_shapes, exponent, device):
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
-    in_data = torch.Tensor(size=input_shapes).uniform_()
-    in_data.requires_grad = True
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True)
 
     pyt_y = torch.pow(in_data, exponent)
 
@@ -42,5 +41,5 @@ def test_bw_rpow(input_shapes, exponent, device):
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

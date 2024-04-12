@@ -30,28 +30,32 @@ struct TensorRecord {
 };
 
 struct OperationRecord {
-    const std::string opcode;
+    const std::size_t ttnn_operation_id;
+    const std::string operation_type;
+    const std::string operation_name;
     const tt::stl::reflection::Attributes attributes;
     const std::vector<TensorRecord> input_tensor_records;
     const std::vector<const char*> composite_parent_names{};
+    std::optional<bool> program_cache_hit;
+    const std::optional<tt::stl::hash::hash_t> program_hash;
 };
 
 namespace detail {
 
 struct OperationHistory {
-
     ~OperationHistory();
 
     void append(OperationRecord&& record);
     void dump_to_csv();
+    void clear();
 
-  private:
+   private:
     std::vector<OperationRecord> records;
 };
 
 inline OperationHistory OPERATION_HISTORY{};
 
-}
+}  // namespace detail
 
 template<typename ... Args>
 inline void append(Args&& ... args) {
@@ -61,6 +65,9 @@ inline void append(Args&& ... args) {
 const char* csv_file_name();
 
 bool enabled();
+
+void dump_to_csv();
+void clear();
 
 }  // namespace operation_history
 

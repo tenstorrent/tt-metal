@@ -68,7 +68,6 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
     uint32_t dst_page_index = 0;
 
     uint32_t num_cores = this->buffer.num_cores();
-    uint32_t shard_size = this->buffer.shard_spec().size();
 
     auto core_host_page_indices = this->buffer.core_host_page_indices();
     vector<uint32_t> num_pages_in_shards;
@@ -268,8 +267,6 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
     uint32_t src_page_index = 0;
 
     uint32_t num_cores = this->buffer.num_cores();
-    uint32_t shard_size = this->buffer.shard_spec().size();
-
     auto core_host_page_indices = this->buffer.core_host_page_indices();
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
@@ -857,32 +854,24 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
 
 // TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
 //  Look into modifying command to do read/write of a page at a time to avoid doing copy
-void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buffer, bool read = false) {
+void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buffer) {
     const uint32_t num_pages = buffer.num_pages();
     const uint32_t page_size = buffer.page_size();
 
     const uint32_t size_in_bytes = num_pages * page_size;
 
-    void* temp = malloc(size_in_bytes);
-    memcpy(temp, host, size_in_bytes);
+    void* swapped = malloc(size_in_bytes);
 
-    const void* dst = host;
     std::set<uint32_t> pages_seen;
+    uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
-
-        if (read) {
-            auto host_page_id = page_id;
-            auto dev_page_id = buffer.get_dev_to_host_mapped_page_id(host_page_id);
-            TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
-            memcpy((char*)dst + dev_page_id * page_size, (char*)temp + host_page_id * page_size, page_size);
-        } else {
-            auto dev_page_id = page_id;
-            auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
-            TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-            memcpy((char*)dst + host_page_id * page_size, (char*)temp + dev_page_id * page_size, page_size);
-        }
+        uint32_t local_num_pages;
+        auto dev_page_id = page_id;
+        auto host_page_id = buffer.get_host_to_dev_mapped_page_id(dev_page_id);
+        TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
+        memcpy((char*)swapped + host_page_id * page_size, (char*)host + dev_page_id * page_size, page_size);
     }
-    free(temp);
+    return swapped;
 }
 
 void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking) {
@@ -987,9 +976,11 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         buffer.page_size() < get_cq_data_buffer_size(dispatch_on_eth, true),
         "Buffer pages must fit within the command queue data section");
 
+    void * final_src = (void *)src;
+
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
         buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        convert_interleaved_to_sharded_on_host(src, buffer);
+        final_src = convert_interleaved_to_sharded_on_host(src, buffer);
     }
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
@@ -1018,17 +1009,22 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         uint32_t event = this->manager.get_next_event(this->id);
         if (is_sharded(buffer.buffer_layout())) {
             auto command = EnqueueWriteShardedBufferCommand(
-                this->id, this->device, buffer, src, this->manager, event, dst_page_index, pages_to_write);
+                this->id, this->device, buffer, final_src, this->manager, event, dst_page_index, pages_to_write);
             this->enqueue_command(command, false);
         } else {
             auto command = EnqueueWriteInterleavedBufferCommand(
-                this->id, this->device, buffer, src, this->manager, event, dst_page_index, pages_to_write);
+                this->id, this->device, buffer, final_src, this->manager, event, dst_page_index, pages_to_write);
             this->enqueue_command(command, false);
         }
         this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 
         total_pages_to_write -= pages_to_write;
         dst_page_index += pages_to_write;
+    }
+
+    if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            free(final_src);
     }
 
     if (blocking) {
@@ -1361,7 +1357,7 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
     Buffer* buffer = alloc_md.buffer;
     uint32_t allocated_addr;
     if(is_sharded(buffer->buffer_layout())) {
-        allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, buffer->num_cores());
+        allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, buffer->num_cores());
     }
     else {
         allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->size(), buffer->page_size(), buffer->buffer_type(), alloc_md.bottom_up, std::nullopt);

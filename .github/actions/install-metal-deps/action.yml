@@ -29,4 +29,4 @@ runs:
         DEPENDENCIES=$(jq -r --arg os "${{ inputs.os }}" '.[$os] | .[]' $GITHUB_ACTION_PATH/dependencies.json)
         echo $DEPENDENCIES
         sudo apt update
-        sudo apt install $DEPENDENCIES
+        sudo apt install -y $DEPENDENCIES

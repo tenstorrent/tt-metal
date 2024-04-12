@@ -73,6 +73,4 @@ class ShardStrategy(Enum):
     BLOCK = 3
 
 
-class ShardOrientation(Enum):
-    ROW_MAJOR = 1
-    COLUMN_MAJOR = 2
+ShardOrientation = ttl.tensor.ShardOrientation

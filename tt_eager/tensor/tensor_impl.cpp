@@ -182,18 +182,47 @@ Tensor to_layout_bfloat8_b(const Tensor &tensor, Layout target_layout) {
     if(tensor.get_layout() == target_layout) {
         return tensor;
     }
+    return std::visit(
+        [&tensor, &target_layout](auto&& storage) -> Tensor {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                std::vector<OwnedBuffer> output_buffers;
+                for (int i = 0; i < storage.buffers.size(); i++) {
+                    // Convert to FLOAT32 tensor and change layout
+                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.buffers[i]).get();
+                    auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+                    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout()).to(target_layout);
 
-    // Convert to FLOAT32 tensor and change layout
-    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-    auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout()).to(target_layout);
+                    // Convert back to BFLOAT8_B
+                    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
+                    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                    output_buffers.push_back(output_uint32_buffer);
+                }
+                return Tensor(
+                    std::move(MultiDeviceHostStorage{output_buffers, storage.shapes}),
+                    tensor.get_legacy_shape(),
+                    DataType::BFLOAT8_B,
+                    target_layout
+                );
 
-    // Convert back to BFLOAT8_B
-    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-    return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), tensor.get_legacy_shape(), DataType::BFLOAT8_B, target_layout);
+            } else {
+                // Convert to FLOAT32 tensor and change layout
+                auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+                auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+                auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout()).to(target_layout);
+
+                // Convert back to BFLOAT8_B
+                auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
+                auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), tensor.get_legacy_shape(), DataType::BFLOAT8_B, target_layout);
+            }
+        }, tensor.get_storage());
+
+
 }
 
 

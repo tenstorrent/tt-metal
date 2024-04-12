@@ -18,13 +18,15 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "iterations",
     ((1),),
 )
-def test_mistral_attention_inference(iterations, device, use_program_cache):
+def test_mistral_attention_inference(iterations, device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 

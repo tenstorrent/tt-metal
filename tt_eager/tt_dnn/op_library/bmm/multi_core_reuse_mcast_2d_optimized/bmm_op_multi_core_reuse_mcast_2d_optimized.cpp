@@ -41,8 +41,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t num_blocks = K / in0_block_w;
 
+    //Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+    //unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    //does a spill and reload, so need more than 2 blocks to use l1 acc for packer
+    //For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
+    bool packer_l1_acc_en = packer_l1_acc && (((bias_buffer != nullptr) && num_blocks > 1) || (num_blocks > 2));
+
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -344,7 +350,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
         }
     }
-    if (packer_l1_acc) {
+    if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
@@ -480,6 +486,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
         log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src2_cb_index, in0_single_tile_size, in2_CB_size / in0_single_tile_size, in2_CB_size);
+
+        // Local L1 to store temp vars
+        uint32_t l1_cb_index = 5;
+        CircularBufferConfig cb_for_l1_array_config = CircularBufferConfig(32 * 2, {{l1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(l1_cb_index, 32 * 2);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     }
 
     uint32_t output_cb_index = 16; // output operands start at index 16

@@ -57,7 +57,7 @@ inline Tensor interleaved_to_sharded(
     const TensorMemoryLayout shard_scheme,
     const ShardOrientation shard_orientation,
     const std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [grid, shard_shape, shard_scheme, shard_orientation, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
@@ -135,7 +135,9 @@ struct CorePageStride {
 
 // TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
+    const MemoryConfig input_mem_config;
     const MemoryConfig output_mem_config;
+    const Shape input_shape;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -144,15 +146,16 @@ struct Reshard {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
+    static constexpr auto attribute_names = std::make_tuple("input_mem_config", "output_mem_config", "input_shape");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->input_mem_config), std::cref(this->output_mem_config), std::cref(this->input_shape)); }
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
     const MemoryConfig &sharded_mem_config,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [sharded_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
@@ -176,7 +179,7 @@ inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.get_workers())};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
         [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
@@ -199,7 +202,7 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
     TT_FATAL(input_tensor.shard_spec().has_value());
     TT_FATAL(output_mem_config.is_sharded());
 
-    return operation::run(Reshard{.output_mem_config = output_mem_config}, {input_tensor}).at(0);
+    return operation::run(Reshard{.input_mem_config = input_tensor.memory_config(), .output_mem_config = output_mem_config, .input_shape=input_tensor.get_legacy_shape()}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

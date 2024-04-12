@@ -18,19 +18,20 @@ namespace tt::tt_metal {
 namespace operation {
 
 template<typename ConcreteOperation>
-std::vector<Tensor> generic_create_output_tensors(
+auto generic_create_output_tensors(
     const ConcreteOperation& operation,
-    const std::vector<Tensor>& input_tensors,
+    const Tensors& input_tensors,
     const DataType output_dtype,
     const Layout output_layout,
     const MemoryConfig& output_mem_config
-) {
+) -> ProgramOutputTensors<ConcreteOperation> {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_shapes = operation.compute_output_shapes(input_tensors);
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
 
-    std::vector<Tensor> output_tensors;
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
+    OutputTensors output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
         output_tensors.emplace_back(
@@ -122,10 +123,14 @@ namespace detail {
 
 template <typename OperationType>
 std::string operation_type_to_string() {
-    if constexpr (std::is_same_v<OperationType, HostOperation>) {
-        return "host";
-    } else if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
-        return "device";
+    if constexpr (std::is_same_v<OperationType, HostOperation<Tensors>>) {
+        return "host<Tensors>";
+    } else if constexpr (std::is_same_v<OperationType, DeviceOperation<Tensors>>) {
+        return "device<Tensors>";
+    } else if constexpr (std::is_same_v<OperationType, HostOperation<OptionalTensors>>) {
+        return "host<OptionalTensors>";
+    } else if constexpr (std::is_same_v<OperationType, DeviceOperation<OptionalTensors>>) {
+        return "device<OptionalTensors>";
     } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
         return "external";
     } else {
@@ -167,11 +172,12 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
         tensor.get_storage());
 }
 
-template<typename OperationType>
+template <typename OperationType>
 static void append_operation_to_operation_history(
+    const std::size_t ttnn_operation_id,
     const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors) {
 
     std::vector<operation_history::TensorRecord> input_tensor_records;
     input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
@@ -184,14 +190,28 @@ static void append_operation_to_operation_history(
             input_tensor_records.emplace_back(create_tensor_record(tensor.value()));
         }
     }
-    operation_history::append(
-        operation_history::OperationRecord{
-            operation.get_type_name(),
-            operation.attributes(),
-            input_tensor_records,
-            run_operation_state::get_composite_parent_names()
+
+    std::optional<bool> program_cache_hit = std::nullopt;
+    std::optional<tt::stl::hash::hash_t> program_hash = std::nullopt;
+    if constexpr (std::is_same_v<OperationType, DeviceOperation<typename OperationType::OutputTensors>>) {
+        auto& program_cache = input_tensors[0].device()->program_cache;
+        if (program_cache.is_enabled()) {
+            program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
+            auto program_pointer = program_cache.find(program_hash.value());
+            program_cache_hit = program_pointer.has_value();
         }
-    );
+    }
+
+    operation_history::append(operation_history::OperationRecord{
+        ttnn_operation_id,
+        boost::core::demangle(typeid(OperationType).name()),
+        operation.get_type_name(),
+        operation.attributes(),
+        input_tensor_records,
+        run_operation_state::get_composite_parent_names(),
+        program_cache_hit,
+        program_hash,
+    });
 }
 
 }  // namespace detail
@@ -199,9 +219,9 @@ static void append_operation_to_operation_history(
 template<typename OperationType>
 inline void log_operation(
     const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {}) {
     tt::log_debug(
         tt::LogOp,
         "Launching Operation: \"{}\" ({})",
@@ -236,7 +256,8 @@ inline void log_operation(
     tt::log_debug(tt::LogOp, "");
 
     if (operation_history::enabled()) {
-        detail::append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
+        detail::append_operation_to_operation_history(
+            ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
     }
 }
 #else
@@ -244,9 +265,9 @@ inline void log_operation(
 template <typename OperationType>
 inline void log_operation(
     const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {}
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {}) {}
 #endif
 
 inline uint32_t assign_id()
@@ -255,105 +276,124 @@ inline uint32_t assign_id()
     return atomic_count.fetch_add(1);
 }
 
-std::vector<Tensor> run(
-    const HostOperation& operation,
-    const std::vector<Tensor>& input_tensors
+template<class OutputTensors=Tensors>
+OutputTensors run(
+    const HostOperation<OutputTensors>& operation,
+    const Tensors& input_tensors
 );
 
-std::vector<Tensor> run(
+template<class OutputTensors=Tensors>
+OutputTensors run(
     CommandQueue& queue,
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+    const DeviceOperation<OutputTensors>& operation,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {});
 
-std::vector<Tensor> run(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+template<class OutputTensors=Tensors>
+OutputTensors run(
+    const DeviceOperation<OutputTensors>& operation,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {});
 
 template<typename ConcreteOperation>
-inline std::vector<Tensor> run(
+inline auto run(
     ConcreteOperation&& concrete_op,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
-) {
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors={},
+    const OptionalTensors& optional_output_tensors={}
+) -> ProgramOutputTensors<ConcreteOperation> {
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_host_operation<ConcreteOperation>()) {
         TT_ASSERT(optional_input_tensors.empty());
         const auto operation = HostOperation(concrete_op);
-        return run(operation, input_tensors);
+        return run<OutputTensors>(operation, input_tensors);
     } else if constexpr (detail::is_device_operation<ConcreteOperation>()) {
         const auto operation = DeviceOperation(concrete_op);
-        return run(operation, input_tensors, optional_input_tensors, optional_output_tensors);
+        return run<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
         static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
 }
 
-std::vector<Tensor> run_without_autoformat(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
+template<class OutputTensors=Tensors>
+OutputTensors run_without_autoformat(
+    const DeviceOperation<OutputTensors>& operation,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {}
 );
 template <typename ConcreteOperation>
-inline std::vector<Tensor> run_without_autoformat(
+inline auto run_without_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {
-    const auto operation = DeviceOperation(concrete_op);
-    return run_without_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors);
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {})
+    -> ProgramOutputTensors<ConcreteOperation>{
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
+    const auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    return run_without_autoformat<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
-std::vector<Tensor> run_with_autoformat(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+Tensors run_with_autoformat(
+    const DeviceOperation<Tensors>& operation,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors = {},
     const float pad_value = 0,
     const bool pad_c = false
 );
+
 template<typename ConcreteOperation>
-inline std::vector<Tensor> run_with_autoformat(
+inline auto run_with_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const float pad_value = 0,
     const bool pad_c = false
-) {
-    const auto operation = DeviceOperation(concrete_op);
+)-> Tensors {
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
+    const auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c);
 }
 
-std::vector<Tensor> run_with_autoformat(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
+Tensors run_with_autoformat(
+    const DeviceOperation<Tensors>& operation,
+    const Tensors& input_tensors,
     const std::vector<FormatParams>& input_formatting,
     const std::vector<Layout>& output_layouts,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const OptionalConstTensors& optional_input_tensors = {},
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {}
 );
 template<typename ConcreteOperation>
-inline std::vector<Tensor> run_with_autoformat(
+inline auto run_with_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<FormatParams>& input_formatting,
     const std::vector<Layout>& output_layouts,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {}
-) {
-    const auto operation = DeviceOperation(concrete_op);
+)-> ProgramOutputTensors<ConcreteOperation> {
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
+    const auto operation = DeviceOperation<OutputTensors>(concrete_op);
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);
 }
 
 void launch_op(
-    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> op_func,
+    std::function<std::vector<Tensor>(const Tensors&, const OptionalConstTensors&)>&& op_func,
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
 );
+
+void launch_with_autoformat(
+    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
+    const std::vector<Tensor> input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+);
+
+std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs = {});
 
 } //namespace operation
 

@@ -105,6 +105,10 @@ def run_functional_t5_question_and_answering_inference(
 
     decoded_tt_output = []
 
+    convert_to_ttnn = (
+        ttnn_optimized_functional_t5.convert_to_ttnn if use_optimized_version else ttnn_functional_t5.convert_to_ttnn
+    )
+
     custom_preprocessor = (
         ttnn_optimized_functional_t5.custom_preprocessor
         if use_optimized_version
@@ -115,6 +119,7 @@ def run_functional_t5_question_and_answering_inference(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
+        convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
@@ -169,6 +174,11 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     decoded_tt_output = []
 
     tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name
+
+    convert_to_ttnn = (
+        ttnn_optimized_functional_t5.convert_to_ttnn if use_optimized_version else ttnn_functional_t5.convert_to_ttnn
+    )
+
     custom_preprocessor = (
         ttnn_optimized_functional_t5.custom_preprocessor
         if use_optimized_version
@@ -178,6 +188,7 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: model,
+        convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
@@ -188,16 +199,16 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     id = []
 
     index = 0
+    iter = 0
     while index < batch_size:
-        answer = validation_split["answers"][index]
+        answer = validation_split["answers"][iter]
         if len(answer["text"]) > 0:
-            question.append(validation_split["question"][index])
-            context.append(validation_split["context"][index])
-            answers.append(validation_split["answers"][index])
-            id.append(validation_split["id"][index])
+            question.append(validation_split["question"][iter])
+            context.append(validation_split["context"][iter])
+            answers.append(validation_split["answers"][iter])
+            id.append(validation_split["id"][iter])
             index += 1
-        else:
-            continue
+        iter += 1
 
     input_sentance = [f"question: {q} context: {c}" for q, c in zip(question, context)]
 
@@ -254,8 +265,8 @@ def run_functional_t5_question_and_answering_inference_squadv2(
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
     (
-        (8, 384, 5, "t5-small", False),
-        (8, 384, 5, "google/flan-t5-small", False),
+        (8, 128, 5, "t5-small", True),
+        (8, 128, 5, "google/flan-t5-small", True),
     ),
 )
 def test_functional_t5_demo(
@@ -271,7 +282,7 @@ def test_functional_t5_demo(
 
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
-    ((3, 384, 5, "t5-small", False), (3, 384, 5, "google/flan-t5-small", False)),
+    ((8, 128, 5, "t5-small", True), (8, 128, 5, "google/flan-t5-small", True)),
 )
 def test_functional_t5_demo_squadv2(device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version):
     disable_persistent_kernel_cache()

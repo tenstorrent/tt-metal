@@ -132,6 +132,7 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
         ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device),
         layout=ttnn.TILE_LAYOUT,
     )
+    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_temb = ttnn.to_layout(
         ttnn.to_device(ttnn.from_torch(temb, dtype=ttnn.bfloat16), device),
         layout=ttnn.TILE_LAYOUT,
@@ -142,9 +143,16 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     parameters = parameters.down_blocks[3]
     reader_patterns_cache = {}
-    model = tt2_ttnn_downblock2d(device, parameters, reader_patterns_cache, N, H, W)
+    model = tt2_ttnn_downblock2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
     ttnn_hidden_states = pre_process_input(device, ttnn_hidden_states)
     ttnn_out, ttnn_output_states = model(
         temb=ttnn_temb,

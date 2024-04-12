@@ -10,15 +10,25 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsampl
 
 
 class upblock_2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+    ):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
+            resnetBlock2D(
+                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
+            )
             for resnet in parameters.resnets
         ]
         self.upsample_2d = upsample2d(
-            device, parameters.upsamplers[0], reader_patterns_cache, batch_size, input_height, input_width
+            device,
+            parameters.upsamplers[0],
+            reader_patterns_cache,
+            batch_size,
+            input_height,
+            input_width,
+            compute_kernel_config,
         )
 
         self.output_height = self.upsample_2d.output_height
@@ -78,7 +88,9 @@ class upblock_2d:
                 hidden_states = ttnn.clone(
                     hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
-            hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=3)
+            hidden_states = ttnn.concat(
+                [hidden_states, on_dev_res_hidden_states], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,
@@ -92,7 +104,7 @@ class upblock_2d:
             )
 
         if add_upsample:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
             hidden_states = self.upsample_2d(
                 hidden_states,
                 in_channels,
