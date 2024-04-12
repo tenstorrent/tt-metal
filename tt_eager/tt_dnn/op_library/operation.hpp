@@ -743,5 +743,5 @@ using Operation = std::variant<HostOperation<Tensors>, HostOperation<OptionalTen
 }  // namespace tt
 
 namespace ttnn {
-inline std::size_t OPERATION_ID = 0;
+inline std::size_t TTNN_OPERATION_ID = 0;
 }

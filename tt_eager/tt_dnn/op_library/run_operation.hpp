@@ -257,7 +257,7 @@ inline void log_operation(
 
     if (operation_history::enabled()) {
         detail::append_operation_to_operation_history(
-            ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
+            ttnn::TTNN_OPERATION_ID, operation, input_tensors, optional_input_tensors);
     }
 }
 #else

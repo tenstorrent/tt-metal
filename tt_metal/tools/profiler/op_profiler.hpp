@@ -264,6 +264,7 @@ namespace op_profiler {
 
     template<typename OutputTensors, template<typename> typename DeviceOperationType>
     inline std::string op_meta_data_serialized_json(
+            size_t TTNN_OPERATION_ID,
             uint32_t opID,
             uint32_t device_id,
             const DeviceOperationType<OutputTensors>& op,
@@ -277,6 +278,7 @@ namespace op_profiler {
         auto j = get_base_json(opID, op, input_tensors, output_tensors);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
+        j["ttnn_op_id"] = TTNN_OPERATION_ID;
         if (std::holds_alternative<std::reference_wrapper<Program>>(program))
         {
             j["kernel_info"] = get_kernels_json(std::get<std::reference_wrapper<Program>>(program));
@@ -303,8 +305,8 @@ namespace op_profiler {
         return fmt::format("`TT_DNN_DEVICE_OP:{}\n{}`",j["op_code"], ser);
     }
 
-#define TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)\
-    std::string op_message = op_profiler::op_meta_data_serialized_json(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);\
+#define TracyOpTTNNDevice(TTNN_OPERATION_ID, op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)\
+    std::string op_message = op_profiler::op_meta_data_serialized_json(TTNN_OPERATION_ID, op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);\
     std::string op_text = fmt::format("id:{}", op_id);\
     ZoneText(op_text.c_str(), op_text.size());\
     TracyMessage(op_message.c_str(), op_message.size());
@@ -323,7 +325,7 @@ namespace op_profiler {
 
 #else
 
-#define TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)
+#define TracyOpTTNNDevice(TTNN_OPERATION_ID, op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)
 #define TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors)
 #define TracyOpTTNNExternal(op_id, op, input_tensors)
 
