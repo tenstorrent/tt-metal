@@ -1121,13 +1121,15 @@ void HWCommandQueue::enqueue_program(
     Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
 
-    if (not program.loaded_onto_device) {
-        TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-            this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
+    this->force_commands([&]() {
+        if (not program.loaded_onto_device) {
+            TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
+            for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+                this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
+            }
+            program.loaded_onto_device = true;
         }
-        program.loaded_onto_device = true;
-    }
+    });
 
     auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, this->expected_num_workers_completed);
     this->enqueue_command(command, blocking);
