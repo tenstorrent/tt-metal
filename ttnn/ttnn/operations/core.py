@@ -527,10 +527,14 @@ def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
         >>> ttnn.deallocate(tensor)
     """
 
-    def impl(tensor):
-        tensor.deallocate(force=force)
+    if not ttnn.CONFIG.enable_fast_runtime_mode:
 
-    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) deallocate")(tensor)
+        def impl(tensor):
+            tensor.deallocate(force=force)
+
+        ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) deallocate")(tensor)
+    else:
+        tensor.deallocate(force=force)
 
 
 def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):

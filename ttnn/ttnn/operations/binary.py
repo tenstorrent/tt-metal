@@ -48,10 +48,11 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    binary_function.__name__ = f"ttnn.{name}"
-    binary_function.decorated_function.__doc__ = doc + (
-        binary_function.__doc__ if binary_function.__doc__ is not None else ""
-    )
+    if isinstance(binary_function, ttnn.decorators.Operation):
+        binary_function.__name__ = f"ttnn.{name}"
+        binary_function.decorated_function.__doc__ = doc + (
+            binary_function.__doc__ if binary_function.__doc__ is not None else ""
+        )
 
     setattr(THIS_MODULE, name, binary_function)
 
@@ -604,23 +605,24 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    elt_binary_function.__name__ = f"ttnn.{name}"
-    elt_binary_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(elt_binary_function, ttnn.decorators.Operation):
+        elt_binary_function.__name__ = f"ttnn.{name}"
+        elt_binary_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
+            Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
 
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
 
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
+            Args:
+                * :attr:`input_tensor_a`
+                * :attr:`input_tensor_b`
 
-        Example::
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor1, tensor2)
-        """
+            Example::
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
+                >>> output = ttnn.{name}(tensor1, tensor2)
+            """
 
     setattr(THIS_MODULE, name, elt_binary_function)
 
