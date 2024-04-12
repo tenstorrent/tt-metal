@@ -13,28 +13,28 @@ from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-def run_eltwise_rsqrt_tests(
+def run_eltwise_softplus_tests(
     input_shape,
     dtype,
     dlayout,
     in_mem_config,
     output_mem_config,
+    beta,
+    threshold,
     data_seed,
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100)
 
     try:
         # get ref result
-        ref_value = torch.rsqrt(x)
-        logger.info(f"PyTorch: {ref_value[0:10, 0:10]}")
+        ref_value = torch.nn.functional.softplus(x, beta=beta, threshold=threshold)
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
+        tt_result = ttnn.softplus(x, beta, threshold, memory_config=output_mem_config)
 
-        tt_result = ttnn.rsqrt(x)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
-        logger.info(f"TensTorrent: {tt_result[0:10, 0:10]}")
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
@@ -43,6 +43,9 @@ def run_eltwise_rsqrt_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
+
+    print(f"PyTorch: {ref_value[0, 0, 0:9, 0:9]}")
+    print(f"TT: {tt_result[0, 0, 0:9, 0:9]}")
 
     # compare tt and golden outputs
     success, pcc_value = comp_pcc(ref_value, tt_result)
@@ -54,27 +57,25 @@ def run_eltwise_rsqrt_tests(
 
 test_sweep_args = [
     (
-        [(224, 128)],
-        [ttnn.bfloat8_b],
-        [ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        1358430,
-    ),
-    (
-        [(6, 160, 64)],
-        [ttnn.bfloat8_b],
+        [(6, 6, 192, 224)],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,
-        17869870,
+        0.0,
+        28.125,
+        19042500,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_rsqrt(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
-    run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+def test_eltwise_softplus(
+    input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed, device
+):
+    run_eltwise_softplus_tests(
+        input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed, device
+    )

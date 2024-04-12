@@ -44,9 +44,6 @@ def run_eltwise_softplus_tests(
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
 
-    print(f"PyTorch: {ref_value[0, 0, 0:9, 0:9]}")
-    print(f"TT: {tt_result[0, 0, 0:9, 0:9]}")
-
     # compare tt and golden outputs
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
@@ -58,7 +55,7 @@ def run_eltwise_softplus_tests(
 test_sweep_args = [
     (
         [(6, 6, 192, 224)],
-        [ttnn.bfloat16],
+        [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,
