@@ -105,7 +105,7 @@ class cross_attention_down_block_2d:
                     upcast_attention=upcast_attention,
                 )
 
-            output_states += (hidden_states,)
+            output_states += (ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG),)
 
         if add_downsample is not None:
             hidden_states = self.downsample_2d(
