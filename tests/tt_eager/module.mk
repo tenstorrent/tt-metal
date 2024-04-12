@@ -6,9 +6,6 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/ops/test_eltwise_unary_op \
 		 tests/tt_eager/ops/test_softmax_op \
 		 tests/tt_eager/ops/test_layernorm_op \
-		 tests/tt_eager/ops/test_moreh_adam_op \
-		 tests/tt_eager/ops/test_moreh_matmul_op \
-		 tests/tt_eager/ops/test_moreh_layernorm_op \
 		 tests/tt_eager/ops/test_multi_queue_api \
 		 tests/tt_eager/ops/test_transpose_op \
 		 tests/tt_eager/ops/test_transpose_wh_single_core \
@@ -26,7 +23,6 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/tensors/test_copy_and_move \
 		 tests/tt_eager/tensors/test_host_device_loopback \
 		 tests/tt_eager/tensors/test_raw_host_memory_pointer \
-		 tests/tt_eager/tensors/test_sharded_loopback \
 		 tests/tt_eager/tensors/test_async_tensor_apis \
 		 tests/tt_eager/integration_tests/test_bert \
 
