@@ -500,7 +500,6 @@ def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
     )
 
 
-@ttnn.register_operation(name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors)
 def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
     """
     deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
@@ -519,10 +518,7 @@ def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
         >>> ttnn.deallocate(tensor)
     """
 
-    def impl(tensor):
-        tensor.deallocate(force=force)
-
-    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) deallocate")(tensor)
+    tensor.deallocate(force=force)
 
 
 def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):

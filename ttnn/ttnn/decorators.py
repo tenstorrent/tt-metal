@@ -783,7 +783,7 @@ def register_operation(
 
         return operation
 
-    return operation_decorator
+    return operation
 
 
 def register_ttl_operation_as_ttnn_operation(name, function):
