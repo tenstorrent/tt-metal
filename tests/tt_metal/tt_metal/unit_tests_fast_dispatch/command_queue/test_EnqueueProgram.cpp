@@ -773,8 +773,6 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
 }
 
 TEST_F(CommandQueueFixture, TestRandomizedProgram) {
-    // TODO: Re-enable with #7222
-    GTEST_SKIP();
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t MAX_RUNTIME_ARGS = 255;
