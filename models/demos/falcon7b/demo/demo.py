@@ -28,6 +28,7 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     nearest_32,
+    get_devices_for_t3000,
 )
 
 END_OF_TEXT = 11
@@ -80,21 +81,26 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len, perf_m
     return prefill_ids, num_users, num_input_tokens
 
 
-def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device):
+def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices):
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     kv_cache = ()
     for _ in range(num_layers):
-        k_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-        v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-        tt_k_cache = torch2tt_tensor(k_cache, device)
-        tt_v_cache = torch2tt_tensor(v_cache, device)
-        kv_cache += ([(tt_k_cache, tt_v_cache)],)
+        kv_cache_cur_layer = []
+        for device in devices:
+            k_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
+            v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
+            tt_k_cache = torch2tt_tensor(k_cache, device)
+            tt_v_cache = torch2tt_tensor(v_cache, device)
+            kv_cache_cur_layer.append((tt_k_cache, tt_v_cache))
+        kv_cache += (kv_cache_cur_layer,)
     return kv_cache
 
 
-def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
+def print_output_prompts(generated_ids, tokenizer, batch_size, num_users_to_display=None):
     output_prompts = tokenizer.batch_decode(generated_ids.tolist())
     for user_id, output_prompt in enumerate(output_prompts[:num_users_to_display]):
+        if user_id % batch_size == 0:
+            logger.info(f"\n\n=============== Results for device {(user_id // batch_size) + 1} ===============\n")
         logger.info(f"Output for user {user_id}:\n{output_prompt}")
 
 
@@ -125,31 +131,47 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
         return token
 
 
+def synchronize_devices(devices):
+    for device in devices:
+        tt_lib.device.Synchronize(device)
+
+
 def run_falcon_demo_kv(
     user_input,
-    model_version,
     batch_size,
-    num_layers,
     max_seq_len,
     model_config_strs_prefill_decode,
     model_location_generator,
-    device,
-    perf_mode=False,
-    greedy_sampling=False,
+    devices,
+    model_version="tiiuae/falcon-7b-instruct",
+    num_layers=32,
+    perf_mode=False,  # Option to measure perf using max seq length (with invalid outputs)
+    greedy_sampling=False,  # Option to use greedy decoding instead of top-k/p
 ):
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
+
+    num_devices = len(devices)
+    global_batch = batch_size * num_devices
+
     torch.manual_seed(0)
 
-    device.enable_program_cache()
+    for device in devices:
+        device.enable_program_cache()
+
+    if perf_mode:
+        logger.info("Running in performance measurement mode (invalid outputs)!")
 
     tt_cache_path = get_tt_cache_path(model_version)
 
     configuration = FalconConfig(**model_config_entries)
 
     profiler.start(f"loading_inputs")
+    assert len(user_input) % batch_size == 0, "Number of users must be a multiple of batch size"
     if len(user_input) == 1:
         input_prompts = user_input
     else:
-        input_prompts = load_inputs(user_input, batch_size)
+        input_prompts = load_inputs(user_input, global_batch)
 
     profiler.end(f"loading_inputs")
 
@@ -171,14 +193,14 @@ def run_falcon_demo_kv(
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 
-    tt_lib.device.Synchronize(device)
+    synchronize_devices(devices)
 
     logger.info("Moving weights to device; might take some time...")
     profiler.start(f"moving_to_device")
 
     base_url = ""
     tt_FalconCausalLM_singlelayer = TtFalconCausalLM(
-        [device],
+        devices,
         state_dict,
         base_url,
         1,
@@ -191,7 +213,7 @@ def run_falcon_demo_kv(
     logger.info("Moved weights to device!")
     profiler.end(f"moving_to_device")
 
-    tt_lib.device.Synchronize(device)
+    synchronize_devices(devices)
 
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
@@ -206,9 +228,9 @@ def run_falcon_demo_kv(
     logger.info("Initializing KV cache...")
     profiler.start(f"initializing_KV_cache")
     kv_cache_singlelayer = initialize_kv_cache(
-        configuration, 1, batch_size, max_seq_len, device
+        configuration, 1, batch_size, max_seq_len, devices
     )  # only used for compile
-    kv_cache = initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device)
+    kv_cache = initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices)
     profiler.end(f"initializing_KV_cache")
     profiler.disable()
 
@@ -216,14 +238,14 @@ def run_falcon_demo_kv(
     logger.info("Running 1st run prefill stage with compile...")
     use_cache = True
     time_prefill_compile = 0
-    N = num_users if not perf_mode else 1
+    N = num_users // num_devices if not perf_mode else 1
     for user_id in tqdm(range(N)):
         time_prefill_compile_start = time.time()
         (
             tt_prefill_embeddings,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM_singlelayer.model_preprocessing(
-            "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
+            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=num_input_tokens
         )
         assert tt_prefill_attention_mask is not None
 
@@ -236,17 +258,18 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
-        tt_lib.device.Synchronize(device)
+        synchronize_devices(devices)
         time_prefill_compile_end = time.time()
         time_prefill_compile += time_prefill_compile_end - time_prefill_compile_start
 
-        tt_prefill_embeddings[0].deallocate()
-        if tt_prefill_attention_mask is not None:
-            tt_prefill_attention_mask[0].deallocate()
+        for i in range(num_devices):
+            tt_prefill_embeddings[i].deallocate()
+            if tt_prefill_attention_mask is not None:
+                tt_prefill_attention_mask[i].deallocate()
 
-        tt_logits[0].deallocate()
+            tt_logits[i].deallocate()
 
-    tt_lib.device.Synchronize(device)
+    synchronize_devices(devices)
     logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
@@ -255,9 +278,7 @@ def run_falcon_demo_kv(
     # Update model config
     update_model_config(tt_FalconCausalLM_singlelayer, model_config_strs_prefill_decode[1])
 
-    decode_ids = torch.randint(low=0, high=configuration.vocab_size - 1, size=(batch_size, 1), dtype=torch.int64)
-
-    prompt_is_done = [False for _ in range(num_users)]
+    decode_ids = torch.randint(low=0, high=configuration.vocab_size - 1, size=(global_batch, 1), dtype=torch.int64)
 
     time_decode_compile = 0
     for kv_cache_len in tqdm(range(num_input_tokens, max_seq_len, 32)):
@@ -278,18 +299,19 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_lib.device.Synchronize(device)
+        synchronize_devices(devices)
         time_decode_compile_end = time.time()
         time_decode_compile += time_decode_compile_end - time_decode_compile_start
 
-        tt_decode_embeddings[0].deallocate()
-        if tt_decode_attention_mask is not None:
-            tt_decode_attention_mask[0].deallocate()
+        for i in range(num_devices):
+            tt_decode_embeddings[i].deallocate()
+            if tt_decode_attention_mask is not None:
+                tt_decode_attention_mask[i].deallocate()
 
-        tt_logits[0].deallocate()
+            tt_logits[i].deallocate()
 
     logger.info("Finished 1st run decode stage with compile!")
-    tt_lib.device.Synchronize(device)
+    synchronize_devices(devices)
 
     del tt_logits
     del tt_prefill_embeddings
@@ -300,7 +322,7 @@ def run_falcon_demo_kv(
     del kv_cache_singlelayer
 
     tt_FalconCausalLM = TtFalconCausalLM(
-        [device],
+        devices,
         state_dict,
         base_url,
         num_layers,
@@ -320,7 +342,7 @@ def run_falcon_demo_kv(
     logger.info("Running inference prefill stage...")
     time_prefill_inference = 0
     if not perf_mode:
-        N = num_users
+        N = num_users // num_devices
         N_warmup = 0
     else:
         N = 15
@@ -332,7 +354,7 @@ def run_falcon_demo_kv(
             tt_prefill_embeddings,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM.model_preprocessing(
-            "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
+            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=num_input_tokens
         )
         assert tt_prefill_attention_mask is not None
 
@@ -345,23 +367,24 @@ def run_falcon_demo_kv(
             layer_past_len=0,
             use_cache=use_cache,
         )
-        tt_lib.device.Synchronize(device)
+        synchronize_devices(devices)
         time_prefill_inference_end = time.time()
         if i >= N_warmup:
             time_prefill_inference += time_prefill_inference_end - time_prefill_inference_start
 
-        tt_prefill_embeddings[0].deallocate()
-        if tt_prefill_attention_mask is not None:
-            tt_prefill_attention_mask[0].deallocate()
+        logits = torch.concat([tt2torch_tensor(tt_logits[j]).squeeze(1) for j in range(num_devices)], dim=-2)
 
-        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
-        tt_logits[0].deallocate()
+        for j in range(num_devices):
+            tt_prefill_embeddings[j].deallocate()
+            if tt_prefill_attention_mask is not None:
+                tt_prefill_attention_mask[j].deallocate()
+            tt_logits[j].deallocate()
 
         user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
-        output_ids[user_id] = user_output_ids
+        output_ids[user_id::batch_size] = user_output_ids
 
     logger.info("Finished inference prefill stage!")
-    num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup)
+    num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup) * num_devices
 
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
 
@@ -373,7 +396,7 @@ def run_falcon_demo_kv(
     # Update model config
     update_model_config(tt_FalconCausalLM, model_config_strs_prefill_decode[1])
 
-    decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
+    decode_ids = torch.zeros(global_batch, 1, dtype=torch.int64)
     for user_id, output_id in enumerate(output_ids):
         decode_ids[user_id] = output_id
 
@@ -403,23 +426,24 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_lib.device.Synchronize(device)
+        synchronize_devices(devices)
         time_decode_inference_end = time.time()
         if output_token_index >= N_warmup:
             time_decode_inference += time_decode_inference_end - time_decode_inference_start
 
-        tt_decode_embeddings[0].deallocate()
-        if tt_decode_attention_mask is not None:
-            tt_decode_attention_mask[0].deallocate()
+        logits = torch.concat([tt2torch_tensor(tt_logits[i]).squeeze(1) for i in range(num_devices)], dim=-2)
 
-        logits = tt2torch_tensor(tt_logits[0]).squeeze(1)
-        tt_logits[0].deallocate()
+        for i in range(num_devices):
+            tt_decode_embeddings[i].deallocate()
+            if tt_decode_attention_mask is not None:
+                tt_decode_attention_mask[i].deallocate()
+            tt_logits[i].deallocate()
 
         if not perf_mode:
             if greedy_sampling:
-                decode_ids = post_processor(logits=logits, index=...).reshape(batch_size, 1)
+                decode_ids = post_processor(logits=logits, index=...).reshape(global_batch, 1)
             else:
-                decode_ids = top_pk_logits_efficient(logits.reshape(batch_size, -1)).reshape(batch_size, 1)
+                decode_ids = top_pk_logits_efficient(logits.reshape(global_batch, -1)).reshape(global_batch, 1)
 
             for user_id, user_decode_id in enumerate(decode_ids[:num_users]):
                 if user_decode_id == END_OF_TEXT:
@@ -435,16 +459,17 @@ def run_falcon_demo_kv(
 
             # TODO: Remove if we don't want to print per generated token
             os.system("clear")
-            print_output_prompts(generated_ids, tokenizer)
+            print_output_prompts(generated_ids, tokenizer, batch_size)
 
     logger.info("Finished inference decode stage!")
-    num_tokens_generated_decode = batch_size * (output_token_index - N_warmup + 1)
+    num_tokens_generated_decode = global_batch * (output_token_index - N_warmup + 1)
     logger.info(f"Total number of tokens generated in decode: {num_tokens_generated_decode}")
 
     if not perf_mode:
-        print_output_prompts(generated_ids, tokenizer)
+        print_output_prompts(generated_ids, tokenizer, batch_size)
 
-    device.disable_and_clear_program_cache()
+    for device in devices:
+        device.disable_and_clear_program_cache()
 
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
@@ -481,40 +506,53 @@ def run_falcon_demo_kv(
     )
     logger.info(f"inference throughput decode: {round(measurements['inference_throughput_decode'], 5)} tok/s")
     logger.info(
-        f"inference throughput decode (per user): {round(measurements['inference_throughput_decode']/batch_size, 5)} tok/s/user"
+        f"inference throughput decode (per user): {round(measurements['inference_throughput_decode']/global_batch, 5)} tok/s/user"
     )
 
     return generated_text, measurements
 
 
-# Option to measure perf using max seq length (with invalid outputs)
 @pytest.mark.parametrize("perf_mode", (False,))
-@pytest.mark.parametrize("greedy_sampling", (False,))
-def test_demo(
-    perf_mode,
-    greedy_sampling,
-    user_input,
-    model_location_generator,
-    device,
-    use_program_cache,
-):
-    disable_persistent_kernel_cache()
-    disable_compilation_reports()
+class TestParametrized:
+    def test_demo_singlechip(
+        self,
+        perf_mode,
+        user_input,
+        model_location_generator,
+        device,
+        use_program_cache,
+    ):
+        return run_falcon_demo_kv(
+            user_input=user_input,
+            batch_size=32,
+            max_seq_len=1024,
+            model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"]
+            if is_wormhole_b0()
+            else ["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
+            model_location_generator=model_location_generator,
+            devices=[device],
+            perf_mode=perf_mode,
+        )
 
-    if perf_mode:
-        logger.info("Running in performance measurement mode (invalid outputs)!")
+    @pytest.mark.parametrize("num_devices", (2, 4, 8))
+    def test_demo_multichip(
+        self,
+        perf_mode,
+        num_devices,
+        user_input,
+        model_location_generator,
+        all_devices,
+        use_program_cache,
+    ):
+        assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
+        devices = get_devices_for_t3000(all_devices, num_devices)
 
-    return run_falcon_demo_kv(
-        user_input=user_input,
-        model_version="tiiuae/falcon-7b-instruct",
-        batch_size=32,
-        num_layers=32,
-        max_seq_len=1024,
-        model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"]
-        if is_wormhole_b0()
-        else ["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
-        model_location_generator=model_location_generator,
-        device=device,
-        perf_mode=perf_mode,
-        greedy_sampling=greedy_sampling,
-    )
+        return run_falcon_demo_kv(
+            user_input=user_input,
+            batch_size=32,
+            max_seq_len=1024,
+            model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
+            model_location_generator=model_location_generator,
+            devices=devices,
+            perf_mode=perf_mode,
+        )
