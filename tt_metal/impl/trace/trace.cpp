@@ -23,7 +23,9 @@ static constexpr uint32_t kExecBufPageMax = 4096;
 // Assumes pages are interleaved across all banks starting at 0
 size_t interleaved_page_size(const uint32_t buf_size, const uint32_t num_banks, const uint32_t min_size, const uint32_t max_size) {
     // Populate power of 2 numbers within min and max as candidates
+    TT_FATAL(min_size > 0 and min_size <= max_size);
     vector<uint32_t> candidates;
+    candidates.reserve(__builtin_clz(min_size) - __builtin_clz(max_size) + 1);
     for (uint32_t size = 1; size <= max_size; size <<= 1) {
         if (size >= min_size) {
             candidates.push_back(size);
@@ -32,7 +34,7 @@ size_t interleaved_page_size(const uint32_t buf_size, const uint32_t num_banks, 
     uint32_t min_waste = -1;
     uint32_t pick = 0;
     // Pick the largest size that minimizes waste
-    for (const auto& size : candidates) {
+    for (const uint32_t size : candidates) {
         // Pad data to the next fully banked size
         uint32_t fully_banked = num_banks * size;
         uint32_t padded_size = (buf_size + fully_banked - 1) / fully_banked * fully_banked;
