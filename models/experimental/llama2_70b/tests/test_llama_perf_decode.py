@@ -34,16 +34,15 @@ from models.utility_functions import (
     get_devices_for_t3000,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
-def load_prompts_file(tokenizer, prefill_length=128):
+def load_prompts_file(tokenizer, prefill_length, gap=64):
     # Load prompts
     prompts = open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
     tokenized = tokenizer.encode(prompts, bos=True, eos=False)
 
     token_ids = []
-    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length):
+    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
         window = tokenized[i : i + prefill_length]
         if len(token_ids) == 32:
             return token_ids, tokenizer.decode(token_ids)
@@ -99,15 +98,13 @@ def run_test_LlamaModel_end_to_end(
     hugging_face_reference_model, tokenizer = generator.model, generator.tokenizer
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-
-    # Prepare input ------------------------------------------------------------------------
-    torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+
+    # Prepare input -----------------------------------------------------------------------
+    torch.manual_seed(0)
     total_len = min(MAX_SEQ_LEN, generation_length + 1)
-
-    prefill_ids, prefill_texts = load_prompts_file(tokenizer, prefill_length=32 if generation_length > 32 else 16)
+    prefill_ids, prefill_texts = load_prompts_file(tokenizer, prefill_length=32 if generation_length > 32 else 20)
     tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, num_users, total_len)
-
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -134,26 +131,28 @@ def run_test_LlamaModel_end_to_end(
     logger.info("Running 1st run decode stage with compile...")
 
     start_pos = 0
+    prev_pos = start_pos
     for cur_pos in range(start_pos + 1, generation_length):
         logger.info(f"Generating token: {cur_pos}")
 
-        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
+        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
+            enable_persistent_kernel_cache()
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, start_pos:cur_pos], start_pos)
+        tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
 
-        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
+        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
             profiler.end(f"processing_of_decode_input_{cur_pos}")
             profiler.start(f"model_run_for_inference_{cur_pos}")
 
         tt_logits = tt_model(
             tt_inp_emb,
             rot_mat,
-            start_pos,
+            prev_pos,
             attn_mask,
         )
 
-        if cur_pos == 1 or cur_pos == generation_length - 10:  # Skip the first few iterations to warm up
+        if cur_pos == start_pos + 1 or cur_pos >= generation_length - 10:  # Skip the first few iterations to warm up
             profiler.end(f"model_run_for_inference_{cur_pos}")
 
         del tt_inp_emb
@@ -164,13 +163,13 @@ def run_test_LlamaModel_end_to_end(
             tt_lib.device.Synchronize(device)
 
         logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
-        logits = logits[..., : configuration.vocab_size].float()
+        logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
         del tt_logits
 
-        next_token = torch.argmax(logits[:, -1], dim=-1)
+        next_token = torch.argmax(logits, dim=-1)
         next_token = next_token.reshape(-1)
 
-        tokens, eos_reached, start_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
+        tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
 
         if all(eos_reached):
             break
@@ -218,9 +217,9 @@ def run_test_LlamaModel_end_to_end(
 @pytest.mark.parametrize(
     "generation_length, expected_compile_time, expected_inference_time",
     (
-        (32, 60, 0.22),
-        (128, 60, 0.22),
-        (2048, 60, 0.22),
+        (32, 552, 1.2),
+        (128, 552, 1.3),
+        (2048, 552, 1.5),
     ),
     ids=["quick", "short", "long"],
 )
@@ -230,7 +229,7 @@ def test_Llama_perf_host(
     expected_inference_time,
     all_devices,
     use_program_cache,
-    n_layers=1,
+    n_layers=80,
     n_devices=8,
     emulated=False,
     num_users=32,
