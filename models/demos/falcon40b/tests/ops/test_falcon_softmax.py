@@ -48,59 +48,93 @@ def run_test_FalconSoftmax_inference(
     device,
     model_location_generator,
 ):
+    is_sharded = True
+
     head_dim = 64
     seqlen = 64
+    num_chips = 8
+
+    if num_chips == 8:
+        num_attention_heads = 16
+    elif num_chips == 4:
+        num_attention_heads = 32
+    else:
+        assert False
 
     # Prepare input
     torch.manual_seed(0)
     model_input_shape = [1, seqlen]
 
-    model_config = get_model_config("BFLOAT8_B-SHARDED", "prefill", model_input_shape, 4)
-
-    num_attention_heads = 16
+    model_config = get_model_config("BFLOAT8_B-SHARDED", "prefill", model_input_shape, num_chips)
 
     input_shape = [1, num_attention_heads, seqlen, seqlen]
     input_torch = (torch.rand(input_shape) * 2) - 1
-    input = torch2tt_tensor(input_torch, None, tt_dtype=model_config["BFLOAT16_DTYPE"])
+    input = torch2tt_tensor(input_torch, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
     input = input.to(device, model_config["DEFAULT_MEMCFG"])
 
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
-        {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 7),
-            ),
-        }
-    )
-
-    softmax_memcfg = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                num_attention_heads * seqlen // 32,
-                seqlen,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
-    # input = ttl.tensor.interleaved_to_sharded(input, sharded_mem_config=softmax_memcfg)
-
     attention_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool).triu(diagonal=1)
-    attention_mask = attention_mask_bool * -100000  # .expand(-1, num_attention_heads, -1, -1)
 
-    attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-    if attention_mask_memconfig.is_sharded():
-        attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-        attn_mask_shard_shape[-1] = seqlen
-        attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+    if is_sharded:
+        if num_attention_heads == 32:  # 4 chip setup
+            shard_spec_cores_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(7, 3),
+                    ),
+                }
+            )
+        elif num_attention_heads == 16:  # 8 chip setup
+            shard_spec_cores_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(7, 1),
+                    ),
+                }
+            )
+        else:
+            assert False
 
-    tt_attention_mask_per_device_host = torch2tt_tensor(attention_mask, None, tt_dtype=model_config["BFLOAT16_DTYPE"])
+        softmax_memcfg = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_cores_grid,
+                [
+                    seqlen,
+                    seqlen,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        input = ttl.tensor.interleaved_to_sharded(input, sharded_mem_config=softmax_memcfg)
+
+        attention_mask_bool = attention_mask_bool.expand(1, num_attention_heads, seqlen, seqlen)
+
+        attention_mask_memconfig = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_cores_grid,
+                [
+                    seqlen,
+                    seqlen,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+    attention_mask = attention_mask_bool * -100000
+
+    tt_attention_mask_per_device_host = torch2tt_tensor(attention_mask, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
     tt_attention_mask_per_device = tt_attention_mask_per_device_host.to(device, model_config["DEFAULT_MEMCFG"])
-    # tt_attention_mask_per_device = ttl.tensor.interleaved_to_sharded(tt_attention_mask_per_device, sharded_mem_config=attention_mask_memconfig)
+    if is_sharded:
+        tt_attention_mask_per_device = ttl.tensor.interleaved_to_sharded(
+            tt_attention_mask_per_device, sharded_mem_config=attention_mask_memconfig
+        )
 
     model_version = "tiiuae/falcon-40b-instruct"
     model_name = model_location_generator(model_version, model_subdir="Falcon")
@@ -113,13 +147,8 @@ def run_test_FalconSoftmax_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_Falconcreate_qkv_heads_model = TtFalconSoftmax(
-        device, model_config=model_config, head_dim=head_dim, seqlen=seqlen
+        device, model_config=model_config, head_dim=head_dim, seqlen=seqlen, is_sharded=is_sharded
     )
-
-    # input_host = torch2tt_tensor(input, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
-    # input = input_host.to(
-    #     device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    # )
 
     tt_out = tt_Falconcreate_qkv_heads_model(input, tt_attention_mask_per_device)
 
