@@ -73,7 +73,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
             shapes.push_back(shard.get_legacy_shape());
         }
-        auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), shapes};
+        auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
         std::unordered_map<int, tt::tt_metal::Shape> shapes;
@@ -83,7 +83,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
             shapes.insert({device->id(), shard.get_legacy_shape()});
         }
-        auto storage = MultiDeviceStorage{std::move(device_buffers), shapes};
+        auto storage = MultiDeviceStorage{AllGatherTensor(), std::move(device_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     }
 }

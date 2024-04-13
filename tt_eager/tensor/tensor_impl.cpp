@@ -204,7 +204,7 @@ Tensor to_layout_bfloat8_b(const Tensor &tensor, Layout target_layout) {
                     output_buffers.push_back(output_uint32_buffer);
                 }
                 return Tensor(
-                    std::move(MultiDeviceHostStorage{output_buffers, storage.shapes}),
+                    std::move(MultiDeviceHostStorage{storage.strategy, output_buffers, storage.shapes}),
                     tensor.get_legacy_shape(),
                     DataType::BFLOAT8_B,
                     target_layout
