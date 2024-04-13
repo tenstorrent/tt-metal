@@ -4,7 +4,7 @@
 
 import math
 import pathlib
-from typing import Union, Tuple, Optional, Any
+from typing import Union, Tuple, Optional, Any, Callable
 
 from loguru import logger
 import torch
@@ -962,6 +962,7 @@ def as_tensor(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
+    preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
@@ -976,6 +977,7 @@ def as_tensor(
         * :attr:`device`: the optional `ttnn` device.
         * :attr:`memory_config`: the optional `ttnn` memory configuration.
         * :attr:`cache_file_name`: the optional cache file name.
+        * :attr:`preprocess`: the optional function to preprocess the tensor before serializing/converting to ttnn.
         * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
 
     Example::
@@ -992,12 +994,16 @@ def as_tensor(
         raise RuntimeError("memory_config must be specified when device is specified")
 
     if cache_file_name is None:
+        if preprocess:
+            tensor = preprocess(tensor)
         return ttnn.from_torch(
             tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
         )
     else:
 
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
+            if preprocess:
+                tensor = preprocess(tensor)
             tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
