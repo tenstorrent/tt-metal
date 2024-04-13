@@ -6,10 +6,10 @@ Getting Started
 TT-Metalium is designed with the needs for non-ML and ML use cases.
 
 The GitHub page for the project is located here:
-https://github.com/tenstorrent-metal/tt-metal
+https://github.com/tenstorrent/tt-metal
 
 Installation and environment setup instructions are in the GitHub repository
-front-page README: https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md
+front-page README: https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md
 
 Quick Start Guide
 -----------------
@@ -26,22 +26,22 @@ hardware.
 
 Install tt-metal and build the project by following the instructions in the
 `installation guide
-<https://github.com/tenstorrent-metal/tt-metal#installing>`_.
+<https://github.com/tenstorrent/tt-metal#installing>`_.
 
 2. Explore the Falcon 7B Demo
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Get started with the Falcon 7B demo to experience the capabilities of tt-metal.
 Navigate to the `Falcon 7B demo folder
-<https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/falcon7b>`_
+<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
 for details.
 
 You can also check our demos for
-`ResNet <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/resnet>`_,
-`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
-`Mistral 7B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/mistral7b>`_,
+`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
+`BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
+`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mistral7b>`_,
 and
-`Llama2-70B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/llama2_70b>`_.
+`Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama2_70b>`_.
 
 3. ttnn Tutorial: Multi-Head Attention (Simple)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -72,4 +72,4 @@ library APIs to build models, please now go to `getting started for models <../.
 
 If you're an internal TT-Metalium developer, please now read please review the
 `contribution standards
-<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.
+<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.

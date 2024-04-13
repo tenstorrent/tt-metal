@@ -175,7 +175,7 @@ void Cluster::assert_risc_reset() {
 
 void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
-    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent-metal/tt-metal/issues/4087
+    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
     TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;

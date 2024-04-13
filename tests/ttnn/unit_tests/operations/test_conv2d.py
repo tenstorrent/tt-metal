@@ -32,7 +32,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
 
     if mem_config is not None:
-        # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
+        # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
         if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
             tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
         else:

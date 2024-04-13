@@ -45,7 +45,7 @@ If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
 Next, please request appropriate write permissions by [opening an
-issue](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose) for
+issue](https://github.com/tenstorrent/tt-metal/issues/new/choose) for
 GitHub permissions.
 
 All contributions require:
@@ -375,11 +375,11 @@ running such tests.
   not all, of the post-commit test suite. They must pass, but are not enough to
   ensure your PR will not be reverted.
 - To run any CI pipeline on GitHub Actions, please navigate to the [actions
-  page](https://github.com/tenstorrent-metal/tt-metal/actions).
+  page](https://github.com/tenstorrent/tt-metal/actions).
 
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
-  on the link to [all post-commit workflows](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
+  on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
 
   ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)

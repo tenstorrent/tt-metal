@@ -10,7 +10,7 @@ message(STATUS
 project(tt-metal
         VERSION 1.0
         DESCRIPTION "Tenstorrent Metallium"
-        HOMEPAGE_URL "https://github.com/tenstorrent-metal/tt-metal"
+        HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
 if(NOT CMAKE_BUILD_TYPE)

@@ -40,7 +40,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     bool is_pow2_num_banks = num_banks && (!(num_banks & (num_banks - 1)));
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved address gen
     // For non pow2 num banks, special cases need to be added to avoid falling back to generic implementation.
-    // See https://github.com/tenstorrent-metal/tt-metal/issues/3321
+    // See https://github.com/tenstorrent/tt-metal/issues/3321
     bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 94 or num_banks == 124);
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
     if (not valid_num_banks) {
