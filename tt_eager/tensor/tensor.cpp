@@ -660,11 +660,15 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
         // TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % ADDRESS_ALIGNMENT == 0);
     }
 
+    auto width = shape[-1];
+    auto other_dims = 1;
+    for (int i = 0; i < shape.rank() - 1; i++) {
+        other_dims *= shape[i];
+    }
+
     auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
     auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
-    std::array<uint32_t,2> tensor2d_size = {shape[0]*shape[1] * shape[2]/page_shape[0],
-                                                shape[3]/page_shape[1]
-                                            };
+    std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
     uint32_t packed_size_in_bytes;
 
