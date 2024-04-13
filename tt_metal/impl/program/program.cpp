@@ -45,7 +45,7 @@ namespace{
     size_t KernelCompileHash(
         const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
-        // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
+        // This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
         // Also account for watcher/dprint enabled in hash because they enable additional code to
         // be compiled into the kernel.

@@ -1,18 +1,18 @@
 <div align="center">
 
 <h1>
-   
+
 [Buy hardware](https://tenstorrent.com/cards/) | [Install](./INSTALLING.md) | [Discord](https://discord.gg/tvhGzHQwaj)
 
 </h1>
-   
+
 <img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="150"/>
 
 **TT-NN** is python & C++ Neural Network OP library.
 
 <h3>
 
-[API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
+[API Reference](https://tenstorrent.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/)
 
 </h3>
 
@@ -31,9 +31,9 @@
 | T5 small                                                 | coming soon         |                              |                             |                                     |
 | Bloom                                                    | coming soon         |                              |                             |                                     |
 
-[1] - Observed from the host. Includes dispatch overahed and kernel execution time. 
+[1] - Observed from the host. Includes dispatch overahed and kernel execution time.
 
-[2] - Ignoring host overhead. Kernel execution time only. 
+[2] - Ignoring host overhead. Kernel execution time only.
 
 ## Wormhole (WH) Models
 
@@ -45,7 +45,7 @@
 | Stable Diffusion 1.4 512x512                             | 1                   | coming soon                  |                             |                                     |
 
 
-## T3000 (2x4 mesh of WHs) Models 
+## T3000 (2x4 mesh of WHs) Models
 
 | Model                                    | Batch                    | Throughput                 |
 |------------------------------------------|--------------------------|----------------------------|
@@ -88,11 +88,11 @@ print(output)
 
 <h3>
 
-[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
+[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metal/latest/tt-metalium)
 
 </h3>
 </div>
 
 ## Getting started
 
-Get started with [simple kernels](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
