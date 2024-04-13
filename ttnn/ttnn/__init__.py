@@ -138,6 +138,7 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
@@ -173,6 +174,8 @@ from ttnn.multi_device import (
     MeshToTensor,
     ConcatMeshToTensor,
     ListMeshToTensor,
+    default_mesh_mapper,
+    default_mesh_composer,
 )
 
 from ttnn.core import (

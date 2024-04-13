@@ -32,6 +32,11 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
 
 inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     ttnn::validate_input_tensor("ttnn.reshape", tensor, reshape_input_schemas[0]);
+    if (is_multi_device_tensor(tensor)) {
+        return transform(tensor, [&](const Tensor& device_tensor) {
+            return reshape(device_tensor, shape);
+        });
+    }
 
     auto tensor_shape = tensor.get_shape();
     if (tensor_shape == shape) {

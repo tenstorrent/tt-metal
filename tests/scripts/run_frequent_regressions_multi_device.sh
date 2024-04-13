@@ -19,6 +19,7 @@ pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
+pytest tests/ttnn/integration_tests/bert/test_ttnn_optimized_bert_multi_chip.py
 
 # Llama2_70b related cached files and tests (the test should parse env variables similar to these)
 export LLAMA_CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/

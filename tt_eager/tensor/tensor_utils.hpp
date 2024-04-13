@@ -67,6 +67,7 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
 Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors);
 
 // Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device tensors.
+Tensor mutable_transform(Tensor& tensor, std::function<Tensor(Tensor&)> transform_func);
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
 
 // Given a multi-device tensor, and a callable, apply the function to all per-device tensors.

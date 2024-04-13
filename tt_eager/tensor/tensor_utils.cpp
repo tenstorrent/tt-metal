@@ -298,6 +298,13 @@ Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageTyp
     }
 }
 
+Tensor mutable_transform(Tensor& tensor, std::function<Tensor(Tensor&)> transform_func) {
+    auto input_tensors = get_tensors_from_multi_device_storage(tensor);
+    std::vector<Tensor> output_tensors(input_tensors.size());
+    std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(),
+        [&](auto& device_tensor) { return transform_func(device_tensor); });
+    return create_multi_device_tensor(output_tensors, tensor.storage_type(), get_distributed_tensor_config_from_tensor(tensor));
+}
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func) {
     auto input_tensors = get_tensors_from_multi_device_storage(tensor);
     std::vector<Tensor> output_tensors(input_tensors.size());
