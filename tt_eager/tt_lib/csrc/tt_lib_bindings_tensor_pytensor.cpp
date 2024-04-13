@@ -324,7 +324,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     }
 }
 
-Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optional<DataType> data_type) {
+Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
     std::vector<Tensor> tt_shards;
     for (const auto &shard : tensor_shards) {
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
@@ -335,7 +335,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
-    auto storage = MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_shapes);
+    auto distributed_tensor_config = get_distributed_tensor_config(strategy);
+    auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
 
     return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
 }
@@ -763,14 +764,15 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         )
                 )doc")
             .def(
-                py::init<>([](const py::object &tensor, std::optional<DataType> data_type) {
+                py::init<>([](const py::object &tensor, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
                     if (py::isinstance<py::list>(tensor)) {
-                        return detail::convert_python_tensors_to_tt_tensors(tensor, data_type);
+                        return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, strategy);
                     }
                     return detail::convert_python_tensor_to_tt_tensor(tensor, data_type);
                 }),
                 py::arg("tensor"),
                 py::arg("data_type") = std::nullopt,
+                py::arg("strategy") = std::unordered_map<std::string, std::string>(),
                 py::return_value_policy::move,
                 R"doc(
                     +--------------+------------------------+

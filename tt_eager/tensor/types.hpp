@@ -21,7 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-static constexpr std::uint8_t VERSION_ID = 2;
+static constexpr std::uint8_t VERSION_ID = 3;
 
 enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
@@ -43,6 +43,21 @@ enum class StorageType {
     MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
+
+struct AllGatherTensor{};
+bool operator==(const AllGatherTensor&, const AllGatherTensor&);
+struct ReplicateTensor {};
+bool operator==(const ReplicateTensor&, const ReplicateTensor&);
+struct ShardTensor {
+    int shard_dimension;
+    ShardTensor(int shard_dimension) : shard_dimension(shard_dimension) {}
+};
+bool operator==(const ShardTensor& lhs, const ShardTensor& rhs);
+
+// DistributedTensorConfig is a variant of different ways in which a tensor can be distributed across devices.
+using DistributedTensorConfig = std::variant<ReplicateTensor, ShardTensor, AllGatherTensor>;
+DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata);
+
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
@@ -318,36 +333,40 @@ struct BorrowedStorage {
     const auto attribute_values() const { return std::make_tuple(); }
 };
 
-    struct MultiDeviceHostStorage {
+struct MultiDeviceHostStorage {
+        DistributedTensorConfig strategy;
         std::vector<OwnedBuffer> buffers;
         std::vector<Shape> shapes;
         std::mutex mtx;
         MultiDeviceHostStorage() = default;
-        MultiDeviceHostStorage(std::vector<OwnedBuffer> buffers_, std::vector<Shape> shapes_) : buffers(buffers_), shapes(shapes_) {}
+        MultiDeviceHostStorage(DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<Shape> shapes_) : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
         MultiDeviceHostStorage(MultiDeviceHostStorage &&other) {
             buffers = other.buffers;
             shapes = other.shapes;
         }
 
         MultiDeviceHostStorage(const MultiDeviceHostStorage &other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
 
         MultiDeviceHostStorage &operator=(const MultiDeviceHostStorage &other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
             return *this;
         }
 
         MultiDeviceHostStorage &operator=( MultiDeviceHostStorage &&other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
             return *this;
         }
 
         bool operator == (const MultiDeviceHostStorage& other) {
-            return this->buffers == other.buffers and this->shapes == other.shapes;
+            return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
         }
 
         static constexpr auto attribute_names = std::make_tuple();
@@ -372,7 +391,7 @@ struct BorrowedStorage {
             TT_FATAL(device->id() < shapes.size(), "Buffer not found for device " + std::to_string(device->id()));
             return shapes[device->id()];
         }
-        
+
         uint32_t num_buffers() {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
@@ -380,34 +399,39 @@ struct BorrowedStorage {
     };
 
     struct MultiDeviceStorage {
+        DistributedTensorConfig strategy;
         std::unordered_map<int, DeviceBuffer> buffers;
         std::unordered_map<int, Shape> shapes;
         mutable std::mutex mtx;
         MultiDeviceStorage() = default;
-        MultiDeviceStorage(std::unordered_map<int, DeviceBuffer> buffers_, std::unordered_map<int, Shape> shapes_) : buffers(buffers_), shapes(shapes_) {}
+        MultiDeviceStorage(DistributedTensorConfig strategy_, std::unordered_map<int, DeviceBuffer> buffers_, std::unordered_map<int, Shape> shapes_) : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
         MultiDeviceStorage(MultiDeviceStorage &&other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
         MultiDeviceStorage(const MultiDeviceStorage &other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
 
         MultiDeviceStorage &operator=(const MultiDeviceStorage &other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
             return *this;
         }
 
         MultiDeviceStorage &operator=( MultiDeviceStorage &&other) {
+            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
             return *this;
         }
 
         bool operator == (const MultiDeviceStorage& other) {
-            return this->buffers == other.buffers and this->shapes == other.shapes;
+            return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
         }
 
         const MemoryConfig memory_config() const {

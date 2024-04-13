@@ -338,7 +338,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 Tensor Tensor::to(DeviceMesh *device_mesh, const MemoryConfig &mem_config) const {
     ZoneScoped;
     auto all_workers = device_mesh->get_devices();
-    auto workers = std::vector<Device*>(all_workers.begin(), all_workers.begin() + num_buffers_in_tensor(*this));
+    auto workers = std::vector<Device*>(all_workers.begin(), all_workers.end());
     TT_FATAL(validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
     Tensor multi_device_tensor = Tensor(workers);
     uint32_t device_tensor_ref_count = multi_device_tensor.tensor_attributes->record_main_thread_ref_count();

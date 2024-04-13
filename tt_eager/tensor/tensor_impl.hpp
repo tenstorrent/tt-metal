@@ -502,7 +502,7 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                     output_buffers.push_back(output_buffer);
                     output_shapes.push_back(storage.shapes[i]);
                 }
-                return MultiDeviceHostStorage{output_buffers, output_shapes};
+                return MultiDeviceHostStorage{storage.strategy, output_buffers, output_shapes};
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {

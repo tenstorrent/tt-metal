@@ -249,8 +249,19 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
     return tensors;
 }
 
+DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor) {
+    if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
+        const auto& tensor_storage = std::get<MultiDeviceStorage>(tensor.get_storage());
+        return tensor_storage.strategy;
+    }
+    else if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+        const auto& tensor_storage = std::get<MultiDeviceHostStorage>(tensor.get_storage());
+        return tensor_storage.strategy;
+    }
+    TT_THROW("Tensor is not a multi-device tensor");
+}
 
-Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageType storage_type) {
+Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy) {
     if (tensors.empty()) {
         TT_THROW("Cannot create multi-device tensor with empty tensor list");
     }
@@ -264,7 +275,7 @@ Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageTyp
             shapes.insert({device->id(), tensor.get_legacy_shape()});
         }
         return Tensor{
-            MultiDeviceStorage{device_buffers, shapes},
+            MultiDeviceStorage{strategy, device_buffers, shapes},
             tensors.at(0).get_legacy_shape(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()
@@ -277,7 +288,7 @@ Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors, StorageTyp
             shapes.push_back(tensor.get_legacy_shape());
         }
         return Tensor{
-            MultiDeviceHostStorage{owned_buffers, shapes},
+            MultiDeviceHostStorage{strategy, owned_buffers, shapes},
             tensors.at(0).get_legacy_shape(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()
@@ -292,7 +303,7 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
     std::vector<Tensor> output_tensors(input_tensors.size());
     std::transform(input_tensors.begin(), input_tensors.end(), output_tensors.begin(),
         [&](const auto& device_tensor) { return transform_func(device_tensor); });
-    return create_multi_device_tensor(output_tensors, tensor.storage_type());
+    return create_multi_device_tensor(output_tensors, tensor.storage_type(), get_distributed_tensor_config_from_tensor(tensor));
 }
 
 void apply(const Tensor& tensor, std::function<void(const Tensor&)> callable) {

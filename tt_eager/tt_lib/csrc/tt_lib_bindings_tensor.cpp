@@ -772,14 +772,12 @@ void TensorModule(py::module &m_tensor) {
         )doc"
     );
 
-    m_tensor.def(
-        "load_tensor",
-        &load_tensor,
-        py::arg("file_name"),
-        py::arg("device") = nullptr,
-        R"doc(
-            Load tensor to file
-        )doc");
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, Device*)>(&load_tensor<Device*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, DeviceMesh*)>(&load_tensor<DeviceMesh*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
 
     m_tensor.def(
         "num_cores_to_corerange_set",

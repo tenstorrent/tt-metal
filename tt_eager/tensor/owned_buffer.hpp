@@ -20,6 +20,10 @@ struct Buffer {
         shared_vector_(shared_vector),
         pointer_for_faster_access_(shared_vector->data()),
         size_(shared_vector->size()) {}
+    explicit Buffer(const std::shared_ptr<std::vector<T>>& shared_vector) :
+        shared_vector_(shared_vector),
+        pointer_for_faster_access_(shared_vector->data()),
+        size_(shared_vector->size()) {}
 
     const std::size_t size() const { return this->size_; }
 
