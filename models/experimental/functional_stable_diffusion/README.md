@@ -2,7 +2,7 @@
 ## How to Run
 
 To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
-For more information, refer [installation and build guide](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html#install-and-build).
+For more information, refer [installation and build guide](https://tenstorrent.github.io/tt-metal/latest/get_started/get_started.html#install-and-build).
 
 Use `pytest --disable-warnings --input-path="models/experimental/functional_stable_diffusion/demo/input_data.json" models/experimental/functional_stable_diffusion/demo/demo.py::test_demo` to run the demo.
 

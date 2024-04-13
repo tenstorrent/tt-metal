@@ -369,7 +369,7 @@ def test_simple(
         tt_lib.tensor.Layout.ROW_MAJOR,
     )
 
-    # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
+    # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
     if False and is_1d_systolic:
         conv_input = conv_input.to(device, conv.input_sharded_memory_config)
     else:

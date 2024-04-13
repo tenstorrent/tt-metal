@@ -314,7 +314,7 @@ class SystemMemoryManager {
         //  this->cq_sysmem_start gives start of hugepage for a given channel
         //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
         //  so channel offset needs to be subtracted to get address relative to channel
-        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent-metal/tt-metal/issues/4757
+        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         memcpy(user_scratchspace, data, size_in_bytes);

@@ -31,10 +31,10 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
 
 ### Step 3. Huge Pages
 
-1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
+1. Download latest [setup_hugepages.py](https://github.com/tenstorrent/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
 
 ```sh
-wget https://raw.githubusercontent.com/tenstorrent-metal/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
+wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
 ```
 
 3. Run first setup script.
@@ -67,7 +67,7 @@ sudo apt install git git-lfs
 3. Clone the repo.
 
 ```sh
-git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
+git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 cd tt-metal
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
@@ -100,7 +100,7 @@ source build/python_env/bin/activate
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent-metal/tt-metal/blob/main/README.md)
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent/tt-metal/blob/main/README.md)
 
 ---
 

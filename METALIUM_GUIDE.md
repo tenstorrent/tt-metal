@@ -51,7 +51,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 - **PCIe link** for host interface
 - **ARC core** for board management and control
 
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
 
 #### Near Memory Compute and Efficient use of SRAM
 The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
@@ -88,7 +88,7 @@ AI workloads operate on tensors (N-dimensional data) and exhibit a high degree o
 These data movement patterns (local, row/column, nearest neighbour) are most efficiently implemented via a regular and scalable mesh architecture.
 
 Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level.
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
 TODO: Describe Galaxy, break up the slide into two slides
 
 #### Two levels of memory
@@ -111,8 +111,8 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
     - Compute Kernels
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
-  <img width="1176" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
-<img width="1171" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+  <img width="1176" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
+<img width="1171" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
 
 
 ### Efficiency of Tile-Based Compute and Data Movement
