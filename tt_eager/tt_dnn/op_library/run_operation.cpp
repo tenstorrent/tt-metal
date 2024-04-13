@@ -313,7 +313,7 @@ OutputTensors run_multi_device_operation(
         if constexpr(std::is_same_v<Tensors, std::remove_const_t<OutputTensors>>){
             multi_device_output_tensors.push_back(
                 Tensor{
-                    MultiDeviceStorage{buffers, shapes},
+                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), buffers, shapes},
                     per_device_output_tensors[devices[0]][i].get_legacy_shape(),
                     per_device_output_tensors[devices[0]][i].get_dtype(),
                     per_device_output_tensors[devices[0]][i].get_layout()
@@ -323,7 +323,7 @@ OutputTensors run_multi_device_operation(
         else if constexpr(std::is_same_v<OptionalTensors, std::remove_const_t<OutputTensors>>){
             multi_device_output_tensors.push_back(
                 Tensor{
-                    MultiDeviceStorage{buffers, shapes},
+                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), buffers, shapes},
                     per_device_output_tensors[devices[0]][i].value().get_legacy_shape(),
                     per_device_output_tensors[devices[0]][i].value().get_dtype(),
                     per_device_output_tensors[devices[0]][i].value().get_layout()

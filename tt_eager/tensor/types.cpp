@@ -12,6 +12,26 @@ namespace tt {
 
 namespace tt_metal {
 
+static DistributedTensorConfig create_shard_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return ShardTensor(std::stoi(metadata.at("shard_dim")));
+}
+static DistributedTensorConfig create_replicate_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return ReplicateTensor{};
+}
+
+DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+    if (auto it = metadata.find("strategy"); it != metadata.end()) {
+        const std::string& strategy = it->second;
+        if (strategy == "shard") {
+            return create_shard_distributed_tensor_config(metadata);
+
+        } else if (strategy == "replicate") {
+            return create_replicate_distributed_tensor_config(metadata);
+        }
+    }
+    TT_THROW("Unsupported DistributedTensorConfig strategy:");
+}
+
 
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
@@ -131,6 +151,16 @@ const uint32_t Shape::get_normalized_index(std::int64_t index) const {
             rank - 1,
             normalized_index));
     return normalized_index;
+}
+
+bool operator==(const ReplicateTensor&, const ReplicateTensor&) {
+    return true; // All instances are considered equal because there are no data members.
+}
+bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
+    return true; // All instances are considered equal because there are no data members.
+}
+bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) {
+    return lhs.shard_dimension == rhs.shard_dimension; // Equal if they have the same shard_dimension.
 }
 
 bool operator==(const Shape& shape_a, const Shape& shape_b) {

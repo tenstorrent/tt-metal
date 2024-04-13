@@ -278,7 +278,7 @@ def from_torch(
         if mesh_mapper:
             device_id_to_shard_ranges = mesh_mapper.map(tensor)
             shards = list(device_id_to_shard_ranges.values())
-            return ttl.tensor.Tensor(shards, dtype)
+            return ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
         return ttl.tensor.Tensor(tensor, dtype)
 
     tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_torch")(tensor, dtype, mesh_mapper)
@@ -1012,11 +1012,24 @@ def as_tensor(
             ttnn.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        storage_type = f"_multi_device_{device.get_num_devices()}" if mesh_mapper else ""
+        def dispatch_to_device_on_load(device) -> bool:
+            return isinstance(device, ttnn.DeviceMesh)
+
+        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
+            storage_type = f"_multi_device" if mesh_mapper else ""
+        elif mesh_mapper:
+            storage_type = f"_multi_device_{device.get_num_devices()}"
+        else:
+            storage_type = ""
+
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         try:
-            tensor = ttnn.load_tensor(cache_file_name)
+            tensor = (
+                ttnn.load_tensor(cache_file_name, device=device)
+                if dispatch_to_device_on_load(device)
+                else ttnn.load_tensor(cache_file_name)
+            )
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
@@ -1025,7 +1038,8 @@ def as_tensor(
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
-        tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
+        if not dispatch_to_device_on_load(device):
+            tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
         return tensor
 
 
