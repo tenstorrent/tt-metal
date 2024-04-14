@@ -1518,7 +1518,7 @@ int main(int argc, char **argv) {
                 prefetch_compile_args,
                 prefetch_core,
                 phys_prefetch_core_g,
-                {0, 0}, // upstream core unused
+                {0xffffffff, 0xffffffff}, // upstream core unused
                 phys_prefetch_h_downstream_core);
 
             if (packetized_path_en_g) {
@@ -1680,7 +1680,7 @@ int main(int argc, char **argv) {
                 prefetch_compile_args,
                 prefetch_core,
                 phys_prefetch_core_g,
-                {0, 0}, // upstream core unused
+                {0xffffffff, 0xffffffff}, // upstream core unused
                 phys_dispatch_core);
         }
 
@@ -1724,7 +1724,7 @@ int main(int argc, char **argv) {
                 dispatch_h_core,
                 phys_dispatch_h_core,
                 phys_dispatch_core,
-                {0,0});
+                {0xffffffff,0xffffffff});
         } else {
             configure_kernel_variant<true, true>(program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
@@ -1732,7 +1732,7 @@ int main(int argc, char **argv) {
                 dispatch_core,
                 phys_dispatch_core,
                 phys_upstream_from_dispatch_core,
-                {0,0});
+                {0xffffffff,0xffffffff});
         }
 
         log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_issue_buffer_size_g));
