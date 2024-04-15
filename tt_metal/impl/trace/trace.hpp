@@ -106,12 +106,13 @@ class Trace {
     CommandQueue& queue() const { return *tq; };
 
     // Stages a trace buffer into device DRAM via the CQ passed in and returns a unique trace id
-    uint32_t instantiate(CommandQueue& tq);
+    uint32_t instantiate(CommandQueue& cq);
 
     // Trace capture, validation, and query methods
     void begin_capture();
     void end_capture();
     void validate();
+    void reset();
 
     // Thread-safe accessors to manage trace instances
     static bool has_instance(const uint32_t tid);
@@ -119,6 +120,7 @@ class Trace {
     static void remove_instance(const uint32_t tid);
     static void release_all();  // note all instances across all devices are released
     static TraceBuffer get_instance(const uint32_t tid);
+    static uint32_t instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, const vector<uint32_t>& cmds);
 };
 
 }  // namespace tt::tt_metal

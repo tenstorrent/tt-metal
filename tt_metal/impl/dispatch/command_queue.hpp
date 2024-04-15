@@ -360,6 +360,7 @@ class EnqueueTraceCommand : public Command {
 };
 
 namespace detail {
+class TraceDescriptor;
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 /*
@@ -431,17 +432,25 @@ class HWCommandQueue {
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
 
-    // Record all commands and metadata from run_commands function
-    template <typename Func>
-    inline std::vector<uint32_t> record_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
+    void record_begin(std::shared_ptr<detail::TraceDescriptor> ctx) {
         // Issue event as a barrier and a counter reset
         std::shared_ptr<Event> event = std::make_shared<Event>();
         this->enqueue_record_event(event, true);
         // Record commands using bypass mode
         this->trace_ctx = ctx;
         this->manager.set_bypass_mode(true, true);  // start
-        run_commands();
+    }
+
+    void record_end() {
         this->manager.set_bypass_mode(false, false);  // stop
+    }
+
+    // Record all commands and metadata from run_commands function
+    template <typename Func>
+    inline std::vector<uint32_t> record_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
+        this->record_begin(ctx);
+        run_commands();
+        this->record_end();
         return std::move(this->manager.get_bypass_data());
     }
 
