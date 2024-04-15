@@ -280,7 +280,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr,
     write_downstream(data_ptr, downstream_data_ptr, length);
 
     // Round to nearest page
-    downstream_data_ptr += (downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1))) & (downstream_cb_page_size - 1);
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
@@ -443,8 +443,7 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
         cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);
     }
 
-    uint32_t pad_to_page = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
-    downstream_data_ptr += pad_to_page;
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -551,8 +550,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-    uint32_t pad_to_page = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
-    downstream_data_ptr += pad_to_page;
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
@@ -617,8 +615,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
     uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-    uint32_t pad_to_page = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
-    downstream_data_ptr += pad_to_page;
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
@@ -707,7 +704,7 @@ static uint32_t process_relay_inline_exec_buf_cmd(uint32_t& cmd_ptr,
     write_downstream(data_ptr, downstream_data_ptr, length);
 
     // Round to nearest page
-    downstream_data_ptr += (downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1))) & (downstream_cb_page_size - 1);
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // XXXXX - painful syncing right now?  move this into get_cmds
     noc_async_writes_flushed();
@@ -1027,7 +1024,7 @@ void kernel_main_d() {
         cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
-        cmd_ptr += (cmddat_q_page_size - (cmd_ptr & (cmddat_q_page_size - 1))) & (cmddat_q_page_size - 1);
+        cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
     }
 
     // Set upstream semaphore MSB to signal completion and path teardown

@@ -11,6 +11,11 @@
 
 #define L1_NOC_ALIGNMENT 16 // XXXXX is the defined elsewhere?
 
+FORCE_INLINE
+uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
+    return (v + (pow2_size - 1)) & ~(pow2_size - 1);
+}
+
 template<uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
 void cb_acquire_pages(uint32_t n) {
