@@ -41,3 +41,8 @@ struct ProgramTransferInfo {
     vector<transfer_info_2> go_signals;                                            // WriteLinear
     vector<kernel_bins_transfer_info> kernel_bins;                                 // RelayPaged, WriteLinear
 };
+
+struct ProgramCommandIndices {
+    std::uint32_t cb_configs_payload_start;    // device_commands
+    std::uint32_t runtime_args_payload_start;  // runtime_args_commands
+};
