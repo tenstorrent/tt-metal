@@ -27,6 +27,7 @@ void EnqueueDeviceToHostTransfer(
 void EnqueueRecordEvent(CommandQueue&, std::shared_ptr<Event>);
 void EnqueueWaitForEvent(CommandQueue&, std::shared_ptr<Event>);
 void EventSynchronize(std::shared_ptr<Event>);
+bool EventQuery(std::shared_ptr<Event>);
 void QueueSynchronize(CommandQueue&);
 
 template<class OutputTensors=tt_metal::operation::Tensors>

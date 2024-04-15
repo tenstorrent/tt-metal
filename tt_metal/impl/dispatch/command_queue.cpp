@@ -1542,6 +1542,15 @@ void EventSynchronize(std::shared_ptr<Event> event) {
     }
 }
 
+bool EventQuery(std::shared_ptr<Event> event) {
+    detail::DispatchStateCheck(true);
+    event->wait_until_ready(); // Block until event populated. Parent thread.
+    bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
+    log_trace(tt::LogMetal, "Returning event_completed: {} for host query on Event(device_id: {} cq_id: {} event_id: {})",
+        event_completed, event->device->id(), event->cq_id, event->event_id);
+    return event_completed;
+}
+
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{

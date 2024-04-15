@@ -205,6 +205,47 @@ TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventBasic) {
     tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
+// Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
+TEST_F(CommandQueueFixture, TestEventsEventsQueryBasic) {
+
+    const size_t num_events = 50;
+    const size_t num_events_between_query = 5;
+    bool event_status;
+
+    auto start = std::chrono::system_clock::now();
+    std::vector<std::shared_ptr<Event>> sync_events;
+
+    // Record many events, occasionally query from host, but cannot guarantee completion status.
+    for (size_t i = 0; i < num_events; i++) {
+        auto event = sync_events.emplace_back(std::make_shared<Event>());
+        EnqueueRecordEvent(this->device_->command_queue(), event);
+
+        if (i > 0 && ((i % num_events_between_query) == 0)) {
+            auto status = EventQuery(event);
+            log_trace(tt::LogTest, "EventQuery for i: {} - status: {}", i, status);
+        }
+    }
+
+    // Wait until an earlier event is finished, then ensure query says it's finished.
+    auto &early_event = sync_events.at(3);
+    EnqueueWaitForEvent(this->device_->command_queue(), early_event);
+    event_status = EventQuery(early_event);
+    EXPECT_EQ(event_status, true);
+
+    // Query a future event that hasn't completed and ensure it's not finished.
+    auto future_event = std::make_shared<Event>();
+    EnqueueRecordEvent(this->device_->command_queue(), future_event);
+    future_event->wait_until_ready();   // in case async used, must block until async cq populated event.
+    future_event->event_id = 0xFFFF;    // Modify event_id to be a future event that isn't issued yet.
+    event_status = EventQuery(future_event);
+    EXPECT_EQ(event_status, false);
+
+    Finish(this->device_->command_queue());
+    std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
+    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+}
+
+
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
 TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     const size_t num_buffers = 100;
