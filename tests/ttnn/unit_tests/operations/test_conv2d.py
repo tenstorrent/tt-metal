@@ -761,7 +761,6 @@ def test_sd_conv(
         )
 
 
-@skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -854,8 +853,8 @@ def test_sd_conv_wh(
     config_override,
     enable_auto_formatting,
 ):
-    # if device.core_grid.y == 7:
-    #     pytest.skip("This test is not supported for N300")
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
 
     # Skip test cases raising OOM, but do not affect the SD e2e test
     if (
