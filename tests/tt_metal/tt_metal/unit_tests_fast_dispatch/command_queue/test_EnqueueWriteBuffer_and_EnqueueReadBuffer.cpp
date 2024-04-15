@@ -365,6 +365,31 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPa
     }
 }
 
+TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) {
+    constexpr uint32_t num_round_robins = 1;
+    for (Device *device : devices_) {
+        TestBufferConfig config = {
+            .num_pages = 1,
+            .page_size = MAX_PREFETCH_COMMAND_SIZE + 2048,
+            .buftype = BufferType::DRAM
+        };
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
+    constexpr uint32_t num_round_robins = 1;
+    uint32_t unaligned_page_size = MAX_PREFETCH_COMMAND_SIZE + 4;
+    for (Device *device : devices_) {
+        TestBufferConfig config = {
+            .num_pages = 1,
+            .page_size = unaligned_page_size,
+            .buftype = BufferType::DRAM
+        };
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
@@ -409,7 +434,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestIssueMultipleReadWriteCommandsForOneBuffer) {
+TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (Device *device : this->devices_) {
         uint32_t page_size = 2048;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());

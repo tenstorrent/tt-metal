@@ -174,6 +174,7 @@ class EnqueueWriteBufferCommand : public Command {
     const Buffer& buffer;
     uint32_t expected_num_workers_completed;
     uint32_t bank_base_address;
+    uint32_t padded_page_size;
     uint32_t dst_page_index;
     uint32_t pages_to_write;
     bool issue_wait;
@@ -188,6 +189,7 @@ class EnqueueWriteBufferCommand : public Command {
         bool issue_wait,
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
+        uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt);
 
@@ -214,6 +216,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
         bool issue_wait,
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
+        uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt)
         : EnqueueWriteBufferCommand(
@@ -225,6 +228,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
             issue_wait,
             expected_num_workers_completed,
             bank_base_address,
+            padded_page_size,
             dst_page_index,
             pages_to_write){;}
 };
@@ -246,6 +250,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
         const BufferPageMapping &buffer_page_mapping,
+        uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt)
         : EnqueueWriteBufferCommand(
@@ -257,6 +262,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             issue_wait,
             expected_num_workers_completed,
             bank_base_address,
+            padded_page_size,
             dst_page_index,
             pages_to_write), buffer_page_mapping(buffer_page_mapping) {;}
 };
