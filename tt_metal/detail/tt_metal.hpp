@@ -39,6 +39,14 @@ namespace tt::tt_metal{
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
 
+        void BeginTraceCapture(Device *device);
+        void EndTraceCapture(Device *device);
+        void ExecuteLastTrace(Device *device, bool blocking);
+
+        void BeginTraceCaptures(std::map<chip_id_t, Device *> devices);
+        void EndTraceCaptures(std::map<chip_id_t, Device *> devices);
+        void ExecuteLastTraces(std::map<chip_id_t, Device *> devices, bool blocking);
+
         /**
         * Copies data from a host buffer into the specified buffer
         *

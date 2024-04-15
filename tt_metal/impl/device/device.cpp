@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -11,7 +13,7 @@
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 
-
+#include "common/env_lib.hpp"
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
@@ -874,7 +876,7 @@ HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
     return *hw_command_queues_[cq_id];
 }
 
-CommandQueue& Device::command_queue(size_t cq_id) {
+CommandQueue &Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch);
     TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
@@ -901,6 +903,53 @@ void Device::enable_async(bool enable) {
 bool Device::using_slow_dispatch() const {
     return not (this->using_fast_dispatch);
 }
+
+void Device::begin_trace() {
+    this->trace_contexts_.clear();
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        trace_contexts_.push_back(std::make_shared<detail::TraceDescriptor>());
+        hw_command_queues_[cq_id]->record_begin(trace_contexts_.at(cq_id));
+    }
+}
+
+void Device::end_trace() {
+    this->trace_insts_.clear();
+    this->release_last_trace();
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        hw_command_queues_[cq_id]->record_end();
+        uint32_t tid = Trace::instantiate(
+            this->command_queue(cq_id), trace_contexts_.at(cq_id), std::move(this->sysmem_manager().get_bypass_data()));
+        trace_insts_.push_back(tid);
+    }
+}
+
+void Device::execute_last_trace(bool blocking) {
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        if (this->trace_insts_.at(cq_id).has_value()) {
+            uint32_t tid = this->trace_insts_.at(cq_id).value();
+            TT_FATAL(Trace::has_instance(tid), "Trace instance " + std::to_string(tid) + " must exist on device");
+            this->command_queue(cq_id).run_command(CommandInterface{
+                .type = EnqueueCommandType::ENQUEUE_TRACE,
+                .blocking = blocking,
+                .trace_id = tid
+            });
+        }
+    }
+}
+
+void Device::release_last_trace() {
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        if (this->trace_insts_.size() > cq_id) {
+            if (this->trace_insts_.at(cq_id).has_value()) {
+                uint32_t tid = this->trace_insts_.at(cq_id).value();
+                if (Trace::has_instance(tid)) {
+                    Trace::remove_instance(tid);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
