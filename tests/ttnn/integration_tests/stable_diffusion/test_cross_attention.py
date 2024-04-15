@@ -216,7 +216,7 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
     model.eval()
 
     hidden_states_shape = torch.Size([N, C, H, W])
-    hidden_states = torch.rand(hidden_states_shape) * 0.01
+    hidden_states = torch.rand(hidden_states_shape)
     if has_encoder_hidden_states:
         cross_attn = pipe.unet.up_blocks[index].attentions[0].transformer_blocks[0].attn2
 

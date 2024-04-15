@@ -6,7 +6,6 @@ import pytest
 
 import torch
 
-
 import ttnn
 from models.utility_functions import skip_for_wormhole_b0, torch_random, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -164,3 +163,72 @@ def test_ttnn_experimental_operations_primary_matmul_1d(
         ttnn.tracer.visualize(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("H, num_cores", [[64, 64]])
+@pytest.mark.parametrize("num_slices", [2])
+def test_sharded_partial_op(
+    device,
+    H,
+    num_cores,
+    num_slices,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    in0_shape = [1, 1, H, 64]
+    W = in0_shape[-1]
+
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    )
+
+    in0 = torch.ones(in0_shape).bfloat16().float()
+    out_initial = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = ttnn.from_torch(
+        in0,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=interleaved_mem_config,
+    )
+    out_tt_tensor = ttnn.from_torch(
+        out_initial,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=interleaved_mem_config,
+    )
+
+    height_shard_spec = [H // 2, W]
+
+    for slice_index in range(num_slices):
+        in0_t_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+            in0_t,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+        )
+        assert in0_t_slice.is_sharded()
+
+        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            in0_t_slice,
+            out_tt_tensor,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    pt_out = in0
+
+    tt_out = ttnn.to_torch(out_tt_tensor)
+
+    assert_with_pcc(pt_out, tt_out)

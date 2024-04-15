@@ -53,8 +53,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
         // TODO(arakhmati): add DataType::INT64?
         data_type = DataType::UINT32;
     } else if (torch_dtype.equal(torch.attr("int32"))) {
-        // TODO(arakhmati): add DataType::INT32?
-        data_type = DataType::UINT32;
+        data_type = DataType::INT32;
     }  else if (torch_dtype.equal(torch.attr("int16"))) {
         // TODO(arakhmati): add DataType::INT16?
         data_type = DataType::UINT16;
@@ -69,6 +68,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             }
             break;
         }
+        case DataType::INT32:
         case DataType::UINT32: {
             if (not torch_dtype.equal(torch.attr("int32"))) {
                 contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
@@ -103,6 +103,16 @@ Tensor convert_torch_tensor_to_tt_tensor(
     switch (data_type) {
         case DataType::UINT16: {
             auto data_ptr = reinterpret_cast<uint16_t *>(torch_data_ptr);
+            if (enable_borrow) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                return create_owned_tensor(data_ptr, num_elements, shape, data_type, Layout::ROW_MAJOR);
+            }
+        }
+        case DataType::INT32: {
+            auto data_ptr = reinterpret_cast<int32_t *>(torch_data_ptr);
             if (enable_borrow) {
                 auto storage = BorrowedStorage(
                     borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
@@ -207,6 +217,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
             }
             break;
         }
+        case DataType::INT32:
         case DataType::UINT32: {
             if (not np_dtype.equal(np.attr("int32"))) {
                 contiguous_np_tensor = contiguous_np_tensor.attr("astype")(np.attr("int32"));
@@ -245,6 +256,12 @@ Tensor convert_numpy_tensor_to_tt_tensor(
     switch (data_type) {
         case DataType::UINT16: {
             auto data_ptr = reinterpret_cast<uint16_t *>(np_data_ptr);
+            auto storage = BorrowedStorage(
+                borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+        }
+        case DataType::INT32: {
+            auto data_ptr = reinterpret_cast<int32_t *>(np_data_ptr);
             auto storage = BorrowedStorage(
                 borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
             return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
@@ -307,7 +324,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     }
 }
 
-Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optional<DataType> data_type) {
+Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
     std::vector<Tensor> tt_shards;
     for (const auto &shard : tensor_shards) {
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
@@ -318,7 +335,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
-    auto storage = MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_shapes);
+    auto distributed_tensor_config = get_distributed_tensor_config(strategy);
+    auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
 
     return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
 }
@@ -394,6 +412,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         const auto tt_dtype_to_torch_dtype = std::map<DataType, py::object> {
             {DataType::UINT16, torch.attr("int16")}, // TODO(arakhmati): add DataType::INT16
+            {DataType::INT32, torch.attr("int32")},
             {DataType::UINT32, torch.attr("int32")}, // TODO(arakhmati): add DataType::INT32
             {DataType::FLOAT32, torch.attr("float32")},
             {DataType::BFLOAT16, torch.attr("bfloat16")},
@@ -455,6 +474,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         const auto tt_dtype_to_np_dtype = std::map<DataType, py::object>{
             {DataType::UINT16, np.attr("int16")},  // TODO(arakhmati): add DataType::INT16
+            {DataType::INT32, np.attr("int32")},
             {DataType::UINT32, np.attr("int32")},  // TODO(arakhmati): add DataType::INT32
             {DataType::FLOAT32, np.attr("float32")},
         };
@@ -744,14 +764,15 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         )
                 )doc")
             .def(
-                py::init<>([](const py::object &tensor, std::optional<DataType> data_type) {
+                py::init<>([](const py::object &tensor, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
                     if (py::isinstance<py::list>(tensor)) {
-                        return detail::convert_python_tensors_to_tt_tensors(tensor, data_type);
+                        return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, strategy);
                     }
                     return detail::convert_python_tensor_to_tt_tensor(tensor, data_type);
                 }),
                 py::arg("tensor"),
                 py::arg("data_type") = std::nullopt,
+                py::arg("strategy") = std::unordered_map<std::string, std::string>(),
                 py::return_value_policy::move,
                 R"doc(
                     +--------------+------------------------+

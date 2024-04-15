@@ -539,7 +539,9 @@ void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir)
             outf << "@" << std::setfill('0') << std::setw(8) << std::hex << (ptr >> 2) << "\n";
             for (size_t i = 0; i < data.size(); i += 4) {
                 for (int j = 3; j >= 0; --j) {
-                    outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
+                    if(i+j < data.size()){
+                        outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
+                    }
                 }
                 outf << "\n";
             }

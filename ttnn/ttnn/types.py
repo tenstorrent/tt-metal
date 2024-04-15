@@ -10,6 +10,7 @@ import ttnn
 
 DataType = ttl.tensor.DataType
 uint16 = DataType.UINT16
+int32 = DataType.INT32
 uint32 = DataType.UINT32
 float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16

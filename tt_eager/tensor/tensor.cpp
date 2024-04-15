@@ -338,7 +338,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 Tensor Tensor::to(DeviceMesh *device_mesh, const MemoryConfig &mem_config) const {
     ZoneScoped;
     auto all_workers = device_mesh->get_devices();
-    auto workers = std::vector<Device*>(all_workers.begin(), all_workers.begin() + num_buffers_in_tensor(*this));
+    auto workers = std::vector<Device*>(all_workers.begin(), all_workers.end());
     TT_FATAL(validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
     Tensor multi_device_tensor = Tensor(workers);
     uint32_t device_tensor_ref_count = multi_device_tensor.tensor_attributes->record_main_thread_ref_count();
@@ -406,9 +406,8 @@ Tensor Tensor::cpu_sharded() const {
 
 
 Tensor Tensor::extract_shard(const CoreCoord & core) const{
-
-    auto buffer= this->buffer();
-    uint32_t core_id = buffer->core_to_core_id().at(core);
+    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
 
@@ -542,14 +541,15 @@ bool Tensor::is_allocated() const {
 }
 
 std::vector<uint32_t> Tensor::host_page_ordering(){
-    auto cores = buffer()->all_cores();
+    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    auto cores = buffer_page_mapping.all_cores_;
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(buffer()->get_dev_to_host_mapped_page_id(page_id));
+        ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id]);
     }
     return ret_vec;
 }
@@ -662,6 +662,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     const static std::unordered_map<DataType, std::function<void*(const Tensor&)>> dispatch_map = {
         {DataType::BFLOAT16, &tensor_impl::get_raw_host_data_ptr<bfloat16>},
         {DataType::FLOAT32, &tensor_impl::get_raw_host_data_ptr<float>},
+        {DataType::INT32, &tensor_impl::get_raw_host_data_ptr<int32_t>},
         {DataType::UINT32, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::BFLOAT8_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
         {DataType::BFLOAT4_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},

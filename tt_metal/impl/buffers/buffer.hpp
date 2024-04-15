@@ -135,6 +135,17 @@ struct ShardedBufferConfig {
 
 bool is_sharded(const TensorMemoryLayout & layout);
 
+struct BufferPageMapping {
+    std::vector< CoreCoord> all_cores_;
+    std::vector< uint32_t> core_bank_indices_;
+    std::vector< std::vector<uint32_t> > core_host_page_indices_;
+    std::vector<uint32_t> dev_page_to_core_mapping_;
+    std::vector<uint32_t> dev_page_to_host_page_mapping_;
+    std::vector<uint32_t> host_page_to_dev_page_mapping_;
+    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
+    std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
+};
+
 class Buffer {
    public:
     Buffer() :
@@ -182,8 +193,10 @@ class Buffer {
 
     uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
+
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
+
     uint64_t sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
     ShardSpecBuffer shard_spec() const {
@@ -192,92 +205,12 @@ class Buffer {
         return this->shard_parameters_.value();
     }
 
-    std::vector<uint32_t> get_dev_page_to_host_page_mapping() const {
-        return dev_page_to_host_page_mapping_;
-    }
-
-    std::vector<uint32_t> get_host_page_to_dev_page_mapping() const {
-        return host_page_to_dev_page_mapping_;
-    }
-
-    CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        TT_ASSERT(dev_page_id < dev_page_to_core_mapping_.size());
-        return all_cores_[dev_page_to_core_mapping_[dev_page_id]];
-    }
-
-    uint32_t get_host_to_dev_mapped_page_id(uint32_t input_id) const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        TT_ASSERT(input_id < host_page_to_dev_page_mapping_.size());
-        return host_page_to_dev_page_mapping_[input_id];
-    }
-
-    uint32_t get_dev_to_host_mapped_page_id(uint32_t input_id) const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
-        return dev_page_to_host_page_mapping_[input_id];
-    }
-
-
-    std::vector<CoreCoord> all_cores() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return all_cores_;
-    }
-
-    std::vector< std::vector<uint32_t> > core_host_page_indices() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_host_page_indices_;
-    }
-
     uint32_t num_cores() const{
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
-    }
-
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_to_core_id_;
-    }
-
-    std::vector<uint32_t> host_pages_in_shard(uint32_t core_id) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_host_page_indices_[core_id];
-    }
-
-    std::vector<uint32_t> host_pages_in_shard(CoreCoord core) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto core_id = core_to_core_id_.at(core);
-        return core_host_page_indices_[core_id];
-    }
-
-    std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        std::vector<uint32_t> ret_vec;
-        for(uint32_t i=0; i<this->dev_page_to_core_mapping_.size() ; i++) {
-           if(this->dev_page_to_core_mapping_[i] == core_id) {
-             ret_vec.push_back(i);
-           }
-        }
-        return ret_vec;
-    }
-
-    std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto core_id = core_to_core_id_.at(core);
-        return dev_pages_in_shard(core_id);
-    }
-
-    std::vector<uint32_t> get_host_page_to_local_shard_page_mapping() const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return host_page_to_local_shard_page_mapping_;
     }
 
 
@@ -294,15 +227,10 @@ class Buffer {
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
-    std::vector< CoreCoord> all_cores_;
-    std::vector< uint32_t> core_bank_indices_;
-    std::vector< std::vector<uint32_t> > core_host_page_indices_;
-    std::vector<uint32_t> dev_page_to_core_mapping_;
-    std::vector<uint32_t> dev_page_to_host_page_mapping_;
-    std::vector<uint32_t> host_page_to_dev_page_mapping_;
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
-    std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
 };
+
+
+BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
 
 namespace detail {
 using PageAddress = uint32_t;
@@ -340,6 +268,7 @@ inline buffer_map BUFFER_MAP;
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint16_t>>,
+    const std::shared_ptr<std::vector<int32_t>>,
     const std::shared_ptr<std::vector<uint32_t>>,
     const std::shared_ptr<std::vector<float>>,
     const std::shared_ptr<std::vector<bfloat16>>,

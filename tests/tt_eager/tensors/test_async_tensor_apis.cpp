@@ -168,7 +168,6 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinaryAutoFormat) {
         Tensor output_tensor_host = output_tensor_device_2.cpu();
         // Verify output data
         auto& buf = std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(output_tensor_host.get_storage()).buffer);
-        EXPECT_EQ(buf.use_count(), 1);
         for (int j = 0; j < 1023 * 1023; j++) {
             EXPECT_EQ(bfloat16(buf[j]), bfloat16(static_cast<float>(i - 2 * i * i)));
         }

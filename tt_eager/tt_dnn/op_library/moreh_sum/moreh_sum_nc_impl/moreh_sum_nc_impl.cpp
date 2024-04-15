@@ -15,7 +15,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &output, int64_t dim) {
+operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim) {
     TT_ASSERT(dim == 0 || dim == 1);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -43,9 +43,9 @@ operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_output_tiles = output.volume() / TILE_HW;
 
-    log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
+    log_debug(LogOp, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
-        LogTest,
+        LogOp,
         "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
         dim,
         num_reduce_input_tile,
@@ -90,8 +90,8 @@ operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_compile_time_args;
-    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/kernels/reader_moreh_sum_nc.cpp";
-    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/kernels/writer_moreh_sum_nc.cpp";
+    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/reader_moreh_sum_nc.cpp";
+    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/writer_moreh_sum_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
-    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/kernels/moreh_sum_nc.cpp";
+    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_sum_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
@@ -167,20 +167,19 @@ operation::ProgramWithCallbacks moreh_sum_nc(const Tensor &input, const Tensor &
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto *input_buffer = input_tensors.at(0).buffer();
-        const auto *output_buffer = input_tensors.at(1).buffer();
+        const auto *output_buffer = output_tensors.at(0).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = input_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = output_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

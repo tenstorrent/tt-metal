@@ -101,7 +101,7 @@ inline void moreh_linear_backward_validate(
         transposed_weight_grad_shape[1] = temp_weight_grad.get_legacy_shape()[1];
         const auto& reshaped_weight_grad = transposed_weight_grad.reshape(transposed_weight_grad_shape);
         std::vector<int64_t> dims {0, 1};
-        moreh_sum(reshaped_weight_grad, weight_grad->get(), dims);
+        moreh_sum(reshaped_weight_grad, dims, weight_grad->get());
         outputs.push_back(weight_grad->get());
     } else {
         outputs.push_back(nullptr);

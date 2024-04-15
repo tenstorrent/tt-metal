@@ -17,7 +17,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &output) {
+operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output) {
     tt_metal::ReduceOpMath reduce_op = tt_metal::ReduceOpMath::SUM;
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::H;
     float scaler = 1.0f;
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
-    string compute_kernel_name = "tt_eager/tt_dnn/op_library/moreh_sum/kernels/moreh_sum_h.cpp";
+    string compute_kernel_name = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h.cpp";
 
     uint32_t src0_cb_index = CB::c_in0;
     CBHandle cb_src0;
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
     }
     reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sum/kernels/reader_moreh_sum_h.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/reader_moreh_sum_h.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
 
     writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_sum/kernels/writer_moreh_sum_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/writer_moreh_sum_h.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
@@ -201,8 +201,9 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = input_tensors.at(1).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

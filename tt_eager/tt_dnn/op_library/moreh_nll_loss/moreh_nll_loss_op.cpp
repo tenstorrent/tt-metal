@@ -189,18 +189,18 @@ Tensor moreh_nll_loss(
 
         const Tensor& step1_result = moreh_nll_loss_step1(input_tensor, target_tensor, weight_tensor, ignore_index, reduction_mean, output_mem_config);
         std::vector<int64_t> dims_step1;
-        moreh_sum(step1_result, divisor_tensor.value(), dims_step1);
+        moreh_sum(step1_result, dims_step1, divisor_tensor.value());
 
         const Tensor& step2_result = moreh_nll_loss_step2(input_tensor, target_tensor, weight_tensor, divisor_tensor, ignore_index, reduction_mean, output_mem_config);
         std::vector<int64_t> dims_step2;
 
-        moreh_sum(step2_result, output_tensor, dims_step2);
+        moreh_sum(step2_result, dims_step2, output_tensor);
         return output_tensor;
     } else {
         const Tensor& step2_result = moreh_nll_loss_step2(input_tensor, target_tensor, weight_tensor, std::nullopt, ignore_index, reduction_mean, output_mem_config);
 
         std::vector<int64_t> dims;
-        moreh_sum(step2_result, output_tensor, dims);
+        moreh_sum(step2_result, dims, output_tensor);
         return output_tensor;
     }
 }

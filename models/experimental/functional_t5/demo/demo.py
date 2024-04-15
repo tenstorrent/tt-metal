@@ -10,7 +10,6 @@ from loguru import logger
 from datasets import load_dataset
 from models.generation_utils import get_logits_processor
 import ttnn
-import tt_lib
 
 from transformers import T5ForConditionalGeneration, AutoTokenizer, T5Config
 from models.experimental.functional_t5.tt import ttnn_functional_t5
@@ -72,12 +71,105 @@ def run_generate(input_ids, model, config, parameters, device, max_tokens, batch
         decoder_input_ids = ttnn.from_device(decoder_input_ids)
         decoder_input_ids = ttnn.to_torch(decoder_input_ids)
 
-        if (iteration + 1) % 32 == 0:
-            decoder_input_ids = torch.cat([decoder_input_ids, decoder_start_values], dim=1)
-
         decoder_input_ids[:, iteration + 1] = next_tokens[:, iteration]
 
     return decoder_input_ids
+
+
+def run_functional_summarization_inference(
+    device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
+):
+    config = T5Config.from_pretrained(model_name)
+    model = T5ForConditionalGeneration.from_pretrained(model_name).eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
+
+    dataset = load_dataset("openai/summarize_from_feedback", "axis")
+    dataset = dataset.shuffle(seed=19)
+    bert_score = evaluate.load("bertscore")
+
+    validation_split = dataset["validation"]["info"]
+    reference_split = dataset["validation"]["summary"]
+
+    input_sentance = []
+    prediction = []
+    references = []
+
+    for i in range(batch_size):
+        references.append(reference_split[i]["text"][1:])
+        input_sentance.append(f"summarize: {validation_split[i]['post']}")
+
+    profiler.start(f"preprocessing_input")
+    input_ids = tokenizer(
+        input_sentance,
+        padding="max_length",
+        max_length=sequence_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids
+    profiler.end(f"preprocessing_input")
+
+    tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name
+
+    decoded_tt_output = []
+
+    convert_to_ttnn = (
+        ttnn_optimized_functional_t5.convert_to_ttnn if use_optimized_version else ttnn_functional_t5.convert_to_ttnn
+    )
+
+    custom_preprocessor = (
+        ttnn_optimized_functional_t5.custom_preprocessor
+        if use_optimized_version
+        else ttnn_functional_t5.custom_preprocessor
+    )
+
+    profiler.start(f"preprocessing_parameter")
+    parameters = preprocess_model_parameters(
+        model_name=tt_model_name,
+        initialize_model=lambda: model,
+        convert_to_ttnn=convert_to_ttnn,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
+    )
+    profiler.end(f"preprocessing_parameter")
+
+    profiler.start(f"inference_time")
+    tt_output = run_generate(
+        input_ids,
+        model,
+        config,
+        parameters,
+        device,
+        max_tokens,
+        batch_size,
+        use_optimized_version,
+    )
+    profiler.end(f"inference_time")
+
+    profiler.start(f"post_processing_output_to_string")
+    for batch in range(batch_size):
+        output = tokenizer.decode(tt_output[batch], skip_special_tokens=True)
+        decoded_tt_output.append(output)
+    profiler.end(f"post_processing_output_to_string")
+
+    logger.info(decoded_tt_output)
+
+    results = bert_score.compute(predictions=decoded_tt_output, references=references, lang="en")
+    Accuracy = sum(results["f1"]) / len(results["f1"])
+    logger.info("Accuracy:")
+    logger.info(Accuracy)
+
+    measurements = {
+        "preprocessing_parameter": profiler.get("preprocessing_parameter"),
+        "preprocessing_input": profiler.get("preprocessing_input"),
+        "inference_time": profiler.get("inference_time"),
+        "post_processing": profiler.get("post_processing_output_to_string"),
+    }
+    logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
+    logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
+    logger.info(f"inference_time: {measurements['inference_time']} s")
+    logger.info(f"post_processing : {measurements['post_processing']} s")
+
+    return measurements
 
 
 def run_functional_t5_question_and_answering_inference(
@@ -100,7 +192,6 @@ def run_functional_t5_question_and_answering_inference(
         return_tensors="pt",
     ).input_ids
     profiler.end(f"preprocessing_input")
-
     tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name
 
     decoded_tt_output = []

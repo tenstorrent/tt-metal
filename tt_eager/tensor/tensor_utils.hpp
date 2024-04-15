@@ -132,6 +132,8 @@ inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors)
     return false;
 }
 
+DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
+
 } // namespace tt_metal
 
 } // namespace tt

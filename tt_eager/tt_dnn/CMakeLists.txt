@@ -177,6 +177,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/nlp_tms/nlp_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/nlp_tms/nlp_concat_heads.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/op_library/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/rotate_half/rotate_half_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
@@ -195,6 +196,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/moreh_getitem/moreh_getitem_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/op_library/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/op_library/scan/scan_op.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})

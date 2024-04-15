@@ -119,7 +119,8 @@ void TensorModule(py::module &m_tensor) {
             [](std::pair<UnaryOpType, float> arg) {
                 return UnaryWithParam{.op_type=arg.first, .param=arg.second};
             }
-        ));
+        ))
+        .def_readonly("op_type", &UnaryWithParam::op_type);
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
     // Can take in just the op type, or sequence container of op type and param value
     py::implicitly_convertible<UnaryOpType, UnaryWithParam>();
@@ -310,6 +311,8 @@ void TensorModule(py::module &m_tensor) {
         .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
+    auto py_owned_buffer_for_int32_t = py::class_<owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<owned_buffer::Buffer<int32_t>, int32_t>(py_owned_buffer_for_int32_t);
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint32_t>, uint32_t>(py_owned_buffer_for_uint32_t);
@@ -324,6 +327,9 @@ void TensorModule(py::module &m_tensor) {
         m_tensor, "borrowed_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint16_t>, std::uint16_t>(
         py_borrowed_buffer_for_uint16_t);
+
+    auto py_borrowed_buffer_for_int32_t = py::class_<borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::int32_t>, std::int32_t>(py_borrowed_buffer_for_int32_t);
 
     auto py_borrowed_buffer_for_uint32_t = py::class_<borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint32_t>, std::uint32_t>(py_borrowed_buffer_for_uint32_t);
@@ -766,14 +772,12 @@ void TensorModule(py::module &m_tensor) {
         )doc"
     );
 
-    m_tensor.def(
-        "load_tensor",
-        &load_tensor,
-        py::arg("file_name"),
-        py::arg("device") = nullptr,
-        R"doc(
-            Load tensor to file
-        )doc");
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, Device*)>(&load_tensor<Device*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, DeviceMesh*)>(&load_tensor<DeviceMesh*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
 
     m_tensor.def(
         "num_cores_to_corerange_set",

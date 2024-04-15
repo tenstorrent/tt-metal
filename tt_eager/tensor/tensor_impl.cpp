@@ -19,6 +19,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::FLOAT32: os << "float32"; break;
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
+        case DataType::INT32: os << "int32"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -50,6 +51,7 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 }
                 break;
                 case DataType::UINT32:
+                case DataType::INT32:
                 case DataType::UINT16: {
                     uint32_t size_of_element = element_size_bytes_wrapper(dtype);
                     page_size = constants::TILE_HW * size_of_element;
@@ -152,12 +154,13 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
-            (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::UINT32 || dtype == DataType::UINT16) &&
-            "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, or UINT16 is supported on device!"
+            (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::UINT16) &&
+            "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32 or UINT16 is supported on device!"
         );
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
+            case DataType::INT32:
             case DataType::UINT32:
             case DataType::UINT16:
             case DataType::BFLOAT16:
@@ -168,7 +171,7 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
                 TT_ASSERT(layout == Layout::TILE && "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             default:
-                TT_ASSERT(false && "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, or UINT16 is supported on device!");
+                TT_ASSERT(false && "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, or UINT16 is supported on device!");
                 break;
             }
     };
@@ -201,7 +204,7 @@ Tensor to_layout_bfloat8_b(const Tensor &tensor, Layout target_layout) {
                     output_buffers.push_back(output_uint32_buffer);
                 }
                 return Tensor(
-                    std::move(MultiDeviceHostStorage{output_buffers, storage.shapes}),
+                    std::move(MultiDeviceHostStorage{storage.strategy, output_buffers, storage.shapes}),
                     tensor.get_legacy_shape(),
                     DataType::BFLOAT8_B,
                     target_layout

@@ -2,18 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
-    const auto num_input_tiles = get_arg_val<uint32_t>(0);
-    const auto num_output_tiles = get_arg_val<uint32_t>(1);
+    ArgFetcher arg_fetcher;
+    const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
 
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_in1 = tt::CB::c_in1;
