@@ -380,10 +380,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         }
     }
 
-    if (program.program_transfer_info.num_active_cores > 0) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
     DeviceCommand command_sequence(cmd_sequence_sizeB);
 
     // Semaphores
@@ -543,13 +539,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         }
     }
     // TODO: add GO for FD2.1
-
-    // Wait Done
-    if (program.program_transfer_info.num_active_cores > 0) {
-        // Wait Done
-        // TODO: maybe this can be removed, see the very first wait of EnqueueProgram
-        command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed + program.program_transfer_info.num_active_cores);
-    }
 
     return command_sequence;
 }
