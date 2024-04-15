@@ -50,7 +50,7 @@ foreach (TEST ${TT_METAL_TESTS})
         ${CMAKE_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)
+    set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/tt_metal)
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
@@ -61,7 +61,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chip_multi_queue)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
-# add_subdirectory(perf_microbenchmark)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 
 add_custom_target(metal_tests DEPENDS
     programming_examples
@@ -70,5 +70,5 @@ add_custom_target(metal_tests DEPENDS
     unit_tests_fast_dispatch
     unit_tests_fast_dispatch_single_chip_multi_queue
     unit_tests_frequent
-    # metal_perf_microbenchmark_tests
+    metal_perf_microbenchmark_tests
 )

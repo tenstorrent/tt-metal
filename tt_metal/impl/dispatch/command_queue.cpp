@@ -12,7 +12,7 @@
 #include <malloc.h>
 
 #include "allocator/allocator.hpp"
-#include "assert.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "tt_metal/common/logger.hpp"
