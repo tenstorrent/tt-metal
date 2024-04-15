@@ -90,6 +90,8 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange &cr) const;
 
+    const std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+
     auto semaphores_on_core(const CoreCoord &core) const {
         std::vector<std::reference_wrapper<const Semaphore>> semaphores;
         for ( const Semaphore & s : this->semaphores_) {
