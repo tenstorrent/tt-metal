@@ -9,6 +9,8 @@ find . -type f -wholename "./infra/*" -prune -o -type f -wholename "./.git/*" -p
 
 git diff > "$generated_diff"
 
+sed -i '/index [^ ]\+\.\.[^ ]\+ 100644/d' $generated_diff
+
 if diff "$cached_diff" "$generated_diff"; then
     echo "No differences found."
 else

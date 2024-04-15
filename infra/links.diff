@@ -1,5 +1,4 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 32ae7f01d..4f6093758 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -10,7 +10,7 @@ message(STATUS
@@ -12,7 +11,6 @@ index 32ae7f01d..4f6093758 100644
  )
  if(NOT CMAKE_BUILD_TYPE)
 diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
-index a5cbff655..91702498c 100644
 --- a/CONTRIBUTING.md
 +++ b/CONTRIBUTING.md
 @@ -45,7 +45,7 @@ If you are interested in making a contribution, then please familiarize
@@ -39,7 +37,6 @@ index a5cbff655..91702498c 100644
  
    ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
 diff --git a/INSTALLING.md b/INSTALLING.md
-index e1b79709e..741a97f6c 100644
 --- a/INSTALLING.md
 +++ b/INSTALLING.md
 @@ -31,10 +31,10 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
@@ -74,7 +71,6 @@ index e1b79709e..741a97f6c 100644
  ---
  
 diff --git a/METALIUM_GUIDE.md b/METALIUM_GUIDE.md
-index 7484534de..9da604bc0 100644
 --- a/METALIUM_GUIDE.md
 +++ b/METALIUM_GUIDE.md
 @@ -51,7 +51,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
@@ -107,7 +103,6 @@ index 7484534de..9da604bc0 100644
  
  ### Efficiency of Tile-Based Compute and Data Movement
 diff --git a/README.md b/README.md
-index ee8cf9ea5..5bd6a08bf 100644
 --- a/README.md
 +++ b/README.md
 @@ -12,7 +12,7 @@
@@ -134,7 +129,6 @@ index ee8cf9ea5..5bd6a08bf 100644
 -Get started with [simple kernels](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 +Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 diff --git a/docs/source/common/resources/contributing.rst b/docs/source/common/resources/contributing.rst
-index b92fda181..c66959eb0 100644
 --- a/docs/source/common/resources/contributing.rst
 +++ b/docs/source/common/resources/contributing.rst
 @@ -5,7 +5,7 @@ Contributing as a developer
@@ -147,7 +141,6 @@ index b92fda181..c66959eb0 100644
  You will need to gain developer write access to the repository. Please read the
  :ref:`support<Support>` section for more details on contacting us.
 diff --git a/docs/source/common/resources/support.rst b/docs/source/common/resources/support.rst
-index dc6c43d94..60407b7a1 100644
 --- a/docs/source/common/resources/support.rst
 +++ b/docs/source/common/resources/support.rst
 @@ -13,7 +13,7 @@ If you have a
@@ -181,7 +174,6 @@ index dc6c43d94..60407b7a1 100644
 +<https://github.com/tenstorrent/tt-metal/blob/main/CODE_OF_CONDUCT.md>`_
  when interacting with the community.
 diff --git a/docs/source/tt-metalium/get_started/get_started.rst b/docs/source/tt-metalium/get_started/get_started.rst
-index 2ca73199f..be37436ba 100644
 --- a/docs/source/tt-metalium/get_started/get_started.rst
 +++ b/docs/source/tt-metalium/get_started/get_started.rst
 @@ -6,10 +6,10 @@ Getting Started
@@ -233,7 +225,6 @@ index 2ca73199f..be37436ba 100644
 -<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.
 +<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.
 diff --git a/docs/source/tt-metalium/tt_metal/programming_model/index.rst b/docs/source/tt-metalium/tt_metal/programming_model/index.rst
-index d7c4c42e4..ed8618611 100644
 --- a/docs/source/tt-metalium/tt_metal/programming_model/index.rst
 +++ b/docs/source/tt-metalium/tt_metal/programming_model/index.rst
 @@ -2,4 +2,4 @@ Programming Model
@@ -243,7 +234,6 @@ index d7c4c42e4..ed8618611 100644
 -<https://github.com/tenstorrent-metal/tt-metal/blob/main/METALIUM_GUIDE.md>`_.
 +<https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md>`_.
 diff --git a/docs/source/ttnn/tt_metal_models/get_started.rst b/docs/source/ttnn/tt_metal_models/get_started.rst
-index 8ca9ba347..d3e4f661d 100644
 --- a/docs/source/ttnn/tt_metal_models/get_started.rst
 +++ b/docs/source/ttnn/tt_metal_models/get_started.rst
 @@ -8,7 +8,7 @@ Prerequisites
@@ -256,7 +246,6 @@ index 8ca9ba347..d3e4f661d 100644
  Now, from the project root, get the Python virtual environment in which you'll
  be working in ready.
 diff --git a/docs/source/ttnn/ttnn/onboarding.rst b/docs/source/ttnn/ttnn/onboarding.rst
-index d95219026..5e94bc8d7 100644
 --- a/docs/source/ttnn/ttnn/onboarding.rst
 +++ b/docs/source/ttnn/ttnn/onboarding.rst
 @@ -5,15 +5,15 @@ TTNN is intended to be a well documented and a clear API that maintains stabilit
@@ -280,7 +269,6 @@ index d95219026..5e94bc8d7 100644
  4. If the pull request (PR) is accepted it will be merge into the main branch and a new branch should be created that adds the implementation.
      * The fallback implementation for the Operation should be left and will continue to be used for op-by-op PCC comparisons when debugging models (see `--ttnn-enable-debug-decorator`).
 diff --git a/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst b/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
-index 58bb5740e..5514df4df 100644
 --- a/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
 +++ b/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
 @@ -22,7 +22,7 @@ The headers for the CSV are explained under `Perf Report Headers`_.
@@ -293,7 +281,6 @@ index 58bb5740e..5514df4df 100644
  
  - In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in
 diff --git a/docs/source/ttnn/ttnn/tutorials.rst b/docs/source/ttnn/ttnn/tutorials.rst
-index 51a746cc7..3b7a7087d 100644
 --- a/docs/source/ttnn/ttnn/tutorials.rst
 +++ b/docs/source/ttnn/ttnn/tutorials.rst
 @@ -2,10 +2,10 @@ Tutorials
@@ -310,7 +297,6 @@ index 51a746cc7..3b7a7087d 100644
  From within the `ttnn/tutorials` directory, launch the notebooks with: :code:`jupyter lab --no-browser --port=8888`
  Hint: Be sure to always run the cells from top to bottom as the order of the cells are dependent.
 diff --git a/models/experimental/functional_stable_diffusion/README.md b/models/experimental/functional_stable_diffusion/README.md
-index 014c520c3..ce76dccf7 100644
 --- a/models/experimental/functional_stable_diffusion/README.md
 +++ b/models/experimental/functional_stable_diffusion/README.md
 @@ -2,7 +2,7 @@
@@ -323,7 +309,6 @@ index 014c520c3..ce76dccf7 100644
  Use `pytest --disable-warnings --input-path="models/experimental/functional_stable_diffusion/demo/input_data.json" models/experimental/functional_stable_diffusion/demo/demo.py::test_demo` to run the demo.
  
 diff --git a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
-index 108465535..10e4b6fd3 100644
 --- a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
 +++ b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
 @@ -55,7 +55,7 @@ class feedforward:
@@ -336,7 +321,6 @@ index 108465535..10e4b6fd3 100644
          size = hidden_states.shape[-2]
          grid_size = self.grid_sizes[size]
 diff --git a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
-index e82ee89db..6dc501b08 100644
 --- a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
 +++ b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
 @@ -79,7 +79,7 @@ class geglu:
@@ -349,7 +333,6 @@ index e82ee89db..6dc501b08 100644
          size = hidden_states.shape[-2]
          grid_size = self.grid_sizes[size]
 diff --git a/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py b/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
-index 31a9955ca..dc6755ea7 100644
 --- a/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
 +++ b/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
 @@ -172,7 +172,7 @@ def test_run_max_pool(
@@ -362,7 +345,6 @@ index 31a9955ca..dc6755ea7 100644
  
      torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 diff --git a/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py b/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
-index 799e91334..25b67dbad 100644
 --- a/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
 +++ b/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
 @@ -369,7 +369,7 @@ def test_simple(
@@ -375,7 +357,6 @@ index 799e91334..25b67dbad 100644
          conv_input = conv_input.to(device, conv.input_sharded_memory_config)
      else:
 diff --git a/tests/ttnn/sweep_tests/build_html_sweep_results.py b/tests/ttnn/sweep_tests/build_html_sweep_results.py
-index 7e6651640..e7934d94b 100644
 --- a/tests/ttnn/sweep_tests/build_html_sweep_results.py
 +++ b/tests/ttnn/sweep_tests/build_html_sweep_results.py
 @@ -14,7 +14,7 @@ from loguru import logger
@@ -388,7 +369,6 @@ index 7e6651640..e7934d94b 100644
      response = requests.get(url, headers=headers, params=params)
      if response.status_code == 200:
 diff --git a/tests/ttnn/unit_tests/operations/test_conv2d.py b/tests/ttnn/unit_tests/operations/test_conv2d.py
-index 261d0f699..b8967f699 100644
 --- a/tests/ttnn/unit_tests/operations/test_conv2d.py
 +++ b/tests/ttnn/unit_tests/operations/test_conv2d.py
 @@ -32,7 +32,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
@@ -401,7 +381,6 @@ index 261d0f699..b8967f699 100644
              tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
          else:
 diff --git a/tt_metal/impl/allocator/allocator.cpp b/tt_metal/impl/allocator/allocator.cpp
-index 303db1f93..62abe5f0a 100644
 --- a/tt_metal/impl/allocator/allocator.cpp
 +++ b/tt_metal/impl/allocator/allocator.cpp
 @@ -40,7 +40,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
@@ -414,7 +393,6 @@ index 303db1f93..62abe5f0a 100644
      bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
      if (not valid_num_banks) {
 diff --git a/tt_metal/impl/dispatch/command_queue_interface.hpp b/tt_metal/impl/dispatch/command_queue_interface.hpp
-index 28e509122..e3d078937 100644
 --- a/tt_metal/impl/dispatch/command_queue_interface.hpp
 +++ b/tt_metal/impl/dispatch/command_queue_interface.hpp
 @@ -314,7 +314,7 @@ class SystemMemoryManager {
@@ -427,7 +405,6 @@ index 28e509122..e3d078937 100644
  
          memcpy(user_scratchspace, data, size_in_bytes);
 diff --git a/tt_metal/impl/kernels/kernel.hpp b/tt_metal/impl/kernels/kernel.hpp
-index 271f587f6..b527ff37e 100644
 --- a/tt_metal/impl/kernels/kernel.hpp
 +++ b/tt_metal/impl/kernels/kernel.hpp
 @@ -85,7 +85,7 @@ class Kernel : public JitBuildSettings {
@@ -440,7 +417,6 @@ index 271f587f6..b527ff37e 100644
      uint16_t binary_size16_;
      std::vector<uint32_t> compile_time_args_;
 diff --git a/tt_metal/impl/program/program.cpp b/tt_metal/impl/program/program.cpp
-index a5fe6f483..10d7ff592 100644
 --- a/tt_metal/impl/program/program.cpp
 +++ b/tt_metal/impl/program/program.cpp
 @@ -45,7 +45,7 @@ namespace{
@@ -453,7 +429,6 @@ index a5fe6f483..10d7ff592 100644
          // Also account for watcher/dprint enabled in hash because they enable additional code to
          // be compiled into the kernel.
 diff --git a/tt_metal/llrt/tt_cluster.cpp b/tt_metal/llrt/tt_cluster.cpp
-index 2fa824f1f..54a55a2ee 100644
 --- a/tt_metal/llrt/tt_cluster.cpp
 +++ b/tt_metal/llrt/tt_cluster.cpp
 @@ -175,7 +175,7 @@ void Cluster::assert_risc_reset() {
@@ -466,7 +441,6 @@ index 2fa824f1f..54a55a2ee 100644
      uint16_t channel = 0;
      this->device_to_host_mem_channel_[mmio_device_id] = channel++;
 diff --git a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
-index bf2229a83..9a110cc0f 100644
 --- a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
 +++ b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
 @@ -16,7 +16,7 @@
@@ -479,7 +453,6 @@ index bf2229a83..9a110cc0f 100644
  
  void kernel_main() {
 diff --git a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
-index 7b3a4ef9c..8f6bfa678 100644
 --- a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
 +++ b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
 @@ -17,7 +17,7 @@
@@ -492,7 +465,6 @@ index 7b3a4ef9c..8f6bfa678 100644
  
  namespace NAMESPACE {
 diff --git a/tt_metal/python_env/requirements-dev.txt b/tt_metal/python_env/requirements-dev.txt
-index f48359ccb..6dc4ebf29 100644
 --- a/tt_metal/python_env/requirements-dev.txt
 +++ b/tt_metal/python_env/requirements-dev.txt
 @@ -47,4 +47,4 @@ einops==0.6.1
@@ -502,7 +474,6 @@ index f48359ccb..6dc4ebf29 100644
 -fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent-metal/tt-metal/issues/3314
 +fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
 diff --git a/ttnn/README.md b/ttnn/README.md
-index f542de508..7f705b91d 100644
 --- a/ttnn/README.md
 +++ b/ttnn/README.md
 @@ -8,9 +8,9 @@ We trust that this library will be a valuable guide to helping you on your journ
@@ -518,7 +489,6 @@ index f542de508..7f705b91d 100644
  
  
 diff --git a/ttnn/tutorials/001.ipynb b/ttnn/tutorials/001.ipynb
-index 97bc7834e..75e7ff2b1 100644
 --- a/ttnn/tutorials/001.ipynb
 +++ b/ttnn/tutorials/001.ipynb
 @@ -222,7 +222,7 @@
@@ -531,7 +501,6 @@ index 97bc7834e..75e7ff2b1 100644
                  "\n",
                  "\n",
 diff --git a/ttnn/tutorials/005.ipynb b/ttnn/tutorials/005.ipynb
-index b40ab4a1f..38069f397 100644
 --- a/ttnn/tutorials/005.ipynb
 +++ b/ttnn/tutorials/005.ipynb
 @@ -13,7 +13,7 @@
