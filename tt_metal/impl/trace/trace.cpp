@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/trace/trace.hpp"
 #include <memory>
 #include <string>
 
@@ -9,6 +10,7 @@
 #include "logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 
 namespace {
 // Labels to make the code more readable
@@ -54,7 +56,12 @@ namespace tt::tt_metal {
 unordered_map<uint32_t, TraceBuffer> Trace::buffer_pool;
 std::mutex Trace::pool_mutex;
 
-Trace::Trace() : state(TraceState::EMPTY) {
+Trace::Trace() {
+    this->reset();
+}
+
+void Trace::reset() {
+    this->state = TraceState::EMPTY;
     this->tq = std::make_unique<CommandQueue>(*this);
 }
 
@@ -88,8 +95,6 @@ uint32_t Trace::next_id() {
 // Stage the trace commands into device DRAM as an interleaved buffer for execution
 uint32_t Trace::instantiate(CommandQueue& cq) {
     this->state = TraceState::INSTANTIATING;
-    uint32_t tid = next_id();
-    TT_FATAL(this->has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
     auto desc = std::make_shared<detail::TraceDescriptor>();
 
     // Record the captured Host API as commands via trace_commands,
@@ -100,6 +105,16 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
         cq.wait_until_empty();
     });
 
+    uint32_t tid = Trace::instantiate(cq, desc, data);
+    this->state = TraceState::READY;
+    return tid;
+}
+
+uint32_t Trace::instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, const vector<uint32_t>& cmds) {
+    uint32_t tid = Trace::next_id();
+    TT_FATAL(Trace::has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
+
+    vector<uint32_t> data = cmds;
     // Add command to terminate the trace buffer
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
@@ -125,8 +140,7 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     Finish(cq);  // clear side effects flag
 
     // Pin the trace buffer in memory until explicitly released by the user
-    this->add_instance(tid, {desc, buffer});
-    this->state = TraceState::READY;
+    Trace::add_instance(tid, {desc, buffer});
     log_trace(LogMetalTrace,
         "Trace {} instantiated with completion buffer num_entries={}, issue buffer unpadded size={}, padded size={}, num_pages={}",
         tid, desc->num_completion_q_reads, unpadded_size, padded_size, padded_size / page_size);

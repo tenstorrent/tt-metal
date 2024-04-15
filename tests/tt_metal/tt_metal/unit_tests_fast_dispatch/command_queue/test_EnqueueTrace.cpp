@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
+#include "detail/tt_metal.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/impl/allocator/allocator.hpp"
@@ -235,6 +236,7 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
         input_last[i] = i;
     }
 
+    // TRACE CAPTURE & INSTANTIATE MODE
     // Capture trace on a trace queue
     Trace trace;
     BeginTrace(trace);
@@ -254,6 +256,32 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
     }
 
     ReleaseTrace(trace_id);
+}
+
+TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommandViaDevice) {
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    vector<uint32_t> input_first(input.size() / sizeof(uint32_t), 0xfaceface);
+    vector<uint32_t> input_last(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_last.size(); i++) {
+        input_last[i] = i;
+    }
+
+    // DEVICE CAPTURE AND REPLAY MODE
+    // Capture trace on a device rather than a trace objet
+    detail::BeginTraceCapture(this->device_);
+    EnqueueWriteBuffer(command_queue, input, input_first.data(), kNonBlocking);
+    EnqueueWriteBuffer(command_queue, input, input_last.data(), kNonBlocking);
+    detail::EndTraceCapture(this->device_);
+
+    // Repeat traces, check that last write occurs correctly during each iteration
+    vector<uint32_t> readback(input.size() / sizeof(uint32_t), 0);
+    for (int i = 0; i < 10; i++) {
+        detail::ExecuteLastTrace(this->device_, true);
+        EnqueueReadBuffer(command_queue, input, readback.data(), kBlocking);
+        EXPECT_EQ(input_last, readback);
+    }
 }
 
 TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
@@ -277,7 +305,7 @@ TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
     EnqueueProgram(command_queue, simple_program, true);
     EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
 
-    // Trace mode
+    // TRACE CAPTURE & INSTANTIATE MODE
     Trace trace;
     EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
 
@@ -289,6 +317,42 @@ TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
 
     EnqueueTrace(command_queue, trace_id, true);
+    EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
+    EXPECT_TRUE(eager_output_data == trace_output_data);
+
+    // Done
+    Finish(command_queue);
+}
+
+TEST_F(CommandQueueFixture, EnqueueTraceProgramCommandViaDevice) {
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    Program simple_program = create_simple_unary_program(input, output);
+    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    vector<uint32_t> eager_output_data;
+    eager_output_data.resize(input_data.size());
+    vector<uint32_t> trace_output_data;
+    trace_output_data.resize(input_data.size());
+
+    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+    EnqueueProgram(command_queue, simple_program, true);
+    EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
+
+    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+
+    // DEVICE CAPTURE AND REPLAY MODE
+    detail::BeginTraceCapture(this->device_);
+    EnqueueProgram(command_queue, simple_program, false);
+    detail::EndTraceCapture(this->device_);
+
+    detail::ExecuteLastTrace(this->device_, true);
     EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
