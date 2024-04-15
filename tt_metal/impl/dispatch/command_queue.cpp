@@ -252,29 +252,43 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_preamble_commands() {
-    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE; // CQ_PREFETCH_CMD_STALL
+    if (not program.loaded_onto_device) {
+        // Wait command so previous program finishes
+        // Wait command with barrier for binaries to commit to DRAM
+        // Prefetch stall to prevent prefetcher picking up incomplete binaries from DRAM
+        uint32_t cmd_sequence_sizeB =
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+        DeviceCommand command_sequence(cmd_sequence_sizeB);
 
-    // Wait for Noc Write Barrier
-    // wait for binaries to commit to dram, also wait for previous program to be done
-    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-    // Stall to allow binaries to commit to DRAM first
-    // TODO: this can be removed for all but the first program run
-    command_sequence.add_dispatch_wait_with_prefetch_stall(
-        true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+        // Wait for Noc Write Barrier
+        // wait for binaries to commit to dram, also wait for previous program to be done
+        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+        // Stall to allow binaries to commit to DRAM first
+        // TODO: this can be removed for all but the first program run
+        command_sequence.add_dispatch_wait_with_prefetch_stall(
+            true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
-    return command_sequence;
+        program.loaded_onto_device = true;
+        return command_sequence;
+    } else {
+        // Wait command so previous program finishes
+        uint32_t cmd_sequence_sizeB =
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+
+        DeviceCommand command_sequence(cmd_sequence_sizeB);
+        command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+        return command_sequence;
+    }
 }
 
 const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_commands() {
     program.update_runtime_args_transfer_info(this->device);
 
     vector<DeviceCommand> runtime_args_command_sequences;
-
+    // Unicast runtime args
     for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
-        uint32_t cmd_sequence_sizeB = 0;
         uint32_t num_packed_cmds = transfer_info.size();
         uint32_t runtime_args_len = transfer_info[0].data.size();
 
@@ -287,7 +301,7 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
         aligned_runtime_data_sizeB += num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
 
         uint32_t rt_payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
-        cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
+        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
 
         DeviceCommand command_sequence(cmd_sequence_sizeB);
 
@@ -314,233 +328,270 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
-    // Calculate size of command
-    // TODO: Would be nice if we could pull this out of program
-    uint32_t cmd_sequence_sizeB = 0;
+    if (program.cached_device_commands.size() == 0) {
+        // Calculate size of command and fill program indices of data to update
+        // TODO: Would be nice if we could pull this out of program
+        uint32_t cmd_sequence_sizeB = 0;
 
-    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
-        uint32_t num_packed_cmds = 0;
-        uint32_t write_packed_len = transfer_info_vec[0].data.size();
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
+            uint32_t num_packed_cmds = 0;
+            uint32_t write_packed_len = transfer_info_vec[0].data.size();
 
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                TT_ASSERT(transfer_info.data.size() == write_packed_len, "Not all data vectors in write packed semaphore cmd equal in len");
-                num_packed_cmds += 1;
+            for (const auto& transfer_info : transfer_info_vec) {
+                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                    TT_ASSERT(
+                        transfer_info.data.size() == write_packed_len,
+                        "Not all data vectors in write packed semaphore cmd equal in len");
+                    num_packed_cmds += 1;
+                }
+            }
+
+            uint32_t aligned_semaphore_data_sizeB =
+                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
+            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
+            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
+        }
+
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
+            uint32_t num_packed_cmds = 0;
+            uint32_t write_packed_len = transfer_info_vec[0].data.size();
+
+            for (const auto& transfer_info : transfer_info_vec) {
+                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                    TT_ASSERT(
+                        transfer_info.data.size() == write_packed_len,
+                        "Not all data vectors in write packed semaphore cmd equal in len");
+                    num_packed_cmds += 1;
+                }
+            }
+
+            uint32_t aligned_semaphore_data_sizeB =
+                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
+            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
+            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + ucast_payload_sizeB, PCIE_ALIGNMENT);
+        }
+
+        program.command_indices.cb_configs_payload_start =
+            (cmd_sequence_sizeB + CQ_PREFETCH_CMD_BARE_MIN_SIZE) / sizeof(uint32_t);
+        for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+            cmd_sequence_sizeB += align(
+                CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                    (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t)),
+                PCIE_ALIGNMENT);
+        }
+
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
+            for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
+                for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                }
             }
         }
 
-        uint32_t aligned_semaphore_data_sizeB = align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
-        uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-        cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) +  mcast_payload_sizeB, PCIE_ALIGNMENT);
-    }
-
-    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
-        uint32_t num_packed_cmds = 0;
-        uint32_t write_packed_len = transfer_info_vec[0].data.size();
-
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                TT_ASSERT(transfer_info.data.size() == write_packed_len, "Not all data vectors in write packed semaphore cmd equal in len");
-                num_packed_cmds += 1;
-            }
-        }
-
-        uint32_t aligned_semaphore_data_sizeB = align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-        uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-        cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) +  ucast_payload_sizeB, PCIE_ALIGNMENT);
-    }
-
-    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
-        cmd_sequence_sizeB += align(
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE +
-                (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t)),
-            PCIE_ALIGNMENT);
-    }
-
-    for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-        const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
-        for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-            for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
-                cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-            }
-        }
-    }
-
-    if (program.program_transfer_info.num_active_cores > 0) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
-    for (const auto& transfer_info : program.program_transfer_info.go_signals) {
-        for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
+        if (program.program_transfer_info.num_active_cores > 0) {
             cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-            cmd_sequence_sizeB += align(transfer_info.data.size() * sizeof(uint32_t), PCIE_ALIGNMENT);
         }
-    }
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
-
-    // Semaphores
-    // Multicast Semaphore Cmd
-    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
-        uint32_t num_packed_cmds = 0;
-        uint32_t write_packed_len = transfer_info_vec[0].data.size();
-
-        std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
-        std::vector<const void *> sem_data;
-
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                num_packed_cmds += 1;
-                multicast_sub_cmds.emplace_back(
-                    CQDispatchWritePackedMulticastSubCmd{.noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second}
-                );
-                sem_data.emplace_back(transfer_info.data.data());
+        for (const auto& transfer_info : program.program_transfer_info.go_signals) {
+            for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
+                cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                cmd_sequence_sizeB += align(transfer_info.data.size() * sizeof(uint32_t), PCIE_ALIGNMENT);
             }
         }
 
-        uint32_t aligned_semaphore_data_sizeB = align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
-        uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
+        DeviceCommand command_sequence(cmd_sequence_sizeB);
 
-        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-            num_packed_cmds,
-            dst,
-            write_packed_len * sizeof(uint32_t),
-            payload_sizeB,
-            multicast_sub_cmds,
-            sem_data
-        );
-    }
+        // Semaphores
+        // Multicast Semaphore Cmd
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_semaphores) {
+            uint32_t num_packed_cmds = 0;
+            uint32_t write_packed_len = transfer_info_vec[0].data.size();
 
-    // Unicast Semaphore Cmd
-    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
-        // TODO: loop over things inside transfer_info[i]
-        uint32_t num_packed_cmds = 0;
-        uint32_t write_packed_len = transfer_info_vec[0].data.size();
+            std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
+            std::vector<const void*> sem_data;
 
-        std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-        std::vector<const void *> sem_data;
+            for (const auto& transfer_info : transfer_info_vec) {
+                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                    num_packed_cmds += 1;
+                    multicast_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                        .noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second});
+                    sem_data.emplace_back(transfer_info.data.data());
+                }
+            }
 
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                num_packed_cmds += 1;
-                unicast_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_info.first});
-                sem_data.emplace_back(transfer_info.data.data());
+            uint32_t aligned_semaphore_data_sizeB =
+                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
+            uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
+
+            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, multicast_sub_cmds, sem_data);
+        }
+
+        // Unicast Semaphore Cmd
+        for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.unicast_semaphores) {
+            // TODO: loop over things inside transfer_info[i]
+            uint32_t num_packed_cmds = 0;
+            uint32_t write_packed_len = transfer_info_vec[0].data.size();
+
+            std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
+            std::vector<const void*> sem_data;
+
+            for (const auto& transfer_info : transfer_info_vec) {
+                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
+                    num_packed_cmds += 1;
+                    unicast_sub_cmds.emplace_back(
+                        CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_info.first});
+                    sem_data.emplace_back(transfer_info.data.data());
+                }
+            }
+
+            uint32_t aligned_semaphore_data_sizeB =
+                align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
+            uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
+
+            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, unicast_sub_cmds, sem_data);
+        }
+
+        // CB Configs commands
+        for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+            std::vector<uint32_t> cb_config_payload(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0);
+            CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
+            CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, CoreType::WORKER);
+
+            uint32_t dst_noc_multicast_encoding =
+                NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+
+            uint32_t num_receivers = core_range.size();
+
+            for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers_on_corerange(core_range)) {
+                for (const auto buffer_index : cb->buffer_indices()) {
+                    // 1 cmd for all 32 buffer indices, populate with real data for specified indices
+
+                    // cb config payload
+                    uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                    cb_config_payload[base_index] = cb->address() >> 4;
+                    cb_config_payload[base_index + 1] = cb->size() >> 4;
+                    cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
+                    cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
+                }
+            }
+            command_sequence.add_dispatch_write_linear(
+                true,  // flush_prefetch
+                num_receivers,
+                dst_noc_multicast_encoding,
+                CIRCULAR_BUFFER_CONFIG_BASE,
+                UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t),
+                cb_config_payload.data());
+        }
+
+        // Program Binaries
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
+            for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
+                for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                    command_sequence.add_dispatch_write_linear(
+                        false,                // flush_prefetch
+                        dst_noc_info.second,  // num_mcast_dests
+                        dst_noc_info.first,   // noc_xy_addr
+                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                        align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
+                    // Difference between prefetch total relayed pages and dispatch write linear
+                    uint32_t relayed_bytes =
+                        align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE);
+                    // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
+                    uint16_t length_adjust =
+                        uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
+
+                    uint32_t base_address, page_offset;
+                    if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+                        const uint32_t num_banks =
+                            this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
+                        page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
+                        uint32_t num_full_pages_written_per_bank =
+                            kg_transfer_info.page_offsets[kernel_idx] / num_banks;
+                        base_address =
+                            this->program.kg_buffers[buffer_idx]->address() +
+                            num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
+                    } else {
+                        base_address = this->program.kg_buffers[buffer_idx]->address();
+                        page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                    }
+
+                    command_sequence.add_prefetch_relay_paged(
+                        true,  // is_dram
+                        page_offset,
+                        base_address,
+                        this->program.kg_buffers[buffer_idx]->page_size(),
+                        relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
+                        length_adjust);
+                }
             }
         }
 
-        uint32_t aligned_semaphore_data_sizeB = align(write_packed_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-        uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
-
-        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-            num_packed_cmds,
-            dst,
-            write_packed_len * sizeof(uint32_t),
-            payload_sizeB,
-            unicast_sub_cmds,
-            sem_data
-        );
-    }
-
-    // CB Configs commands
-    // TODO: need to not loop over cb here
-    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
-        std::vector<uint32_t> cb_config_payload(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0);
-        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
-        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, CoreType::WORKER);
-
-        uint32_t dst_noc_multicast_encoding =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-
-        uint32_t num_receivers = core_range.size();
-
-        for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers_on_corerange(core_range)) {
-            for (const auto buffer_index : cb->buffer_indices()) {
-                // 1 cmd for all 32 buffer indices, populate with real data for specified indices
-
-                // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
-                cb_config_payload[base_index] = cb->address() >> 4;
-                cb_config_payload[base_index + 1] = cb->size() >> 4;
-                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
-            }
+        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+        if (program.program_transfer_info.num_active_cores > 0) {
+            // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+            // TODO: any way to not have dispatcher poll the addr here?
+            command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0);
         }
-        command_sequence.add_dispatch_write_linear(
-            true,  // flush_prefetch
-            num_receivers,
-            dst_noc_multicast_encoding,
-            CIRCULAR_BUFFER_CONFIG_BASE,
-            UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t),
-            cb_config_payload.data());
-    }
 
-    // Program Binaries
-    for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-        const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
-        for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-            for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+        // Go Signals
+        for (const auto& transfer_info : program.program_transfer_info.go_signals) {
+            for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
                 command_sequence.add_dispatch_write_linear(
-                    false,                // flush_prefetch
+                    true,                 // flush_prefetch
                     dst_noc_info.second,  // num_mcast_dests
                     dst_noc_info.first,   // noc_xy_addr
-                    kg_transfer_info.dst_base_addrs[kernel_idx],
-                    align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
-                // Difference between prefetch total relayed pages and dispatch write linear
-                uint32_t relayed_bytes = align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE);
-                // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
-                uint16_t length_adjust = uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
-
-                uint32_t base_address, page_offset;
-                if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                    const uint32_t num_banks = this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
-                    page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
-                    uint32_t num_full_pages_written_per_bank = kg_transfer_info.page_offsets[kernel_idx] / num_banks;
-                    base_address = this->program.kg_buffers[buffer_idx]->address() + num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
-                } else {
-                    base_address = this->program.kg_buffers[buffer_idx]->address();
-                    page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                }
-
-                command_sequence.add_prefetch_relay_paged(
-                    true,  // is_dram
-                    page_offset,
-                    base_address,
-                    this->program.kg_buffers[buffer_idx]->page_size(),
-                    relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
-                    length_adjust);
+                    transfer_info.dst_base_addr,
+                    transfer_info.data.size() * sizeof(uint32_t),
+                    transfer_info.data.data());
             }
         }
-    }
+        // TODO: add GO for FD2.1
+        program.cached_device_commands = command_sequence.cmd_vector();
+        return command_sequence;
+    } else {
+        DeviceCommand command_sequence(program.cached_device_commands.size() * sizeof(uint32_t));
+        command_sequence.update_cmd_sequence(
+            0, program.cached_device_commands.data(), program.cached_device_commands.size() * sizeof(uint32_t));
 
-    // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-    if (program.program_transfer_info.num_active_cores > 0) {
-        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-        // TODO: any way to not have dispatcher poll the addr here?
-        // TODO: also need to update CommandQueue to track total worker count and increment and wrap? Does noc semaphore inc wrap?
-        command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
-    }
+        uint32_t cb_payload_index = program.command_indices.cb_configs_payload_start;
+        for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+            std::vector<uint32_t> cb_config_payload(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0);
+            for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers_on_corerange(core_range)) {
+                for (const auto buffer_index : cb->buffer_indices()) {
+                    // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
-    // Go Signals
-    for (const auto& transfer_info : program.program_transfer_info.go_signals) {
-        for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
-            command_sequence.add_dispatch_write_linear(
-                true, // flush_prefetch
-                dst_noc_info.second, // num_mcast_dests
-                dst_noc_info.first, // noc_xy_addr
-                transfer_info.dst_base_addr,
-                transfer_info.data.size() * sizeof(uint32_t),
-                transfer_info.data.data()
-            );
+                    // cb config payload
+                    uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                    cb_config_payload[base_index] = cb->address() >> 4;
+                    cb_config_payload[base_index + 1] = cb->size() >> 4;
+                    cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
+                    cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
+                }
+            }
+            command_sequence.update_cmd_sequence(
+                cb_payload_index, cb_config_payload.data(), cb_config_payload.size() * sizeof(uint32_t));
+            cb_payload_index += (align(
+                                    CQ_PREFETCH_CMD_BARE_MIN_SIZE + (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG *
+                                                                     NUM_CIRCULAR_BUFFERS * sizeof(uint32_t)),
+                                    PCIE_ALIGNMENT)) /
+                                sizeof(uint32_t);
         }
-    }
-    // TODO: add GO for FD2.1
 
-    return command_sequence;
+        return command_sequence;
+    }
 }
 
 void EnqueueProgramCommand::process() {
@@ -548,6 +599,7 @@ void EnqueueProgramCommand::process() {
 
     // Preamble, some waits and stalls
     DeviceCommand preamble_command_sequence = this->assemble_preamble_commands();
+
     uint32_t preamble_fetch_size_bytes = preamble_command_sequence.size_bytes();
 
     // Runtime Args Command Sequence
@@ -1119,7 +1171,6 @@ void HWCommandQueue::enqueue_program(
             for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
                 this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
             }
-            program.loaded_onto_device = true;
         }
     });
 

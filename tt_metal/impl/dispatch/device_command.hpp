@@ -23,6 +23,8 @@ class DeviceCommand {
 
     const void* data() const { return this->cmd_sequence.data(); }
 
+    vector<uint32_t> cmd_vector() const { return this->cmd_sequence; }
+
     void add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0);
 
     void add_dispatch_wait_with_prefetch_stall(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0);
@@ -38,6 +40,10 @@ class DeviceCommand {
     void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
+
+    void update_cmd_sequence(uint32_t cmd_idx, const void *new_data, uint32_t data_sizeB) {
+        memcpy(this->cmd_sequence.data() + cmd_idx, new_data, data_sizeB);
+    }
 
     template<typename PackedSubCmd>
     void add_dispatch_write_packed(
