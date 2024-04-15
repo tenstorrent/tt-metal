@@ -270,7 +270,7 @@ void process_write_host_d() {
     relay_to_next_cb(data_ptr, length);
 
     // Move to next page
-    downstream_cb_data_ptr += (dispatch_cb_page_size - (downstream_cb_data_ptr & (dispatch_cb_page_size - 1))) & (dispatch_cb_page_size - 1);
+    downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
 }
 
 FORCE_INLINE
@@ -283,7 +283,7 @@ void relay_write_h() {
     relay_to_next_cb(data_ptr, length);
 
     // Move to next page
-    downstream_cb_data_ptr += (dispatch_cb_page_size - (downstream_cb_data_ptr & (dispatch_cb_page_size - 1))) & (dispatch_cb_page_size - 1);
+    downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
 }
 
 // Note that for non-paged writes, the number of writes per page is always 1
@@ -479,8 +479,8 @@ void process_write_packed() {
     volatile WritePackedSubCmd tt_l1_ptr *sub_cmd_ptr =
         (volatile WritePackedSubCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd));
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(WritePackedSubCmd);
-    data_ptr = (data_ptr + L1_NOC_ALIGNMENT - 1) & ~(L1_NOC_ALIGNMENT - 1);
-    uint32_t stride = (xfer_size + L1_NOC_ALIGNMENT - 1) & ~(L1_NOC_ALIGNMENT - 1);
+    data_ptr = round_up_pow2(data_ptr, L1_NOC_ALIGNMENT);
+    uint32_t stride = round_up_pow2(xfer_size, L1_NOC_ALIGNMENT);
 
     DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
     while (count != 0) {
@@ -801,7 +801,7 @@ void kernel_main() {
             process_cmd_h(cmd_ptr);
 
         // Move to next page
-        cmd_ptr += (dispatch_cb_page_size - (cmd_ptr & (dispatch_cb_page_size - 1))) & (dispatch_cb_page_size - 1);
+        cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
 
         // XXXXX move this inside while loop waiting for get_dispatch_cb_page above
         // XXXXX can potentially clear a partial block when stalled w/ some more bookkeeping
