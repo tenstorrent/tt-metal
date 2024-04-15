@@ -92,6 +92,14 @@ export TT_METAL_ENV=dev
 
 4. Build & activate
 
+NEW!! CMake Support
+```sh
+./build_metal.sh
+
+source python_env/bin/activate
+```
+
+Old Makefile Flow
 ```sh
 make build
 

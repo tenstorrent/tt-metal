@@ -40,9 +40,10 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: make build
+        run: |
+          PYTHON_ENV_DIR=$(pwd)/build/python_env ./build_metal.sh
       - name: Build tt-metal CPP tests
-        run: make tests
+        run: cmake --build build --target tests -- -j`nproc`
       - name: Run pre/post regression tests
         timeout-minutes: 60
         run: |

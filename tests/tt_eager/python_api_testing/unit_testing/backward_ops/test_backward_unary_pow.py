@@ -28,7 +28,7 @@ def test_negative_exponent(input_shapes, exponent, device):
 
     with pytest.raises(RuntimeError) as _e:
         tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
-    assert "exponent >= 0.0" in str(_e)
+    assert "exponent >= 0.0" in str(_e.value)
 
 
 @pytest.mark.parametrize(

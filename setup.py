@@ -47,10 +47,10 @@ def get_arch_name():
     return attempt_get_env_var("ARCH_NAME")
 
 
-def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
+def get_metal_eager_local_version_scheme(metal_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
 
-    arch_name = buda_eager_build_config.arch_name
+    arch_name = metal_build_config.arch_name
 
     if version.dirty:
         return f"+g{version.node}.{arch_name}"
@@ -58,14 +58,14 @@ def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
         return ""
 
 
-def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
+def get_metal_eager_main_version_scheme(metal_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
 
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
 
-    arch_name = buda_eager_build_config.arch_name
+    arch_name = metal_build_config.arch_name
 
     if is_clean_prod_build:
         return version.format_with("{tag}+{arch_name}", arch_name=arch_name)
@@ -78,26 +78,26 @@ def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
         return version.format_with("{tag}.dev{distance}+{arch_name}", arch_name=arch_name)
 
 
-def get_version(buda_eager_build_config):
+def get_version(metal_build_config):
     return {
-        "version_scheme": partial(get_buda_eager_main_version_scheme, buda_eager_build_config),
-        "local_scheme": partial(get_buda_eager_local_version_scheme, buda_eager_build_config),
+        "version_scheme": partial(get_metal_eager_main_version_scheme, metal_build_config),
+        "local_scheme": partial(get_metal_eager_local_version_scheme, metal_build_config),
     }
 
 
 @dataclass(frozen=True)
-class BUDAEagerBuildConfig:
+class MetalliumBuildConfig:
     is_dev_build = get_is_dev_build()
     is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
 
 
-buda_eager_build_config = BUDAEagerBuildConfig()
+metal_build_config = MetalliumBuildConfig()
 
 
-class BUDAEagerBuild(build_ext):
+class CMakeBuild(build_ext):
     @staticmethod
-    def get_buda_eager_build_env():
+    def get_build_env():
         """
         Force production environment when creating the wheel because there's
         a lot of extra stuff that's added to the environment in dev that the
@@ -107,25 +107,39 @@ class BUDAEagerBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
-            # Need to create static lib for tt_metal runtime because currently
-            # we package it with the wheel at the moment
-            "TT_METAL_CREATE_STATIC_LIB": "1",
         }
 
-    def run(self):
+    # This should only run when building the wheel. Should not be running for any dev flow
+    # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
+    def run(self) -> None:
         assert (
             len(self.extensions) == 2
         ), f"Detected {len(self.extensions)} extensions, but should be only 2: tt_lib_csrc and ttnn"
 
         if self.is_editable_install_():
             assert (
-                buda_eager_build_config.is_srcdir_build
+                metal_build_config.is_srcdir_build
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        build_env = BUDAEagerBuild.get_buda_eager_build_env()
-        subprocess.check_call(["make", "build"], env=build_env)
-        subprocess.check_call(["ls", "-hal", "build/lib"], env=build_env)
+        ext = self.extensions[0]
+        build_env = CMakeBuild.get_build_env()
+        source_dir = Path(os.environ.get("TT_METAL_HOME"))
+        build_dir = Path(os.environ.get("TT_METAL_HOME") + "/build")
+        if not build_dir.exists():
+            build_dir.mkdir(parents=True)
+
+        cmake_args = [f"."]
+
+        nproc = subprocess.check_output(["nproc"]).decode().strip()
+        build_args = [f"-j{nproc}"]
+
+        subprocess.check_call(["cmake", source_dir, *cmake_args], cwd=build_dir, env=build_env)
+        subprocess.check_call(["cmake", "--build", ".", *build_args], cwd=build_dir, env=build_env)
+        subprocess.check_call(["cmake", "--build", ".", "--target", "metal-install"], cwd=build_dir)
+
+        subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
 
         # Move built SOs into appropriate locations
         for ext in self.extensions:
@@ -139,7 +153,7 @@ class BUDAEagerBuild(build_ext):
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
 
-            src = build_constants_lookup[ext].so_src_location
+            src = os.path.join(build_dir, build_constants_lookup[ext].so_src_location)
             self.copy_file(src, full_lib_path)
 
     def is_editable_install_(self):
@@ -152,21 +166,21 @@ class BUDAEagerBuild(build_ext):
 packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn"]
 
 # Empty sources in order to force extension executions
-buda_eager_lib_C = Extension("tt_lib._C", sources=[])
+eager_lib_C = Extension("tt_lib._C", sources=[])
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
 
-ext_modules = [buda_eager_lib_C, ttnn_lib_C]
+ext_modules = [eager_lib_C, ttnn_lib_C]
 
 BuildConstants = namedtuple("BuildConstants", ["so_src_location"])
 
 build_constants_lookup = {
-    buda_eager_lib_C: BuildConstants(so_src_location="build/lib/libtt_lib_csrc.so"),
-    ttnn_lib_C: BuildConstants(so_src_location="build/lib/_ttnn.so"),
+    eager_lib_C: BuildConstants(so_src_location="lib/_C.so"),
+    ttnn_lib_C: BuildConstants(so_src_location="lib/_ttnn.so"),
 }
 
 setup(
     url="http://www.tenstorrent.com",
-    use_scm_version=get_version(buda_eager_build_config),
+    use_scm_version=get_version(metal_build_config),
     packages=packages,
     package_dir={
         "": "tt_eager",
@@ -178,6 +192,6 @@ setup(
     include_package_data=True,
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
-    cmdclass=dict(build_ext=BUDAEagerBuild),
+    cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
 )
