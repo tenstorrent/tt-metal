@@ -76,6 +76,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op_v2.cpp \
 	tt_eager/tt_dnn/op_library/softmax/multi_core/softmax_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/softmax/softmax_op.cpp \
+	tt_eager/tt_dnn/op_library/sdpa/multi_core/sdpa_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/sdpa/sdpa_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.cpp \
