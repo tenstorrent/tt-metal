@@ -7,6 +7,20 @@ import numpy as np
 from loguru import logger
 
 
+def print_infs(golden, calculated):
+    golden = golden.flatten()
+    calculated = calculated.flatten()
+
+    isinf = torch.logical_or(torch.isinf(golden), torch.isinf(calculated))
+    isnan = torch.logical_or(torch.isnan(golden), torch.isnan(calculated))
+
+    shape = golden.shape
+
+    for i in range(shape[0]):
+        if isinf[i] or isnan[i]:
+            print(f"**** golden:{golden[i]} calculated:{calculated[i]}")
+
+
 def get_atol_rtol_pcc(golden, calculated):
     if golden.dtype != calculated.dtype:
         logger.warning(f"Converting calculated to golden.dtype {golden.dtype}")
@@ -44,6 +58,8 @@ def get_atol_rtol_pcc(golden, calculated):
         if torch.any(golden.bool()) != torch.any(calculated.bool()):
             logger.warning("One tensor is all zero")
             return 0.0
+
+        # print_infs(golden, calculated)
 
         if torch.any(torch.isnan(golden)):
             logger.warning(f"Tensor golden has NaNs")
