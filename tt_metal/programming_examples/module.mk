@@ -4,6 +4,9 @@ PROGRAMMING_EXAMPLES_OBJDIR = $(OBJDIR)/programming_examples
 PROGRAMMING_EXAMPLES_INCLUDES = $(COMMON_INCLUDES)
 PROGRAMMING_EXAMPLES_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lm
 
+include $(TT_METAL_HOME)/tt_metal/programming_examples/hello_world_compute_kernel/module.mk
+include $(TT_METAL_HOME)/tt_metal/programming_examples/hello_world_datamovement_kernel/module.mk
+include $(TT_METAL_HOME)/tt_metal/programming_examples/hello_world_datatypes_kernel/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/add_2_integers_in_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/add_2_integers_in_compute/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/loopback/module.mk
@@ -22,7 +25,10 @@ PROFILER_TESTS += \
 		  programming_examples/profiler/test_full_buffer\
 		  programming_examples/profiler/test_multi_op
 
-programming_examples: programming_examples/add_2_integers_in_riscv \
+programming_examples: programming_examples/hello_world_compute_kernel \
+                      programming_examples/hello_world_datamovement_kernel \
+                      programming_examples/hello_world_datatypes_kernel \
+                      programming_examples/add_2_integers_in_riscv \
                       programming_examples/add_2_integers_in_compute \
                       programming_examples/loopback \
                       programming_examples/eltwise_binary \
@@ -33,6 +39,9 @@ programming_examples: programming_examples/add_2_integers_in_riscv \
                       programming_examples/matmul_multicore_reuse_mcast \
                       $(PROFILER_TESTS)
 
+programming_examples/hello_world_compute_kernel:$(PROGRAMMING_EXAMPLES_TESTDIR)/hello_world_compute_kernel
+programming_examples/hello_world_datamovement_kernel:$(PROGRAMMING_EXAMPLES_TESTDIR)/hello_world_datamovement_kernel
+programming_examples/hello_world_datatypes_kernel:$(PROGRAMMING_EXAMPLES_TESTDIR)/hello_world_datatypes_kernel
 programming_examples/add_2_integers_in_riscv:$(PROGRAMMING_EXAMPLES_TESTDIR)/add_2_integers_in_riscv
 programming_examples/add_2_integers_in_compute:$(PROGRAMMING_EXAMPLES_TESTDIR)/add_2_integers_in_compute
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
