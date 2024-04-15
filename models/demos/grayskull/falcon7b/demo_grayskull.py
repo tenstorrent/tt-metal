@@ -11,6 +11,7 @@ def test_demo(
     perf_mode,
     user_input,
     model_location_generator,
+    get_tt_cache_path,
     device,
     use_program_cache,
 ):
@@ -20,6 +21,7 @@ def test_demo(
         max_seq_len=1024,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
         model_location_generator=model_location_generator,
+        get_tt_cache_path=get_tt_cache_path,
         devices=[device],
         perf_mode=perf_mode,
     )

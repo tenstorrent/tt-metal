@@ -14,6 +14,7 @@ def test_demo_multichip(
     num_devices,
     user_input,
     model_location_generator,
+    get_tt_cache_path,
     all_devices,
     use_program_cache,
 ):
@@ -26,6 +27,7 @@ def test_demo_multichip(
         max_seq_len=1024,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
+        get_tt_cache_path=get_tt_cache_path,
         devices=devices,
         perf_mode=perf_mode,
     )

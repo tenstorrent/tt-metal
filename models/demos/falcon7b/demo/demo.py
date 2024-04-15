@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
-from models.demos.falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
+from models.demos.falcon7b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
@@ -140,6 +140,7 @@ def run_falcon_demo_kv(
     max_seq_len,
     model_config_strs_prefill_decode,
     model_location_generator,
+    get_tt_cache_path,
     devices,
     model_version="tiiuae/falcon-7b-instruct",
     num_layers=32,
@@ -160,7 +161,10 @@ def run_falcon_demo_kv(
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
-    tt_cache_path = get_tt_cache_path(model_version)
+    model_config = get_model_config(model_config_strs_prefill_decode[0])
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     configuration = FalconConfig(**model_config_entries)
 
@@ -177,15 +181,12 @@ def run_falcon_demo_kv(
     # State dict is needed for embeddings
     logger.info("Loading weights...")
     profiler.start(f"loading_weights")
-    if (tt_cache_path == Path(f"models/demos/falcon7b/datasets/{model_version}")) and (
-        len(os.listdir(f"models/demos/falcon7b/datasets/{model_version}")) < 260
-    ):
+    if len(os.listdir(tt_cache_path)) < 260:
         logger.info("Weights not found on machine; downloading weights...")
         model_name = model_location_generator(model_version, model_subdir="Falcon")
         hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
         hugging_face_reference_model.eval()
         state_dict = hugging_face_reference_model.state_dict()
-        torch.save(state_dict["transformer.word_embeddings.weight"], tt_cache_path / "embedding.pt")
     else:
         state_dict = None
 
@@ -205,7 +206,7 @@ def run_falcon_demo_kv(
         1,
         configuration,
         max_seq_len,
-        get_model_config(model_config_strs_prefill_decode[0]),
+        model_config,
         tt_cache_path,
     )  # single layer only used for compile
 

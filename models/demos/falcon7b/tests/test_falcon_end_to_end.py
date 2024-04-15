@@ -21,7 +21,6 @@ from models.demos.falcon7b.tt.falcon_common import (
 
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_out_layer_present
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -336,12 +335,15 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
 ):
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
 
     model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     disable_persistent_kernel_cache()
     disable_compilation_reports()

@@ -14,7 +14,6 @@ from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -206,10 +205,13 @@ def test_FalconCausalLM_inference(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     device,
 ):
     model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     batch = 32
     seq_len = 128
