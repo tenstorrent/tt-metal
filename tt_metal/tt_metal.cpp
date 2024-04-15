@@ -682,6 +682,34 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
     }
 
+    void BeginTraceCapture(Device *device) {
+        device->begin_trace();
+    }
+
+    void EndTraceCapture(Device *device) {
+        device->end_trace();
+    }
+
+    void ExecuteLastTrace(Device *device, bool blocking) {
+        device->execute_last_trace(blocking);
+    }
+
+    void BeginTraceCaptures(std::map<chip_id_t, Device *> devices) {
+        for (const auto &[device_id, dev] : devices) {
+            dev->begin_trace();
+        }
+    }
+    void EndTraceCaptures(std::map<chip_id_t, Device *> devices) {
+        for (const auto &[device_id, dev] : devices) {
+            dev->end_trace();
+        }
+    }
+    void ExecuteLastTraces(std::map<chip_id_t, Device *> devices, bool blocking) {
+        for (const auto &[device_id, dev] : devices) {
+            dev->execute_last_trace(blocking);
+        }
+    }
+
 }   // namespace detail
 
 size_t GetNumAvailableDevices() {
