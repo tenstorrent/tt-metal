@@ -352,11 +352,11 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) +  ucast_payload_sizeB, PCIE_ALIGNMENT);
     }
 
-    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
-        for (const CoreRange& core_range : cb->core_ranges().ranges()) {
-            cmd_sequence_sizeB +=
-                align(CQ_PREFETCH_CMD_BARE_MIN_SIZE + (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t)), PCIE_ALIGNMENT) * cb->buffer_indices().size();
-        }
+    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+        cmd_sequence_sizeB += align(
+            CQ_PREFETCH_CMD_BARE_MIN_SIZE +
+                (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t)),
+            PCIE_ALIGNMENT);
     }
 
     for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
@@ -447,36 +447,36 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
     }
 
     // CB Configs commands
-    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
-        for (const CoreRange& core_range : cb->core_ranges().ranges()) {
-            CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
-            CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, CoreType::WORKER);
+    // TODO: need to not loop over cb here
+    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+        std::vector<uint32_t> cb_config_payload(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0);
+        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, CoreType::WORKER);
+        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, CoreType::WORKER);
 
-            uint32_t dst_noc_multicast_encoding =
-                NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+        uint32_t dst_noc_multicast_encoding =
+            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
 
-            uint32_t num_receivers = core_range.size();
+        uint32_t num_receivers = core_range.size();
 
+        for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers_on_corerange(core_range)) {
             for (const auto buffer_index : cb->buffer_indices()) {
-                // 1 cmd per buffer index
+                // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
                 // cb config payload
-                std::vector<uint32_t> cb_config_payload(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);
-                cb_config_payload[0] = cb->address() >> 4;
-                cb_config_payload[1] = cb->size() >> 4;
-                cb_config_payload[2] = cb->num_pages(buffer_index);
-                cb_config_payload[3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
-
-                command_sequence.add_dispatch_write_linear(
-                    true, // flush_prefetch
-                    num_receivers,
-                    dst_noc_multicast_encoding,
-                    CIRCULAR_BUFFER_CONFIG_BASE + buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
-                    UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
-                    cb_config_payload.data()
-                );
+                uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                cb_config_payload[base_index] = cb->address() >> 4;
+                cb_config_payload[base_index + 1] = cb->size() >> 4;
+                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
+                cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
             }
         }
+        command_sequence.add_dispatch_write_linear(
+            true,  // flush_prefetch
+            num_receivers,
+            dst_noc_multicast_encoding,
+            CIRCULAR_BUFFER_CONFIG_BASE,
+            UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS * sizeof(uint32_t),
+            cb_config_payload.data());
     }
 
     // Program Binaries

@@ -414,6 +414,18 @@ const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_
     return cbs_on_core;
 }
 
+const std::vector<CoreRange> Program::circular_buffers_unique_coreranges() const {
+    std::vector<CoreRange> core_ranges;
+    for (auto circular_buffer : circular_buffers_) {
+        for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
+            if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
+                core_ranges.push_back(core_range);
+            }
+        }
+    }
+    return core_ranges;
+}
+
 void Program::invalidate_circular_buffer_allocation() {
     if (this->local_circular_buffer_allocation_needed_) {
         return;
