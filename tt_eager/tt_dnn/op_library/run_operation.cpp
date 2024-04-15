@@ -154,7 +154,7 @@ OutputTensors run_device_operation(
 
     tt::stl::hash::hash_t program_hash = 0;
     if (program_cache.is_enabled()) {
-        get_or_create_program = [&program_cache, &program_hash](
+        get_or_create_program = [&program_cache, &program_hash, &optional_output_tensors](
                                     const DeviceOperation<OutputTensors>& operation,
                                     const Tensors& input_tensors,
                                     const OptionalConstTensors& optional_input_tensors,
@@ -165,6 +165,7 @@ OutputTensors run_device_operation(
             bool cache_hit = program_ptr.has_value();
             log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, cache_hit ? "HIT" : "MISS");
             if (not cache_hit) {
+                operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
                 program_ptr = std::make_shared<operation::CacheableProgram<OutputTensors>>(operation.create_program(input_tensors, optional_input_tensors, output_tensors));
                 program_cache.insert(program_hash, program_ptr.value());
             }
@@ -194,16 +195,17 @@ OutputTensors run_device_operation(
             return program_with_callbacks.program;
         };
     } else {
-        get_or_create_program = [](const DeviceOperation<OutputTensors>& operation,
+        get_or_create_program = [&optional_output_tensors](const DeviceOperation<OutputTensors>& operation,
                                    const Tensors& input_tensors,
                                    const OptionalConstTensors& optional_input_tensors,
                                    OutputTensors& output_tensors) -> std::shared_ptr<Program> {
+            operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
             auto program_with_callbacks =
                 operation.create_program(input_tensors, optional_input_tensors, output_tensors);
             return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
