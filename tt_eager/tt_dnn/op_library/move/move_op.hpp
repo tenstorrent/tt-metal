@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -47,6 +48,12 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Ten
 operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &output);
 
 inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config) {
+    if (is_multi_device_tensor(input_tensor)) {
+        return mutable_transform(input_tensor, [&](Tensor& tensor) {
+            return move(tensor, mem_config);
+        });
+    }
+
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();

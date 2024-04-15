@@ -352,7 +352,7 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
-    if mesh_composer:
+    if mesh_composer and tensor.storage_type() == ttnn.MULTI_DEVICE_STORAGE_TYPE:
         return mesh_composer.compose(tensor)
 
     if ttnn.is_tensor_storage_on_device(tensor):

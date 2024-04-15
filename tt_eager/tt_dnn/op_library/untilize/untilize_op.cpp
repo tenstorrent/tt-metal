@@ -109,7 +109,7 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;            // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
-    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a}).at(0);
+    return operation::run(Untilize{output_mem_config, use_multicore, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a}).at(0);
 }
 
 

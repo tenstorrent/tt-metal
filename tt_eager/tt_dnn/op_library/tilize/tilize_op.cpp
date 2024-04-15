@@ -93,7 +93,7 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_confi
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
-    return operation::run_without_autoformat(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), use_multicore}, {input_tensor_a}).at(0);
+    return operation::run(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), use_multicore}, {input_tensor_a}).at(0);
 }
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
@@ -188,7 +188,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output
         });
     }
 
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
+    return operation::run(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
 
 }
 

@@ -147,4 +147,46 @@ class ListMeshToTensor(MeshToTensor):
         return [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
 
 
+@contextlib.contextmanager
+def default_mesh_mapper(mesh_mapper):
+    # Store the original from_torch to restore later
+    device_mesh = mesh_mapper.device_mesh
+    _original_from_torch = ttnn.from_torch
+
+    def from_torch_with_mapper(*args, **kwargs):
+        kwargs["device"] = device_mesh
+        kwargs.setdefault("mesh_mapper", mesh_mapper)
+        return _original_from_torch(*args, **kwargs)
+
+    try:
+        # Replace from_torch with our custom version
+        bound_from_torch_with_mapper = lambda *args, **kwargs: from_torch_with_mapper(*args, **kwargs)
+        ttnn.from_torch = bound_from_torch_with_mapper
+
+        yield
+    finally:
+        # Restore the original from_torch function
+        ttnn.from_torch = _original_from_torch
+
+
+@contextlib.contextmanager
+def default_mesh_composer(mesh_composer):
+    # Store the original from_torch to restore later
+    _original_to_torch = ttnn.to_torch
+
+    def to_torch_with_composer(*args, **kwargs):
+        kwargs.setdefault("mesh_composer", mesh_composer)
+        return _original_to_torch(*args, **kwargs)
+
+    try:
+        # Replace from_torch with our custom version
+        bound_from_torch_with_composer = lambda *args, **kwargs: to_torch_with_composer(*args, **kwargs)
+        ttnn.to_torch = bound_from_torch_with_composer
+
+        yield
+    finally:
+        # Restore the original from_torch function
+        ttnn.to_torch = _original_to_torch
+
+
 __all__ = []

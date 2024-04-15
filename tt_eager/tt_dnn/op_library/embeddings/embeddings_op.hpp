@@ -41,7 +41,7 @@ inline Tensor embeddings(
     std::optional<uint32_t> pad_token = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    return operation::run_without_autoformat(
+    return operation::run(
                Embeddings{
                    .output_mem_config = mem_config,
                    .tilized = tilized,
