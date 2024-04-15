@@ -5,6 +5,7 @@
 import torch
 from abc import abstractmethod
 from typing import Optional, Tuple
+from tqdm import tqdm
 
 import tt_lib
 
@@ -44,9 +45,15 @@ class TtFalconModelShared(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
-        self.embeddings.weight = torch.nn.Parameter(
-            torch.load(str(tt_cache_path / "embedding.pt"), map_location=torch.device("cpu"))
-        )
+        word_embeddings_path = tt_cache_path / "embedding.pt"
+        if word_embeddings_path.exists():
+            self.embeddings.weight = torch.nn.Parameter(
+                torch.load(word_embeddings_path, map_location=torch.device("cpu"))
+            )
+        else:
+            embed_weights = state_dict["transformer.word_embeddings.weight"]
+            torch.save(embed_weights, word_embeddings_path)
+            self.embeddings.weight = torch.nn.Parameter(embed_weights)
 
         # stack all decoders
         self.layers = torch.nn.ModuleList(
@@ -61,7 +68,7 @@ class TtFalconModelShared(torch.nn.Module):
                     model_config=model_config,
                     tt_cache_path=tt_cache_path,
                 )
-                for layer_num in range(num_layers)
+                for layer_num in tqdm(range(num_layers), desc="Loading decoder layers")
             ]
         )
 
