@@ -1,0 +1,545 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 32ae7f01d..4f6093758 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -10,7 +10,7 @@ message(STATUS
+ project(tt-metal
+         VERSION 1.0
+         DESCRIPTION "Tenstorrent Metallium"
+-        HOMEPAGE_URL "https://github.com/tenstorrent-metal/tt-metal"
++        HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
+         LANGUAGES CXX
+ )
+ if(NOT CMAKE_BUILD_TYPE)
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index a5cbff655..91702498c 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -45,7 +45,7 @@ If you are interested in making a contribution, then please familiarize
+ yourself with our technical contribution standards as set forth in this guide.
+ 
+ Next, please request appropriate write permissions by [opening an
+-issue](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose) for
++issue](https://github.com/tenstorrent/tt-metal/issues/new/choose) for
+ GitHub permissions.
+ 
+ All contributions require:
+@@ -375,11 +375,11 @@ running such tests.
+   not all, of the post-commit test suite. They must pass, but are not enough to
+   ensure your PR will not be reverted.
+ - To run any CI pipeline on GitHub Actions, please navigate to the [actions
+-  page](https://github.com/tenstorrent-metal/tt-metal/actions).
++  page](https://github.com/tenstorrent/tt-metal/actions).
+ 
+   Next, you can navigate to any pipeline on the left side of the view. For
+   example, you can run the entire post-commit CI suite by clicking on
+-  on the link to [all post-commit workflows](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
++  on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
+   selecting your branch, and pressing "Run workflow".
+ 
+   ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
+diff --git a/INSTALLING.md b/INSTALLING.md
+index e1b79709e..741a97f6c 100644
+--- a/INSTALLING.md
++++ b/INSTALLING.md
+@@ -31,10 +31,10 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
+ 
+ ### Step 3. Huge Pages
+ 
+-1. Download latest [setup_hugepages.py](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
++1. Download latest [setup_hugepages.py](https://github.com/tenstorrent/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
+ 
+ ```sh
+-wget https://raw.githubusercontent.com/tenstorrent-metal/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
++wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
+ ```
+ 
+ 3. Run first setup script.
+@@ -67,7 +67,7 @@ sudo apt install git git-lfs
+ 3. Clone the repo.
+ 
+ ```sh
+-git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
++git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
+ cd tt-metal
+ git submodule foreach 'git lfs fetch --all && git lfs pull'
+ ```
+@@ -100,7 +100,7 @@ source build/python_env/bin/activate
+ 
+ 5. Start coding
+ 
+-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent-metal/tt-metal/blob/main/README.md)
++You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent/tt-metal/blob/main/README.md)
+ 
+ ---
+ 
+diff --git a/METALIUM_GUIDE.md b/METALIUM_GUIDE.md
+index 7484534de..9da604bc0 100644
+--- a/METALIUM_GUIDE.md
++++ b/METALIUM_GUIDE.md
+@@ -51,7 +51,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
+ - **PCIe link** for host interface
+ - **ARC core** for board management and control
+ 
+-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
++<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
+ 
+ #### Near Memory Compute and Efficient use of SRAM
+ The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
+@@ -88,7 +88,7 @@ AI workloads operate on tensors (N-dimensional data) and exhibit a high degree o
+ These data movement patterns (local, row/column, nearest neighbour) are most efficiently implemented via a regular and scalable mesh architecture.
+ 
+ Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level.
+-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
++<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+ TODO: Describe Galaxy, break up the slide into two slides
+ 
+ #### Two levels of memory
+@@ -111,8 +111,8 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
+     - Compute Kernels
+     - Ethernet Data Movement Kernels
+   - Dispatch Kernels
+-  <img width="1176" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
+-<img width="1171" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
++  <img width="1176" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
++<img width="1171" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+ 
+ 
+ ### Efficiency of Tile-Based Compute and Data Movement
+diff --git a/README.md b/README.md
+index ee8cf9ea5..5bd6a08bf 100644
+--- a/README.md
++++ b/README.md
+@@ -12,7 +12,7 @@
+ 
+ <h3>
+ 
+-[API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
++[API Reference](https://tenstorrent.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/) 
+ 
+ </h3>
+ 
+@@ -88,11 +88,11 @@ print(output)
+ 
+ <h3>
+ 
+-[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium)
++[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metal/latest/tt-metalium)
+ 
+ </h3>
+ </div>
+ 
+ ## Getting started
+ 
+-Get started with [simple kernels](https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
++Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+diff --git a/docs/source/common/resources/contributing.rst b/docs/source/common/resources/contributing.rst
+index b92fda181..c66959eb0 100644
+--- a/docs/source/common/resources/contributing.rst
++++ b/docs/source/common/resources/contributing.rst
+@@ -5,7 +5,7 @@ Contributing as a developer
+ 
+ If you would like to contribute to this project, please review the
+ `contribution standards
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.
++<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.
+ 
+ You will need to gain developer write access to the repository. Please read the
+ :ref:`support<Support>` section for more details on contacting us.
+diff --git a/docs/source/common/resources/support.rst b/docs/source/common/resources/support.rst
+index dc6c43d94..60407b7a1 100644
+--- a/docs/source/common/resources/support.rst
++++ b/docs/source/common/resources/support.rst
+@@ -13,7 +13,7 @@ If you have a
+ * need for support such as access permissions or cloud issues
+ 
+ then please file an
+-`issue <https://github.com/tenstorrent-metal/tt-metal/issues/new/choose>`_ on
++`issue <https://github.com/tenstorrent/tt-metal/issues/new/choose>`_ on
+ GitHub.
+ 
+ Troubleshooting and debugging tips
+@@ -21,7 +21,7 @@ Troubleshooting and debugging tips
+ 
+ You can check out relevant sections in the
+ `contribution standards
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_ if
++<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_ if
+ you ever need hardware troubleshooting help or debugging tips.
+ 
+ Community
+@@ -31,9 +31,9 @@ We have an official Discord channel with representatives from both Tenstorrent
+ and the Metal project. Join `here <https://discord.gg/tvhGzHQwaj>`_.
+ 
+ We have a `discussion board
+-<https://github.com/tenstorrent-metal/tt-metal/discussions>`_ on GitHub where
++<https://github.com/tenstorrent/tt-metal/discussions>`_ on GitHub where
+ members can bounce ideas off each other and discuss the project.
+ 
+ Please refer to the `code of conduct
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/CODE_OF_CONDUCT.md>`_
++<https://github.com/tenstorrent/tt-metal/blob/main/CODE_OF_CONDUCT.md>`_
+ when interacting with the community.
+diff --git a/docs/source/tt-metalium/get_started/get_started.rst b/docs/source/tt-metalium/get_started/get_started.rst
+index 2ca73199f..be37436ba 100644
+--- a/docs/source/tt-metalium/get_started/get_started.rst
++++ b/docs/source/tt-metalium/get_started/get_started.rst
+@@ -6,10 +6,10 @@ Getting Started
+ TT-Metalium is designed with the needs for non-ML and ML use cases.
+ 
+ The GitHub page for the project is located here:
+-https://github.com/tenstorrent-metal/tt-metal
++https://github.com/tenstorrent/tt-metal
+ 
+ Installation and environment setup instructions are in the GitHub repository
+-front-page README: https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md
++front-page README: https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md
+ 
+ Quick Start Guide
+ -----------------
+@@ -26,22 +26,22 @@ hardware.
+ 
+ Install tt-metal and build the project by following the instructions in the
+ `installation guide
+-<https://github.com/tenstorrent-metal/tt-metal#installing>`_.
++<https://github.com/tenstorrent/tt-metal#installing>`_.
+ 
+ 2. Explore the Falcon 7B Demo
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+ Get started with the Falcon 7B demo to experience the capabilities of tt-metal.
+ Navigate to the `Falcon 7B demo folder
+-<https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/falcon7b>`_
++<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
+ for details.
+ 
+ You can also check our demos for
+-`ResNet <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/resnet>`_,
+-`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
+-`Mistral 7B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/mistral7b>`_,
++`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
++`BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
++`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mistral7b>`_,
+ and
+-`Llama2-70B <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/llama2_70b>`_.
++`Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama2_70b>`_.
+ 
+ 3. ttnn Tutorial: Multi-Head Attention (Simple)
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -72,4 +72,4 @@ library APIs to build models, please now go to `getting started for models <../.
+ 
+ If you're an internal TT-Metalium developer, please now read please review the
+ `contribution standards
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.
++<https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.
+diff --git a/docs/source/tt-metalium/tt_metal/programming_model/index.rst b/docs/source/tt-metalium/tt_metal/programming_model/index.rst
+index d7c4c42e4..ed8618611 100644
+--- a/docs/source/tt-metalium/tt_metal/programming_model/index.rst
++++ b/docs/source/tt-metalium/tt_metal/programming_model/index.rst
+@@ -2,4 +2,4 @@ Programming Model
+ =================
+ 
+ Please find our architecture and programming model guide `here
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/METALIUM_GUIDE.md>`_.
++<https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md>`_.
+diff --git a/docs/source/ttnn/tt_metal_models/get_started.rst b/docs/source/ttnn/tt_metal_models/get_started.rst
+index 8ca9ba347..d3e4f661d 100644
+--- a/docs/source/ttnn/tt_metal_models/get_started.rst
++++ b/docs/source/ttnn/tt_metal_models/get_started.rst
+@@ -8,7 +8,7 @@ Prerequisites
+ 
+ Ensure that you have the base TT-Metalium source and environment configuration
+ `built and ready
+-<https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md>`_.
++<https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
+ 
+ Now, from the project root, get the Python virtual environment in which you'll
+ be working in ready.
+diff --git a/docs/source/ttnn/ttnn/onboarding.rst b/docs/source/ttnn/ttnn/onboarding.rst
+index d95219026..5e94bc8d7 100644
+--- a/docs/source/ttnn/ttnn/onboarding.rst
++++ b/docs/source/ttnn/ttnn/onboarding.rst
+@@ -5,15 +5,15 @@ TTNN is intended to be a well documented and a clear API that maintains stabilit
+ To achieve this goal, we ask that new functionality to the API follows the Test-Driven Development originally popularized by Kent Beck.  By following this approach, the expectation
+ is that the long term benefits will help us maintain our objectives. Please follow all the following steps when adding new functionality.
+ 
+-1. Submit a request for a Single Operation as an `Issue <https://github.com/tenstorrent-metal/tt-metal/issues>`_ and select `For external users - Propose a feature`
+-    * Provide a clear description of its intended purpose. (`Example <https://github.com/tenstorrent-metal/tt-metal/issues/4730>`_)
++1. Submit a request for a Single Operation as an `Issue <https://github.com/tenstorrent/tt-metal/issues>`_ and select `For external users - Propose a feature`
++    * Provide a clear description of its intended purpose. (`Example <https://github.com/tenstorrent/tt-metal/issues/4730>`_)
+     * Add the label ttnn to the issue
+     * Add a python reference implementation that is fully functional.  This reference implementation will be called the `fallback` implementation.
+ 2. Create a branch that defines the API and references the issue in step 1.
+     * When creating the branch, please follow the pattern of 'TTNN-<Issue Number>-<brief description>'.  For example, if the issue is 4730, the branch name would be `TTNN-4730-concat-operation`
+     * Use the `fallback` reference implementation for the operation and implement the functionality.
+-    * Add the documentation in the rst format for the operation under `ttnn documentation <https://github.com/tenstorrent-metal/tt-metal/tree/main/docs/source/ttnn/ttnn>`_
+-    * Add sweep tests to the branch using the fallback implementation under `ttnn sweep tests <https://github.com/tenstorrent-metal/tt-metal/tree/main/tests/ttnn/sweep_tests/sweeps>`_
++    * Add the documentation in the rst format for the operation under `ttnn documentation <https://github.com/tenstorrent/tt-metal/tree/main/docs/source/ttnn/ttnn>`_
++    * Add sweep tests to the branch using the fallback implementation under `ttnn sweep tests <https://github.com/tenstorrent/tt-metal/tree/main/tests/ttnn/sweep_tests/sweeps>`_
+ 3. Update the issue referencing the pull requests after verifying that all the sweep tests run as expected.  A TTNN CODEOWNERS will review the PR and verify that the API is acceptable and that the sweep tests reflect the intended functionality.
+ 4. If the pull request (PR) is accepted it will be merge into the main branch and a new branch should be created that adds the implementation.
+     * The fallback implementation for the Operation should be left and will continue to be used for op-by-op PCC comparisons when debugging models (see `--ttnn-enable-debug-decorator`).
+diff --git a/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst b/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
+index 58bb5740e..5514df4df 100644
+--- a/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
++++ b/docs/source/ttnn/ttnn/profiling_ttnn_operations.rst
+@@ -22,7 +22,7 @@ The headers for the CSV are explained under `Perf Report Headers`_.
+ 
+ **IMPORTANT NOTES**:
+ 
+-- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
++- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
+ - If you have done a reset on your GS device with ``tt_smi`` or ``tensix_reset.sh``, profiling results are not valid due to tensix cores' skewed timer starts. You need to perform a full reboot with ``sudo reboot`` on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after ``tt_smi`` resets.
+ 
+ - In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in
+diff --git a/docs/source/ttnn/ttnn/tutorials.rst b/docs/source/ttnn/ttnn/tutorials.rst
+index 51a746cc7..3b7a7087d 100644
+--- a/docs/source/ttnn/ttnn/tutorials.rst
++++ b/docs/source/ttnn/ttnn/tutorials.rst
+@@ -2,10 +2,10 @@ Tutorials
+ #########
+ 
+ This is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
+-notebooks can be found under https://github.com/tenstorrent-metal/tt-metal/tree/main/ttnn/tutorials.
++notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
+ 
+ These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
+-followed the instructions for `installing and building the software <https://github.com/tenstorrent-metal/tt-metal/blob/main/README.md>`_.
++followed the instructions for `installing and building the software <https://github.com/tenstorrent/tt-metal/blob/main/README.md>`_.
+ 
+ From within the `ttnn/tutorials` directory, launch the notebooks with: :code:`jupyter lab --no-browser --port=8888`
+ Hint: Be sure to always run the cells from top to bottom as the order of the cells are dependent.
+diff --git a/models/experimental/functional_stable_diffusion/README.md b/models/experimental/functional_stable_diffusion/README.md
+index 014c520c3..ce76dccf7 100644
+--- a/models/experimental/functional_stable_diffusion/README.md
++++ b/models/experimental/functional_stable_diffusion/README.md
+@@ -2,7 +2,7 @@
+ ## How to Run
+ 
+ To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
+-For more information, refer [installation and build guide](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html#install-and-build).
++For more information, refer [installation and build guide](https://tenstorrent.github.io/tt-metal/latest/get_started/get_started.html#install-and-build).
+ 
+ Use `pytest --disable-warnings --input-path="models/experimental/functional_stable_diffusion/demo/input_data.json" models/experimental/functional_stable_diffusion/demo/demo.py::test_demo` to run the demo.
+ 
+diff --git a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
+index 108465535..10e4b6fd3 100644
+--- a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
++++ b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_feedforward.py
+@@ -55,7 +55,7 @@ class feedforward:
+     def __call__(self, config, hidden_states):
+         hidden_states = self.geglu(config, hidden_states)
+ 
+-        # TODO: Output sharded once https://github.com/tenstorrent-metal/tt-metal/issues/6775 is fixed
++        # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
+         interleaved_output = True
+         size = hidden_states.shape[-2]
+         grid_size = self.grid_sizes[size]
+diff --git a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
+index e82ee89db..6dc501b08 100644
+--- a/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
++++ b/models/experimental/functional_stable_diffusion/tt2/ttnn_functional_geglu.py
+@@ -79,7 +79,7 @@ class geglu:
+         )
+ 
+     def __call__(self, config, hidden_states):
+-        # TODO: Output sharded once https://github.com/tenstorrent-metal/tt-metal/issues/6775 is fixed
++        # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
+         interleaved_output = True
+         size = hidden_states.shape[-2]
+         grid_size = self.grid_sizes[size]
+diff --git a/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py b/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
+index 31a9955ca..dc6755ea7 100644
+--- a/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
++++ b/tests/tt_eager/python_api_testing/unit_testing/misc/test_max_pool.py
+@@ -172,7 +172,7 @@ def test_run_max_pool(
+ 
+     if (compute_grid_size.x * compute_grid_size.y) == ncores_on_n300:
+         pytest.skip(
+-            f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent-metal/tt-metal/issues/5458"
++            f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent/tt-metal/issues/5458"
+         )
+ 
+     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
+diff --git a/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py b/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
+index 799e91334..25b67dbad 100644
+--- a/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
++++ b/tests/tt_eager/python_api_testing/unit_testing/misc/test_optimized_conv_v2.py
+@@ -369,7 +369,7 @@ def test_simple(
+         tt_lib.tensor.Layout.ROW_MAJOR,
+     )
+ 
+-    # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
++    # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
+     if False and is_1d_systolic:
+         conv_input = conv_input.to(device, conv.input_sharded_memory_config)
+     else:
+diff --git a/tests/ttnn/sweep_tests/build_html_sweep_results.py b/tests/ttnn/sweep_tests/build_html_sweep_results.py
+index 7e6651640..e7934d94b 100644
+--- a/tests/ttnn/sweep_tests/build_html_sweep_results.py
++++ b/tests/ttnn/sweep_tests/build_html_sweep_results.py
+@@ -14,7 +14,7 @@ from loguru import logger
+ 
+ def get_list_of_runs():
+     params = {"per_page": 3}
+-    url = "https://api.github.com/repos/tenstorrent-metal/tt-metal/actions/workflows/ttnn-run-sweeps.yaml/runs"
++    url = "https://api.github.com/repos/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml/runs"
+     headers = {"Accept": "application/vnd.github.v3+json"}
+     response = requests.get(url, headers=headers, params=params)
+     if response.status_code == 200:
+diff --git a/tests/ttnn/unit_tests/operations/test_conv2d.py b/tests/ttnn/unit_tests/operations/test_conv2d.py
+index 261d0f699..b8967f699 100644
+--- a/tests/ttnn/unit_tests/operations/test_conv2d.py
++++ b/tests/ttnn/unit_tests/operations/test_conv2d.py
+@@ -32,7 +32,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
+     tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
+ 
+     if mem_config is not None:
+-        # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
++        # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
+         if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+             tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
+         else:
+diff --git a/tt_metal/impl/allocator/allocator.cpp b/tt_metal/impl/allocator/allocator.cpp
+index 303db1f93..62abe5f0a 100644
+--- a/tt_metal/impl/allocator/allocator.cpp
++++ b/tt_metal/impl/allocator/allocator.cpp
+@@ -40,7 +40,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
+     bool is_pow2_num_banks = num_banks && (!(num_banks & (num_banks - 1)));
+     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved address gen
+     // For non pow2 num banks, special cases need to be added to avoid falling back to generic implementation.
+-    // See https://github.com/tenstorrent-metal/tt-metal/issues/3321
++    // See https://github.com/tenstorrent/tt-metal/issues/3321
+     bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 94 or num_banks == 124);
+     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
+     if (not valid_num_banks) {
+diff --git a/tt_metal/impl/dispatch/command_queue_interface.hpp b/tt_metal/impl/dispatch/command_queue_interface.hpp
+index 28e509122..e3d078937 100644
+--- a/tt_metal/impl/dispatch/command_queue_interface.hpp
++++ b/tt_metal/impl/dispatch/command_queue_interface.hpp
+@@ -314,7 +314,7 @@ class SystemMemoryManager {
+         //  this->cq_sysmem_start gives start of hugepage for a given channel
+         //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
+         //  so channel offset needs to be subtracted to get address relative to channel
+-        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent-metal/tt-metal/issues/4757
++        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
+         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
+ 
+         memcpy(user_scratchspace, data, size_in_bytes);
+diff --git a/tt_metal/impl/kernels/kernel.hpp b/tt_metal/impl/kernels/kernel.hpp
+index 271f587f6..b527ff37e 100644
+--- a/tt_metal/impl/kernels/kernel.hpp
++++ b/tt_metal/impl/kernels/kernel.hpp
+@@ -85,7 +85,7 @@ class Kernel : public JitBuildSettings {
+     std::string binary_path_;
+     // DataMovement kernels have one binary each and Compute kernels have three binaries
+     // Different set of binaries per device because kernel compilation is device dependent
+-    // TODO: break this dependency by https://github.com/tenstorrent-metal/tt-metal/issues/3381
++    // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
+     std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
+     uint16_t binary_size16_;
+     std::vector<uint32_t> compile_time_args_;
+diff --git a/tt_metal/impl/program/program.cpp b/tt_metal/impl/program/program.cpp
+index a5fe6f483..10d7ff592 100644
+--- a/tt_metal/impl/program/program.cpp
++++ b/tt_metal/impl/program/program.cpp
+@@ -45,7 +45,7 @@ namespace{
+     size_t KernelCompileHash(
+         const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
+         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
+-        // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
++        // This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
+ 
+         // Also account for watcher/dprint enabled in hash because they enable additional code to
+         // be compiled into the kernel.
+diff --git a/tt_metal/llrt/tt_cluster.cpp b/tt_metal/llrt/tt_cluster.cpp
+index 2fa824f1f..54a55a2ee 100644
+--- a/tt_metal/llrt/tt_cluster.cpp
++++ b/tt_metal/llrt/tt_cluster.cpp
+@@ -175,7 +175,7 @@ void Cluster::assert_risc_reset() {
+ 
+ void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
+-    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent-metal/tt-metal/issues/4087
++    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
+     TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
+     uint16_t channel = 0;
+     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
+diff --git a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
+index bf2229a83..9a110cc0f 100644
+--- a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
++++ b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp
+@@ -16,7 +16,7 @@
+  *
+  * More info on tt-metal issue #515
+  *
+- * https://github.com/tenstorrent-metal/tt-metal/issues/515#issuecomment-1548434301
++ * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
+ */
+ 
+ void kernel_main() {
+diff --git a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
+index 7b3a4ef9c..8f6bfa678 100644
+--- a/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
++++ b/tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp
+@@ -17,7 +17,7 @@
+  *
+  * More info on tt-metal issue #515
+  *
+- * https://github.com/tenstorrent-metal/tt-metal/issues/515#issuecomment-1548434301
++ * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
+ */
+ 
+ namespace NAMESPACE {
+diff --git a/tt_metal/python_env/requirements-dev.txt b/tt_metal/python_env/requirements-dev.txt
+index f48359ccb..6dc4ebf29 100644
+--- a/tt_metal/python_env/requirements-dev.txt
++++ b/tt_metal/python_env/requirements-dev.txt
+@@ -47,4 +47,4 @@ einops==0.6.1
+ multiprocess==0.70.14
+ evaluate==0.4.0
+ bert-score==0.3.12
+-fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent-metal/tt-metal/issues/3314
++fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
+diff --git a/ttnn/README.md b/ttnn/README.md
+index f542de508..7f705b91d 100644
+--- a/ttnn/README.md
++++ b/ttnn/README.md
+@@ -8,9 +8,9 @@ We trust that this library will be a valuable guide to helping you on your journ
+ 
+ #### Please learn the API using our Jupyter Notebook tutorials
+ * There is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
+-notebooks can be found under https://github.com/tenstorrent-metal/tt-metal/tree/main/ttnn/tutorials.
++notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
+ * These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
+-followed the instructions for [installing and building the software](https://github.com/tenstorrent-metal/tt-metal/blob/main/README.md).
++followed the instructions for [installing and building the software](https://github.com/tenstorrent/tt-metal/blob/main/README.md).
+ * From within the `ttnn/tutorials` directory, launch the notebooks with: `jupyter lab --no-browser --port=8888`
+ 
+ 
+diff --git a/ttnn/tutorials/001.ipynb b/ttnn/tutorials/001.ipynb
+index 97bc7834e..75e7ff2b1 100644
+--- a/ttnn/tutorials/001.ipynb
++++ b/ttnn/tutorials/001.ipynb
+@@ -222,7 +222,7 @@
+             "source": [
+                 "## Layout\n",
+                 "\n",
+-                "TensTorrent hardware is most efficiently utilized when running tensors using [tile layout](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn/tensor.html#layout).\n",
++                "TensTorrent hardware is most efficiently utilized when running tensors using [tile layout](https://tenstorrent.github.io/tt-metal/latest/ttnn/tensor.html#layout).\n",
+                 "The current tile size is hard-coded to [32, 32]. It was determined to be the optimal size for a tile given the compute, memory and data transfer constraints.\n",
+                 "\n",
+                 "\n",
+diff --git a/ttnn/tutorials/005.ipynb b/ttnn/tutorials/005.ipynb
+index b40ab4a1f..38069f397 100644
+--- a/ttnn/tutorials/005.ipynb
++++ b/ttnn/tutorials/005.ipynb
+@@ -13,7 +13,7 @@
+    "id": "253a1334-d62f-4cff-806e-62ce5289b580",
+    "metadata": {},
+    "source": [
+-    "See the documentation on [profiling](https://tenstorrent-metal.github.io/tt-metal/latest/ttnn/dependencies/ops_perf_report.html) !"
++    "See the documentation on [profiling](https://tenstorrent.github.io/tt-metal/latest/ttnn/dependencies/ops_perf_report.html) !"
+    ]
+   },
+   {

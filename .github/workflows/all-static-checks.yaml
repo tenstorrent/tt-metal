@@ -40,3 +40,15 @@ jobs:
         run: sudo apt-get install -y aspell
       - name: Run checks on docs
         run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
+  check-links-org-change-diff-donotmerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run diff check on links
+        run: ./infra/check_org_change_links_diff.sh
+      - name: Upload diff
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: links-generated-diff
+          path: infra/links-generated.diff
