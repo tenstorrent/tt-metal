@@ -12,6 +12,7 @@ if [[ -z "$ARCH_NAME" ]]; then
 fi
 
 remove_default_log_locations
-make clean
-make build ENABLE_PROFILER=1 ENABLE_TRACY=1
-make programming_examples
+
+# rm -rf build
+PYTHON_ENV_DIR=$(pwd)/build/python_env ENABLE_TRACY=1 ENABLE_PROFILER=1 ./build_metal.sh
+cmake --build build --target programming_examples -- -j`nproc`

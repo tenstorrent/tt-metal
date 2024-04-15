@@ -7,7 +7,7 @@
 #include <string>
 
 #include "dispatch/device_command.hpp"
-#include "logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"

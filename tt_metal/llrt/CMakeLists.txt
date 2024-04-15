@@ -1,4 +1,3 @@
-# add CFLAG  -Wno-int-to-pointer-cast
 
 set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp

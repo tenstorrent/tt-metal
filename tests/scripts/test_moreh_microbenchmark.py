@@ -148,7 +148,7 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -213,7 +213,7 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
         + "--iter "
         + str(iter)
         + " --buffer_type "

@@ -16,4 +16,4 @@ target_include_directories(unit_tests_fast_dispatch_single_chip_multi_queue PRIV
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-set_target_properties(unit_tests_fast_dispatch_single_chip_multi_queue PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal)
+set_target_properties(unit_tests_fast_dispatch_single_chip_multi_queue PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/tt_metal)

@@ -40,7 +40,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: make build
+        run: PYTHON_ENV_DIR=$(pwd)/build/python_env ./build_metal.sh
       - name: Run performance regressions
         timeout-minutes: 60
         run: |

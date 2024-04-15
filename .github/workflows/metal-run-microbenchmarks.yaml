@@ -35,7 +35,7 @@ jobs:
       - name: Build tt-metal and libs
         run: ./scripts/build_scripts/build_with_profiler_opt.sh
       - name: Build tests
-        run: make tests
+        run: cmake --build build --target tests -- -j`nproc`
       - name: Run microbenchmark tests
         timeout-minutes: 90
         run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks

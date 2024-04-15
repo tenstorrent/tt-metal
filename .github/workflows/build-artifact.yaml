@@ -14,6 +14,7 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ci
       SILENT: 0
+      VERBOSE: 1
     environment: dev
     runs-on: build
     steps:
@@ -24,8 +25,10 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
-          make build PYTHON_ENV=${{ github.workspace }}/python_env
-          make tests
+          CONFIG=ci cmake -B build
+          cmake --build build --target tests -- -j`nproc`
+          cmake --build build --target metal-install
+
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test
       - name: 'Upload Artifact'

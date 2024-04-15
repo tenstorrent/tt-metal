@@ -9,8 +9,77 @@ jobs:
     strategy:
       matrix:
         config: [
-          { type: debug, runs-on: ubuntu-20.04 },
-          { type: release, runs-on: ubuntu-20.04 },
+          { type: Debug, runs-on: ubuntu-20.04 },
+          { type: Release, runs-on: ubuntu-20.04 },
+          { type: RelWithDebInfo, runs-on: build },
+        ]
+        arch: [grayskull, wormhole_b0]
+        os: [ubuntu-20.04]
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ${{ matrix.config.type }}
+      # So we can get all the makefile output we want
+      VERBOSE: 1
+    runs-on: ${{ matrix.config.runs-on }}
+    name: cmake build ${{ matrix.config.type }} ${{ matrix.arch }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ubuntu-20.04
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ubuntu-20.04
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal libraries
+        run: |
+          cmake -B build
+          cmake --build build -- -j`nproc`
+      - name: Remove unnecessary artifacts
+        run: |
+          find build/ -name *.so -or -name *.a -or -name *.o | xargs strip -d
+      - name: 'Tar files'
+        run: tar -cvf ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar build
+      - name: Upload libraries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config.type }}
+          path: ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar
+  build-cpptest:
+    strategy:
+      matrix:
+        config: [Debug, Release, RelWithDebInfo]
+        arch: [grayskull, wormhole_b0]
+        os: [ubuntu-20.04]
+    needs: build-lib
+    name: cmake build cpptest ${{ matrix.config }} ${{ matrix.arch }}
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ${{ matrix.config }}
+      # So we can get all the makefile output we want
+      VERBOSE: 1
+    runs-on: build
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
+      - name: Build tt-metal tests
+        run: |
+          rm -f build/CMakeCache.txt
+          cmake -B build
+          cmake --build build --target tests -- -j`nproc`
+  make-build-lib:
+    strategy:
+      matrix:
+        config: [
           { type: assert, runs-on: build },
         ]
         arch: [grayskull, wormhole_b0]
@@ -46,10 +115,10 @@ jobs:
         with:
           name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config.type }}
           path: ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar
-  build-cpptest:
+  make-build-cpptest:
     strategy:
       matrix:
-        config: [debug, release, assert]
+        config: [assert]
         arch: [grayskull, wormhole_b0]
         os: [ubuntu-20.04]
     needs: build-lib
