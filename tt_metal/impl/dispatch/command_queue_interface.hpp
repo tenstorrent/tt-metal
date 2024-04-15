@@ -39,6 +39,10 @@ constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 512 * 1024 / (1 << DISPATC
 
 static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
+// When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken down into equal sized partial pages
+// BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is incremented by PCIe alignment until page size can be evenly split
+static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
+
 // Starting L1 address of commands
 inline uint32_t get_dispatch_buffer_base() {
     uint32_t dispatch_buffer_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE));
