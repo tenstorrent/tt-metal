@@ -624,6 +624,7 @@ static void process_wait() {
     DEBUG_STATUS('P', 'W', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    DPRINT << " DISPATCH WAIT " << HEX() << addr << " count " << count << ENDL();
     while (*sem_addr < count); // XXXXX use a wrapping compare
     DEBUG_STATUS('P', 'W', 'D');
 
