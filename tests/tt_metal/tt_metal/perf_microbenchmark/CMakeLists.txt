@@ -6,6 +6,8 @@ set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_prefetcher
     ethernet/test_ethernet_read_and_send_data
     ethernet/test_workers_and_erisc_datamover_unidirectional
+    ethernet/test_ethernet_bidirectional_bandwidth_no_edm
+    ethernet/test_ethernet_hop_latencies_no_edm
     noc/test_noc_unicast_vs_multicast_to_single_core_latency
     old/matmul/matmul_global_l1
     old/matmul/matmul_local_l1
@@ -42,7 +44,7 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
         ${CMAKE_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tt_metal/perf_microbenchmark/${TEST_DIR})
+    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR})
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()
