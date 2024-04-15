@@ -132,10 +132,10 @@ namespace op_profiler {
         }
 
         auto tensor_shape = tensor.get_legacy_shape();
-        ret["shape"]["W"] = tensor_shape[0];
-        ret["shape"]["Z"] = tensor_shape[1];
-        ret["shape"]["Y"] = tensor_shape[2];
-        ret["shape"]["X"] = tensor_shape[3];
+        ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
+        ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
+        ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
+        ret["shape"]["X"] = tensor_shape[-1];
         ret["layout"] = fmt::format("{}", magic_enum::enum_name(tensor.get_layout()));
         ret["dtype"] = fmt::format("{}", magic_enum::enum_name(tensor.get_dtype()));
 
