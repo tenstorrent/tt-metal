@@ -1529,15 +1529,6 @@ volatile bool HWCommandQueue::is_noc_hung() {
     return illegal_noc_txn_hang;
 }
 
-void EnqueueAddBufferToProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ADD_BUFFER_TO_PROGRAM,
-        .blocking = blocking,
-        .buffer = buffer,
-        .program = program,
-    });
-}
-
 void EnqueueAddBufferToProgramImpl(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {
     std::visit([program] (auto&& b) {
         using buffer_type = std::decay_t<decltype(b)>;
@@ -1555,18 +1546,14 @@ void EnqueueAddBufferToProgramImpl(const std::variant<std::reference_wrapper<Buf
     }, buffer);
 }
 
-void EnqueueUpdateRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
-    auto runtime_args_md = RuntimeArgsMetadata {
-            .core_coord = core_coord,
-            .runtime_args_ptr = runtime_args_ptr,
-            .kernel = kernel,
-            .update_idx = update_idx,
-    };
-    cq.run_command( CommandInterface {
-        .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
-        .blocking = blocking,
-        .runtime_args_md = runtime_args_md,
-    });
+void EnqueueAddBufferToProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
+    EnqueueAddBufferToProgramImpl(buffer, program);
+    // cq.run_command(CommandInterface{
+    //     .type = EnqueueCommandType::ADD_BUFFER_TO_PROGRAM,
+    //     .blocking = blocking,
+    //     .buffer = buffer,
+    //     .program = program,
+    // });
 }
 
 void EnqueueUpdateRuntimeArgsImpl (const RuntimeArgsMetadata& runtime_args_md) {
@@ -1589,17 +1576,19 @@ void EnqueueUpdateRuntimeArgsImpl (const RuntimeArgsMetadata& runtime_args_md) {
     }
 }
 
-void EnqueueSetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
+void EnqueueUpdateRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
     auto runtime_args_md = RuntimeArgsMetadata {
             .core_coord = core_coord,
             .runtime_args_ptr = runtime_args_ptr,
             .kernel = kernel,
+            .update_idx = update_idx,
     };
-    cq.run_command( CommandInterface {
-        .type = EnqueueCommandType::SET_RUNTIME_ARGS,
-        .blocking = blocking,
-        .runtime_args_md = runtime_args_md,
-    });
+    EnqueueUpdateRuntimeArgsImpl(runtime_args_md);
+    // cq.run_command( CommandInterface {
+    //     .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
+    //     .blocking = blocking,
+    //     .runtime_args_md = runtime_args_md,
+    // });
 }
 
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
@@ -1619,29 +1608,32 @@ void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
     runtime_args_md.kernel -> set_runtime_args(runtime_args_md.core_coord, resolved_runtime_args);
 }
 
-void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
-    cq.run_command( CommandInterface {
-        .type = EnqueueCommandType::GET_BUF_ADDR,
-        .blocking = blocking,
-        .shadow_buffer = buffer,
-        .dst = dst_buf_addr
-    });
+void EnqueueSetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
+    auto runtime_args_md = RuntimeArgsMetadata {
+            .core_coord = core_coord,
+            .runtime_args_ptr = runtime_args_ptr,
+            .kernel = kernel,
+    };
+    EnqueueSetRuntimeArgsImpl(runtime_args_md);
+    // cq.run_command( CommandInterface {
+    //     .type = EnqueueCommandType::SET_RUNTIME_ARGS,
+    //     .blocking = blocking,
+    //     .runtime_args_md = runtime_args_md,
+    // });
 }
 
 void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer) {
-    *(static_cast<uint32_t*>(dst_buf_addr)) = buffer -> address();
+    *(static_cast<uint32_t*>(dst_buf_addr)) = buffer->address();
 }
-void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {
-    auto alloc_md = AllocBufferMetadata {
-        .buffer = buffer,
-        .allocator = *(buffer->device()->allocator_),
-        .bottom_up = bottom_up,
-    };
-    cq.run_command(CommandInterface {
-        .type = EnqueueCommandType::ALLOCATE_BUFFER,
-        .blocking = blocking,
-        .alloc_md = alloc_md,
-    });
+
+void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
+    EnqueueGetBufferAddrImpl(dst_buf_addr, buffer);
+    // cq.run_command( CommandInterface {
+    //     .type = EnqueueCommandType::GET_BUF_ADDR,
+    //     .blocking = blocking,
+    //     .shadow_buffer = buffer,
+    //     .dst = dst_buf_addr
+    // });
 }
 
 void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
@@ -1656,6 +1648,24 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
     buffer->set_address(static_cast<uint64_t>(allocated_addr));
 }
 
+void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {
+    auto alloc_md = AllocBufferMetadata{
+        .buffer = buffer,
+        .allocator = *(buffer->device()->allocator_),
+        .bottom_up = bottom_up,
+    };
+    EnqueueAllocateBufferImpl(alloc_md);
+    // cq.run_command(CommandInterface {
+    //     .type = EnqueueCommandType::ALLOCATE_BUFFER,
+    //     .blocking = blocking,
+    //     .alloc_md = alloc_md,
+    // });
+}
+
+void EnqueueDeallocateBufferImpl(AllocBufferMetadata alloc_md) {
+    allocator::deallocate_buffer(alloc_md.allocator, alloc_md.device_address, alloc_md.buffer_type);
+}
+
 void EnqueueDeallocateBuffer(CommandQueue& cq, Allocator& allocator, uint32_t device_address, BufferType buffer_type, bool blocking) {
     // Need to explictly pass in relevant buffer attributes here, since the Buffer* ptr can be deallocated a this point
     auto alloc_md = AllocBufferMetadata {
@@ -1663,15 +1673,12 @@ void EnqueueDeallocateBuffer(CommandQueue& cq, Allocator& allocator, uint32_t de
         .buffer_type = buffer_type,
         .device_address = device_address,
     };
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::DEALLOCATE_BUFFER,
-        .blocking = blocking,
-        .alloc_md = alloc_md,
-    });
-}
-
-void EnqueueDeallocateBufferImpl(AllocBufferMetadata alloc_md) {
-    allocator::deallocate_buffer(alloc_md.allocator, alloc_md.device_address, alloc_md.buffer_type);
+    EnqueueDeallocateBufferImpl(alloc_md);
+    // cq.run_command(CommandInterface{
+    //     .type = EnqueueCommandType::DEALLOCATE_BUFFER,
+    //     .blocking = blocking,
+    //     .alloc_md = alloc_md,
+    // });
 }
 
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking){

@@ -11,6 +11,7 @@
 #include "impl/dispatch/work_executor.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+// #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "dev_msgs.h"
@@ -37,6 +38,7 @@ struct ProgramDeleter {
     void operator()(Program* p);
 };
 
+class TraceDescriptor;
 
 }
 
@@ -182,6 +184,13 @@ class Device {
     SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
     HWCommandQueue& hw_command_queue(size_t cq_id = 0);
     CommandQueue& command_queue(size_t cq_id = 0);
+
+    // Metal trace device capture mode
+    void begin_trace();
+    void end_trace();
+    void execute_last_trace(bool blocking);
+    void release_last_trace();
+
     bool using_slow_dispatch() const;
     void check_allocator_is_initialized() const;
 
@@ -270,6 +279,10 @@ class Device {
         return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
                 or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
     }
+
+   private:
+    std::vector<std::optional<uint32_t>> trace_insts_;
+    std::vector<std::shared_ptr<tt::tt_metal::detail::TraceDescriptor>> trace_contexts_;
 };
 
 }  // namespace tt_metal
