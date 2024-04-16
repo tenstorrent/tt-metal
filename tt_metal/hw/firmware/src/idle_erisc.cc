@@ -126,6 +126,10 @@ int main() {
                 uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
             }
+
+            while (1) {
+                RISC_POST_HEARTBEAT(heartbeat);
+            }
         }
     }
 

@@ -980,6 +980,10 @@ void kernel_main_h() {
             DPRINT << "terminating\n";
             done = true;
         }
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        uint32_t heartbeat = 0;
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     }
 }
 
@@ -1025,6 +1029,10 @@ void kernel_main_d() {
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        uint32_t heartbeat = 0;
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     }
 
     // Set upstream semaphore MSB to signal completion and path teardown
@@ -1050,11 +1058,17 @@ void kernel_main_hd() {
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride);
         cmd_ptr += stride;
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        uint32_t heartbeat = 0;
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     }
 }
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+
+
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
     } else if (is_h_variant) {
