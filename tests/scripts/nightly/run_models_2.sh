@@ -45,7 +45,7 @@ env pytest models/experimental/yolov3/tests/test_yolov3_conv.py
 
 env pytest models/experimental/efficientnet/tests/test_efficientnet_model.py
 
-env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
+env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py
 
 env pytest models/experimental/stable_diffusion/tests/test_embedding.py
 
