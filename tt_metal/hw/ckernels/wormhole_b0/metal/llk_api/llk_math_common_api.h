@@ -13,6 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
+#include "debug/status.h"
 
 // Need to revisit why we even need this
 #define EPS 1.19209e-07  // std::numeric_limits::epsilon() for FP32
@@ -22,7 +23,9 @@
  *************************************************************************/
 
 inline void llk_math_wait_for_dest_available() {
+    DEBUG_STATUS('M', 'W', 'D', 'W');
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    DEBUG_STATUS('M', 'W', 'D', 'D');
 }
 
 template <bool is_fp32_dest_acc_en = false>

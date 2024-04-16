@@ -48,6 +48,7 @@ OPS_CSV_HEADER = [
     "HOST DURATION [ns]",
     "DEVICE FW START CYCLE",
     "DEVICE FW END CYCLE",
+    "OP TO OP LATENCY [ns]",
     "DEVICE FW DURATION [ns]",
     "DEVICE KERNEL DURATION [ns]",
     "DEVICE BRISC KERNEL DURATION [ns]",
@@ -80,6 +81,7 @@ def import_tracy_op_logs():
     ops = {}
     signposts = {}
     signpostsCount = 0
+    cached_ops = {}
     with open(tracyOpDataLog, "r", newline="") as csvFile:
         opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
         opsData = []
@@ -87,13 +89,26 @@ def import_tracy_op_logs():
             opDataStr = opDataDict["MessageName"]
             opDataTime = opDataDict["total_ns"]
             if "TT_DNN" in opDataStr:
-                tmpStrs = opDataStr.split("{", 1)
+                tmpStrs = opDataStr.split(" ->\n", 1)
+                opData = {}
                 if len(tmpStrs) > 1:
                     jsonStr = tmpStrs[-1]
-                    jsonStr = "{" + jsonStr
                     opData = json.loads(jsonStr)
-                    opData["tracy_time"] = opDataTime
-                    opsData.append(opData)
+                    if "op_hash" in opData.keys():
+                        cached_ops[int(opData["op_hash"])] = opData.copy()
+                        del cached_ops[int(opData["op_hash"])]["global_call_count"]
+                else:
+                    opDataList = opDataStr.split(":", 1)[-1].split(",")
+                    assert len(opDataList) > 2, "Wrong cached op info format"
+                    opCode = opDataList[0].strip()
+                    opHash = int(opDataList[1])
+                    opID = int(opDataList[2])
+                    assert opHash in cached_ops.keys(), "Expected hashed op info is not found"
+                    opData = cached_ops[opHash].copy()
+                    opData["global_call_count"] = opID
+                opData["tracy_time"] = opDataTime
+                opsData.append(opData)
+
             if "TT_SIGNPOST" in opDataStr:
                 signpostsCount += 1
                 signposts[f"sp_{signpostsCount}"] = {"data": opDataStr, "tracy_time": opDataTime}
@@ -204,6 +219,8 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
     with open(allOpsCSVPath, "w") as allOpsCSV:
         rowDicts = []
+
+        devicePreOpTime = {}
 
         tensorCSVData = {
             "INPUT": {
@@ -317,12 +334,23 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                     rowDict["CORE COUNT"] = opData["core_usage"]["count"]
 
                 if "device_time" in opData.keys():
+                    assert "device_id" in opData.keys(), "Op has device data without device_id"
+                    deviceID = opData["device_id"]
                     for analysis, analysisData in opData["device_time"].items():
                         headerField = f"{csv_header_format(analysis)} [ns]"
                         assert len(analysisData) == 1, "Unexpected device data format"
                         rowDict[headerField] = f"{analysisData[0]['duration_ns']:.0f}"
-                    rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
-                    rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                        if analysis == "device_fw_duration":
+                            rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
+                            rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                            freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
+                            if deviceID in devicePreOpTime.keys():
+                                rowDict["OP TO OP LATENCY [ns]"] = round(
+                                    (analysisData[0]["start_cycle"] - devicePreOpTime[deviceID]) / freq
+                                )
+                            else:
+                                rowDict["OP TO OP LATENCY [ns]"] = 0
+                            devicePreOpTime[deviceID] = analysisData[0]["end_cycle"]
 
                 assert "input_tensors" in opData.keys(), "Ops must have input tensors"
                 if "optional_input_tensors" in opData.keys():

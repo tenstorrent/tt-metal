@@ -942,6 +942,8 @@ def eltwise_softmax(
 def eltwise_softplus(
     x,
     *args,
+    beta,
+    threshold,
     device,
     dtype,
     layout,
@@ -950,7 +952,7 @@ def eltwise_softplus(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softplus(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.softplus(t0, beta, threshold, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
 
 
@@ -1261,6 +1263,22 @@ def eltwise_silu(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.silu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_sigmoid_accurate(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sigmoid_accurate(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 

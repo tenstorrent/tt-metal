@@ -36,6 +36,12 @@ def test_hardtanh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_sigmoid_accurate(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.sigmoid_accurate, torch.sigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_hardswish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.hardswish, F.hardswish)
 

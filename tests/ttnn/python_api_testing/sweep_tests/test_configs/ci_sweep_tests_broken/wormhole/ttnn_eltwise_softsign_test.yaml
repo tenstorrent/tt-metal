@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-signbit:
+  - ttnn-eltwise-softsign:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -22,4 +22,4 @@ test-list:
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_signbit_sweep.csv
+      output-file: eltwise_softsign_sweep.csv

@@ -201,6 +201,13 @@ def main():
     parser.add_option(
         "-t", "--port", action="store", help="Internal port used by the script", type="string", dest="port"
     )
+    parser.add_option(
+        "--no-op-info-cache",
+        dest="opInfoCache",
+        action="store_false",
+        help="Show full op info for cached ops as well",
+        default=True,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -215,6 +222,13 @@ def main():
         port = options.port
     else:
         port = get_available_port()
+
+    opInfoCacheStr = "TT_METAL_PROFILER_NO_CACHE_OP_INFO"
+    if options.opInfoCache:
+        if opInfoCacheStr in os.environ.keys():
+            del os.environ[opInfoCacheStr]
+    else:
+        os.environ[opInfoCacheStr] = "1"
 
     if len(args) > 0:
         doReport = False

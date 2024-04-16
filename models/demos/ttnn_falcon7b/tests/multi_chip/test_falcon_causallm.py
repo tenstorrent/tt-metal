@@ -62,6 +62,10 @@ PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "enable_async, num_loops",
+    ((True, 20), (False, 1)),
+)
 def test_falcon_causal_lm(
     device_mesh,
     use_program_cache,
@@ -73,7 +77,12 @@ def test_falcon_causal_lm(
     num_layers,
     expected_pcc,
     model_config_str,
+    enable_async,
+    num_loops,
 ):
+    for device in device_mesh.get_device_ids():
+        device_mesh.get_device(device).enable_async(enable_async)
+
     torch.manual_seed(0)
     batch = device_batch_size * device_mesh.get_num_devices()
     if llm_mode == "decode":
@@ -159,35 +168,41 @@ def test_falcon_causal_lm(
     )
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
-        tt_outs = []
-        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
-            llm_mode, model_input, kv_cache_len, num_input_tokens=seq_len
-        )
-        tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
-            llm_mode=llm_mode,
-            attention_mask=tt_attention_mask,
-            user_id=0,
-            layer_past=tt_layer_past,
-            layer_past_len=kv_cache_len,
-            use_cache=True,
-        )
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+        for loop in range(num_loops):
+            tt_outs = []
+            tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+                llm_mode, model_input, kv_cache_len, num_input_tokens=seq_len
+            )
+            tt_out, tt_layer_present = tt_FalconCausalLM(
+                input_embeddings=tt_embeddings,
+                llm_mode=llm_mode,
+                attention_mask=tt_attention_mask,
+                user_id=0,
+                layer_past=tt_layer_past,
+                layer_past_len=kv_cache_len,
+                use_cache=True,
+            )
+            # Explicitly move tensor to host ... in async mode this is faster than calling from torch directly,
+            # due to parallelization of tensor shards
+            tt_out = ttnn.from_device(tt_out)
+            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
 
     elif llm_mode == "decode":
-        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
-            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
-        )
-        tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
-            llm_mode=llm_mode,
-            attention_mask=tt_attention_mask,
-            layer_past=tt_layer_past,
-            layer_past_len=kv_cache_len,
-            use_cache=True,
-        )
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
-        tt_out = tt_out.transpose(0, 1)
+        for loop in range(num_loops):
+            tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+                llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
+            )
+            tt_out, tt_layer_present = tt_FalconCausalLM(
+                input_embeddings=tt_embeddings,
+                llm_mode=llm_mode,
+                attention_mask=tt_attention_mask,
+                layer_past=tt_layer_past,
+                layer_past_len=kv_cache_len,
+                use_cache=True,
+            )
+            tt_out = ttnn.from_device(tt_out)
+            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+            tt_out = tt_out.transpose(0, 1)
 
     passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
@@ -223,3 +238,6 @@ def test_falcon_causal_lm(
         logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
     logger.info("Falcon CausalLM Passed!")
+
+    for device in device_mesh.get_device_ids():
+        device_mesh.get_device(device).enable_async(False)

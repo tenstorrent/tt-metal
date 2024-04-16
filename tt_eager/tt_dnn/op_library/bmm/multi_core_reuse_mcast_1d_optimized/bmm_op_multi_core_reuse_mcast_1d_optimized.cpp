@@ -291,7 +291,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
-
     KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
@@ -871,7 +870,6 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         mcast_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
-
 
     auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
         program,

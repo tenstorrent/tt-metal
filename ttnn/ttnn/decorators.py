@@ -757,6 +757,9 @@ def register_operation(
     def operation_decorator(function: callable):
         global REGISTERED_OPERATIONS
 
+        if ttnn.CONFIG.enable_fast_runtime_mode:
+            return function
+
         operation = Operation(
             name=name,
             function=function,

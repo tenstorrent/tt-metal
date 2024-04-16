@@ -209,19 +209,24 @@ const operation::Hash Unpad::compute_program_hash (
 Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    auto input_tensor_shape = input_tensor_a.get_legacy_shape();
-    const Shape output_tensor_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
-    if (input_tensor_a.get_legacy_shape() == output_tensor_shape) {
-        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
-    }
-
-    return operation::run(Unpad{output_tensor_start, output_tensor_end, output_mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
-
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [output_tensor_start, output_tensor_end, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                auto& input_tensor_a = input_tensors.at(0);
+                auto input_tensor_shape = input_tensor_a.get_legacy_shape();
+                const Shape output_tensor_shape = {
+                    output_tensor_end[0] - output_tensor_start[0] + 1,
+                    output_tensor_end[1] - output_tensor_start[1] + 1,
+                    output_tensor_end[2] - output_tensor_start[2] + 1,
+                    output_tensor_end[3] - output_tensor_start[3] + 1,
+                };
+                if (input_tensor_a.get_legacy_shape() == output_tensor_shape) {
+                    return {AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config)};
+                }
+                return operation::run(Unpad{output_tensor_start, output_tensor_end, output_mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a});
+        },
+    {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 void UnpadOnHost::validate(const std::vector<Tensor> &input_tensors) const {

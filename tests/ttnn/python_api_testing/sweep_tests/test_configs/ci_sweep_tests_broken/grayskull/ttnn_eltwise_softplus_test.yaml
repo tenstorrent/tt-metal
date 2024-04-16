@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-softshrink:
+  - ttnn-eltwise-softplus:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -13,13 +13,13 @@ test-list:
         function: gen_rand
         args:
           low: -100
-          high: 100
+          high: 0.1
       comparison:
         function: comp_pcc
-      args-gen: gen_shrink_args
+      args-gen: gen_softplus_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_softshrink_sweep.csv
+      output-file: eltwise_softplus_sweep.csv

@@ -353,6 +353,7 @@ from ttnn.operations.activation import (
     prelu,
     relu6,
     sigmoid,
+    sigmoid_accurate,
     sign,
     softshrink,
     softsign,
