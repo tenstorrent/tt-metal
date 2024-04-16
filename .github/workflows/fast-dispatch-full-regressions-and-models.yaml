@@ -50,22 +50,22 @@ jobs:
           env pytest models/experimental/whisper -k whisper_attention
           env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
 
-          env pytest models/experimental/deit/tests/test_deit_for_image_classification_with_teacher.py -k test_deit_for_image_classification_with_teacher_inference
+          env pytest models/experimental/deit/tests/test_deit_for_image_classification_with_teacher.py
 
-          env pytest models/experimental/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
+          env pytest models/experimental/vit/tests/test_vit_image_classification.py
 
-          env pytest models/experimental/t5/tests -k t5_dense_act_dense
-          env pytest models/experimental/t5/tests -k t5_layer_norm
-          env pytest models/experimental/t5/tests -k t5_layer_ff
+          env pytest models/experimental/t5/tests/test_t5_dense_act_dense.py
+          env pytest models/experimental/t5/tests/test_t5_layer_norm.py
+          env pytest models/experimental/t5/tests/test_t5_layer_ff.py
 
-          env pytest models/experimental/roberta/tests -k roberta_self_attention
-          env pytest models/experimental/roberta/tests -k roberta_self_output
-          env pytest models/experimental/roberta/tests -k roberta_attention
-          env pytest models/experimental/roberta/tests -k roberta_intermediate
-          env pytest models/experimental/roberta/tests -k roberta_output
-          env pytest models/experimental/roberta/tests -k roberta_pooler
-          env pytest models/experimental/roberta/tests -k roberta_lm_head
-          env pytest models/experimental/roberta/tests -k roberta_classification_head
+          env pytest models/experimental/roberta/tests/test_roberta_self_attention.py
+          env pytest models/experimental/roberta/tests/test_roberta_self_output.py
+          env pytest models/experimental/roberta/tests/test_roberta_attention.py
+          env pytest models/experimental/roberta/tests/test_roberta_intermediate.py
+          env pytest models/experimental/roberta/tests/test_roberta_output.py
+          env pytest models/experimental/roberta/tests/test_roberta_pooler.py
+          env pytest models/experimental/roberta/tests/test_roberta_lm_head.py
+          env pytest models/experimental/roberta/tests/test_roberta_classification_head.py
 
           env pytest models/experimental/bloom/tests -k baddbmm
           env pytest models/experimental/bloom/tests -k bloom_attention
