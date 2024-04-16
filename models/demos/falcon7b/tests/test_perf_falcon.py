@@ -428,6 +428,7 @@ class TestParametrized:
             "decode_batch32_2047",
         ],
     )
+    @pytest.mark.parametrize("async_mode", (False, True))
     @skip_for_grayskull()
     def test_perf_wh_bare_metal(
         self,
@@ -446,13 +447,23 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         all_devices,
+        async_mode,
     ):
         if num_devices > 1:
             pytest.skip(f"num_devices={num_devices} is not supported on CI yet")
         if model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 2047:
             pytest.skip(f"kv_cache_len={kv_cache_len} does not fit with L1_SHARDED")
-        devices = get_devices_for_t3000(all_devices, num_devices)
+        if async_mode:
+            if llm_mode == "prefill" and seq_len == 128:
+                pytest.skip(f"Skipping {llm_mode} with {seq_len} in async mode")
+            if llm_mode == "decode" and not (kv_cache_len == 2047):
+                if not (model_config_str == "BFLOAT16-L1_SHARDED" or kv_cache_len == 1024):
+                    pytest.skip(f"Skipping {llm_mode} with {kv_cache_len} in async mode")
 
+        devices = get_devices_for_t3000(all_devices, num_devices)
+        # Enable Async Mode
+        for device in devices:
+            device.enable_async(async_mode)
         model_config = get_model_config(model_config_str)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]

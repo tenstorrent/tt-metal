@@ -342,7 +342,12 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         TT_FATAL(input_tensor_a.get_dtype()==DataType::BFLOAT16);
         return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
     }
-    return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [N, C, H, W, output_mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, input_tensors);
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 } // namespace tt_metal

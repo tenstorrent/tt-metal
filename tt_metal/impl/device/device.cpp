@@ -58,7 +58,7 @@ void ActiveDevices::deactivate_device(chip_id_t id) {
     this->active_devices_[id] = ActiveState::INACTIVE;
 }
 
-Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs)
+Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id)
 {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");

@@ -7,7 +7,8 @@ from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
 
 
-@pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
+@pytest.mark.parametrize("perf_mode", (True,))  # Option to measure perf using max seq length (with invalid outputs)
+@pytest.mark.parametrize("async_mode", (False,))  # Option to run Falcon in Async mode
 @pytest.mark.parametrize("num_devices", (1, 2, 3, 4, 5, 6, 7, 8))
 def test_demo_multichip(
     perf_mode,
@@ -17,10 +18,13 @@ def test_demo_multichip(
     get_tt_cache_path,
     all_devices,
     use_program_cache,
+    async_mode,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     devices = get_devices_for_t3000(all_devices, num_devices)
 
+    for device in devices:
+        device.enable_async(async_mode)
     return run_falcon_demo_kv(
         user_input=user_input,
         batch_size=32,
