@@ -46,6 +46,7 @@ enum class EnqueueCommandType {
     ENQUEUE_WAIT_FOR_EVENT,
     FINISH,
     FLUSH,
+    TERMINATE,
     INVALID
 };
 
@@ -369,6 +370,27 @@ class EnqueueTraceCommand : public Command {
     constexpr bool has_side_effects() { return true; }
 };
 
+class EnqueueTerminateCommand : public Command {
+   private:
+    uint32_t command_queue_id;
+    Device* device;
+    SystemMemoryManager& manager;
+
+   public:
+    EnqueueTerminateCommand(
+        uint32_t command_queue_id,
+        Device* device,
+        SystemMemoryManager& manager);
+
+    const DeviceCommand assemble_device_commands();
+
+    void process();
+
+    EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
+
+    constexpr bool has_side_effects() { return false; }
+};
+
 namespace detail {
 class TraceDescriptor;
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
@@ -509,7 +531,7 @@ class HWCommandQueue {
     void enqueue_wait_for_event(std::shared_ptr<Event> sync_event, bool clear_count = false);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish();
-    void launch(launch_msg_t& msg);
+    void terminate();
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
@@ -522,6 +544,7 @@ class HWCommandQueue {
     friend void FinishImpl(CommandQueue & cq);
     friend void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
     friend class CommandQueue;
+    friend class Device;
 };
 
 // Common interface for all command queue types

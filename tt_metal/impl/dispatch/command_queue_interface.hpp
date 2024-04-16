@@ -14,15 +14,23 @@
 
 using namespace tt::tt_metal;
 
+// todo consider moving these to dispatch_addr_map
+static constexpr uint32_t PCIE_ALIGNMENT = 32;
+static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
+
 typedef uint32_t prefetch_q_entry_type;
 static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 static constexpr uint32_t PREFETCH_Q_ENTRIES = 128;
+static constexpr uint32_t PREFETCH_Q_SIZE = PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
 static constexpr uint32_t MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
-static constexpr uint32_t CMDDAT_Q_SIZE = 128 * 1024;
-static constexpr uint32_t SCRATCH_DB_SIZE = 128 * 1024;
+static constexpr uint32_t PREFETCH_Q_BASE = DISPATCH_L1_UNRESERVED_BASE;
 
-static constexpr uint32_t PCIE_ALIGNMENT = 32;
-static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
+static constexpr uint32_t CMDDAT_Q_BASE = PREFETCH_Q_BASE + ((PREFETCH_Q_SIZE + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
+
+// TODO: three below should be diff for tensix/eth and be configurable
+static constexpr uint32_t CMDDAT_Q_SIZE = 64 * 1024;
+static constexpr uint32_t SCRATCH_DB_BASE = CMDDAT_Q_BASE + ((CMDDAT_Q_SIZE + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
+static constexpr uint32_t SCRATCH_DB_SIZE = 64 * 1024;
 
 static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
 static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;

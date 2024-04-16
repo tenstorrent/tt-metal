@@ -918,6 +918,42 @@ void EnqueueTraceCommand::process() {
     // log_trace(LogDispatch, "EnqueueTraceCommand issued write_ptr={}, fetch_size={}, commands={}", write_ptr, fetch_size_bytes, this->commands);
 }
 
+EnqueueTerminateCommand::EnqueueTerminateCommand(
+    uint32_t command_queue_id,
+    Device* device,
+    SystemMemoryManager& manager) :
+    command_queue_id(command_queue_id), device(device), manager(manager) {}
+
+const DeviceCommand EnqueueTerminateCommand::assemble_device_commands() {
+    uint32_t cmd_sequence_sizeB =
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_TERMINATE
+
+    DeviceCommand command_sequence(cmd_sequence_sizeB);
+    command_sequence.add_dispatch_terminate();
+    command_sequence.add_prefetch_terminate();
+
+    return command_sequence;
+}
+
+void EnqueueTerminateCommand::process() {
+    DeviceCommand command_sequence = this->assemble_device_commands();
+
+    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+
+    // move this into the command queue interface
+    TT_ASSERT(fetch_size_bytes <= MAX_PREFETCH_COMMAND_SIZE, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((fetch_size_bytes >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
+    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+}
+
+
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
     manager(device->sysmem_manager()), completion_queue_thread{} {
@@ -1591,6 +1627,14 @@ volatile bool HWCommandQueue::is_dprint_server_hung() {
 
 volatile bool HWCommandQueue::is_noc_hung() {
     return illegal_noc_txn_hang;
+}
+
+void HWCommandQueue::terminate() {
+    ZoneScopedN("HWCommandQueue_terminate");
+    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id);
+    std::cout << "Sent terminate command!" << std::endl;
+    auto command = EnqueueTerminateCommand(this->id, this->device, this->manager);
+    this->enqueue_command(command, false);
 }
 
 void EnqueueAddBufferToProgramImpl(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {

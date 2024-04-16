@@ -140,3 +140,17 @@ void DeviceCommand::add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_
 
     this->write_to_cmd_sequence(&exec_buf_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
 }
+
+void DeviceCommand::add_dispatch_terminate() {
+    this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+    CQDispatchCmd terminate_cmd;
+    terminate_cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
+    this->write_to_cmd_sequence(&terminate_cmd, sizeof(CQDispatchCmd));
+}
+
+void DeviceCommand::add_prefetch_terminate() {
+    CQPrefetchCmd terminate_cmd;
+    terminate_cmd.base.cmd_id = CQ_PREFETCH_CMD_TERMINATE;
+
+    this->write_to_cmd_sequence(&terminate_cmd, sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+}

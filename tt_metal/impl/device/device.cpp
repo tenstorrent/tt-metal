@@ -329,14 +329,18 @@ void Device::compile_command_queue_programs() {
 
     constexpr uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t dispatch_buffer_base = get_dispatch_buffer_base();
-    constexpr uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-    constexpr uint32_t prefetch_q_size = PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
-    constexpr uint32_t noc_read_alignment = 32;
-    constexpr uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-    constexpr uint32_t scratch_db_base = cmddat_q_base + ((CMDDAT_Q_SIZE + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-    static_assert(scratch_db_base < MEM_L1_SIZE);
+
+    std::cout << "DISPATCH_L1_UNRESERVED_BASE " << DISPATCH_L1_UNRESERVED_BASE
+              << " prefetch q base " << PREFETCH_Q_BASE << " size " << PREFETCH_Q_SIZE
+              << " cmdat q base " << CMDDAT_Q_BASE << " size " << CMDDAT_Q_SIZE
+              << " scratch db base " << SCRATCH_DB_BASE << " size " << SCRATCH_DB_SIZE << std::endl;
+
+    static_assert(SCRATCH_DB_BASE + SCRATCH_DB_SIZE < MEM_ETH_SIZE);
 
     constexpr uint32_t prefetch_d_buffer_pages = PREFETCH_D_BUFFER_SIZE >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+
+    std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
+    std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
 
     // TODO: These are semaphore IDs, remove these when CreateSemaphore returns ID rather than address
     constexpr uint32_t prefetch_sync_sem = 0;
@@ -372,6 +376,14 @@ void Device::compile_command_queue_programs() {
                 CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, dispatch_core_type);
                 CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
 
+                if (dispatch_core_type == CoreType::WORKER) {
+                    std::cout << "Dispatching on tenix:\t";
+                } else {
+                    std::cout << "Dispatching on ethernet:\t";
+                }
+                std::cout << "Prefetch " << prefetch_location.str() << " physical " << prefetch_physical_core.str()
+                          << " Dispatch " << dispatch_location.str() << " physical " << dispatch_physical_core.str() << std::endl;
+
                 uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t issue_queue_start_addr = command_queue_start_addr + CQ_START;
                 uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
@@ -399,12 +411,12 @@ void Device::compile_command_queue_programs() {
                     dispatch_cb_sem,
                     issue_queue_start_addr,
                     issue_queue_size,
-                    prefetch_q_base,
+                    PREFETCH_Q_BASE,
                     PREFETCH_Q_ENTRIES * (uint32_t)sizeof(prefetch_q_entry_type),
                     CQ_PREFETCH_Q_RD_PTR,
-                    cmddat_q_base,
+                    CMDDAT_Q_BASE,
                     CMDDAT_Q_SIZE,
-                    scratch_db_base,
+                    SCRATCH_DB_BASE,
                     SCRATCH_DB_SIZE,
                     prefetch_sync_sem,
                     prefetch_d_buffer_pages, // prefetch_d only
@@ -417,19 +429,27 @@ void Device::compile_command_queue_programs() {
                     true    // is_host_variant
                 };
 
-                tt::tt_metal::CreateKernel(
-                    *command_queue_program_ptr,
-                    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp", // update this for remote device
-                    prefetch_location,
-                    tt::tt_metal::DataMovementConfig {
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                        .noc = tt::tt_metal::NOC::RISCV_0_default,
-                        .compile_args = prefetch_compile_args,
-                        .defines = prefetch_defines});
+                if (dispatch_core_type == CoreType::WORKER) {
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr, prefetch_kernel_path, prefetch_location,
+                        DataMovementConfig{
+                            .processor = DataMovementProcessor::RISCV_1,
+                            .noc = NOC::NOC_0,
+                            .compile_args = prefetch_compile_args,
+                            .defines = prefetch_defines});
+                } else {
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr, prefetch_kernel_path, prefetch_location,
+                        EthernetConfig{
+                            .eth_mode = Eth::IDLE,
+                            .noc = NOC::NOC_0,
+                            .compile_args = prefetch_compile_args,
+                            .defines = prefetch_defines});
+                }
 
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0);
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, dispatch_buffer_pages);
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0, dispatch_core_type);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, dispatch_buffer_pages, dispatch_core_type);
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0, dispatch_core_type);
 
                 if (device_id == this->id()) {
                     std::map<string, string> dispatch_defines = {
@@ -461,19 +481,27 @@ void Device::compile_command_queue_programs() {
                         true    // is_host_variant
                     };
 
-                    tt::tt_metal::CreateKernel(
-                        *command_queue_program_ptr,
-                        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                        dispatch_location,
-                        tt::tt_metal::DataMovementConfig {
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                            .noc = tt::tt_metal::NOC::RISCV_0_default,
-                            .compile_args = dispatch_compile_args,
-                            .defines = dispatch_defines});
+                    if (dispatch_core_type == CoreType::WORKER) {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr, dispatch_kernel_path, dispatch_location,
+                            DataMovementConfig{
+                                .processor = DataMovementProcessor::RISCV_1,
+                                .noc = NOC::NOC_0,
+                                .compile_args = dispatch_compile_args,
+                                .defines = dispatch_defines});
+                    } else {
+                        tt::tt_metal::CreateKernel(
+                            *command_queue_program_ptr, dispatch_kernel_path, dispatch_location,
+                            EthernetConfig{
+                                .eth_mode = Eth::IDLE,
+                                .noc = NOC::NOC_0,
+                                .compile_args = dispatch_compile_args,
+                                .defines = dispatch_defines});
+                    }
 
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, dispatch_buffer_pages);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0, dispatch_core_type);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0, dispatch_core_type);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, dispatch_buffer_pages, dispatch_core_type);
 
                 } else {
                     TT_THROW("FD2.0 does not support R chip yet");
@@ -498,8 +526,6 @@ void Device::configure_command_queue_programs() {
 
     TT_ASSERT(this->command_queue_programs.size() == 1);
     Program& command_queue_program = *this->command_queue_programs[0];
-
-    uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         // Reset the host manager's pointer for this command queue
@@ -533,24 +559,24 @@ void Device::configure_command_queue_programs() {
                 // Initialize the FetchQ
                 std::vector<uint32_t> prefetch_q(PREFETCH_Q_ENTRIES, 0);
                 std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
-                    (uint32_t)(prefetch_q_base + PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type))
+                    (uint32_t)(PREFETCH_Q_BASE + PREFETCH_Q_SIZE)
                 };
-                detail::WriteToDeviceL1(this, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data);
-                detail::WriteToDeviceL1(this, prefetch_location, prefetch_q_base, prefetch_q);
+                detail::WriteToDeviceL1(this, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
+                detail::WriteToDeviceL1(this, prefetch_location, PREFETCH_Q_BASE, prefetch_q, dispatch_core_type);
 
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ0_COMPLETION_LAST_EVENT, zero);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ1_COMPLETION_LAST_EVENT, zero);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ0_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
+                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ1_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
 
                 // Initialize address where workers signal to completion to dispatch core
                 // This value is always increasing
-                detail::WriteToDeviceL1(this, dispatch_location, DISPATCH_MESSAGE_ADDR, zero);
+                detail::WriteToDeviceL1(this, dispatch_location, DISPATCH_MESSAGE_ADDR, zero, dispatch_core_type);
             }
         }
     }
@@ -639,6 +665,10 @@ bool Device::close() {
     watcher_detach(this);
     DprintServerDetach(this);
 
+    for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
+        hw_command_queue->terminate();
+    }
+
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -654,9 +684,9 @@ bool Device::close() {
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
 
-    if (llrt::OptionsG.get_clear_l1()) {
-        this->clear_l1_state();
-    }
+    // if (llrt::OptionsG.get_clear_l1()) {
+    //     this->clear_l1_state();
+    // }
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
