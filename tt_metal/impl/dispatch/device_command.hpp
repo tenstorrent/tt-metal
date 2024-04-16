@@ -41,6 +41,10 @@ class DeviceCommand {
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
+    void add_dispatch_terminate();
+
+    void add_prefetch_terminate();
+
     void update_cmd_sequence(uint32_t cmd_idx, const void *new_data, uint32_t data_sizeB) {
         memcpy(this->cmd_sequence.data() + cmd_idx, new_data, data_sizeB);
     }
