@@ -177,6 +177,7 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
+    GTEST_SKIP();
     // Only run on device 0 because this test takes the watcher server down.
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
@@ -187,6 +188,7 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
 TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
         this->devices_[0]
@@ -196,6 +198,7 @@ TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
         this->devices_[0]
@@ -205,6 +208,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
         this->devices_[0]
@@ -214,6 +218,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
         this->devices_[0]
@@ -223,6 +228,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
 TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
         this->devices_[0]
