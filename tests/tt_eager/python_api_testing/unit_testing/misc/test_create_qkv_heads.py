@@ -21,7 +21,7 @@ def run_create_qkv_heads_test(
     cores_h,
     cores_w,
     device,
-    transpose_k=False,
+    transpose_k,
     in_mem_config=None,
     out_mem_config=None,
 ):
@@ -73,12 +73,16 @@ def run_create_qkv_heads_test(
         in0_t,
         num_q_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
-        transpose_k_heads=False,
+        transpose_k_heads=transpose_k,
         output_mem_config=out_mem_config,
     )
 
     assert list(q.get_legacy_shape()) == [batch, num_q_heads, seq_len, head_dim]
-    assert list(k.get_legacy_shape()) == [batch, num_kv_heads, seq_len, head_dim]
+    if transpose_k:
+        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, head_dim, seq_len]
+    else:
+        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, seq_len, head_dim]
+
     assert list(v.get_legacy_shape()) == [batch, num_kv_heads, seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
@@ -93,8 +97,15 @@ def run_create_qkv_heads_test(
     ref_k = torch.reshape(ref_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
     ref_v = torch.reshape(ref_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
 
+    if transpose_k:
+        ref_k = torch.transpose(ref_k, -2, -1)
+
     if dtype == ttl.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
+    elif (
+        dtype == ttl.tensor.DataType.FLOAT32 and transpose_k
+    ):  # conversion from fp32 to tf32 when unpack writes to register for compute will decrease pcc in the transpose case
+        pcc = 0.9999999
     else:
         pcc = 1.0
 
@@ -121,6 +132,10 @@ def run_create_qkv_heads_test(
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
+    "transpose_k",
+    (True, False),
+)
+@pytest.mark.parametrize(
     "batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w",
     (
         (7, 224, 8, 8, 64, 7, 8),
@@ -138,6 +153,7 @@ def test_nlp_create_qkv_heads_test(
     num_q_heads,
     num_kv_heads,
     head_dim,
+    transpose_k,
     cores_h,
     cores_w,
     dtype,
@@ -146,4 +162,6 @@ def test_nlp_create_qkv_heads_test(
     if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
-    run_create_qkv_heads_test(batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device)
+    run_create_qkv_heads_test(
+        batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
+    )
