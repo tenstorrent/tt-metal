@@ -1,5 +1,5 @@
-env pytest models/experimental/whisper -k whisper_attention
-env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
+env pytest models/experimental/whisper/tests/test_whisper_attention.py
+env pytest models/experimental/whisper/tests/test_whisper_decoder_layer.py
 
 env pytest models/experimental/deit/tests/test_deit_for_image_classification_with_teacher.py
 
@@ -18,43 +18,39 @@ env pytest models/experimental/roberta/tests/test_roberta_pooler.py
 env pytest models/experimental/roberta/tests/test_roberta_lm_head.py
 env pytest models/experimental/roberta/tests/test_roberta_classification_head.py
 
-env pytest models/experimental/bloom/tests -k baddbmm
-env pytest models/experimental/bloom/tests -k bloom_attention
-env pytest models/experimental/bloom/tests -k bloom_gelu_forward
-env pytest models/experimental/bloom/tests -k bloom_merge_heads
-env pytest models/experimental/bloom/tests -k bloom_mlp
+env pytest models/experimental/bloom/tests/test_baddbmm.py
+env pytest models/experimental/bloom/tests/test_bloom_attention.py
+env pytest models/experimental/bloom/tests/test_bloom_gelu_forward.py
+env pytest models/experimental/bloom/tests/test_bloom_merge_heads.py
+env pytest models/experimental/bloom/tests/test_bloom_mlp.py
 
 env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py -k batch_7-BFLOAT8_B-SHARDED
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_7
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_7
 
-env pytest models/experimental/synthetic_gradients/tests -k test_batchnorm1d
-env pytest models/experimental/synthetic_gradients/tests -k test_linear
-env pytest models/experimental/synthetic_gradients/tests -k test_block
-env pytest models/experimental/synthetic_gradients/tests -k test_full_inference
+env pytest models/experimental/synthetic_gradients/tests/
 
-env pytest models/experimental/lenet/tests -k test_lenet_inference
+env pytest models/experimental/lenet/tests/test_lenet.py
 
-env pytest models/experimental/convnet_mnist/tests -k mnist_inference
+env pytest models/experimental/convnet_mnist/tests/test_convnet_mnist.py
 
-env pytest models/experimental/yolov5/tests -k Yolov5_detection_model
-env pytest models/experimental/yolov3 -k conv2d_module
-env pytest models/experimental/yolov3 -k conv_module
-env pytest models/experimental/yolov3 -k concat_module
-env pytest models/experimental/yolov3 -k bottleneck_module
-env pytest models/experimental/yolov3 -k detect_module
-env pytest models/experimental/yolov3 -k detection_model
-env pytest models/experimental/yolov3 -k upsample_module
+env pytest models/experimental/yolov5/tests/test_yolov5_detection_model.py
 
-env pytest models/experimental/efficientnet/tests -k efficientnet_b0_model_real
-env pytest models/experimental/efficientnet/tests -k efficientnet_v2_s_model_real
-env pytest models/experimental/efficientnet/tests -k efficientnet_lite0_model_real
+env pytest models/experimental/yolov3/tests/test_yolov3_upsample.py
+env pytest models/experimental/yolov3/tests/test_yolov3_concat.py
+env pytest models/experimental/yolov3/tests/test_yolov3_conv2d.py
+env pytest models/experimental/yolov3/tests/test_yolov3_bottleneck.py
+env pytest models/experimental/yolov3/tests/test_yolov3_detection_model.py
+env pytest models/experimental/yolov3/tests/test_yolov3_detect.py
+env pytest models/experimental/yolov3/tests/test_yolov3_conv.py
+
+env pytest models/experimental/efficientnet/tests/test_efficientnet_model.py
 
 env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
 
 env pytest models/experimental/stable_diffusion/tests/test_embedding.py
 
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_mlp
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_rotary_embeddings
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_attention
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_decoder
+env pytest models/demos/ttnn_falcon7b/tests/test_falcon_mlp.py
+env pytest models/demos/ttnn_falcon7b/tests/test_falcon_rotary_embedding.py
+env pytest models/demos/ttnn_falcon7b/tests/test_falcon_attention.py
+env pytest models/demos/ttnn_falcon7b/tests/test_falcon_decoder.py
