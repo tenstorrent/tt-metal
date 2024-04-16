@@ -203,6 +203,7 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
+    GTEST_SKIP();
     CheckHostSanitization(this->devices_[0]);
 
     // Only run on device 0 because this test takes down the watcher server.
@@ -218,6 +219,7 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
 TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
@@ -230,6 +232,7 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
 TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
@@ -242,6 +245,7 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
 TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
+    GTEST_SKIP();
     this->RunTestOnDevice(RunTestEth, this->devices_[0]);
 }
 

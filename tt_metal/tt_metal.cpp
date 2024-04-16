@@ -136,6 +136,12 @@ inline void SetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kerne
 }  // namespace
 
 //#define DEBUG_PRINT_SHARD
+namespace device_pool {
+
+// Definition of the global device vector
+    std::vector<Device*> devices;
+
+} // device_pool
 
 namespace detail {
 
@@ -151,9 +157,9 @@ std::map<chip_id_t, Device *> CreateDevices(
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
             for (const auto &mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (mmio_controlled_device_id != mmio_device_id) {
-                    continue;
-                }
+                //if (mmio_controlled_device_id != mmio_device_id) {
+                //    continue;
+                //}
                 Device *dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
                 detail::InitDeviceProfiler(dev);
@@ -718,6 +724,12 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         }
     }
 
+    Device *GetDeviceHandle(chip_id_t device_id) {
+        ZoneScoped;
+        TT_ASSERT(device_id < device_pool::devices.size());
+        TT_ASSERT(device_pool::devices[device_id] != nullptr);
+        return device_pool::devices[device_id];
+    }
 }   // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -751,6 +763,11 @@ Device *CreateDevice(
 bool CloseDevice(Device *device) {
     ZoneScoped;
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+    auto device_id = device->id();
+    TT_ASSERT(device_id < device_pool::devices.size());
+    if (device_pool::devices[device_id] != nullptr) {
+        device_pool::devices[device_id] = nullptr;
+    }
     return device->close();
 }
 

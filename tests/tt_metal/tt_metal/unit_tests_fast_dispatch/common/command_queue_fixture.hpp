@@ -51,15 +51,14 @@ class CommandQueueMultiDeviceFixture : public ::testing::Test {
         if (num_devices_ < 2 ) {
             GTEST_SKIP();
         }
-        // TODO: enable all devices here after R chip support on FD2
         std::vector<chip_id_t> chip_ids;
-        for (unsigned int id = 0; id < 4; id++) {
+        for (unsigned int id = 0; id < num_devices_; id++) {
             chip_ids.push_back(id);
         }
 
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
-        for (const auto &id : chip_ids) {
-            devices_.push_back(reserved_devices_.at(id));
+        for (const auto &[id, device] : reserved_devices_) {
+            devices_.push_back(device);
         }
     }
 
