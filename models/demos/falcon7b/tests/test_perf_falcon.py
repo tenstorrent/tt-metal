@@ -455,10 +455,14 @@ class TestParametrized:
             pytest.skip(f"kv_cache_len={kv_cache_len} does not fit with L1_SHARDED")
         if async_mode:
             if llm_mode == "prefill" and seq_len == 128:
-                pytest.skip(f"Skipping {llm_mode} with {seq_len} in async mode")
+                pytest.skip(
+                    f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
+                )
             if llm_mode == "decode" and not (kv_cache_len == 2047):
-                if not (model_config_str == "BFLOAT16-L1_SHARDED" or kv_cache_len == 1024):
-                    pytest.skip(f"Skipping {llm_mode} with {kv_cache_len} in async mode")
+                if not (model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 1024):
+                    pytest.skip(
+                        f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
+                    )
 
         devices = get_devices_for_t3000(all_devices, num_devices)
         # Enable Async Mode

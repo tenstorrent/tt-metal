@@ -375,7 +375,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         using namespace pybind11::literals;
         py::object torch = py::module_::import("torch");
         auto frombuffer = torch.attr("frombuffer");
-
         auto buffer = std::visit(
             [](auto &&storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
                 using T = std::decay_t<decltype(storage)>;
@@ -895,6 +894,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
             .def(
+                "sync",
+                [](Tensor &self) { return self.wait_for_tensor_data_populated(); }
+            )
+            .def(
                 "extract_shard",
                 [](const Tensor &self, CoreCoord core) { return self.extract_shard(core); },
                 py::arg("core").noconvert(),
@@ -958,7 +961,12 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     tt_tensor = tt_tensor.cpu_sharded()
             )doc")
-            .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
+            .def(
+                "to",
+                py::overload_cast<Layout, Device*>(&Tensor::to, py::const_),
+                py::arg("target_layout").noconvert(),
+                py::arg("worker") = nullptr,
+                R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:
 
                 * ROW_MAJOR to TILE

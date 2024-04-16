@@ -179,6 +179,35 @@ def torch2tt_tensor(
     return tt_tensor
 
 
+def tt_tensors_to_torch_tensors(tt_tensors_device):
+    # Issue non-blocking reads across all devices. This allows for reads across devices to overlap
+    tensors_on_host = [tt_tensor_device.cpu(False) for tt_tensor_device in tt_tensors_device]
+    # Flush each device and stall until each tensor is populated
+    for i, tensor in enumerate(tensors_on_host):
+        tensor.sync()
+        tt_lib.device.Synchronize(tt_tensors_device[i].device())
+    # Once populated, convert tensors to RM layout
+    row_major_tensors = [
+        tt_tensor_host.to(tt_lib.tensor.Layout.ROW_MAJOR, tt_tensors_device[i].device())
+        for i, tt_tensor_host in enumerate(tensors_on_host)
+    ]
+    # Return torch tensors
+    return [tensor.to_torch() for tensor in row_major_tensors]
+
+
+def torch_tensors_to_tt_tensors(torch_tensors, layout, dtype, mem_config, devices):
+    tt_host_tensors = []
+    tt_device_tensors = []
+    # Offload layout conversion to workers
+    for i, torch_tensor in enumerate(torch_tensors):
+        size = list(torch_tensor.size())
+        while len(size) < 4:
+            size.insert(0, 1)
+        tt_host_tensors.append(tt_lib.tensor.Tensor(torch_tensor.reshape(size), dtype).to(layout, devices[i]))
+    # Issue writes using workers
+    return [tt_host_tensors[i].to(device, mem_config) for i, device in enumerate(devices)]
+
+
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
