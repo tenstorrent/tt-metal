@@ -335,6 +335,7 @@ def test_LlamaModel_demo(
     n_devices,
     emulated,
     decode_only,
+    use_program_cache,
 ):
     ## Get model config
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
