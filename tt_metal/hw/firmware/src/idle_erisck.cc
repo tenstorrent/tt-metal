@@ -23,10 +23,10 @@
 #include <kernel.cpp>
 
 uint8_t noc_index = NOC_INDEX;
-inline void RISC_POST_STATUS(uint32_t status) {
-  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-  ptr[0] = status;
-}
+//inline void RISC_POST_STATUS(uint32_t status) {
+//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+//  ptr[0] = status;
+//}
 void kernel_launch() {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_IERISC_INIT_LOCAL_L1_BASE);
