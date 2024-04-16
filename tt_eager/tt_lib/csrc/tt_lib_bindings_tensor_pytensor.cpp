@@ -864,6 +864,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
+            .def("track_ref_count",
+                [](Tensor &self) { return self.track_ref_count(); },
+                R"doc(
+                    Log the reference count (as seen by the main and worker threads) of a tensor as it evolves during runtime.
+                )doc")
             .def(
                 "to",
                 py::overload_cast<DeviceMesh *, const MemoryConfig &>(&Tensor::to, py::const_),

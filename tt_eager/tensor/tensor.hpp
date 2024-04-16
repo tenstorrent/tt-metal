@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 struct Tensor {
-    struct TensorAttributes {
+    struct TensorAttributes : public enable_shared_from_this<TensorAttributes> {
         Storage storage;
         ttnn::Shape shape;
         DataType dtype;
@@ -36,6 +36,7 @@ struct Tensor {
         uint32_t main_thread_ref_count = 0;
         bool deallocated = false; // Set to true if device side storage was deallocated
         bool dynamic_storage = false; // Storage type can change, depending on op behaviour
+        bool track_ref_count = false;
         TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) : storage(storage), shape(shape), dtype(dtype), layout(layout) {}
         TensorAttributes() : shape({0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
         ~TensorAttributes() = default;
@@ -55,12 +56,18 @@ struct Tensor {
         void increment_main_thread_ref_count(Device* worker) {
             if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count++;
+                if (track_ref_count) {
+                    tt::log_info("Inc Ref Count on tensor {}. Main Thread Ref Count: {}. Total Ref Count: {}.", reinterpret_cast<uint64_t>(this), main_thread_ref_count, shared_from_this().use_count());
+                }
             }
         }
 
         void decrement_main_thread_ref_count(Device* worker) {
             if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
                 main_thread_ref_count--;
+                if (track_ref_count) {
+                    tt::log_info("Dec Ref Count on tensor {}. Main Thread Ref Count: {}. Total Ref Count: {}.", reinterpret_cast<uint64_t>(this), main_thread_ref_count, shared_from_this().use_count());
+                }
             }
         }
 
@@ -70,6 +77,9 @@ struct Tensor {
 
         void update_main_thread_ref_count(Device* worker, uint32_t ref_count) {
             if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
+                if (track_ref_count) {
+                    tt::log_info("Update Ref Count on tensor {}. Main Thread Ref Count: {}. Total Ref Count: {}.", reinterpret_cast<uint64_t>(this), main_thread_ref_count, shared_from_this().use_count());
+                }
                 main_thread_ref_count = ref_count;
             }
         }
@@ -155,6 +165,8 @@ struct Tensor {
     Tensor &operator=(Tensor &&other) = default;
 
     ~Tensor();
+
+    void track_ref_count() { this->tensor_attributes->track_ref_count = true; }
 
     void deepcopy(const Tensor& other);
 
