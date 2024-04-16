@@ -50,7 +50,7 @@ class DeviceProfiler {
         // Device-Core tracy context
         std::map<std::pair<uint16_t,CoreCoord>, TracyTTCtx> device_tracy_contexts;
 
-        // Device-Core tracy context
+        // Device events
         std::set<tracy::TTDeviceEvent> device_events;
 
         // Hash to zone source locations
@@ -102,6 +102,8 @@ class DeviceProfiler {
         //DRAM buffer for device side results
         std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
 
+        // Device-core Syncdata
+        std::map<CoreCoord, std::tuple<double,double,double>> device_core_sync_info;
 
         //Set the device side file flag
         void setNewLogFlag(bool new_log_flag);

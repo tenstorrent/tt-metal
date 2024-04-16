@@ -87,6 +87,7 @@ class RunTimeOptions {
 
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
+    bool profiler_sync_enabled = false;
 
     bool null_kernels = false;
 
@@ -220,6 +221,7 @@ class RunTimeOptions {
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
+    inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
