@@ -11,7 +11,7 @@ using namespace tt::constants;
 using namespace tt;
 
 
-static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(const Tensor &input_tensor, const vector<uint32_t> &&heads_per_group, const uint32_t head_dim, const uint32_t groups, std::vector<Tensor> &output) {
+static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(const Tensor &input_tensor, const vector<uint32_t> &&heads_per_group, const uint32_t head_dim, const uint32_t groups, std::vector<Tensor> &output, bool transpose_k) {
     // groups = kv_heads usually
     // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
     TT_FATAL(head_dim % TILE_WIDTH == 0, fmt::format("head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH));
@@ -84,11 +84,26 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
         (std::uint32_t) num_tiles_per_group[2] * single_tile_size, // size of V tiles in each group, in bytes
     };
 
+    std::map<string, string> reader_defines;
+    if (transpose_k) {
+        reader_defines["TRANSPOSE_K_HEADS"] = "1";
+    }
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_create_qkv_heads_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+
+    if (transpose_k)    {
+        std::vector<uint32_t> compute_args = {
+            (std::uint32_t) block_ht*num_tiles_per_group[1]*groups_per_block, // number of K tiles
+        };
+        auto compute_kernel_id = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/transpose_wh_sharded.cpp",
+            all_cores,
+            tt_metal::ComputeConfig{.compile_args = compute_args});
+    }
 
     uint32_t input_size = block_ht*block_wt*single_tile_size;
     uint32_t q_size = block_ht*num_tiles_per_group[0]*single_tile_size*groups_per_block;
@@ -111,6 +126,13 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     auto c_out2_config = CircularBufferConfig(v_size, {{CB::c_out2, data_format}})
         .set_page_size(CB::c_out2, single_tile_size).set_globally_allocated_address(*output[2].buffer());
     auto cb_out2_id = CreateCircularBuffer( program, all_cores, c_out2_config );
+
+    if (transpose_k) {
+        auto c_im0_config = CircularBufferConfig(k_size, {{CB::c_intermed0, data_format}})
+            .set_page_size(CB::c_intermed0, single_tile_size);
+        auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
+    }
+
 
     auto override_runtime_args_callback = [
         cb_in0_id,
@@ -172,7 +194,7 @@ namespace tt_metal {
 */
 operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(const Tensor &input_tensor_qkv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     TT_FATAL(num_q_heads % num_kv_heads == 0, fmt::format("num q heads {} / num kv heads {} needs to be a whole number", num_q_heads, num_kv_heads));
-    return create_heads_combined_qkv_sharded(input_tensor_qkv, {num_q_heads/num_kv_heads, 1, 1}, head_dim, num_kv_heads, output);
+    return create_heads_combined_qkv_sharded(input_tensor_qkv, {num_q_heads/num_kv_heads, 1, 1}, head_dim, num_kv_heads, output, transpose_k_heads);
 }
 
 } // namespace tt_metal

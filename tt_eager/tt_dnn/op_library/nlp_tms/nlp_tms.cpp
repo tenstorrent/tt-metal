@@ -279,7 +279,7 @@ void CreateQKVHeads::validate(const std::vector<Tensor> &input_tensors) const {
     uint32_t num_h_cores = rm ? bbox.end.y + 1 : bbox.end.x + 1;
     uint32_t num_w_cores = rm ? bbox.end.x + 1 : bbox.end.y + 1;
 
-    TT_FATAL(this->num_q_heads % this->num_kv_heads == 0, "Number of q heads {} must fit evenly into number of kv heads {}", this->num_q_heads, this->num_kv_heads);
+    TT_FATAL(this->num_q_heads % this->num_kv_heads == 0, fmt::format("Number of q heads {} must fit evenly into number of kv heads {}", this->num_q_heads, this->num_kv_heads));
     TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", input_shape[3], num_w_cores, TILE_WIDTH));
 
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
@@ -332,19 +332,21 @@ std::vector<Tensor> CreateQKVHeads::create_output_tensors(const std::vector<Tens
     //uint32_t num_q_heads_per_shard = q_shape[1] / num_w_cores;
 
     uint32_t q_shard_h = q_shape[0] * q_shape[1] * q_shape[2] / num_cores; // want the API to work for different sequence lengths
-    uint32_t kv_shard_h = k_shape[0] * k_shape[1] * k_shape[2] / num_cores; // want the API to work for different sequence lengths
-    auto q_spec = ShardSpec(all_cores, {q_shard_h, head_dim}, shard_orientation);
-    auto kv_spec = ShardSpec(all_cores, {kv_shard_h, head_dim}, shard_orientation);
+    uint32_t k_shard_h = k_shape[0] * k_shape[1] * k_shape[2] / num_cores; // want the API to work for different sequence lengths
+    uint32_t v_shard_h = v_shape[0] * v_shape[1] * v_shape[2] / num_cores; // want the API to work for different sequence lengths
 
+    auto q_spec = ShardSpec(all_cores, {q_shard_h, q_shape[-1]}, shard_orientation);
+    auto k_spec = ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
+    auto v_spec = ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
     auto mem_config_q = this->output_mem_config;
     mem_config_q.shard_spec = q_spec;
 
     auto mem_config_k = this->output_mem_config;
-    mem_config_k.shard_spec = kv_spec;
+    mem_config_k.shard_spec = k_spec;
 
     auto mem_config_v = this->output_mem_config;
-    mem_config_v.shard_spec = kv_spec;
+    mem_config_v.shard_spec = v_spec;
 
     auto out_tensor_q = create_sharded_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
     auto out_tensor_k = create_sharded_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
