@@ -12,8 +12,8 @@ from models.generation_utils import get_logits_processor
 import ttnn
 
 from transformers import T5ForConditionalGeneration, AutoTokenizer, T5Config
-from models.experimental.functional_t5.tt import ttnn_functional_t5
-from models.experimental.functional_t5.tt import ttnn_optimized_functional_t5
+from models.demos.grayskull.t5.tt import ttnn_functional_t5
+from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
@@ -51,8 +51,7 @@ def run_generate(input_ids, model, config, parameters, device, max_tokens, batch
     input_ids = ttnn.to_device(input_ids, device)
 
     for iteration in range(max_tokens):
-        decoder_input_ids = ttnn.from_torch(decoder_input_ids)
-        decoder_input_ids = ttnn.to_device(decoder_input_ids, device)
+        decoder_input_ids = ttnn.from_torch(decoder_input_ids, device=device, dtype=ttnn.uint32)
 
         tt_model = ttnn_optimized_functional_t5 if use_optimized_version else ttnn_functional_t5
 
@@ -361,7 +360,7 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     ),
 )
 def test_functional_t5_demo(
-    device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
+    device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
@@ -375,7 +374,9 @@ def test_functional_t5_demo(
     ("batch_size", "sequence_length", "max_tokens", "model_name", "use_optimized_version"),
     ((8, 128, 5, "t5-small", True), (8, 128, 5, "google/flan-t5-small", True)),
 )
-def test_functional_t5_demo_squadv2(device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version):
+def test_functional_t5_demo_squadv2(
+    device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, use_optimized_version
+):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
