@@ -1,0 +1,1 @@
+../integration_tests/stable_diffusion/test_unet_2d_condition_model.py
