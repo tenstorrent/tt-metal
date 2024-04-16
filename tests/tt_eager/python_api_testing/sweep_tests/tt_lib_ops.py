@@ -486,7 +486,7 @@ def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config
     t1 = ttl.tensor.mean_hw(t0, output_mem_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
-    output = output.max(2, True)[0].max(3, True)[0]
+    output = output[:, :, 0, 0]
 
     return output
 
