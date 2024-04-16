@@ -135,6 +135,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
    private:
     void add_prefetch_relay(DeviceCommand &command) override;
+    BufferPageMapping buffer_page_mapping;
 
    public:
     EnqueueReadShardedBufferCommand(
@@ -144,6 +145,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
         void* dst,
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed,
+        const BufferPageMapping &buffer_page_mapping,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt)
             :EnqueueReadBufferCommand(command_queue_id,
@@ -153,7 +155,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
                                 manager,
                                 expected_num_workers_completed,
                                 src_page_index,
-                                pages_to_read) {}
+                                pages_to_read), buffer_page_mapping(buffer_page_mapping) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
@@ -231,6 +233,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
    private:
     void add_dispatch_write(DeviceCommand &command, void *data_to_write) override;
+    BufferPageMapping buffer_page_mapping;
 
    public:
     EnqueueWriteShardedBufferCommand(
@@ -242,6 +245,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         bool issue_wait,
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
+        const BufferPageMapping &buffer_page_mapping,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt)
         : EnqueueWriteBufferCommand(
@@ -254,7 +258,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             expected_num_workers_completed,
             bank_base_address,
             dst_page_index,
-            pages_to_write){;}
+            pages_to_write), buffer_page_mapping(buffer_page_mapping) {;}
 };
 
 class EnqueueProgramCommand : public Command {

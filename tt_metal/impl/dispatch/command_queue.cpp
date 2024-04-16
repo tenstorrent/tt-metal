@@ -78,11 +78,12 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(DeviceCommand &comm
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(DeviceCommand &command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
-    CoreCoord core = this->buffer.device()->worker_core_from_logical_core(buffer.get_core_from_dev_page_id((this->src_page_index)));
+    CoreCoord logical_core = this->buffer_page_mapping.all_cores_[this->buffer_page_mapping.dev_page_to_core_mapping_[this->src_page_index]];
+    CoreCoord core = this->buffer.device()->worker_core_from_logical_core(logical_core);
     command.add_prefetch_relay_linear(
         get_noc_unicast_encoding(core),
         padded_page_size * this->pages_to_read,
-        this->buffer.address() + buffer.get_host_page_to_local_shard_page_mapping()[buffer.get_dev_to_host_mapped_page_id(this->src_page_index)] * padded_page_size
+        this->buffer.address() + this->buffer_page_mapping.host_page_to_local_shard_page_mapping_[this->buffer_page_mapping.dev_page_to_host_page_mapping_[this->src_page_index]] * padded_page_size
     );
 }
 
@@ -169,7 +170,8 @@ void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(DeviceCommand &com
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence, void *data_to_write) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     uint32_t data_size_bytes = this->pages_to_write * padded_page_size;
-    CoreCoord core = this->buffer.device()->worker_core_from_logical_core(buffer.get_core_from_dev_page_id((this->dst_page_index)));
+    CoreCoord logical_core = this->buffer_page_mapping.all_cores_[this->buffer_page_mapping.dev_page_to_core_mapping_[this->dst_page_index]];
+    CoreCoord core = this->buffer.device()->worker_core_from_logical_core(logical_core);
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
@@ -954,7 +956,6 @@ void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, co
     const uint32_t page_size = buffer.page_size();
 
     std::set<uint32_t> pages_seen;
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
     uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
         uint32_t local_num_pages;
@@ -983,10 +984,17 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
 
     if (is_sharded(buffer.buffer_layout())) {
         constexpr uint32_t half_scratch_space = SCRATCH_DB_SIZE / 2;
+        auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         // Note that the src_page_index is the device page idx, not the host page idx
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            auto core_pages = buffer.dev_pages_in_shard(core_id);
+            std::vector<uint32_t> core_pages;
+            for (uint32_t i=0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
+                if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
+                    core_pages.push_back(i);
+                }
+            }
+
             uint32_t num_pages = core_pages.size();
             uint32_t max_pages_in_scratch = half_scratch_space / buffer.page_size();
             TT_ASSERT(max_pages_in_scratch > 0);
@@ -995,10 +1003,10 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 uint32_t num_pages_to_read = std::min(num_pages, max_pages_in_scratch);
                 src_page_index = core_pages[curr_page_idx_in_shard];
                 // Unused. Remove?
-                unpadded_dst_offset = buffer.get_dev_to_host_mapped_page_id(src_page_index) * buffer.page_size();
+                unpadded_dst_offset = buffer_page_mapping.dev_page_to_host_page_mapping_[src_page_index] * buffer.page_size();
 
                 auto command = EnqueueReadShardedBufferCommand(
-                    this->id, this->device, buffer, dst, this->manager, this->expected_num_workers_completed, src_page_index, num_pages_to_read);
+                    this->id, this->device, buffer, dst, this->manager, this->expected_num_workers_completed, buffer_page_mapping, src_page_index, num_pages_to_read);
 
                 this->issued_completion_q_reads.push(
                     detail::ReadBufferDescriptor(buffer, padded_page_size, dst, unpadded_dst_offset, num_pages_to_read, src_page_index)
@@ -1075,14 +1083,21 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     uint32_t dst_page_index = 0;
 
     if (is_sharded(buffer.buffer_layout())) {
+        auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         const void* remapped_src = (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
                                     buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED)
-                                       ? convert_interleaved_to_sharded_on_host(src, buffer)
+                                       ? convert_interleaved_to_sharded_on_host(src, buffer, buffer_page_mapping)
                                        : src;
 
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            auto core_pages = buffer.dev_pages_in_shard(core_id);
+            std::vector<uint32_t> core_pages;
+            for (uint32_t i=0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
+                if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
+                    core_pages.push_back(i);
+                }
+            }
+
             uint32_t num_pages = core_pages.size();
             uint32_t curr_page_idx_in_shard = 0;
             while (num_pages != 0) {
@@ -1104,7 +1119,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
 
                     auto command = EnqueueWriteShardedBufferCommand(
-                        this->id, this->device, buffer, remapped_src, this->manager, issue_wait, this->expected_num_workers_completed, bank_base_address, dst_page_index, pages_to_write);
+                        this->id, this->device, buffer, remapped_src, this->manager, issue_wait, this->expected_num_workers_completed, bank_base_address, buffer_page_mapping, dst_page_index, pages_to_write);
 
                     this->enqueue_command(command, false);
                     curr_page_idx_in_shard += pages_to_write;
