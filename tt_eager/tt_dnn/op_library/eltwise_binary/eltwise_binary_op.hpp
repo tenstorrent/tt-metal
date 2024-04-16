@@ -198,7 +198,9 @@ inline Tensor add(
             in_a = repeat(input_tensor_a, shape, output_mem_config);
         }
     }
-    TT_FATAL(in_a.get_legacy_shape() == in_b.get_legacy_shape(), "Input shapes must be the same!");
+    TT_FATAL(
+        in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding(),
+        "Input shapes must be the same!");
     auto output = operation::run(
         EltwiseBinary{
             BinaryOpType::ADD,

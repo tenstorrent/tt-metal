@@ -630,7 +630,7 @@ class resnet50:
             # TODO: fix the need to do the reshard here
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, self.max_pool_input_sharded_config)
+            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
         x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
