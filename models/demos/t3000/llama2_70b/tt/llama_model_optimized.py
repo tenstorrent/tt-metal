@@ -10,9 +10,9 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32, profiler
-from model.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from model.demos.t3000.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
-from model.demos.t3000.llama2_70b.tt.llama_common import (
+from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
+from models.demos.t3000.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.t3000.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     generate_rot_emb,
     get_weight_cache_path,

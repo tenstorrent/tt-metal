@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32
-from model.demos.t3000.llama2_70b.tt.llama_common import (
+from models.demos.t3000.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
