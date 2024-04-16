@@ -329,6 +329,7 @@ def test_Llama_perf_host(
     )
 
 
+@pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
