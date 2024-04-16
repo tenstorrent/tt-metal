@@ -41,7 +41,7 @@ You can also check our demos for
 `BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
 `Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mistral7b>`_,
 and
-`Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama2_70b>`_.
+`Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
 
 3. ttnn Tutorial: Multi-Head Attention (Simple)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

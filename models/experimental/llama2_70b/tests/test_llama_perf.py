@@ -40,7 +40,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 
 def load_prompts_file(tokenizer, prefill_length=128):
     # Load prompts
-    prompts = open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
+    prompts = open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
     tokenized = tokenizer.encode(prompts, bos=True, eos=False)
 
     token_ids = []
@@ -70,7 +70,10 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
 
 
 def print_output_prompts(
-    generated_ids, tokenizer, num_users_to_display=6, output_file="models/demos/llama2_70b/demo/data/output_prompts.txt"
+    generated_ids,
+    tokenizer,
+    num_users_to_display=6,
+    output_file="models/demos/t3000/llama2_70b/demo/data/output_prompts.txt",
 ):
     output_prompts = tokenizer.decode(generated_ids.tolist())
 
@@ -348,7 +351,7 @@ def test_Llama_perf_device(batch, seq_len, expected_perf):
 
     seq_len_str = "2k" if seq_len == 2048 else str(seq_len)
     llm_mode = "decode" if seq_len == 1 else f"prefill_{seq_len_str}"
-    command = f"pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[{llm_mode}-8chip-T3000-2L]"
+    command = f"pytest models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[{llm_mode}-8chip-T3000-2L]"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
