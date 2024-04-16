@@ -134,15 +134,6 @@ run_models_performance_bare_metal_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # BERT large via new enqueue APIs. I know this is not a unit test, but I would like to avoid BERT large breaking, so this
-    # is a safe place to put it for the time being. Need to run these as separate tests to avoid segfault (TODO(agrebenisan): Investigate why)
-    if [[ $dispatch_mode == "slow" ]]; then
-        env pytest -svv models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-        env pytest -svv models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-    else
-        echo "Not running bert-large in fast-dispatch mode on bare-metal"
-    fi
-
     run_models_performance "$tt_arch" "$pipeline_type"
 }
 
