@@ -28,9 +28,14 @@ void kernel_main() {
     constexpr uint32_t v_size_per_group_t_bytes         = get_compile_time_arg_val(14); // total size of all V heads (expecting 1) in a group
 
     constexpr uint32_t cb_in0  = tt::CB::c_in0;
-    constexpr uint32_t cb_out0 = tt::CB::c_out0;
-    constexpr uint32_t cb_out1 = tt::CB::c_out1;
-    constexpr uint32_t cb_out2 = tt::CB::c_out2;
+
+    constexpr uint32_t cb_outq = tt::CB::c_out0;
+    #ifdef TRANSPOSE_K_HEADS
+    constexpr uint32_t cb_outk = tt::CB::c_intermed0;
+    #else
+    constexpr uint32_t cb_outk = tt::CB::c_out1;
+    #endif
+    constexpr uint32_t cb_outv = tt::CB::c_out2;
 
 
     // copy one entire head_dim tile, then go to next sequence tile and do another head_dim.
@@ -49,9 +54,9 @@ void kernel_main() {
 
     uint64_t src_noc_addr = get_noc_addr(get_read_ptr(cb_in0));
     // re-order q
-    cb_reserve_back(cb_out0, q_num_tiles);
+    cb_reserve_back(cb_outq, q_num_tiles);
 
-    uint32_t q_write_addr = get_write_ptr(cb_out0);
+    uint32_t q_write_addr = get_write_ptr(cb_outq);
     uint32_t src_noc_addr_offset_outer = 0;
 
     uint32_t group_addr_offset = 0;
@@ -70,15 +75,27 @@ void kernel_main() {
         group_addr_offset += group_t_size_bytes;
     }
     noc_async_read_barrier();
-    cb_push_back(cb_out0, q_num_tiles);
+    cb_push_back(cb_outq, q_num_tiles);
 
     // re-order k
-    cb_reserve_back(cb_out1, k_num_tiles);
-    uint32_t k_write_addr = get_write_ptr(cb_out1);
+
+    cb_reserve_back(cb_outk, k_num_tiles);
+    uint32_t k_write_addr = get_write_ptr(cb_outk);
     group_addr_offset = q_size_per_group_t_bytes;
     for (uint32_t k = 0; k < groups_per_block; k++) { // number of kv heads inside the shard
         uint32_t head_in_group_offset = 0;
         for (uint32_t j = 0; j < k_heads_per_group; j++) { // go to next K heads in the group (expecting only 1 for K)
+            #ifdef TRANSPOSE_K_HEADS
+            for (uint32_t k_head_tile_offset = 0; k_head_tile_offset < k_head_size_bytes; k_head_tile_offset += single_tile_size_bytes) { // finish head after sequence length when transposing K
+                uint32_t seq_tile_offset = 0;
+                for (uint32_t i = 0; i < block_ht; i++) { // iterate across seq_len dimension tiles
+                    uint64_t k_src_noc_addr = src_noc_addr + seq_tile_offset + head_in_group_offset + group_addr_offset + k_head_tile_offset;
+                    noc_async_read(k_src_noc_addr, k_write_addr, single_tile_size_bytes); // read only one tile since we're transposing
+                    k_write_addr += single_tile_size_bytes; // output address of next K head
+                    seq_tile_offset += block_wt_size_bytes; // go to next tile in seq_len
+                }
+            }
+            #else
             uint32_t seq_tile_offset = 0;
             for (uint32_t i = 0; i < block_ht; i++) { // iterate across seq_len dimension tiles
                 uint64_t k_src_noc_addr = src_noc_addr + seq_tile_offset + head_in_group_offset + group_addr_offset;
@@ -86,17 +103,17 @@ void kernel_main() {
                 k_write_addr += k_head_size_bytes; // output address of next K head
                 seq_tile_offset += block_wt_size_bytes; // go to next tile in seq_len
             }
+            #endif
             head_in_group_offset += k_head_size_bytes;
         }
         group_addr_offset += group_t_size_bytes;
     }
     noc_async_read_barrier();
-    cb_push_back(cb_out1, k_num_tiles);
-
+    cb_push_back(cb_outk, k_num_tiles);
 
     // re-order v
-    cb_reserve_back(cb_out2, v_num_tiles);
-    uint32_t v_write_addr = get_write_ptr(cb_out2);
+    cb_reserve_back(cb_outv, v_num_tiles);
+    uint32_t v_write_addr = get_write_ptr(cb_outv);
     group_addr_offset = q_size_per_group_t_bytes + k_size_per_group_t_bytes;
     for (uint32_t k = 0; k < groups_per_block; k++) { // number of kv heads inide the hard
         uint32_t head_in_group_offset = 0;
@@ -113,5 +130,5 @@ void kernel_main() {
         group_addr_offset += group_t_size_bytes;
     }
     noc_async_read_barrier();
-    cb_push_back(cb_out2, v_num_tiles);
+    cb_push_back(cb_outv, v_num_tiles);
 }

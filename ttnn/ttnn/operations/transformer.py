@@ -232,11 +232,9 @@ def split_query_key_value_and_split_heads(
             input_tensor,
             num_q_heads=num_heads,
             num_kv_heads=num_heads,
-            transpose_k_heads=False,
+            transpose_k_heads=transpose_key,
             output_mem_config=memory_config,
         )
-        if transpose_key:
-            key = ttnn.experimental.tensor.transpose(key, -2, -1, memory_config)
 
         return query, key, value
     else:
