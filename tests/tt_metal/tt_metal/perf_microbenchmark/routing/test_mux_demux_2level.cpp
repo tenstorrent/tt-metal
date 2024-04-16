@@ -15,7 +15,7 @@ using namespace tt;
 int main(int argc, char **argv) {
 
     constexpr uint32_t default_prng_seed = 0x100;
-    constexpr uint32_t default_data_kb_per_tx = 256*1024;
+    constexpr uint32_t default_data_kb_per_tx = 64*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
         }
 
         constexpr uint32_t rx_x = 0;
-        constexpr uint32_t rx_y = 6;
+        constexpr uint32_t rx_y = 4;
         std::vector<CoreCoord> rx_core;
         std::vector<CoreCoord> rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
@@ -120,18 +120,18 @@ int main(int argc, char **argv) {
             mux_l1_phys_core.push_back(device->worker_core_from_logical_core(core));
         }
 
-        constexpr uint32_t mux_l2_x = 0;
-        constexpr uint32_t mux_l2_y = 3;
+        constexpr uint32_t mux_l2_x = 4;
+        constexpr uint32_t mux_l2_y = 2;
         CoreCoord mux_l2_core = {mux_l2_x, mux_l2_y};
         CoreCoord mux_l2_phys_core = device->worker_core_from_logical_core(mux_l2_core);
 
         constexpr uint32_t demux_l1_x = 0;
-        constexpr uint32_t demux_l1_y = 4;
+        constexpr uint32_t demux_l1_y = 3;
         CoreCoord demux_l1_core = {demux_l1_x, demux_l1_y};
         CoreCoord demux_l1_phys_core = device->worker_core_from_logical_core(demux_l1_core);
 
-        constexpr uint32_t demux_l2_x = 0;
-        constexpr uint32_t demux_l2_y = 5;
+        constexpr uint32_t demux_l2_x = 1;
+        constexpr uint32_t demux_l2_y = 3;
         std::vector<CoreCoord> demux_l2_core;
         std::vector<CoreCoord> demux_l2_phys_core;
         for (uint32_t i = 0; i < num_demux_l2; i++) {
