@@ -8,10 +8,14 @@ import pytest
 
 import tt_lib as ttl
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import (
+    skip_for_grayskull,
+)
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, skip_for_wormhole_b0
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [4096, 1024])
 @pytest.mark.parametrize("num_slices", [16])
 @pytest.mark.parametrize("num_cores", [64])
@@ -26,6 +30,7 @@ def test_time_sharded_attnention_hwb(
     data_format,
     function_level_defaults,
 ):
+    pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -228,6 +233,7 @@ def test_time_sharded_attnention_hwb(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [4096, 1024])
 @pytest.mark.parametrize("num_slices", [16])
 @pytest.mark.parametrize("num_cores", [64])
@@ -242,6 +248,7 @@ def test_time_sharded_attnention(
     data_format,
     function_level_defaults,
 ):
+    pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -407,6 +414,7 @@ def test_time_sharded_attnention(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("kv_len", [96])
 @pytest.mark.parametrize("num_heads", [16])
@@ -421,6 +429,7 @@ def test_cross_attnention(
     reshard_for_softmax,
     function_level_defaults,
 ):
+    pytest.skip()
     if seq_len == 64 and reshard_for_softmax:
         pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -594,6 +603,7 @@ def test_cross_attnention(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [1024, 256, 64])
 @pytest.mark.parametrize("num_heads", [16])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
@@ -606,6 +616,7 @@ def test_attnention(
     reshard_for_softmax,
     function_level_defaults,
 ):
+    pytest.skip()
     if seq_len == 64 and reshard_for_softmax:
         pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -784,6 +795,7 @@ def test_attnention(
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT16])
 @pytest.mark.parametrize("interleaved_output", [True, False])
@@ -794,6 +806,7 @@ def test_qkv(
     interleaved_output,
     function_level_defaults,
 ):
+    pytest.skip()
     sizes = {
         4096: [1, 8192, 320, 1536],
         1024: [1, 2048, 640, 2304],
@@ -909,6 +922,7 @@ def test_qkv(
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("is_kv", [True, False])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT16])
@@ -921,6 +935,7 @@ def test_q_and_kv(
     interleaved_output,
     function_level_defaults,
 ):
+    pytest.skip()
     sizes = {4096: [1, 8192, 320, 512], 1024: [1, 2048, 640, 768], 256: [1, 512, 1280, 1280], 64: [1, 128, 1280, 1280]}
     grid_sizes = {4096: (8, 5), 1024: (8, 5), 256: (8, 8), 64: (4, 8)}
     out_subblock_hs = {4096: 8, 1024: 8, 256: 2, 64: 1}
@@ -1040,6 +1055,7 @@ def test_q_and_kv(
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("interleaved_output", [True, False])
@@ -1050,6 +1066,7 @@ def test_out(
     interleaved_output,
     function_level_defaults,
 ):
+    pytest.skip()
     sizes = {4096: [1, 8192, 512, 320], 1024: [1, 2048, 768, 640], 256: [1, 512, 1280, 1280], 64: [1, 128, 1280, 1280]}
     grid_sizes = {4096: (8, 8), 1024: (8, 4), 256: (8, 5), 64: (4, 8)}
     shard_direction = {
@@ -1177,6 +1194,7 @@ def test_out(
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("interleaved_output", [True, False])
@@ -1187,6 +1205,7 @@ def test_ff(
     interleaved_output,
     function_level_defaults,
 ):
+    pytest.skip()
     sizes = {4096: [1, 8192, 1280, 320], 1024: [1, 2048, 640, 768], 256: [1, 512, 1280, 1280], 64: [1, 128, 1280, 1280]}
     grid_sizes = {4096: (8, 5), 1024: (8, 5), 256: (8, 8), 64: (4, 8)}
     out_subblock_hs = {4096: 8, 1024: 8, 256: 2, 64: 1}

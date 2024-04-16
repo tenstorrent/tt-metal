@@ -234,7 +234,7 @@ class transformer_2d_model:
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.proj_in.conv.input_sharded_memory_config,
+            memory_config=hidden_states.memory_config(),
             use_multicore=True,
         )
 
@@ -285,6 +285,7 @@ class transformer_2d_model:
             use_multicore=True,
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )
+        hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
 
         hidden_states = self.proj_in(hidden_states)
 

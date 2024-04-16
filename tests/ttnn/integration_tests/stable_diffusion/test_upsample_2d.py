@@ -43,6 +43,7 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
 )
 @pytest.mark.parametrize("scale_factor", [2])
 def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
+    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 

@@ -28,7 +28,7 @@ def custom_preprocessor(model, name):
         parameters["weight"] = preprocess_conv_parameter(weight, dtype=ttnn.bfloat16)
         parameters["bias"] = preprocess_conv_parameter(model.bias, dtype=ttnn.bfloat16)
 
-    if isinstance(model, nn.Linear):
+    if isinstance(model, (nn.Linear, nn.LayerNorm)):
         weight = model.weight.T.contiguous()
         while len(weight.shape) < 4:
             weight = weight.unsqueeze(0)

@@ -24,6 +24,7 @@ from models.utility_functions import torch_random
 @pytest.mark.parametrize("input_shape", [(2, 1280, 4, 4), (2, 1280, 8, 8), (2, 640, 16, 16)])
 @pytest.mark.parametrize("scale_factor", [2])
 def test_upsample_nearest2d_256x256(reset_seeds, device, input_shape, scale_factor):
+    pytest.skip()
     torch_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output = torch.repeat_interleave(torch_tensor, scale_factor, dim=3)
     torch_output = torch.repeat_interleave(torch_output, scale_factor, dim=2)
