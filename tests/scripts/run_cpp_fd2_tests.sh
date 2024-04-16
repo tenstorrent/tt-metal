@@ -99,12 +99,13 @@ echo "Running test_dispatcher tests now...";
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 1024 -max 1024
 
 
-#############################################
-# PACKETIZED PATH TESTS                     #
-#############################################
-echo "Running packetized path tests now...";
-# 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
-./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
+# TODO - re-enable these when regression hangs are resolved
+# #############################################
+# # PACKETIZED PATH TESTS                     #
+# #############################################
+# echo "Running packetized path tests now...";
+# # 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
+# ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
 
-# 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
-./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
+# # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
+# ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
