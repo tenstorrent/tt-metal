@@ -57,8 +57,11 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre" # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis" # Smoke Test
 
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
+if [[ $ARCH_NAME == "wormhole_b0" ]]; then
+    # packetized path used only on multi-chip WH
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
+fi
 
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
@@ -99,13 +102,14 @@ echo "Running test_dispatcher tests now...";
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 1024 -max 1024
 
 
-# TODO - re-enable these when regression hangs are resolved
-# #############################################
-# # PACKETIZED PATH TESTS                     #
-# #############################################
-# echo "Running packetized path tests now...";
-# # 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
-# ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
+if [[ $ARCH_NAME == "wormhole_b0" ]]; then
+    #############################################
+    # PACKETIZED PATH TESTS - WH only           #
+    #############################################
+    echo "Running packetized path tests now...";
+    # 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
 
-# # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
-# ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
+    # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
+fi
