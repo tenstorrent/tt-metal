@@ -754,7 +754,13 @@ void EnqueueRecordEventCommand::process() {
     std::vector<const void *> event_payloads(num_hw_cqs);
 
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(this->device->id(), channel, cq_id);
+        tt_cxy_pair dispatch_location;
+        if (device->is_mmio_capable()) {
+            dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(this->device->id(), channel, cq_id);
+        } else {
+            dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_d_core(this->device->id(), channel, cq_id);
+        }
+
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = get_noc_unicast_encoding(dispatch_physical_core)};
         event_payloads[cq_id] = event_payload.data();
@@ -877,9 +883,13 @@ void EnqueueTerminateCommand::process() {
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
+    // Command sequence has dispatch and prefetch terminate commands but each needs to be a separate fetch queue entry
+    TT_ASSERT(cmd_sequence_sizeB % CQ_PREFETCH_CMD_BARE_MIN_SIZE == 0);
+    uint32_t num_terminate_cmds = cmd_sequence_sizeB / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    for (int terminate_cmd_idx = 0; terminate_cmd_idx < num_terminate_cmds; terminate_cmd_idx++) {
+        this->manager.fetch_queue_reserve_back(this->command_queue_id);
+        this->manager.fetch_queue_write(CQ_PREFETCH_CMD_BARE_MIN_SIZE, this->command_queue_id);
+    }
 }
 
 

@@ -23,6 +23,13 @@ using std::mutex;
 
 namespace tt::tt_metal{
 
+    namespace device_pool {
+
+    // Definition of the global device vector
+        extern std::vector<Device*> devices;
+
+    } // device_pool
+
     namespace detail {
 
         inline static bool DispatchStateCheck( bool isFastDispatch){
@@ -38,6 +45,7 @@ namespace tt::tt_metal{
             const std::vector<uint32_t> &l1_bank_remap = {});
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
+        Device *GetDeviceHandle(chip_id_t device_id);
 
         void BeginTraceCapture(Device *device);
         void EndTraceCapture(Device *device);
@@ -407,7 +415,13 @@ namespace tt::tt_metal{
 
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
             const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
-            tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, cq_id);
+            tt_cxy_pair enqueue_program_dispatch_core;
+            if (device->is_mmio_capable()) {
+                enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, cq_id);
+            } else {
+                enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_d_core(device->id(), channel, cq_id);
+            }
+
             CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
             CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, core_type);
 
