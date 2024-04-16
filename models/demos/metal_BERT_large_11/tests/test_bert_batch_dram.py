@@ -21,6 +21,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     is_e75,
+    skip_for_wormhole_b0,
 )
 
 
@@ -282,6 +283,9 @@ def test_bert_batch_dram(
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
+    if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 and (batch != 7 or model_config_str != "BFLOAT8_B-SHARDED"):
+        pytest.skip("Only batch_7-BFLOAT8_B-SHARDED supported for WH B0")
+
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
@@ -364,6 +368,9 @@ def test_bert_batch_dram_with_program_cache(
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
+
+    if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 and (batch != 7 or model_config_str != "BFLOAT8_B-SHARDED"):
+        pytest.skip("Only batch_7-BFLOAT8_B-SHARDED supported for WH B0")
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

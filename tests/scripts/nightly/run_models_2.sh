@@ -24,7 +24,7 @@ env pytest models/experimental/bloom/tests/test_bloom_gelu_forward.py
 env pytest models/experimental/bloom/tests/test_bloom_merge_heads.py
 env pytest models/experimental/bloom/tests/test_bloom_mlp.py
 
-env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py -k batch_7-BFLOAT8_B-SHARDED
+env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py
 
 env pytest models/experimental/synthetic_gradients/tests/
