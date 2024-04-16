@@ -9,9 +9,9 @@ import math
 import torch.nn.functional as F
 
 import tt_lib
-from models.demos.llama2_70b.reference.llama.llama import Llama
-from models.demos.llama2_70b.reference.llama.llama.model import repeat_kv
-from models.demos.llama2_70b.tt.model_config import (
+from model.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from model.demos.t3000.llama2_70b.reference.llama.llama.model import repeat_kv
+from model.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
     # get_tt_cache_path,
 )

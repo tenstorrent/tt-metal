@@ -14,16 +14,16 @@ import datasets
 import pytest
 from loguru import logger
 
-from models.demos.llama2_70b.reference.llama.llama import Llama
+from model.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 from transformers.generation.utils import top_k_top_p_filtering
 from tqdm import tqdm
-from models.demos.llama2_70b.demo.demo import run_decode, build_generator
-from models.demos.llama2_70b.tt.model_config import (
+from model.demos.t3000.llama2_70b.demo.demo import run_decode, build_generator
+from model.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from models.utility_functions import get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_common import get_llama_path
+from model.demos.t3000.llama2_70b.tt.llama_common import get_llama_path
 
 
 def main(args):

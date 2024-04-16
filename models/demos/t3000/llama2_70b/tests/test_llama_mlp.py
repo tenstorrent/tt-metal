@@ -9,10 +9,10 @@ from torch import nn
 import tt_lib
 import ttnn
 
-from models.demos.llama2_70b.reference.llama.llama import Llama
-from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.demos.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.demos.llama2_70b.tt.model_config import (
+from model.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from model.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from model.demos.t3000.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
+from model.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
 
@@ -21,7 +21,7 @@ from models.demos.llama2_70b.tt.model_config import (
 #     comp_pcc,
 # )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
-from models.demos.llama2_70b.tt.llama_common import (
+from model.demos.t3000.llama2_70b.tt.llama_common import (
     get_llama_path,
     MAX_SEQ_LEN,
     BASE_URL,
