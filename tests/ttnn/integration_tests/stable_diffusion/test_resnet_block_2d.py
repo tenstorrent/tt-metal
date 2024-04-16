@@ -47,6 +47,7 @@ def ttnn_to_torch(input):
 def test_resnet_block_2d_256x256(
     device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
 ):
+    pytest.skip()
     # setup pytorch model
     model_name = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)

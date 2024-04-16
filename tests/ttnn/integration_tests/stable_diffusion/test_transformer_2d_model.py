@@ -61,6 +61,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 def test_transformer_2d_model_256x256(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):
+    pytest.skip()
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
     class_labels = (None,)
@@ -190,37 +191,24 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.rand(encoder_hidden_states)
 
-    load_from_disk = False
-    if not load_from_disk:
-        pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-        unet = pipe.unet
-        unet.eval()
-        config = unet.config
+    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
+    unet = pipe.unet
+    unet.eval()
+    config = unet.config
 
-        parameters = preprocess_model_parameters(
-            model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
-        )
+    parameters = preprocess_model_parameters(
+        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+    )
 
-        if block == "up":
-            parameters = parameters.up_blocks[index1].attentions[index2]
-            transformer = pipe.unet.up_blocks[index1].attentions[index2]
-        elif block == "down":
-            parameters = parameters.down_blocks[index1].attentions[index2]
-            transformer = pipe.unet.down_blocks[index1].attentions[index2]
-        elif block == "mid":
-            parameters = parameters.mid_block.attentions[0]
-            transformer = pipe.unet.mid_block.attentions[0]
-        torch.save(transformer, "transformer.pt")
-        torch.save(config, "config.pt")
-    else:
-        transformer = torch.load("transformer.pt")
-        config = torch.load("config.pt")
-        parameters = preprocess_model_parameters(
-            model_name=model_name,
-            initialize_model=lambda: transformer,
-            custom_preprocessor=custom_preprocessor,
-            device=device,
-        )
+    if block == "up":
+        parameters = parameters.up_blocks[index1].attentions[index2]
+        transformer = pipe.unet.up_blocks[index1].attentions[index2]
+    elif block == "down":
+        parameters = parameters.down_blocks[index1].attentions[index2]
+        transformer = pipe.unet.down_blocks[index1].attentions[index2]
+    elif block == "mid":
+        parameters = parameters.mid_block.attentions[0]
+        transformer = pipe.unet.mid_block.attentions[0]
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 

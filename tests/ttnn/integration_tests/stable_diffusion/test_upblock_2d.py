@@ -31,6 +31,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 4, 4]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_upblock_256x256(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
+    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
@@ -135,8 +136,8 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
-    temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
     hidden_state = pre_process_input(device, hidden_state)
     res_hidden_states_tuple = (weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state))

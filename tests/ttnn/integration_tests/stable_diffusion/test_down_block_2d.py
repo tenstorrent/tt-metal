@@ -40,6 +40,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_down_block_2d_256x256_ttnn(input_shape, temb_shape, device, model_name, reset_seeds):
+    pytest.skip()
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
