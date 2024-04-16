@@ -25,6 +25,14 @@ struct dispatch_core_types_t {
     std::optional<tt_cxy_pair> prefetcher = std::nullopt;  // Pulls commands from the issue queue for a given command queue on a device
     std::optional<tt_cxy_pair> completion_queue_writer = std::nullopt; // Pushes to completion queue for a given command queue on a device
     std::optional<tt_cxy_pair> dispatcher = std::nullopt; // Relays work to worker cores on device that command is targeting. Currently for MMIO devices, dispatcher == completion_queue_writer
+    std::optional<tt_cxy_pair> mux = std::nullopt; // Mux
+    std::optional<tt_cxy_pair> demux = std::nullopt; // Demux
+    std::optional<tt_cxy_pair> tunneler = std::nullopt; // ethernet tunneler
+    std::optional<tt_cxy_pair> prefetcher_d = std::nullopt;
+    std::optional<tt_cxy_pair> dispatcher_d = std::nullopt;
+    std::optional<tt_cxy_pair> mux_d = std::nullopt; // Mux
+    std::optional<tt_cxy_pair> demux_d = std::nullopt; // Demux
+    std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
 };
 
 class dispatch_core_manager {
@@ -56,8 +64,150 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
+        log_info(tt::LogMetal, "Allocated Prefetch Core: {} for Device {}", assignment.prefetcher.value().str(), device_id);
         return assignment.prefetcher.value();
     }
+
+    bool is_prefetcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.prefetcher.has_value()) {
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief Gets the location of the kernel desginated to interface with prefetcher kernel running on mmio device.
+    ///         Prefetcher kernel on mmio device relays commands to prefetcher_d running on remote device.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
+    const tt_cxy_pair &prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.prefetcher_d.has_value()) {
+            return assignment.prefetcher_d.value();
+        }
+        CoreCoord prefetch_d_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.prefetcher_d = tt_cxy_pair(device_id, prefetch_d_coord.x, prefetch_d_coord.y);
+        log_info(tt::LogMetal, "Allocated Prefetch D Core: {} for Device {}", assignment.prefetcher_d.value().str(), device_id);
+        return assignment.prefetcher_d.value();
+    }
+
+    bool is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.prefetcher_d.has_value()) {
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief Gets the location of the kernel desginated for multiplexing issue queue traffic to tunneler.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
+    const tt_cxy_pair &mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.mux.has_value()) {
+            return assignment.mux.value();
+        }
+        // Mux interface is on the MMIO device
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        CoreCoord mux_coord = this->get_next_available_dispatch_core(mmio_device_id);
+        assignment.mux = tt_cxy_pair(mmio_device_id, mux_coord.x, mux_coord.y);
+        log_info(tt::LogMetal, "Allocated Mux Core: {} for Device {}", assignment.mux.value().str(), device_id);
+        return assignment.mux.value();
+    }
+
+    bool is_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.mux.has_value()) {
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief Gets the location of the kernel desginated for multiplexing traffic back towards mmio chip.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux_d core
+
+    const tt_cxy_pair &mux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.mux_d.has_value()) {
+            return assignment.mux_d.value();
+        }
+        // mux_d is on remote device
+        CoreCoord mux_d_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.mux_d = tt_cxy_pair(device_id, mux_d_coord.x, mux_d_coord.y);
+        log_info(tt::LogMetal, "Allocated Mux D Core: {} for Device {}", assignment.mux_d.value().str(), device_id);
+        return assignment.mux_d.value();
+    }
+
+    /// @brief Gets the location of the kernel desginated for demultiplexing traffic to completion queues.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
+    const tt_cxy_pair &demux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.demux.has_value()) {
+            return assignment.demux.value();
+        }
+        // demux interface is on the MMIO device
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        CoreCoord demux_coord = this->get_next_available_dispatch_core(mmio_device_id);
+        assignment.demux = tt_cxy_pair(mmio_device_id, demux_coord.x, demux_coord.y);
+        log_info(tt::LogMetal, "Allocated Demux Core: {} for Device {}", assignment.demux.value().str(), device_id);
+        return assignment.demux.value();
+    }
+
+    bool is_demux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.demux.has_value()) {
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief Gets the location of the kernel desginated for demultiplexing traffic on remote chip.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the demux_d core
+    const tt_cxy_pair &demux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.demux_d.has_value()) {
+            return assignment.demux_d.value();
+        }
+        // demux_d is on remote device
+        CoreCoord demux_d_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.demux_d = tt_cxy_pair(device_id, demux_d_coord.x, demux_d_coord.y);
+        log_info(tt::LogMetal, "Allocated Demux D Core: {} for Device {}", assignment.demux_d.value().str(), device_id);
+        return assignment.demux_d.value();
+    }
+
+    /// @brief Gets the location of the kernel desginated for tunneling over ethernet.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the ethernet tunnel core
+    const tt_cxy_pair &tunneler_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.tunneler.has_value()) {
+            return assignment.tunneler.value();
+        }
+        TT_ASSERT(assignment.mux.has_value(), " Mux core not assigned for device {}. Must assign a Mux core before getting a tunneler core.", device_id);
+
+        tt_cxy_pair tunneler_location = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+                        assignment.mux.value(), EthRouterMode::BI_DIR_TUNNELING, device_id);
+        assignment.tunneler = tunneler_location;
+        log_info(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", tunneler_location.str(), device_id);
+        return assignment.tunneler.value();
+    }
+
+
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular command queue
     ///         Each command queue has one completion queue
@@ -76,11 +226,18 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.completion_queue_writer = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
-        if (mmio_device_id == device_id) {
-            TT_ASSERT(not assignment.dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.dispatcher.value().str(), device_id);
-            assignment.dispatcher = assignment.completion_queue_writer;
-        }
+        TT_ASSERT(not assignment.dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.dispatcher.value().str(), device_id);
+        assignment.dispatcher = assignment.completion_queue_writer;
+        log_info(tt::LogMetal, "Allocated Completion Queue Writer Core: {} for Device {}", assignment.completion_queue_writer.value().str(), device_id);
         return assignment.completion_queue_writer.value();
+    }
+
+    bool is_completion_queue_writer_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.completion_queue_writer.has_value()) {
+            return true;
+        }
+        return false;
     }
 
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a particular command queue
@@ -93,14 +250,37 @@ class dispatch_core_manager {
         if (assignment.dispatcher.has_value()) {
             return assignment.dispatcher.value();
         }
-        CoreCoord dispatcher_coord = this->get_next_available_dispatch_core(device_id);
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        assignment.dispatcher = tt_cxy_pair(device_id, dispatcher_coord.x, dispatcher_coord.y);
-        if (mmio_device_id == device_id) {
-            TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
-            assignment.completion_queue_writer = assignment.dispatcher;
-        }
+        CoreCoord dispatcher_coord = this->get_next_available_dispatch_core(mmio_device_id);
+        assignment.dispatcher = tt_cxy_pair(mmio_device_id, dispatcher_coord.x, dispatcher_coord.y);
+        TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
+        assignment.completion_queue_writer = assignment.dispatcher;
+        log_info(tt::LogMetal, "Allocated Dispatcher Core: {} for Device {}", assignment.dispatcher.value().str(), device_id);
         return assignment.dispatcher.value();
+    }
+
+    bool is_dispatcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.dispatcher.has_value()) {
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a particular command queue
+    /// @param device_id ID of the device that should be running the command
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher_d core
+    const tt_cxy_pair &dispatcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.dispatcher_d.has_value()) {
+            return assignment.dispatcher_d.value();
+        }
+        CoreCoord dispatcher_d_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.dispatcher_d = tt_cxy_pair(device_id, dispatcher_d_coord.x, dispatcher_d_coord.y);
+        log_info(tt::LogMetal, "Allocated Dispatcher D Core: {} for Device {}", assignment.dispatcher_d.value().str(), device_id);
+        return assignment.dispatcher_d.value();
     }
 
     CoreType get_dispatch_core_type(chip_id_t device_id) {
