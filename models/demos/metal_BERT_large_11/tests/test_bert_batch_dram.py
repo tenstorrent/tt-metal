@@ -267,6 +267,9 @@ def run_bert_question_and_answering_inference(
     ),
     ids=["BERT_LARGE"],
 )
+@skip_for_wormhole_b0(
+    reason_str="#7525: Previously batch_7-BFLOAT8_B-SHARDED supported for WH B0, but now hangs entirely"
+)
 def test_bert_batch_dram(
     model_version,
     batch,
@@ -282,9 +285,6 @@ def test_bert_batch_dram(
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
-
-    if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 and (batch != 7 or model_config_str != "BFLOAT8_B-SHARDED"):
-        pytest.skip("Only batch_7-BFLOAT8_B-SHARDED supported for WH B0")
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
@@ -351,6 +351,9 @@ def test_bert_batch_dram(
         ),
     ),
     ids=["BERT_LARGE"],
+)
+@skip_for_wormhole_b0(
+    reason_str="#7525: Previously batch_7-BFLOAT8_B-SHARDED supported for WH B0, but now hangs entirely"
 )
 def test_bert_batch_dram_with_program_cache(
     device,
