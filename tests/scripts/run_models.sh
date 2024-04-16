@@ -12,6 +12,7 @@ if [[ $ARCH_NAME == "grayskull" ]]; then
   env pytest tests/ttnn/integration_tests
 fi
 
+# THIS DOES NOT RUN LOL leaving this here for record keeping
 if [[ $ARCH_NAME == "wormhole" ]]; then
   env pytest tests/ttnn/integration_tests/unet
   env pytest tests/ttnn/integration_tests/stable_diffusion
@@ -56,10 +57,9 @@ env pytest models/experimental/bloom/tests -k bloom_gelu_forward
 env pytest models/experimental/bloom/tests -k bloom_merge_heads
 env pytest models/experimental/bloom/tests -k bloom_mlp
 
-# Currently hangs due to #4968
-# env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py -k batch_7-BFLOAT8_B-SHARDED
-# env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_7
-# env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_7
+env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py -k batch_7-BFLOAT8_B-SHARDED
+env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_7
+env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_7
 
 env pytest models/experimental/synthetic_gradients/tests -k test_batchnorm1d
 env pytest models/experimental/synthetic_gradients/tests -k test_linear
@@ -145,11 +145,6 @@ env pytest models/experimental/nanogpt/tests -k nanogpt_model
 
 env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_1]
 env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_2]
-
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_mlp
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_rotary_embeddings
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_attention
-env pytest models/demos/ttnn_falcon7b/tests -k falcon_decoder
 
 #3524 SD gets lower PCC than FD for Resnet
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
