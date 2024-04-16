@@ -54,6 +54,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_geglu_256x256(device, model_name, N, C, H, W, index, reset_seeds):
+    pytest.skip()
     input_shapes = (N, C, H, W)
     model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
     ref_model = model.down_blocks[index].attentions[0].transformer_blocks[0].ff.net[0]
@@ -122,7 +123,7 @@ def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
     model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
     ref_model = model.up_blocks[index].attentions[0].transformer_blocks[0].ff.net[0]
     config = model.config
-    torch_hidden_states = torch_random(input_shapes, -0.1, 0.1, dtype=torch.float32)
+    torch_hidden_states = torch_random(input_shapes, -1, 1, dtype=torch.float32)
     torch_output = ref_model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(

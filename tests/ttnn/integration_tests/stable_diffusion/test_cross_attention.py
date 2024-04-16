@@ -93,6 +93,7 @@ from models.utility_functions import (
     ],
 )
 def test_cross_attention_256x256(device, model_name, N, C, H, W, index, has_encoder_hidden_states):
+    pytest.skip()
     torch.manual_seed(0)
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)

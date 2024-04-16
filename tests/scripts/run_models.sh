@@ -13,8 +13,8 @@ if [[ $ARCH_NAME == "grayskull" ]]; then
 fi
 
 if [[ $ARCH_NAME == "wormhole" ]]; then
-  env pytest tests/ttnn/integration_tests/stable_diffusion
   env pytest tests/ttnn/integration_tests/unet
+  env pytest tests/ttnn/integration_tests/stable_diffusion
 fi
 
 if [[ $ARCH_NAME == "wormhole_b0" ]]; then
