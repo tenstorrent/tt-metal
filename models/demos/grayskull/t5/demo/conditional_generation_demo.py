@@ -11,7 +11,6 @@ from datasets import load_dataset
 from models.generation_utils import get_logits_processor
 import ttnn
 
-
 from transformers import T5ForConditionalGeneration, AutoTokenizer, T5Config
 from models.demos.grayskull.t5.tt import ttnn_functional_t5
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
@@ -49,8 +48,7 @@ def run_generate(input_ids, model, config, parameters, device, max_tokens, batch
 
     profiler.start(f"inference_time")
     for iteration in range(max_tokens):
-        decoder_input_ids = ttnn.from_torch(decoder_input_ids)
-        decoder_input_ids = ttnn.to_device(decoder_input_ids, device)
+        decoder_input_ids = ttnn.from_torch(decoder_input_ids, device=device, dtype=ttnn.uint32)
 
         tt_output, encoder_hidden_states = tt_model.t5_for_conditional_generation(
             config,
@@ -244,7 +242,9 @@ def run_summarization_dataset_inference(device, batch_size, sequence_length, max
         (8, 128, 64, "google/flan-t5-small"),
     ),
 )
-def test_t5_demo_for_summarize(input_path, device, batch_size, sequence_length, max_tokens, model_name):
+def test_t5_demo_for_summarize(
+    input_path, device, use_program_cache, batch_size, sequence_length, max_tokens, model_name
+):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -258,7 +258,7 @@ def test_t5_demo_for_summarize(input_path, device, batch_size, sequence_length, 
         (8, 128, 64, "google/flan-t5-small"),
     ),
 )
-def test_t5_demo_for_summarize_dataset(device, batch_size, sequence_length, max_tokens, model_name):
+def test_t5_demo_for_summarize_dataset(device, use_program_cache, batch_size, sequence_length, max_tokens, model_name):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 

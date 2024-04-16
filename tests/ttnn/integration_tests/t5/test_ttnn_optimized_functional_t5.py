@@ -7,7 +7,7 @@ import pytest
 import torch
 import transformers
 
-from models.experimental.functional_t5.tt import ttnn_optimized_functional_t5 as functional_t5
+from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5 as functional_t5
 from models.utility_functions import torch_random, skip_for_wormhole_b0
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
