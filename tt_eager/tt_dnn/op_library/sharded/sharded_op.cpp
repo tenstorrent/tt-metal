@@ -109,16 +109,11 @@ operation::ProgramWithCallbacks Reshard::create_program(
     auto& output_tensor = output_tensors.at(0);
     //each tensor has its respective shard_spec within its memory_config
     return reshard_multi_core(input_tensor, output_tensor);
-
-
 }
 
 std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto mem_config = this->output_mem_config;
-
-
-
 
     return {create_sharded_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
@@ -128,16 +123,6 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
         mem_config
         )};
 }
-
-const operation::Hash Reshard::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
-    return operation::hash_operation<Reshard>(
-        this->input_mem_config,
-        this->output_mem_config,
-        this->input_shape);
-}
-
-
 
 ShardedOpParallelizationStrategy Reshard::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     return ShardedOpParallelizationStrategy::MULTI_CORE;

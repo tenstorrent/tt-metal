@@ -100,7 +100,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
         in1_t,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 

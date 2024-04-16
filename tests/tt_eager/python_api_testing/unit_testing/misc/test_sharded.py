@@ -16,12 +16,20 @@ from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
 
+# TODO (7735): Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests
 @pytest.mark.parametrize(
     "input_shape, shard_scheme, shard_size",
     [
         ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
         ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512)),
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32)),
+        pytest.param(
+            [1, 1, 100352, 64],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            (2048, 32),
+            marks=pytest.mark.xfail(
+                reason="7735: Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -84,14 +92,31 @@ def test_sharded_tile(
     assert passing
 
 
+# TODO (7735): Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests
 @pytest.mark.parametrize(
     "input_shape, shard_scheme, shard_size, num_cores",
     [
         ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), 98),
         ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), 98),
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), 98),
+        pytest.param(
+            [1, 1, 100352, 64],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            (2048, 32),
+            98,
+            marks=pytest.mark.xfail(
+                reason="7735: switch to new interleaved_to_sharded with sharded_mem_config input and re-enable block sharded tests"
+            ),
+        ),
         ([1, 1, 32, 40], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (32, 40), 1),
-        ([2, 64, 64, 320], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 40), 64),
+        pytest.param(
+            [2, 64, 64, 320],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            (1024, 40),
+            64,
+            marks=pytest.mark.xfail(
+                reason="7735: switch to new interleaved_to_sharded with sharded_mem_config input and re-enable block sharded tests"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -2077,7 +2102,7 @@ def test_sharded_matmul_no_mcast(
     assert passing
 
 
-@pytest.mark.parametrize("in0_shape, grid_size", [([12, 16, 384, 64], (12, 8)), ([1, 32, 32, 64], (8, 4))])
+@pytest.mark.parametrize("in0_shape, grid_size", [([12, 16, 384, 64], (12, 8)), ([1, 32, 32, 64], (1, 4))])
 @pytest.mark.parametrize("in0_sharded, out_sharded", [[True, True], [False, False]], ids=["sharded", "unsharded"])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_concat_heads(
@@ -2216,7 +2241,7 @@ def run_reshard_test(
             (64, 64),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 7),
+            (1, 3),
             (32, 32),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
@@ -2226,11 +2251,11 @@ def run_reshard_test(
             ttl.tensor.Layout.TILE,
             (0, 3),
             (32, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (0, 1),
             (32, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
@@ -2238,11 +2263,11 @@ def run_reshard_test(
             ttl.tensor.Layout.TILE,
             (0, 7),
             (32, 288),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (0, 1),
             (32, 1152),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
@@ -2263,27 +2288,10 @@ def run_reshard_test(
             (7, 7),
             (32, 128),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             (0, 7),
             (32, 1024),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_shape_1, input_layout_1, input_shard_grid_1,  input_shard_shape_1, input_shard_orientation_1, input_sharding_scheme_1, output_shard_grid_1, output_shard_shape_1, output_shard_orientation_1, output_sharding_scheme_1 ",
-    [
-        (
-            [1, 1, 32, 8192],
-            ttl.tensor.Layout.TILE,
-            (7, 7),
-            (32, 128),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 7),
-            (32, 1024),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ],
@@ -2291,7 +2299,6 @@ def run_reshard_test(
 @pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_reshard(
     device,
-    use_program_cache,
     input_shape,
     input_layout,
     input_shard_grid,
@@ -2302,16 +2309,6 @@ def test_reshard(
     output_shard_shape,
     output_shard_orientation,
     output_sharding_scheme,
-    input_shape_1,
-    input_layout_1,
-    input_shard_grid_1,
-    input_shard_shape_1,
-    input_shard_orientation_1,
-    input_sharding_scheme_1,
-    output_shard_grid_1,
-    output_shard_shape_1,
-    output_shard_orientation_1,
-    output_sharding_scheme_1,
     tt_dtype,
 ):
     torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
@@ -2336,18 +2333,53 @@ def test_reshard(
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
 
+
+@skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        (
+            [1, 1, 32, 8192],
+            ttl.tensor.Layout.TILE,
+            (7, 7),
+            (32, 128),
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            (0, 7),
+            (32, 1024),
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_reshard_with_program_cache(
+    device,
+    use_program_cache,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
     torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
         device,
-        input_shape_1,
-        input_layout_1,
-        input_shard_grid_1,
-        input_shard_shape_1,
-        input_shard_orientation_1,
-        input_sharding_scheme_1,
-        output_shard_grid_1,
-        output_shard_shape_1,
-        output_shard_orientation_1,
-        output_sharding_scheme_1,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
         tt_dtype,
     )
 
@@ -2357,6 +2389,30 @@ def test_reshard(
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
+
+    torch_tensor1, torch_tensor_after_round_trip1 = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor1.shape == torch_tensor_after_round_trip1.shape
+    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+        passing, output = comp_equal(torch_tensor1, torch_tensor_after_round_trip1)
+    else:
+        passing, output = comp_pcc(torch_tensor1, torch_tensor_after_round_trip1)
+    assert passing, output
+
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize(
@@ -2388,6 +2444,9 @@ def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation
         grid_x = input_shape[-1] // 32
         grid_y = input_shape[-2] // 32
         shard_shape = [input_shape[-2] // grid_y, input_shape[-1] // grid_x]
+
+        if shard_orientation == ttl.tensor.ShardOrientation.COL_MAJOR:
+            grid_x, grid_y = grid_y, grid_x
     else:
         assert False, f"Unsupported {shard_scheme}"
 

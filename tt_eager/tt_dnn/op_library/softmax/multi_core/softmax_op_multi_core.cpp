@@ -448,6 +448,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
+    uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] * input_tensor.shard_spec().value().shape[1]);
 
     uint32_t mask_H = shape[2];
     if (mask.has_value()) {
@@ -654,44 +655,75 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         num_tiles_in_attn_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_HW;
         num_tiles_of_attn_mask_needed_per_core = block_ht * block_wt;
     }
-    for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+    uint32_t num_cores_per_batch_index = 0;
 
-        if (shard_orient == ShardOrientation::COL_MAJOR && !hw_dims_only_causal_mask) {
-            mask_start_tile_id = 0;
-        }
-
+    if (shard_orient == ShardOrientation::COL_MAJOR) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+            for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
-            // reader args
-            std::vector<uint32_t> reader_args;
-            reader_args.push_back(0x3f803f80);
-            reader_args.push_back(s.u);
-            reader_args.push_back(mask_addr);
-            reader_args.push_back(mask_start_tile_id);
-            if (hw_dims_only_causal_mask) {
-                reader_args.push_back(num_tiles_in_attn_mask);
-            }
+                // reader args
+                std::vector<uint32_t> reader_args;
+                reader_args.push_back(0x3f803f80);
+                reader_args.push_back(s.u);
+                reader_args.push_back(mask_addr);
+                reader_args.push_back(mask_start_tile_id);
+                if (hw_dims_only_causal_mask) {
+                    reader_args.push_back(num_tiles_in_attn_mask);
+                }
 
-            tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-            if (hw_dims_only_causal_mask) {
-                uint32_t mask_tile_id_end = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-                mask_start_tile_id = mask_tile_id_end;
-            } else {
-                if (shard_orient == ShardOrientation::COL_MAJOR) {
-                    if (mask.has_value()) {
-                        if (causal_mask) {
-                            mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
-                        } else {
-                            mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+
+                num_cores_per_batch_index ++;
+
+                if (hw_dims_only_causal_mask) {
+                    uint32_t mask_tile_id_end = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
+                    mask_start_tile_id = mask_tile_id_end;
+                } else {
+                    if (num_cores_per_batch_index == num_cores_per_batch) {
+                        num_cores_per_batch_index = 0;
+                        if (mask.has_value()) {
+                            if (causal_mask) {
+                                mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                            } else {
+                                mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                            }
                         }
                     }
-                } else if (core_idx_x == num_cores_c - 1) {
-                    if (mask.has_value()) {
-                        if (causal_mask) {
-                            mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
-                        } else {
-                            mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                }
+            }
+        }
+    } else {
+        for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+
+                // reader args
+                std::vector<uint32_t> reader_args;
+                reader_args.push_back(0x3f803f80);
+                reader_args.push_back(s.u);
+                reader_args.push_back(mask_addr);
+                reader_args.push_back(mask_start_tile_id);
+                if (hw_dims_only_causal_mask) {
+                    reader_args.push_back(num_tiles_in_attn_mask);
+                }
+
+                tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+
+                num_cores_per_batch_index ++;
+
+                if (hw_dims_only_causal_mask) {
+                    uint32_t mask_tile_id_end = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
+                    mask_start_tile_id = mask_tile_id_end;
+                } else {
+                    if (num_cores_per_batch_index == num_cores_per_batch) {
+                        num_cores_per_batch_index = 0;
+                        if (mask.has_value()) {
+                            if (causal_mask) {
+                                mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                            } else {
+                                mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
+                            }
                         }
                     }
                 }
