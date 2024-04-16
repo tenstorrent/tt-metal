@@ -8,8 +8,8 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
-from model.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from model.demos.t3000.llama2_70b.tt.model_config import (
+from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
     # get_tt_cache_path,
 )
