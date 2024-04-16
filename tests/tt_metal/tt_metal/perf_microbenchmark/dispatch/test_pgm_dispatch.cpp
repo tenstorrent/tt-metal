@@ -97,8 +97,8 @@ void init(int argc, char **argv) {
 }
 
 void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args) {
-    for (int core_idx_y = workers_g.start.y; core_idx_y < workers_g.end.y; core_idx_y++) {
-        for (int core_idx_x = workers_g.start.x; core_idx_x < workers_g.end.x; core_idx_x++) {
+    for (int core_idx_y = workers_g.start.y; core_idx_y <= workers_g.end.y; core_idx_y++) {
+        for (int core_idx_x = workers_g.start.x; core_idx_x <= workers_g.end.x; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
             tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
