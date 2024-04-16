@@ -178,7 +178,7 @@ class Args:
         max_seq_len=4096,
         # Generation args
         num_tokens=100,
-        prompts_file="models/demos/llama2_70b/demo/data/multi_prompt.json",
+        prompts_file="models/demos/t3000/llama2_70b/demo/data/multi_prompt.json",
         output_at_end=True,
         top_p=1,
         top_k=1,

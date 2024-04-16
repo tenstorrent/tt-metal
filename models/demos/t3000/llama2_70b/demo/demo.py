@@ -38,7 +38,9 @@ def main(args):
         all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
 
         if args.output_at_end:
-            with open("models/demos/llama2_70b/demo/data/demo_user_output.txt", "w") as f:  # Open a file for writing
+            with open(
+                "models/demos/t3000/llama2_70b/demo/data/demo_user_output.txt", "w"
+            ) as f:  # Open a file for writing
                 for i, text in enumerate(all_text):
                     logger.info(f"user {i}: {text}")  # Log to wherever logger is configured to write
                     f.write(f"user {i}: {text}\n")  # Write to the file with a newline
@@ -245,7 +247,7 @@ class Args:
         max_seq_len=4096,
         # Generation args
         num_tokens=100,
-        prompts_file="models/demos/llama2_70b/demo/data/multi_prompt.json",
+        prompts_file="models/demos/t3000/llama2_70b/demo/data/multi_prompt.json",
         output_at_end=True,
         top_p=1,
         top_k=1,
@@ -311,8 +313,8 @@ def construct_arg(**kwargs):
 @pytest.mark.parametrize(
     "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
     [
-        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
-        (128, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
+        (128, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
+        (128, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
     ],
     ids=["greedy", "sampling"],
 )
