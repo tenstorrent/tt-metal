@@ -35,7 +35,6 @@ env pytest models/experimental/stable_diffusion/tests/test_unet_mid_block.py -k 
 env pytest models/experimental/stable_diffusion/tests/test_upblock_2d.py -k test_run_upblock_real_input_inference
 env pytest models/experimental/stable_diffusion/tests -k test_unbatched_stable_diffusion #
 
-env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_12
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_12
 
