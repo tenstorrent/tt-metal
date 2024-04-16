@@ -111,8 +111,11 @@ def get_model_config(batch, device_grid_size, model_config_str):
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
     L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
-    SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
+    BLOCK_SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED, tt_lib.tensor.BufferType.L1
+    )
+    HEIGHT_SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
     )
 
     # Set default dtype and mem_config based on model_config_str
@@ -131,7 +134,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
         mem_config = L1_MEMCFG
     elif model_config_str in ("BFLOAT8_B-SHARDED"):
         dtype = tt_lib.tensor.DataType.BFLOAT8_B
-        mem_config = SHARDED_MEMCFG
+        mem_config = BLOCK_SHARDED_MEMCFG
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -302,9 +305,12 @@ def get_model_config(batch, device_grid_size, model_config_str):
             "SHARD_ORIENTATION": shard_orientation,
             "QKV_INTERLEAVED": activation_grid_dim,
             "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG": SHARDED_MEMCFG,
+            "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG": BLOCK_SHARDED_MEMCFG,
             "OP1_FUSED_QKV_MM_INPUT_MEMCFG": L1_MEMCFG,
+            "OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG": HEIGHT_SHARDED_MEMCFG,
+            "OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG": HEIGHT_SHARDED_MEMCFG,
             "OP4_SOFTMAX_ATTENTION_MASK_MEMCFG": L1_MEMCFG,
+            "OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG": HEIGHT_SHARDED_MEMCFG,
             "INPUT_EMBEDDINGS_MEMCFG": L1_MEMCFG,
             "OUTPUT_EMBEDDINGS_MEMCFG": L1_MEMCFG,
             "QA_LINEAR_OUTPUT_MEMCFG": L1_MEMCFG,

@@ -118,6 +118,47 @@ DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Devic
                                             std::optional<ShardSpecBuffer> shard_params,
                                             const MemoryConfig& memory_config) {
     TT_ASSERT(shard_params.has_value(), "Shard params are required for sharded buffer and they were not initialized");
+
+    auto shard_spec = memory_config.shard_spec.value();
+    auto& shard_shape = shard_spec.shape;
+
+    uint32_t num_cores = shard_spec.num_cores();
+
+    uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+    uint32_t total_width = shape[-1];
+    if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_ASSERT(total_width == shard_shape[1], fmt::format("Shard shape {} does not divide tensor shape {} correctly according to sharding scheme", shard_shape[1], total_width));
+        uint32_t num_shards = div_up(total_height, shard_shape[0]);
+        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
+    } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        TT_ASSERT(total_height == shard_shape[0], "Shard shape does not divide tensor shape correctly according to sharding scheme");
+        uint32_t num_shards = div_up(total_width, shard_shape[1]);
+        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
+    } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_ASSERT(shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
+        uint32_t num_shards_along_height = div_up(total_height, shard_shape[0]);
+        uint32_t num_shards_along_width = div_up(total_width, shard_shape[1]);
+
+        // Additionally check that number of cores along height and width matches shard grid
+        const CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
+        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+            TT_ASSERT(num_shards_along_height <= shard_grid.y, fmt::format("Number of shards along height {} must match number of rows {} for row major orientation!", num_shards_along_height, shard_grid.y));
+            TT_ASSERT(num_shards_along_width <= shard_grid.x, fmt::format("Number of shards along width {} must match number of columns {} for row major orientation!", num_shards_along_width, shard_grid.x));
+        } else {
+            TT_ASSERT(num_shards_along_height <= shard_grid.x, fmt::format("Number of shards along height {} must match number of columns {} for column major orientation!", num_shards_along_height, shard_grid.x));
+            TT_ASSERT(num_shards_along_width <= shard_grid.y, fmt::format("Number of shards along width {} must match number of rows {} for column major orientation!", num_shards_along_width, shard_grid.y));
+        }
+    } else {
+        TT_FATAL(false, "Unsupported sharding scheme");
+    }
+
+    if (layout == Layout::TILE) {
+        TT_ASSERT((shard_shape[0] % constants::TILE_HEIGHT == 0 && shard_shape[1] % constants::TILE_WIDTH == 0), "Shard shape must be tile sized");
+    } else if (layout == Layout::ROW_MAJOR) {
+        // Require alignment for now
+        // TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % ADDRESS_ALIGNMENT == 0);
+    }
+
     auto page_shape = shard_params.value().page_shape;
     uint32_t size_of_element = element_size_bytes_wrapper(data_type);
     uint32_t page_size = page_shape[0] * page_shape[1] * size_of_element;
