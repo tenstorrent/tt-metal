@@ -30,6 +30,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     tensor_id{std::nullopt},
     tensor_attributes(std::make_shared<TensorAttributes>(storage, shape, dtype, layout)),
     deallocate_through_destructor(false) {
+    ZoneScoped;
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -70,6 +71,7 @@ Tensor::Tensor(const Storage storage, const Shape shape, DataType dtype, Layout 
     Tensor(storage, ttnn::Shape{shape}, dtype, layout) {}
 
 Tensor::~Tensor() {
+    ZoneScoped;
     this->deallocate_through_destructor = true;
     this->deallocate();
     // Decrement main thread ref count for all tensors on device
@@ -80,6 +82,7 @@ Tensor::~Tensor() {
 }
 
 void Tensor::deallocate(bool force) {
+    ZoneScoped;
     if (this->tensor_attributes.use_count()) {
         // Check if the attributes didn't get moved to another tensor.
         // If not, we can deallocate this tensor.
@@ -165,6 +168,7 @@ void Tensor::deallocate(bool force) {
 
 // Main Thread - Wait for all workers in this tensor to populate the entire tensor
 void Tensor::wait_for_tensor_data_populated() const {
+    ZoneScoped;
     // Stall until all the workers for this tensor
     // have populated the full tensor
     for (int i = 0; i < this->tensor_attributes->tensor_populated.size(); i++) {
@@ -177,6 +181,7 @@ void Tensor::wait_for_tensor_data_populated() const {
 
 // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
 void Tensor::wait_for_tensor_metadata_populated() const {
+    ZoneScoped;
     // First worker is responsible for updating all metadata fields
     // Stall until this worker is done
     while (true) {
@@ -200,6 +205,7 @@ void Tensor::set_populated(Device* worker) {
 }
 
 void Tensor::deepcopy(const Tensor& other) {
+    ZoneScoped;
     // Wait until the tensor being copied is populated
     other.wait_for_tensor_data_populated();
     // Populate tensor metadata
@@ -212,6 +218,7 @@ void Tensor::deepcopy(const Tensor& other) {
 }
 
 void Tensor::populate_buffers_and_metadata(const Tensor& other) {
+    ZoneScoped;
     // Similar to deepcopy, but to be applied on a tensor that has an empty storage
     // container initialized. Require tensor storage to be correctly initialized.
     this->set_shape(other.get_shape());
@@ -232,6 +239,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
 }
 
 std::vector<Device*> Tensor::get_workers(bool blocking) const {
+    ZoneScoped;
     // Initialize an empty worker vector (remains empty for host side storage)
     std::vector<Device*> workers = {};
 
@@ -413,6 +421,7 @@ Tensor Tensor::cpu_sharded() const {
 
 
 Tensor Tensor::extract_shard(const CoreCoord & core) const{
+    ZoneScoped;
     auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
     auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
@@ -492,11 +501,13 @@ uint32_t Tensor::element_size() const {
 }
 
 Tensor Tensor::reshape(int N, int C, int H, int W) const {
+    ZoneScoped;
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
     return this->reshape(new_shape);
 }
 
 Tensor Tensor::reshape(const Shape& new_shape) const {
+    ZoneScoped;
     TT_ASSERT(
         this->volume() == tt::tt_metal::compute_volume(new_shape),
         "{} != {}",
@@ -511,6 +522,7 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
 }
 
 bool Tensor::is_allocated() const {
+    ZoneScoped;
     return std::visit(
         [](auto&& storage) -> bool
         {
