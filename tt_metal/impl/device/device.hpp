@@ -63,6 +63,7 @@ public:
 
     bool activate_device(chip_id_t id);
     void deactivate_device(chip_id_t id);
+    bool is_device_active(chip_id_t id);
 };
 
 // A physical PCIexpress Tenstorrent device
