@@ -352,6 +352,7 @@ inline auto run_with_autoformat(
     const float pad_value = 0,
     const bool pad_c = false
 )-> Tensors {
+    log_debug(tt::LogOp, "run_with_autoformat run_op.hpp 1");
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c);
@@ -374,6 +375,7 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {}
 )-> ProgramOutputTensors<ConcreteOperation> {
+    log_debug(tt::LogOp, "run_with_autoformat run_op.hpp 2");
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<OutputTensors>(concrete_op);
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);

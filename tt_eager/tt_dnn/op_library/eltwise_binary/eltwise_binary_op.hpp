@@ -67,6 +67,8 @@ struct EltwiseBinary {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    // operation::ProgramWithOptionalOutputTensors create_program(
+    //     const std::vector<Tensor> &input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::OpPerformanceModel create_op_performance_model(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -119,6 +121,7 @@ struct make_eltwise_binary {
         // std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
         if(opt_output_tensor.has_value() && !(opt_output_tensor.value()).empty()){
             opt_output_tensor.value() = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+            log_debug(tt::LogOp, "opt_output_tensor bin op.hpp workers {}, {}", opt_output_tensor.has_value(), opt_output_tensor.value().at(0));
             operation::launch_with_autoformat(
             [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
                 Tensor in_a = input_tensors.at(0);
@@ -150,6 +153,7 @@ struct make_eltwise_binary {
                         {in_a, in_b});
             },
         {input_tensor_a, input_tensor_b}, opt_output_tensor.value());
+        log_debug(tt::LogOp, "return opt_output_tensor.value()).at(0) ");
         return (opt_output_tensor.value()).at(0);
         }
         else {
@@ -185,6 +189,7 @@ struct make_eltwise_binary {
                         {in_a, in_b});
             },
         {input_tensor_a, input_tensor_b}, output_tensors);
+        log_debug(tt::LogOp, "return output_tensors.at(0) ");
         return output_tensors.at(0);
         }
 
