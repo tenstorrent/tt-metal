@@ -234,7 +234,7 @@ def get_tensor(shape, dtype):
         (
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 8192, 1536],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 320),
             ttl.tensor.CoreRangeSet(
                 {
