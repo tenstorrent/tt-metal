@@ -631,34 +631,9 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.shard_spec.has_value());
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);
+
     auto shard_spec = memory_config.shard_spec.value();
     auto& shard_shape = shard_spec.shape;
-
-    uint32_t num_cores = shard_spec.num_cores();
-
-    uint32_t num_shards;
-    uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
-    uint32_t total_width = shape[-1];
-    if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_ASSERT(total_width == shard_shape[1], "Shard shape {} does not divide tensor shape {} correctly according to sharding scheme", shard_shape[1], total_width);
-        num_shards = div_up(total_height, shard_shape[0]);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_ASSERT(total_height == shard_shape[0], "Shard shape does not divide tensor shape correctly according to sharding scheme");
-        num_shards = div_up(total_width, shard_shape[1]);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_shards = div_up(total_height, shard_shape[0]) * div_up(total_width, shard_shape[1]);
-    } else {
-        TT_FATAL(false, "Unsupported sharding scheme");
-    }
-
-    TT_ASSERT(num_shards == num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
-
-    if (layout == Layout::TILE) {
-        TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
-    } else if (layout == Layout::ROW_MAJOR) {
-        // Require alignment for now
-        // TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % ADDRESS_ALIGNMENT == 0);
-    }
 
     auto width = shape[-1];
     auto other_dims = 1;
@@ -671,7 +646,6 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
     uint32_t packed_size_in_bytes;
-
 
     packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,

@@ -217,9 +217,8 @@ def split_query_key_value_and_split_heads(
         ):
             raise RuntimeError("input_tensor memory config must be BLOCK sharded when input_tensor is sharded!")
 
-        # TODO: Add this back when output is HEIGHT sharded only!
-        # if memory_config != ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG:
-        #     raise RuntimeError("Output memory config must be HEIGHT sharded when input_tensor is sharded!")
+        if memory_config != ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG:
+            raise RuntimeError("Output memory config must be HEIGHT sharded when input_tensor is sharded!")
 
         input_tensor = ttnn.reshape(
             input_tensor,
