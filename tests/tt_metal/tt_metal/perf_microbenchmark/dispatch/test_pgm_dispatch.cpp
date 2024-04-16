@@ -81,7 +81,7 @@ void init(int argc, char **argv) {
         exit(0);
     }
     if (n_args_g > MAX_ARGS) {
-        log_fatal("CB count must be 0..{}", MAX_ARGS);
+        log_fatal("Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (n_sems_g > NUM_SEMAPHORES) {
@@ -186,6 +186,8 @@ int main(int argc, char **argv) {
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
+        log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
+        log_info(LogTest, "Iterations: {}", iterations_g);
         log_info(LogTest, "Grid: ({}-{})", workers_g.start.str(), workers_g.end.str());
         log_info(LogTest, "Kernel size: {}", kernel_size_g);
         log_info(LogTest, "Kernel cycles: {}", kernel_cycles_g);
