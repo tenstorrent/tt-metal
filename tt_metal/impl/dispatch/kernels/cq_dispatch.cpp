@@ -779,6 +779,8 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 }
 
 void kernel_main() {
+
+
     DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": start" << ENDL();
 
     static_assert(is_d_variant || split_dispatch_page_preamble_size == 0);
@@ -845,6 +847,11 @@ void kernel_main() {
         // components use.
         noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_dispatch_cb_sem_id)), 0x80000000);
     }
+
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+    RISC_POST_HEARTBEAT(heartbeat);
+#endif
 
     DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": out" << ENDL();
 }
