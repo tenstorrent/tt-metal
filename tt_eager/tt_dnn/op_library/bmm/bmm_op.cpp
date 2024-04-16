@@ -804,21 +804,37 @@ Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &i
 
 Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto seq_len = input_tensor_a.get_legacy_shape()[2];
-
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias}))};
     if (seq_len > 512) {
         // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-        TT_FATAL(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-        TT_FATAL(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-        TT_FATAL((input_tensor_a.get_legacy_shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
-        TT_FATAL((input_tensor_b.get_legacy_shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
-        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+        operation::launch_with_autoformat(
+            [seq_len, mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                auto& input_tensor_a = input_tensors.at(0);
+                auto& input_tensor_b = input_tensors.at(1);
+                auto& bias = optional_input_tensors.at(0);
+                TT_FATAL(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
+                TT_FATAL(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
+                TT_FATAL((input_tensor_a.get_legacy_shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
+                TT_FATAL((input_tensor_b.get_legacy_shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
+                return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}, {bias});
+            },
+        {input_tensor_a, input_tensor_b}, output_tensors, {bias});
+
     } else {
-        CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
-        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
-        std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
-        auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
-        return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
+        operation::launch_op(
+            [mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                auto& input_tensor_a = input_tensors.at(0);
+                auto& input_tensor_b = input_tensors.at(1);
+                auto& bias = optional_input_tensors.at(0);
+                CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
+                auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
+                std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
+                auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
+                return {operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config)};
+            },
+        {input_tensor_a, input_tensor_b}, output_tensors, {bias});
     }
+    return output_tensors.at(0);
 }
 
 /**

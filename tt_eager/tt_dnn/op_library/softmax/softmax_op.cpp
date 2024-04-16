@@ -183,8 +183,14 @@ Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgram
 
 namespace transformers {
 Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val, .is_scale_causal_mask_hw_dims_softmax=false}, {input_tensor}, {mask});
+    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [scale, mask, program_config, is_causal_mask, compute_kernel_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor = input_tensors.at(0);
+            auto& mask = optional_input_tensors.at(0);
+            auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+            return operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {mask});
+        }, {input_tensor}, dummy_output_tensors, {mask});
     return input_tensor;
 }
 
@@ -209,6 +215,7 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
     operation::launch_with_autoformat(
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
+            auto& mask = optional_input_tensors.at(0);
             Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             std::optional<FormatParams> mask_format_params = std::nullopt;
@@ -224,7 +231,7 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
             }
             auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
             return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params});
-        }, {input_tensor}, output_tensors);
+        }, {input_tensor}, output_tensors, {mask});
     return output_tensors.at(0);
 }
 }  // namespace transformers

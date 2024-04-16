@@ -5,10 +5,13 @@
 #pragma once
 
 #include <functional>
+#include <pthread.h>
+#include <sched.h>
 #include <thread>
 
 #include "common/env_lib.hpp"
 #include "lock_free_queue.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt {
 
@@ -31,7 +34,7 @@ class WorkExecutor {
     public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor() {
+    WorkExecutor(int device_id) : managed_device_id(device_id) {
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->start_worker();
         }
@@ -52,9 +55,10 @@ class WorkExecutor {
                 if (this->worker_state == WorkerState::TERMINATE) {
                     break;
                 }
-                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                std::this_thread::sleep_for(std::chrono::microseconds(5));
             }
             else {
+                ZoneScopedN("PopWork");
                 auto func = this->worker_queue.pop();
                 (*func)();
             }
@@ -62,6 +66,7 @@ class WorkExecutor {
     }
 
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
+        ZoneScopedN("PushWork");
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
             if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
                 // Push function executor to worker queue
@@ -109,12 +114,19 @@ class WorkExecutor {
     private:
     std::thread worker_thread;
     WorkerState worker_state = WorkerState::IDLE;
+    int managed_device_id = 0;
 
     inline void start_worker() {
         this->worker_queue.parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
         this->worker_state = WorkerState::RUNNING;
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
         this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
+        // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(managed_device_id % std::thread::hardware_concurrency(), &cpuset);
+        int rc = pthread_setaffinity_np(worker_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
+        TT_FATAL(rc == 0, "Unable to bind worker thread to CPU Core");
     }
 
     inline void stop_worker() {
