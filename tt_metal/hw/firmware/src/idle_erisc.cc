@@ -53,10 +53,10 @@ namespace kernel_profiler {
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
 
-inline void RISC_POST_STATUS(uint32_t status) {
-  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-  ptr[0] = status;
-}
+//inline void RISC_POST_STATUS(uint32_t status) {
+//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+//  ptr[0] = status;
+//}
 
 void init_sync_registers() {
     volatile tt_reg_ptr uint* tiles_received_ptr;
