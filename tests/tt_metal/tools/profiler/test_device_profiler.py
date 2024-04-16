@@ -8,8 +8,11 @@ import re
 import inspect
 import pytest
 
+import pandas as pd
+
 from tt_metal.tools.profiler.common import (
     TT_METAL_HOME,
+    PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
@@ -21,8 +24,10 @@ from models.utility_functions import skip_for_grayskull
 PROG_EXMP_DIR = "programming_examples/profiler"
 
 
-def run_device_profiler_test(doubleRun=False, setup=False):
+def run_device_profiler_test(testName=None, doubleRun=False, setup=False):
     name = inspect.stack()[1].function
+    if testName:
+        name = testName
     clear_profiler_runtime_artifacts()
     profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{PROG_EXMP_DIR}/{name}")
     assert profilerRun == 0
@@ -171,3 +176,21 @@ def test_dispatch_cores():
             if statType in stat:
                 statTypesSet.remove(statType)
     assert len(statTypesSet) == 0
+
+
+def test_profiler_host_device_sync():
+    TOLERANCE = 0.1
+
+    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+    deviceData = run_device_profiler_test(testName="test_custom_cycle_count")
+    reprotedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
+
+    syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
+
+    assert os.path.isfile(syncInfoFile)
+
+    syncinfoDF = pd.read_csv(syncInfoFile)
+    freq = float(syncinfoDF.iloc[-1]["frequency"]) * 1e9
+
+    assert freq < (reprotedFreq * (1 + TOLERANCE)), "Frequency too large on this {ENV_VAR_ARCH_NAME}"
+    assert freq > (reprotedFreq * (1 - TOLERANCE)), "Frequency too small on this {ENV_VAR_ARCH_NAME}"
