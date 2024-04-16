@@ -228,6 +228,7 @@ def run_test_LlamaModel_inference(
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
+@pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "pcc, n_layers",
