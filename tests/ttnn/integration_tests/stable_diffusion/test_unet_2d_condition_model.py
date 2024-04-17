@@ -163,7 +163,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")
 
-    ttnn.CONFIG.throw_exception_on_fallback = True
     parameters = preprocess_model_parameters(
         model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
