@@ -244,10 +244,12 @@ class Device {
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() {
+        log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
         this->synchronize();
         program_cache.enable();
     }
     void disable_and_clear_program_cache() {
+        log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
         this->synchronize();
         if (this->program_cache.is_enabled()) {
             program_cache.clear();

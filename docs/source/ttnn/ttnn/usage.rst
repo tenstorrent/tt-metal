@@ -110,8 +110,8 @@ Basic Examples
 
     torch_input_tensor = torch.rand(32, 32, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.manage_config_attribute("enable_comparison_mode", True):
-        with ttnn.manage_config_attribute("comparison_mode_pcc", 0.9998): # This is optional in case default value of 0.9999 is too high
+    with ttnn.manage_config("enable_comparison_mode", True):
+        with ttnn.manage_config("comparison_mode_pcc", 0.9998): # This is optional in case default value of 0.9999 is too high
             output_tensor = ttnn.exp(input_tensor)
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
@@ -169,8 +169,8 @@ Basic Examples
 
 .. code-block:: bash
 
-    # To print currently executing ttnn operations with their durations
-    export TTNN_CONFIG_OVERRIDES='{"enable_logging": true}'
+    # To print currently executing ttnn operations
+    export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
 
     # To generate a csv with all of the ttnn and tt_lib operations, their attributes and their input tensors:
     export OPERATION_HISTORY_CSV=operation_history.csv
@@ -244,26 +244,14 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
 
 
-11. Speeding up ttnn calls
---------------------------
-
-ttnn has a python decorator that optionally enables features during run-time. The features are related to validation and debugging of the operations.
-
-The following environment variable can be set in order to completely disable these features.
-
-.. code-block:: bash
-
-    export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": true}'
-
-
-
-12. Visualize using Web Browser
+11. Visualize using Web Browser
 -------------------------------
 
 Set the following environment variables as needed
 
 .. code-block:: bash
 
+    # enable_fast_runtime_mode - This has to be disabled to enable logging
     # enable_logging - Synchronize main thread after every operation and log the operation
     # report_name (optional) - Name of the report used by the visualizer. If not provided, then no data will be dumped to disk
     # enable_detailed_buffer_report (if report_name is set) - Enable to visualize the detailed buffer report after every operation
@@ -271,17 +259,31 @@ Set the following environment variables as needed
     # enable_detailed_tensor_report (if report_name is set) - Enable to visualize the values of input and output tensors of every operation
     # enable_comparison_mode (if report_name is set) - Enable to test the output of operations against their golden implementaiton
 
+
+     # If running a pytest that is located inside of tests/ttnn, use this config (unless you want to override "report_name" manually)
     export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
         "enable_logging": true,
-        "report_name": "whatever_name_you_want",
         "enable_graph_report": false,
         "enable_detailed_buffer_report": false,
         "enable_detailed_tensor_report": false,
-        "enable_comparison_mode": false,
+        "enable_comparison_mode": false
     }'
 
-    # Or modify ~/.config/ttnn/config.json
-    # Or set TTNN_CONFIG_PATH to a json file of your choice
+    # Otherwise, use this config and make sure to set "report_name"
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_logging": true,
+        "report_name": "<name of the run in the visualizer>",
+        "enable_graph_report": false,
+        "enable_detailed_buffer_report": false,
+        "enable_detailed_tensor_report": false,
+        "enable_comparison_mode": false
+    }'
+
+    # Additionally, a json file can be used to override the config values
+    export TTNN_CONFIG_PATH=<path to the file>
+
 
 Run the code. i.e.:
 
@@ -315,7 +317,7 @@ Open the visualizer by running the following command:
 
 
 
-13. Register pre- and/or post-operation hooks
+12. Register pre- and/or post-operation hooks
 ---------------------------------------------
 
 .. code-block:: python
@@ -342,7 +344,7 @@ Open the visualizer by running the following command:
 
 
 
-14. Query all operations
+13. Query all operations
 ------------------------
 
 .. code-block:: python
@@ -352,7 +354,7 @@ Open the visualizer by running the following command:
 
 
 
-15. Disable Fallbacks
+14. Disable Fallbacks
 ---------------------
 
 Fallbacks are used when the operation is not supported by the device. The fallbacks are implemented in the host and are slower than the device operations.

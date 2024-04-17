@@ -26,9 +26,7 @@ def test_softmax(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor = ttnn.to_device(input_tensor, device)
-    with ttnn.manage_config_attribute("enable_comparison_mode", True), ttnn.manage_config_attribute(
-        "comparison_mode_pcc", 0.99
-    ):
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config("comparison_mode_pcc", 0.99):
         output_tensor = ttnn.softmax(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -46,7 +44,7 @@ def test_exp(device, batch_size, h, w):
     torch_output_tensor = torch.exp(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.manage_config_attribute("enable_comparison_mode", True):
+    with ttnn.manage_config("enable_comparison_mode", True):
         output_tensor = ttnn.exp(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

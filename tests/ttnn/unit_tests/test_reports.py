@@ -17,7 +17,7 @@ import ttnn.database
 def test_enable_logging(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True):
+    with ttnn.manage_config("enable_logging", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -50,9 +50,7 @@ def test_enable_logging(device, height, width):
 def test_enable_logging_and_enable_graph_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_graph_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_graph_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -74,9 +72,7 @@ def test_enable_logging_and_enable_graph_report(device, height, width):
 def test_enable_logging_and_enable_detailed_buffer_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_detailed_buffer_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_detailed_buffer_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -116,9 +112,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
 def test_enable_logging_and_enable_comparison_mode(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_comparison_mode", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_comparison_mode", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -150,9 +144,7 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
 def test_enable_logging_and_enable_detailed_tensor_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_detailed_tensor_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_detailed_tensor_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
