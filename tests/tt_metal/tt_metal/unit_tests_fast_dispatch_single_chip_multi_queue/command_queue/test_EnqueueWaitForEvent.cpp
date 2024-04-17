@@ -145,7 +145,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
 
     for (uint cq_id = 0; cq_id < cqs.size(); cq_id++) {
         for (size_t i = 0; i < num_cmds_per_cq * cqs.size() * num_events_per_cq; i++) {
-            uint32_t host_addr = completion_queue_base[cq_id] + i * TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
+            uint32_t host_addr = completion_queue_base[cq_id] + i * dispatch_constants::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
             tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
             log_debug(tt::LogTest, "Checking completion queue. cq_id: {} i: {} host_addr: {}. Got event_id: {}", cq_id, i, host_addr, event);
             EXPECT_EQ(event, expected_event_id[cq_id]++);
