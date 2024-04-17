@@ -68,7 +68,7 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         TT_ASSERT(false, "Invalid arch");
         break;
     }
-    common_flags += "-std=c++17 -g -flto -ffast-math ";
+    common_flags += "-std=c++17 -flto -ffast-math ";
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-fno-use-cxa-atexit -fno-exceptions "
