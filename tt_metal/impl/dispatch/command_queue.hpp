@@ -406,9 +406,9 @@ struct ReadBufferDescriptor {
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
-    uint32_t cur_host_page_id;
+    uint32_t cur_dev_page_id;
 
-    ReadBufferDescriptor(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_host_page_id) {
+    ReadBufferDescriptor(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_dev_page_id) {
         this->buffer_layout = buffer.buffer_layout();
         this->page_size = buffer.page_size();
         this->padded_page_size = padded_page_size;
@@ -419,7 +419,7 @@ struct ReadBufferDescriptor {
         this->dst = dst;
         this->dst_offset = dst_offset;
         this->num_pages_read = num_pages_read;
-        this->cur_host_page_id = cur_host_page_id;
+        this->cur_dev_page_id = cur_dev_page_id;
     }
 };
 
@@ -516,7 +516,7 @@ class HWCommandQueue {
 
     CoreType get_dispatch_core_type();
 
-    void copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel);
+    void copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel);
     void read_completion_queue();
 
     template <typename T>
