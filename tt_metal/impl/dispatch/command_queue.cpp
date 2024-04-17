@@ -297,12 +297,15 @@ const DeviceCommand EnqueueProgramCommand::assemble_preamble_commands() {
     }
 }
 
+// Generate command sequence for unique (unicast) and common (multicast) runtime args
 const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_commands() {
     program.update_runtime_args_transfer_info(this->device);
 
     vector<DeviceCommand> runtime_args_command_sequences;
-    // Unicast runtime args
-    for (const auto& [dst, transfer_info] : program.program_transfer_info.runtime_args) {
+
+    // Unicast unique runtime args per core.
+    for (const auto& [dst, transfer_info] : program.program_transfer_info.unicast_runtime_args) {
+
         uint32_t num_packed_cmds = transfer_info.size();
         uint32_t runtime_args_len = transfer_info[0].data.size();
 
@@ -335,6 +338,48 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
             rt_payload_sizeB,
             unicast_sub_cmds,
             rt_data_and_sizes);
+        runtime_args_command_sequences.emplace_back(command_sequence);
+    }
+
+    // Muticast common runtime args (shared by all cores)
+    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_runtime_args) {
+        uint32_t num_packed_cmds = 0;
+        uint32_t runtime_args_len = transfer_info_vec[0].data.size();
+
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                TT_ASSERT(transfer_info.data.size() == runtime_args_len, "Not all data vectors in write packed common rtargs cmd equal in len");
+                num_packed_cmds += 1;
+            }
+        }
+
+        uint32_t aligned_runtime_data_sizeB = align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
+        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
+        uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) +  mcast_payload_sizeB, PCIE_ALIGNMENT);
+
+        DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+        std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
+        std::vector<const void *> rtarg_data;
+
+        for (const auto& transfer_info: transfer_info_vec) {
+            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
+                multicast_sub_cmds.emplace_back(
+                    CQDispatchWritePackedMulticastSubCmd{.noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second}
+                );
+                rtarg_data.emplace_back(transfer_info.data.data());
+            }
+        }
+
+        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+            num_packed_cmds,
+            dst,
+            runtime_args_len * sizeof(uint32_t),
+            mcast_payload_sizeB,
+            multicast_sub_cmds,
+            rtarg_data
+        );
         runtime_args_command_sequences.emplace_back(command_sequence);
     }
 
