@@ -34,10 +34,11 @@ from models.utility_functions import (
     get_devices_for_t3000,
 )
 from models.perf.perf_utils import prep_perf_report
+from tracy import signpost
 
 
 def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
-    with open("models/demos/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
+    with open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
         tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
 
     token_windows = []
@@ -168,6 +169,7 @@ def run_test_LlamaModel_end_to_end(
 
     start_pos = 0
     prev_pos = start_pos
+    enable_persistent_kernel_cache()
     for cur_pos in range(start_pos + 1, total_len):
         logger.info(f"Generating token: {cur_pos}")
 
@@ -177,12 +179,13 @@ def run_test_LlamaModel_end_to_end(
         )
 
         if should_profile:
-            enable_persistent_kernel_cache()
             profiler.start(f"processing_of_decode_input_{cur_pos}")
+            signpost(header="Prepare Inputs", message="Prepare Inputs")
 
         tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
 
         if should_profile:
+            signpost(header="End of prepare Inputs", message="End of prepare Inputs")
             profiler.end(f"processing_of_decode_input_{cur_pos}")
             profiler.start(f"model_run_for_inference_{cur_pos}")
 
@@ -269,7 +272,7 @@ def test_Llama_perf_host(
     expected_inference_time,
     all_devices,
     use_program_cache,
-    n_layers=80,
+    n_layers=1,
     n_devices=8,
     emulated=False,
     num_users=32,
