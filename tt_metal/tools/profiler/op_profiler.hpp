@@ -36,7 +36,7 @@ namespace op_profiler {
 
 
 #if defined(TRACY_ENABLE)
-    inline std::unordered_map<tt::tt_metal::operation::Hash, std::string> cached_ops {};
+    inline std::unordered_map<uint32_t, std::unordered_map<tt::tt_metal::operation::Hash, std::string>> cached_ops {};
     inline stack<TracyCZoneCtx> call_stack;
 #endif
 
@@ -277,7 +277,12 @@ namespace op_profiler {
     {
 
         const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
-        if (!useCachedOps || !isProgramCached || (cached_ops.find(opHash) == cached_ops.end()))
+        if (
+                !useCachedOps ||\
+                !isProgramCached ||\
+                (cached_ops.find(device_id) == cached_ops.end()) ||\
+                (cached_ops[device_id].find(opHash) == cached_ops[device_id].end())
+           )
         {
             auto j = get_base_json(opID, op, input_tensors, output_tensors);
             j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
@@ -305,15 +310,22 @@ namespace op_profiler {
             j["performance_model"]["input_bws"] = perfModel.get_input_bws();
             j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
-            std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, ",j["op_code"], opHash);
-            cached_ops.emplace(opHash, short_str);
+            std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ",j["op_code"], opHash, device_id);
+            if (cached_ops.find(device_id) == cached_ops.end())
+            {
+                cached_ops.emplace(device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{opHash, short_str}});
+            }
+            else
+            {
+                cached_ops[device_id].emplace(opHash, short_str);
+            }
 
             std::string ser = j.dump(4);
             return fmt::format("{}{} ->\n{}`", short_str, opID, ser);
         }
         else
         {
-            return fmt::format("{}{}`", cached_ops[opHash], opID);
+            return fmt::format("{}{}`", cached_ops[device_id][opHash], opID);
         }
     }
 
