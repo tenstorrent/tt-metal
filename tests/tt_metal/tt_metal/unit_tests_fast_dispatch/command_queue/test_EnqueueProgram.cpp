@@ -427,6 +427,152 @@ bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const 
     return pass;
 }
 
+
+// Verify RT args for a core at a given address by comparing to expected values.
+bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, uint32_t addr, std::vector<uint32_t> expected_rt_args, uint32_t incr_val) {
+    bool pass = true;
+    std::string label = unique ? "Unique" : "Common";
+    log_debug(tt::LogTest, "Verifying {} {} RT args for {} at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, logical_core.str(), addr, incr_val);
+
+    std::vector<uint32_t> written_args;
+    tt::tt_metal::detail::ReadFromDeviceL1(device, logical_core, addr, expected_rt_args.size() * sizeof(uint32_t), written_args);
+
+    for(int i=0; i<expected_rt_args.size(); i++){
+        uint32_t expected_val = expected_rt_args[i] + incr_val;
+        log_debug(tt::LogTest, "Checking {} RT Arg. i: {} expected: {} observed: {}", label, i, expected_val, written_args[i]);
+        EXPECT_EQ(written_args[i], expected_val);
+        pass &= (written_args[i] == expected_val);
+    }
+    return pass;
+}
+
+// Write unique and common RT args, increment in kernel, and verify correctness via readback.
+bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv) {
+
+    Program program;
+    bool pass = true;
+    CoreRangeSet cr_set = program_config.cr_set;
+
+    // Tell kernel how many unique and common RT args to expect. Will increment each.
+    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args};
+
+    KernelHandle kernel_id = 0;
+    uint32_t unique_args_addr = 0;
+
+    switch (riscv) {
+        case tt::RISCV::BRISC:
+            unique_args_addr = BRISC_L1_ARG_BASE;
+            kernel_id = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = compile_args,
+                });
+            break;
+        case tt::RISCV::NCRISC:
+            unique_args_addr = NCRISC_L1_ARG_BASE;
+            kernel_id = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = compile_args,
+                });
+            break;
+        case tt::RISCV::COMPUTE:
+            unique_args_addr = TRISC_L1_ARG_BASE;
+            kernel_id = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
+                cr_set,
+                tt::tt_metal::ComputeConfig{
+                    .compile_args = compile_args,
+                });
+            break;
+        case tt::RISCV::ERISC:
+            TT_ASSERT("ERISC not yet supported in test");
+            break;
+        default: TT_THROW("Unsupported {} processor in test.", riscv);
+    }
+
+    const auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+
+    // Unique Runtime Args.
+    std::vector<uint32_t> unique_runtime_args;
+    for (uint32_t i=0; i<num_unique_rt_args; i++) {
+        unique_runtime_args.push_back(i);
+    }
+    SetRuntimeArgs(program, 0, cr_set, unique_runtime_args);
+
+    // Setup Common Runtime Args.
+    std::vector<uint32_t> common_runtime_args;
+    for (uint32_t i=0; i<num_common_rt_args; i++) {
+        common_runtime_args.push_back(1000 + i);
+    }
+    SetCommonRuntimeArgs(program, 0, common_runtime_args);
+
+    // Compile and Launch the Program now.
+    EnqueueProgram(device->command_queue(), program, false);
+    Finish(device->command_queue());
+
+    // Verify Unique/Common Args. Incr values match kernel used.
+    auto common_args_addr = unique_args_addr + kernel->get_common_runtime_args_offset();
+    constexpr uint32_t unique_arg_incr_val = 10;
+    constexpr uint32_t common_arg_incr_val = 100;
+    for (auto &core_range : kernel->logical_coreranges()) {
+        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                CoreCoord core_coord(x, y);
+                pass &= verify_rt_args(true, device, core_coord, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
+                pass &= verify_rt_args(false, device, core_coord, common_args_addr, common_runtime_args, common_arg_incr_val);
+            }
+        }
+    }
+
+    return pass;
+}
+
+// Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
+// Optionally force the max size for one of the vectors.
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool force_max_size = false, uint32_t unique_base = 0, uint32_t common_base = 100){
+
+    constexpr uint32_t MAX_RUNTIME_ARGS = 255;
+
+    // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via padding
+    uint32_t num_rt_args_unique = num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
+    uint32_t num_rt_args_unique_padded = align(num_rt_args_unique, L1_ALIGNMENT / sizeof(uint32_t));
+    uint32_t num_rt_args_common = num_rt_args_unique_padded < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique_padded + 1) : 0;
+
+    if (force_max_size) {
+        if (rand() % 2) {
+            num_rt_args_unique = MAX_RUNTIME_ARGS;
+            num_rt_args_common = 0;
+        } else {
+            num_rt_args_common = MAX_RUNTIME_ARGS;
+            num_rt_args_unique = 0;
+        }
+    }
+
+    vector<uint32_t> rt_args_common;
+    for (uint32_t i = 0; i < num_rt_args_common; i++) {
+        rt_args_common.push_back(common_base + i);
+    }
+
+    vector<uint32_t> rt_args_unique;
+    for (uint32_t i = 0; i < num_rt_args_unique; i++) {
+        rt_args_unique.push_back(unique_base + i);
+    }
+
+    log_trace(tt::LogTest, "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}", __FUNCTION__, num_rt_args_unique, num_rt_args_common, force_max_size);
+    return std::make_pair(rt_args_unique, rt_args_common);
+}
+
+
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -592,35 +738,13 @@ TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDi
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
+// Sanity test for setting and verifying common and unique runtime args to a single core, the simplest case.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreCompute) {
+    CoreRange cr0({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr0});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
-        Program program;
-
-        CoreRange cr({0, 0}, {0, 0});
-        CoreRangeSet cr_set({cr});
-
-        auto compute_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
-            cr_set,
-            tt::tt_metal::ComputeConfig{});
-
-
-        std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
-
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
-
-        std::vector<uint32_t> increments = {87, 216};
-        std::vector<uint32_t> written_args;
-        CoreCoord logical_core(0,0);
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device, logical_core, TRISC_L1_ARG_BASE, initial_runtime_args.size() * sizeof(uint32_t), written_args);
-        for(int i=0; i<initial_runtime_args.size(); i++){
-            bool got_expected_result = (written_args[i] == (initial_runtime_args[i] + increments[i]));
-            EXPECT_TRUE(got_expected_result);
-        }
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
     }
 }
 
@@ -764,6 +888,62 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
     }
 }
 
+// Sanity test for setting and verifying common and unique runtime args to multiple cores.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute) {
+    CoreRange cr0({1, 1}, {2, 2});
+    CoreRange cr1({3, 3}, {4, 4});
+    CoreRangeSet cr_set({cr0, cr1});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
+    }
+}
+
+// Max number of 255 unique RT args.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
+    CoreRange cr0({1, 1}, {2, 2});
+    CoreRange cr1({3, 3}, {4, 4});
+    CoreRangeSet cr_set({cr0, cr1});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
+    }
+}
+
+// Max number of 255 common RT args.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
+    CoreRange cr0({1, 1}, {2, 2});
+    CoreRange cr1({3, 3}, {4, 4});
+    CoreRangeSet cr_set({cr0, cr1});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
+    }
+}
+
+// Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
+    CoreRange cr0({1, 1}, {2, 2});
+    CoreRange cr1({3, 3}, {4, 4});
+    CoreRangeSet cr_set({cr0, cr1});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
+    }
+}
+
+// Sanity test for setting and verifying common and unique runtime args to multiple cores via NCRISC.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
+    CoreRange cr0({1, 1}, {2, 2});
+    CoreRange cr1({3, 3}, {4, 4});
+    CoreRangeSet cr_set({cr0, cr1});
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
+    }
+}
+
+
 }  // end namespace multicore_tests
 }
 
@@ -787,27 +967,22 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
 TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
-    uint32_t MAX_RUNTIME_ARGS = 255;
     uint32_t page_size = 1024;
 
     // Make random
-    // srand((unsigned int)time(NULL));
+    auto random_seed = 0; // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
 
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
-    auto create_runtime_args = [&]() -> vector<uint32_t> {
-        vector<uint32_t> runtime_args;
-        for (uint32_t i = 0; i < rand() % (MAX_RUNTIME_ARGS) + 1; i++) {
-            runtime_args.push_back(i);
-        }
-        return runtime_args;
-    };
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        std::cout << "Compiling program " << (i + 1) << "/" << NUM_PROGRAMS << std::endl;
         programs.push_back(Program());
         Program& program = programs.back();
 
@@ -816,6 +991,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
+        bool USE_MAX_RT_ARGS;
+
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
             // ensure it compiles and runs
@@ -824,13 +1001,18 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             BRISC_INNER_LOOP = MAX_LOOP;
             NUM_CBS = NUM_CIRCULAR_BUFFERS;
             NUM_SEMS = NUM_SEMAPHORES;
+            USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            USE_MAX_RT_ARGS = false;
         }
+
+        log_debug(tt::LogTest, "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+                 i+1, NUM_PROGRAMS, BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, USE_MAX_RT_ARGS);
 
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}}).set_page_size(j, page_size * (j + 1));
@@ -841,8 +1023,10 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             CreateSemaphore(program, cr_set, j + 1);
         }
 
-        vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, page_size};
-        vector<uint32_t> brisc_runtime_args = create_runtime_args();
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
+        uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
+        vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
 
         // ncrisc
         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
@@ -855,8 +1039,11 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
-        vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, page_size};
-        vector<uint32_t> ncrisc_runtime_args = create_runtime_args();
+
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
+        uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
+        vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
 
         // trisc
         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
@@ -870,15 +1057,18 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, page_size};
-        vector<uint32_t> trisc_runtime_args = create_runtime_args();
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
+        uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
+        vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};
 
         bool at_least_one_kernel = false;
         if (i == 0 or ((rand() % 2) == 0)) {
             auto dummy_brisc_kernel = CreateKernel(
                 program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
-            SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_runtime_args);
+            SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+            SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             at_least_one_kernel = true;
         }
 
@@ -886,7 +1076,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             auto dummy_ncrisc_kernel = CreateKernel(
                 program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
-            SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_runtime_args);
+            SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+            SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             at_least_one_kernel = true;
         }
 
@@ -897,7 +1088,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
                     .compile_args = trisc_compile_args,
                     .defines = compute_defines
                 });
-            SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_runtime_args);
+            SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+            SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             at_least_one_kernel = true;
         }
 
@@ -907,12 +1099,14 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
                 auto dummy_brisc_kernel = CreateKernel(
                     program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
                         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = brisc_compile_args, .defines = data_movement_defines});
-                SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_runtime_args);
+                SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+                SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
             } else if (random_risc == 2) {
                 auto dummy_ncrisc_kernel = CreateKernel(
                     program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, DataMovementConfig{
                         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = ncrisc_compile_args, .defines = data_movement_defines});
-                SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_runtime_args);
+                SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+                SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
             } else if (random_risc == 3) {
                 auto dummy_trisc_kernel = CreateKernel(
                     program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp", cr_set, ComputeConfig{
@@ -920,7 +1114,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
                         .compile_args = trisc_compile_args,
                         .defines = compute_defines
                     });
-                SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_runtime_args);
+                SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+                SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             } else {
                 TT_ASSERT("Invalid");
             }
@@ -929,6 +1124,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         tt::tt_metal::detail::CompileProgram(this->device_, program);
     }
 
+    log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
     for (Program& program: programs) {
         EnqueueProgram(this->device_->command_queue(), program, false);
@@ -936,14 +1132,20 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     // This loops assumes already cached
     uint32_t NUM_ITERATIONS = 500; // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of iterations, need to come back to that
+
+    log_info(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         auto rng = std::default_random_engine {};
         std::shuffle(std::begin(programs), std::end(programs), rng);
+        if (i % 10 == 0) {
+            log_debug(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
+        }
         for (Program& program: programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }
 
+    log_info(tt::LogTest, "Calling Finish.");
     Finish(this->device_->command_queue());
 }
 

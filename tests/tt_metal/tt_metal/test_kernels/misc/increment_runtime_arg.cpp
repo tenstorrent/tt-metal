@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+#include "dataflow_api.h"
+
+namespace {
+void kernel_main() {
 
     // Get configurable number of unique and common runtime args, and increment them all in place by a fixed value.
     constexpr uint32_t rt_args_base = get_arg_addr(0);
@@ -20,13 +21,13 @@ void MAIN {
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         uint32_t rt_arg = get_arg_val<uint32_t>(i);
         volatile tt_l1_ptr std::uint32_t* arg_ptr = (volatile tt_l1_ptr uint32_t*)(rt_args_base + (i * 4));
-        UNPACK(arg_ptr[0] = rt_arg + unique_arg_incr_val);
+        arg_ptr[0] = rt_arg + unique_arg_incr_val;
     }
 
     for (uint32_t i = 0; i < num_common_rt_args; i++) {
         uint32_t rt_arg = get_common_arg_val<uint32_t>(i);
         volatile tt_l1_ptr std::uint32_t* arg_ptr = (volatile tt_l1_ptr uint32_t*)(rt_args_base + COMMON_RT_ARGS_OFFSET + (i * 4));
-        UNPACK(arg_ptr[0] = rt_arg + common_arg_incr_val);
+        arg_ptr[0] = rt_arg + common_arg_incr_val;
     }
 
 }
