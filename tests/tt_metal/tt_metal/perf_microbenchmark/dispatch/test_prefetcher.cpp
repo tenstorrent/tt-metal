@@ -66,7 +66,7 @@ bool warmup_g = false;
 bool debug_g;
 uint32_t max_prefetch_command_size_g;
 
-uint32_t dispatch_buffer_page_size_g = 1 << DISPATCH_BUFFER_LOG_PAGE_SIZE;
+uint32_t dispatch_buffer_page_size_g = 1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
 uint32_t prefetch_q_entries_g;
 uint32_t hugepage_issue_buffer_size_g;
 void * host_hugepage_completion_buffer_base_g;
@@ -124,7 +124,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", PREFETCH_D_BUFFER_SIZE);
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::PREFETCH_D_BUFFER_SIZE);
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
@@ -151,7 +151,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", PREFETCH_D_BUFFER_SIZE);
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::PREFETCH_D_BUFFER_SIZE);
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
@@ -353,8 +353,8 @@ void add_prefetcher_cmd_to_hostq(vector<uint32_t>& cmds,
     }
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
-    sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
+    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 }
 
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
@@ -534,8 +534,8 @@ void gen_dram_read_cmd(Device *device,
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
-    cmd_sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
+    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
     // Model the paged read in this function by updating worker data with interleaved/paged DRAM data, for validation later.
     add_paged_dram_data_to_worker_data(dram_data_map, worker_core, worker_data, start_page, base_addr, page_size, pages, length_adjust);
@@ -589,8 +589,8 @@ void gen_linear_read_cmd(Device *device,
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
-    cmd_sizes.push_back(new_size >> PREFETCH_Q_LOG_MINSIZE);
+    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
     // Add linear data to worker data:
     uint32_t length_words = length / sizeof(uint32_t);
@@ -1152,7 +1152,7 @@ void write_prefetcher_cmd(Device *device,
 
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
-    uint32_t cmd_size_bytes = (uint32_t)cmd_size16b << PREFETCH_Q_LOG_MINSIZE;
+    uint32_t cmd_size_bytes = (uint32_t)cmd_size16b << dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
     uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
 
     for (uint32_t i = 0; i < cmd_size_words; i++) {
@@ -1170,7 +1170,7 @@ void write_prefetcher_cmd(Device *device,
     }
 
     // wrap
-    if (prefetch_q_dev_ptr == prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type)) {
+    if (prefetch_q_dev_ptr == prefetch_q_base + prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type)) {
         prefetch_q_dev_ptr = prefetch_q_base;
 
         while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
@@ -1181,7 +1181,7 @@ void write_prefetcher_cmd(Device *device,
 
     tt::Cluster::instance().write_reg(&cmd_size16b, tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_dev_ptr);
 
-    prefetch_q_dev_ptr += sizeof(prefetch_q_entry_type);
+    prefetch_q_dev_ptr += sizeof(dispatch_constants::prefetch_q_entry_type);
 }
 
 void write_prefetcher_cmds(uint32_t iterations,
@@ -1211,20 +1211,20 @@ void write_prefetcher_cmds(uint32_t iterations,
         vector<uint32_t> prefetch_q(DEFAULT_PREFETCH_Q_ENTRIES, 0);
         vector<uint32_t> prefetch_q_rd_ptr_addr_data;
 
-        prefetch_q_rd_ptr_addr_data.push_back(prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type));
+        prefetch_q_rd_ptr_addr_data.push_back(prefetch_q_base + prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type));
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, prefetch_q_rd_ptr_addr_data, prefetch_q_rd_ptr_addr);
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, prefetch_q, prefetch_q_base);
 
         host_mem_ptr = (uint32_t *)host_hugepage_base;
         prefetch_q_dev_ptr = prefetch_q_base;
-        prefetch_q_dev_fence = prefetch_q_base + prefetch_q_entries_g * sizeof(prefetch_q_entry_type);
+        prefetch_q_dev_fence = prefetch_q_base + prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
         initialize_device_g = false;
     }
 
     for (uint32_t i = 0; i < iterations; i++) {
         uint32_t cmd_ptr = 0;
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
-            uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
+            uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << dispatch_constants::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
             uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
             if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_issue_buffer_size_g)) {
                 // Wrap huge page
@@ -1316,7 +1316,8 @@ int main(int argc, char **argv) {
 
     init(argc, argv);
 
-    uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
+    const CoreType dispatch_core_type = CoreType::WORKER;
+    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
 
     bool pass = true;
     try {
@@ -1356,20 +1357,20 @@ int main(int argc, char **argv) {
         constexpr uint32_t packetized_path_test_results_size = 1024;
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
-        l1_buf_base_g = l1_unreserved_base_aligned + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
-        TT_ASSERT((l1_buf_base_g & ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
+        uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+        l1_buf_base_g = l1_unreserved_base_aligned + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
+        TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
         uint32_t dispatch_buffer_base = l1_buf_base_g;
         uint32_t prefetch_d_buffer_base = l1_buf_base_g;
-        uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+        uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         uint32_t prefetch_q_base = l1_buf_base_g;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
         dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
         vector<uint32_t>zero_data(0);
         llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
-        uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(prefetch_q_entry_type);
+        uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
         uint32_t noc_read_alignment = 32;
         uint32_t cmddat_q_base = prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
@@ -1465,14 +1466,14 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> prefetch_compile_args = {
             dispatch_buffer_base, // overridden below for prefetch_h
-            DISPATCH_BUFFER_LOG_PAGE_SIZE, // overridden below for prefetch_h
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE, // overridden below for prefetch_h
             dispatch_buffer_pages, // overridden below for prefetch_h
             prefetch_downstream_cb_sem, // overridden below for prefetch_d
             dispatch_cb_sem, // overridden below for prefetch_h
             dev_hugepage_base_g,
             hugepage_issue_buffer_size_g,
             prefetch_q_base,
-            prefetch_q_entries_g * (uint32_t)sizeof(prefetch_q_entry_type),
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
             prefetch_q_rd_ptr_addr,
             cmddat_q_base, // overridden for split below
             cmddat_q_size_g, // overridden for split below
@@ -1482,8 +1483,8 @@ int main(int argc, char **argv) {
             prefetch_d_buffer_pages, // prefetch_d only
             prefetch_d_upstream_cb_sem, // prefetch_d only
             prefetch_downstream_cb_sem, // prefetch_d only
-            PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-            PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
             prefetch_h_exec_buf_sem,
         };
 
@@ -1492,13 +1493,13 @@ int main(int argc, char **argv) {
             log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
 
             // prefetch_d
-            uint32_t scratch_db_base = prefetch_d_buffer_base + (((prefetch_d_buffer_pages << PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
+            uint32_t scratch_db_base = prefetch_d_buffer_base + (((prefetch_d_buffer_pages << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
                                                                   noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
             TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
 
             prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
             prefetch_compile_args[10] = prefetch_d_buffer_base;
-            prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+            prefetch_compile_args[11] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
             prefetch_compile_args[12] = scratch_db_base;
 
             CoreCoord phys_prefetch_d_upstream_core =
@@ -1513,7 +1514,7 @@ int main(int argc, char **argv) {
 
             // prefetch_h
             prefetch_compile_args[0] = prefetch_d_buffer_base;
-            prefetch_compile_args[1] = PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            prefetch_compile_args[1] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
             prefetch_compile_args[2] = prefetch_d_buffer_pages;
             prefetch_compile_args[3] = prefetch_downstream_cb_sem;
             prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
@@ -1590,7 +1591,7 @@ int main(int argc, char **argv) {
                     0x0,// 18: output_depacketize info
                     // 19: input 0 packetize info:
                     packet_switch_4B_pack(0x1,
-                                        DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                                        dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                         prefetch_downstream_cb_sem, // upstream sem
                                         prefetch_d_upstream_cb_sem), // local sem
                     packet_switch_4B_pack(0, 0, 0, 0), // 20: input 1 packetize info
@@ -1656,7 +1657,7 @@ int main(int argc, char **argv) {
                         timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
                         0x1, // 25: output_depacketize_mask
                         // 26: output 0 packetize info:
-                        packet_switch_4B_pack(DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                        packet_switch_4B_pack(dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                             prefetch_d_upstream_cb_sem, // downstream sem
                                             prefetch_downstream_cb_sem, // local sem
                                             0), // remove header
@@ -1696,17 +1697,17 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> dispatch_compile_args = {
              dispatch_buffer_base,
-             DISPATCH_BUFFER_LOG_PAGE_SIZE,
-             DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
+             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
              dispatch_cb_sem, // overridden below for h
              split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
-             DISPATCH_BUFFER_SIZE_BLOCKS,
+             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
              dev_hugepage_base_g,
              dev_hugepage_completion_buffer_base,
              DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
-             DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
              0, // unused on hd, filled in below for h and d
              0, // unused on hd, filled in below for h and d
              0, // unused unless tunneler is between h and d
@@ -1808,7 +1809,7 @@ int main(int argc, char **argv) {
                     0x0,// 18: output_depacketize info
                     // 19: input 0 packetize info:
                     packet_switch_4B_pack(0x1,
-                                          DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                                          dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                           dispatch_downstream_cb_sem, // upstream sem
                                           dispatch_h_cb_sem), // local sem
                     packet_switch_4B_pack(0, 0, 0, 0), // 20: input 1 packetize info
@@ -1874,7 +1875,7 @@ int main(int argc, char **argv) {
                         timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
                         0x1, // 25: output_depacketize_mask
                         // 26: output 0 packetize info:
-                        packet_switch_4B_pack(DISPATCH_BUFFER_LOG_PAGE_SIZE,
+                        packet_switch_4B_pack(dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                               dispatch_h_cb_sem, // downstream sem
                                               dispatch_downstream_cb_sem, // local sem
                                               1), // remove header

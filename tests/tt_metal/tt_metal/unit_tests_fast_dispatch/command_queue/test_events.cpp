@@ -18,7 +18,7 @@ enum class DataMovementMode: uint8_t {
 };
 
 constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
-constexpr uint32_t completion_queue_page_size = TRANSFER_PAGE_SIZE;
+constexpr uint32_t completion_queue_page_size = dispatch_constants::TRANSFER_PAGE_SIZE;
 
 TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
