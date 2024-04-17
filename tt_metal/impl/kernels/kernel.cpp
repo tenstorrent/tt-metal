@@ -194,6 +194,7 @@ std::pair<uint64_t, uint64_t> ComputeKernel::get_runtime_args_range() const {
     return arg_base_to_result_base;
 }
 
+// Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
 
     // Common RT args starting address must be 16B aligned, so account for that here via padding
@@ -202,6 +203,7 @@ void Kernel::validate_runtime_args_size(size_t num_unique_rt_args, size_t num_co
     auto[l1_arg_base, result_base] = this->get_runtime_args_range();
 
     if (l1_arg_base + total_rt_args_size > result_base) {
+        log_warning(tt::LogMetal, "Too many runtime args. unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
         TT_THROW(std::to_string(total_rt_args_size) + " Bytes unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() + " are too large.\
  Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string(result_base - l1_arg_base) + " Bytes");
     }
