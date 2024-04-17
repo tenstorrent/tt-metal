@@ -358,7 +358,7 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPa
     for (Device *device : devices_) {
         TestBufferConfig config = {
             .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
-            .page_size = TRANSFER_PAGE_SIZE + 32,
+            .page_size = dispatch_constants::TRANSFER_PAGE_SIZE + 32,
             .buftype = BufferType::DRAM
         };
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
@@ -368,9 +368,11 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPa
 TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
     for (Device *device : devices_) {
+        CoreType dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+        const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1,
-            .page_size = MAX_PREFETCH_COMMAND_SIZE + 2048,
+            .page_size = max_prefetch_command_size + 2048,
             .buftype = BufferType::DRAM
         };
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
@@ -379,8 +381,10 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) 
 
 TEST_F(CommandQueueSingleCardFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
-    uint32_t unaligned_page_size = MAX_PREFETCH_COMMAND_SIZE + 4;
     for (Device *device : devices_) {
+        CoreType dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+        const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+        uint32_t unaligned_page_size = max_prefetch_command_size + 4;
         TestBufferConfig config = {
             .num_pages = 1,
             .page_size = unaligned_page_size,
