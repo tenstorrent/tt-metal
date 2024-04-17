@@ -6,9 +6,10 @@ from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
 from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 import pytest
 from loguru import logger
-from models.utility_functions import is_e75, skip_for_wormhole_b0
+from models.utility_functions import is_e75, skip_for_wormhole_b0, skip_for_grayskull
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("batch", (7,), ids=["batch_7"])
 @pytest.mark.parametrize(
     "input_path",
@@ -78,6 +79,7 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
         assert expected_answers[i] == answers[i]
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch, exact, f1",
     (

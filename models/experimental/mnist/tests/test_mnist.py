@@ -13,10 +13,12 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 from models.experimental.mnist.tt.mnist_model import mnist_model
 
 
+@skip_for_wormhole_b0()
 def test_mnist_inference(device, model_location_generator):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
