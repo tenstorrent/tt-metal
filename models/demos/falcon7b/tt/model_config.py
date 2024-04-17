@@ -118,6 +118,9 @@ def get_model_config(model_config_str):
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
 
+    # Input ids are UINT32
+    model_config["INPUT_DTYPE"] = ttl.tensor.DataType.UINT32
+
     # Matmul Weights must always be BFP8_B
     # Override defaults for certain configs
     for key in model_config.keys():

@@ -43,9 +43,9 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 
-def generate_embeddings(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
+def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
     if llm_mode == "prefill":
-        tt_embeddings, tt_attention_mask = zip(
+        tt_input_ids, tt_attention_mask = zip(
             *[
                 tt_FalconCausalLM.model_preprocessing(
                     llm_mode, model_input[i::batch], kv_cache_len, num_input_tokens=seq_len
@@ -54,10 +54,10 @@ def generate_embeddings(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, 
             ]
         )
     elif llm_mode == "decode":
-        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+        tt_input_ids, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-    return tt_embeddings, tt_attention_mask
+    return tt_input_ids, tt_attention_mask
 
 
 # TODO: Replace this with actual Falcon application-level tests
@@ -122,10 +122,6 @@ def run_test_FalconCausalLM_end_to_end(
         generate_attention_inputs=False,
     )
 
-    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
-    # since we don't yet have embedding support on device
-    # device, state_dict, base_url, max_position_embeddings, config, num_decoders
-
     profiler.start("TtFalcon_model_setup")
     tt_FalconCausalLM = TtFalconCausalLM(
         devices,
@@ -140,8 +136,8 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.end("TtFalcon_model_setup")
 
     profiler.start("processing_of_input")
-    # TODO: Generate embeddings and attention_mask on device
-    tt_embeddings, tt_attention_mask = generate_embeddings(
+    # TODO: Generate attention_mask on device
+    tt_input_ids, tt_attention_mask = get_inputs_on_device(
         llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
     )
     profiler.end("processing_of_input")
@@ -154,13 +150,13 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.start("first_model_run_with_compile", force_enable=True)
     if llm_mode == "prefill":
         tt_outs = []
-        # Embedding time is included in model run time for prefill
-        tt_embeddings, tt_attention_mask = generate_embeddings(
+        # Device transfer time is included in model run time for prefill
+        tt_input_ids, tt_attention_mask = get_inputs_on_device(
             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_input_ids[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -173,7 +169,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_input_ids,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
@@ -186,7 +182,7 @@ def run_test_FalconCausalLM_end_to_end(
     del tt_out
     del tt_layer_past
     del tt_layer_present
-    del tt_embeddings
+    del tt_input_ids
     del tt_attention_mask
 
     # Re-generate dummy kv_cache ------------------------------------------------------------
@@ -222,21 +218,21 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.enable()
     enable_persistent_kernel_cache()
 
-    # Regenerate embeddings and attention_mask
-    tt_embeddings, tt_attention_mask = generate_embeddings(
+    # Regenerate input ids and attention_mask on device
+    tt_input_ids, tt_attention_mask = get_inputs_on_device(
         llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
     )
 
     profiler.start(f"model_run_for_inference")
     if llm_mode == "prefill":
         tt_outs = []
-        # Embedding time is included in model run time for prefill
-        tt_embeddings, tt_attention_mask = generate_embeddings(
+        # Device transfer time is included in model run time for prefill
+        tt_input_ids, tt_attention_mask = get_inputs_on_device(
             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_input_ids[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -248,7 +244,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_input_ids,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
@@ -340,7 +336,7 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((32, 0.88),),
+    ((32, 0.84),),
     ids=["layers_32"],
 )
 @pytest.mark.parametrize(

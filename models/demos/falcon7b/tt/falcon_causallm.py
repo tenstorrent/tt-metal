@@ -53,7 +53,7 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def forward(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -62,7 +62,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().forward(
-            input_embeddings=input_embeddings,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             llm_mode=llm_mode,
             user_id=user_id,
