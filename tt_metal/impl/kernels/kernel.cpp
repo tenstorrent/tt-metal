@@ -196,12 +196,14 @@ std::pair<uint64_t, uint64_t> ComputeKernel::get_runtime_args_range() const {
 
 void Kernel::validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
 
-    uint32_t total_rt_args_size = (num_unique_rt_args + num_common_rt_args) * sizeof(uint32_t);
+    // Common RT args starting address must be 16B aligned, so account for that here via padding
+    uint32_t num_unique_rt_args_padded = align(num_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
+    uint32_t total_rt_args_size = (num_unique_rt_args_padded + num_common_rt_args) * sizeof(uint32_t);
     auto[l1_arg_base, result_base] = this->get_runtime_args_range();
 
     if (l1_arg_base + total_rt_args_size > result_base) {
-        TT_THROW(std::to_string(total_rt_args_size / 1024) + "KB unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() + " are too large.\
- Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
+        TT_THROW(std::to_string(total_rt_args_size) + " Bytes unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() + " are too large.\
+ Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string(result_base - l1_arg_base) + " Bytes");
     }
 }
 
@@ -286,7 +288,7 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions& build_opt
     jit_build_subset(build_states, this, this->kernel_path_file_name_);
 }
 
-// Calculate offset to reach common runtime args from core with most unique runtime args.
+// Calculate 16B aligned offset to reach common runtime args from core with most unique runtime args.
 uint32_t Kernel::get_common_runtime_args_offset() {
     uint32_t max_unique_rt_args = 0;
     for (const auto &logical_core : this->cores_with_runtime_args()) {
@@ -294,7 +296,7 @@ uint32_t Kernel::get_common_runtime_args_offset() {
         max_unique_rt_args = rt_args.size() > max_unique_rt_args ? rt_args.size() : max_unique_rt_args;
     }
 
-    uint32_t common_rt_args_offset = max_unique_rt_args * sizeof(uint32_t);
+    uint32_t common_rt_args_offset = align(max_unique_rt_args * sizeof(uint32_t), L1_ALIGNMENT);
     return common_rt_args_offset;
 }
 
