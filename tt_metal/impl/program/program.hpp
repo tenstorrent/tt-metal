@@ -133,6 +133,7 @@ class Program {
     // The buffer that holds the kernel/binaries/etc for this program
     std::vector<std::shared_ptr<Buffer>> kg_buffers;
     std::unique_ptr<Buffer> buffer;
+    bool runtime_args_dirty;
     ProgramTransferInfo program_transfer_info;
 
     bool loaded_onto_device;
