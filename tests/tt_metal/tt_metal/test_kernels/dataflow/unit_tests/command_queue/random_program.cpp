@@ -17,6 +17,8 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #endif
 
+#include "debug/dprint.h"
+
 #ifdef DATA_MOVEMENT
 namespace {
 void kernel_main() {
@@ -29,20 +31,46 @@ void MAIN  {
     constexpr volatile uint32_t middle_loop = get_compile_time_arg_val(1);
     constexpr volatile uint32_t inner_loop = get_compile_time_arg_val(2);
 
-    // Go through all the CBs + Semaphores and confirm the data looks correct
+    // Go through all the CBs + Semaphores + RTArgs and confirm the data looks correct
     constexpr volatile uint32_t num_cbs = get_compile_time_arg_val(3);
     constexpr volatile uint32_t num_sems = get_compile_time_arg_val(4);
-    constexpr volatile uint32_t page_size = get_compile_time_arg_val(5);
+    constexpr volatile uint32_t num_unique_rt_args = get_compile_time_arg_val(5);
+    constexpr volatile uint32_t num_common_rt_args = get_compile_time_arg_val(6);
+    constexpr volatile uint32_t page_size = get_compile_time_arg_val(7);
 
     for (uint32_t i = 0; i < num_cbs; i++) {
-        if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CIRCULAR_BUFFER_CONFIG_BASE + i * 16)[3] != ((i + 1) * page_size) >> 4) {
+        uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CIRCULAR_BUFFER_CONFIG_BASE + i * 16)[3];
+        uint32_t expected = ((i + 1) * page_size) >> 4;
+        if (cb_val != expected) {
+            DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
             while(true); // Purposefully hang the kernel if CBs did not arrive correctly
         }
     }
 
     for (uint32_t i = 0; i < num_sems; i++) {
-        if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SEMAPHORE_BASE + i * 16)[0] != i + 1) {
+        uint32_t sem_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SEMAPHORE_BASE + i * 16)[0];
+        uint32_t expected = i + 1;
+        if (sem_val != expected) {
+            DPRINT << "Problem with Sem idx: " << i << " Expected: " << expected << " Got: " << sem_val << ENDL();
             while(true); // Purposefully hang the kernel if semaphores did not arrive correctly
+        }
+    }
+
+    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
+        uint32_t rt_arg = get_arg_val<uint32_t>(i);
+        uint32_t expected = i;
+        if (rt_arg != expected) {
+            DPRINT << "Problem with unique RT Arg idx: " << i << " Expected: " << expected << " Got: " << rt_arg << ENDL();
+            while(true); // Purposefully hang the kernel if Unique RT Args did not arrive correctly.
+        }
+    }
+
+    for (uint32_t i = 0; i < num_common_rt_args; i++) {
+        uint32_t rt_arg = get_common_arg_val<uint32_t>(i);
+        uint32_t expected = i+100;
+        if (rt_arg != expected){
+            DPRINT << "Problem with common RT Arg idx: " << i << " Expected: " << expected << " Got: " << rt_arg << ENDL();
+            while(true); // Purposefully hang the kernel if Common RT Args did not arrive correctly.
         }
     }
 
