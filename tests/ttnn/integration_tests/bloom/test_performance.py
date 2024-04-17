@@ -9,8 +9,8 @@ import pytest
 import torch
 from transformers import BloomConfig, BloomForQuestionAnswering, BloomTokenizerFast
 
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom
-from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
+from models.demos.bloom.tt import ttnn_functional_bloom
+from models.demos.bloom.tt import ttnn_optimized_functional_bloom
 from models.utility_functions import (
     skip_for_wormhole_b0,
     enable_persistent_kernel_cache,

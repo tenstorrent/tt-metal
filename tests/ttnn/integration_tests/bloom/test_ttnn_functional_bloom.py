@@ -8,7 +8,7 @@ import torch
 import ttnn
 from transformers.models import bloom
 
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom
+from models.demos.bloom.tt import ttnn_functional_bloom
 from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
