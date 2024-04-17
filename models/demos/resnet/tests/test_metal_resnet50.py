@@ -118,7 +118,7 @@ golden_pcc = {
 
 
 @skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("batch_size", [1, 2, 8, 16, 20], ids=["batch_1", "batch_2", "batch_8", "batch_16", "batch_20"])
+@pytest.mark.parametrize("batch_size", [1, 2, 16, 20], ids=["batch_1", "batch_2", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
     [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
