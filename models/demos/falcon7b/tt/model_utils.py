@@ -16,7 +16,11 @@ def get_weights_cached(
     weights_to_cache,
     overwrite=False,
     padzero=False,
+    tt_layout=tt_lib.tensor.Layout.TILE,
 ):
+    if padzero:
+        assert tt_layout == tt_lib.tensor.Layout.TILE, "padding by zero currently only uses TILE layout"
+
     """Load cached weights and duplicate per device. Store if not cached."""
     if (
         not overwrite
@@ -38,6 +42,7 @@ def get_weights_cached(
             weights_host = torch2tt_tensor(
                 weights_to_cache,
                 tt_device=None,
+                tt_layout=tt_layout,
                 tt_memory_config=model_config[f"{weight_config_str}_MEMCFG"],
                 tt_dtype=model_config[f"{weight_config_str}_DTYPE"],
             )

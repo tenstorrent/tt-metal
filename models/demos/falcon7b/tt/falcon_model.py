@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 from tqdm import tqdm
 
 import tt_lib
+import ttnn
 
 from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.utility_functions import (
@@ -43,17 +44,17 @@ class TtFalconModelShared(torch.nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
 
-        # So far on CPU until we add embeddings support on device
-        self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
-        word_embeddings_path = tt_cache_path / "embedding.pt"
-        if word_embeddings_path.exists():
-            self.embeddings.weight = torch.nn.Parameter(
-                torch.load(word_embeddings_path, map_location=torch.device("cpu"))
-            )
-        else:
-            embed_weights = state_dict["transformer.word_embeddings.weight"]
-            torch.save(embed_weights, word_embeddings_path)
-            self.embeddings.weight = torch.nn.Parameter(embed_weights)
+        layer_name = f"{base_url}"
+        embedding_weights_str = f"{layer_name}.word_embeddings.weight"
+        self.embedding_weights = get_weights_cached(
+            devices,
+            model_config,
+            tt_cache_path,
+            embedding_weights_str,
+            weight_config_str="WORD_EMBEDDING_WEIGHTS",
+            weights_to_cache=(state_dict[embedding_weights_str] if state_dict else None),
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+        )
 
         # stack all decoders
         self.layers = torch.nn.ModuleList(
@@ -71,8 +72,6 @@ class TtFalconModelShared(torch.nn.Module):
                 for layer_num in tqdm(range(num_layers), desc="Loading decoder layers")
             ]
         )
-
-        layer_name = f"{base_url}"
 
         layernorm_weights_str = f"{layer_name}.ln_f.weight"
         layernorm_bias_str = f"{layer_name}.ln_f.bias"
@@ -103,22 +102,21 @@ class TtFalconModelShared(torch.nn.Module):
         global_batch_size, sequence_size = input_ids.shape
         batch_size = global_batch_size // self.num_devices
 
-        embeddings = self.embeddings(input_ids)
-
         # Generate input and attention_mask ---------------------------------------------
         if llm_mode == "prefill":
             assert batch_size == 1, "For prefill, batch_size must be 1!"
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
-            tt_embeddings, tt_attention_mask = [], []
+            tt_input_ids, tt_attention_mask = [], []
             for i, device in enumerate(self.devices):
-                tt_embeddings.append(
-                    torch2tt_tensor(
-                        embeddings[i : i + 1].unsqueeze(1),
-                        device,
-                        tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-                        tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                tt_input_ids.append(
+                    ttnn.as_tensor(
+                        input_ids[i : i + 1],
+                        dtype=self.model_config["INPUT_DTYPE"],
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=self.model_config["INPUT_MEMCFG"],
                     )
                 )
 
@@ -146,14 +144,15 @@ class TtFalconModelShared(torch.nn.Module):
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
             assert sequence_size == 1, "For decode, q_len must be 1!"
 
-            tt_embeddings, tt_attention_mask = [], []
+            tt_input_ids, tt_attention_mask = [], []
             for i, device in enumerate(self.devices):
-                tt_embeddings.append(
-                    torch2tt_tensor(
-                        embeddings[batch_size * i : batch_size * (i + 1)].unsqueeze(1).transpose(0, 2),
-                        device,
-                        tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-                        tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                tt_input_ids.append(
+                    ttnn.as_tensor(
+                        input_ids[batch_size * i : batch_size * (i + 1)].transpose(0, 1),
+                        dtype=self.model_config["INPUT_DTYPE"],
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=self.model_config["INPUT_MEMCFG"],
                     )
                 )
 
@@ -204,12 +203,12 @@ class TtFalconModelShared(torch.nn.Module):
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
-        return tt_embeddings, tt_attention_mask
+        return tt_input_ids, tt_attention_mask
 
     @abstractmethod
     def forward(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -217,6 +216,20 @@ class TtFalconModelShared(torch.nn.Module):
         layer_past_len: int = 0,
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
+        # Convert input tokens to embeddings
+        input_embeddings = [
+            ttnn.embedding(
+                input_ids[i],
+                self.embedding_weights[i],
+                memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+            )
+            for i in range(self.num_devices)
+        ]
+        for i in range(self.num_devices):
+            input_embeddings[i] = ttnn.unsqueeze_to_4D(input_embeddings[i])
+        for i in range(self.num_devices):
+            input_embeddings[i] = ttnn.to_layout(input_embeddings[i], tt_lib.tensor.Layout.TILE)
+
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -285,7 +298,7 @@ class TtFalconModel(TtFalconModelShared):
 
     def forward(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -294,7 +307,7 @@ class TtFalconModel(TtFalconModelShared):
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().forward(
-            input_embeddings=input_embeddings,
+            input_ids=input_ids,
             llm_mode=llm_mode,
             attention_mask=attention_mask,
             user_id=user_id,
