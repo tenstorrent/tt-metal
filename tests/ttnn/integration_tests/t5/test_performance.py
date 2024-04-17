@@ -72,14 +72,13 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
         decoder_input_ids = ttnn.from_torch(torch_decoder_input_ids, device=device)
 
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            output, *_ = functional_t5.t5_for_conditional_generation(
-                config,
-                input_ids,
-                decoder_input_ids,
-                parameters=parameters,
-            )
-            output = ttnn.from_device(output)
+        output, *_ = functional_t5.t5_for_conditional_generation(
+            config,
+            input_ids,
+            decoder_input_ids,
+            parameters=parameters,
+        )
+        output = ttnn.from_device(output)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()

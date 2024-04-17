@@ -32,17 +32,46 @@ class Config:
 
     @property
     def report_path(self):
+        import zlib
+        import pickle
+
         if self.report_name is None:
             return None
-        return self.root_report_path / f"{hash(self.report_name)}"
+        return self.root_report_path / f"{zlib.adler32(pickle.dumps(self.report_name))}"
+
+    def __setattr__(self, name: str, value) -> None:
+        object.__setattr__(self, name, value)
+        self.validate(name)
+
+    def validate(self, name):
+        if name in {"enable_fast_runtime_mode", "enable_logging"}:
+            if self.enable_fast_runtime_mode:
+                if self.enable_logging:
+                    logger.warning(
+                        "Running in fast runtime mode without logging. Please disable fast runtime mode if you want to enable logging."
+                    )
+
+        if name in {
+            "enable_logging",
+            "enable_graph_report",
+            "enable_detailed_buffer_report",
+            "enable_detailed_tensor_report",
+        }:
+            if not self.enable_logging:
+                if self.enable_graph_report:
+                    logger.warning("Running without logging. Please enable logging to save graph report")
+                if self.enable_detailed_buffer_report:
+                    logger.warning("Running without logging. Please enable logging to save detaile buffer report")
+                if self.enable_detailed_tensor_report:
+                    logger.warning("Running without logging. Please enable logging to save detailed tensor report")
 
 
 CONFIG = Config()
-CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
+CONFIG_PATH = None
 if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
-CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
 def load_config_from_dictionary(config, from_file=False):
@@ -80,15 +109,16 @@ def save_config_to_json_file(json_path):
         json.dump(normalized_config, f, indent=4)
 
 
-if CONFIG_PATH.exists():
-    logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
-    load_config_from_json_file(CONFIG_PATH)
-else:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    save_config_to_json_file(CONFIG_PATH)
+if CONFIG_PATH is not None:
+    if CONFIG_PATH.exists():
+        logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
+        load_config_from_json_file(CONFIG_PATH)
+    else:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        save_config_to_json_file(CONFIG_PATH)
 
 
-if CONFIG_OVERRIDES:
+if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
@@ -97,7 +127,7 @@ logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))
 
 
 @contextlib.contextmanager
-def manage_config_attribute(name, value):
+def manage_config(name, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)

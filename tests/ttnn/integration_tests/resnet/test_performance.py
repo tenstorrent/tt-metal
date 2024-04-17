@@ -77,9 +77,8 @@ def test_performance(
     for _ in range(num_iterations):
         test_infra.preprocess_torch_input()
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = test_infra.run()
-            tt_output = ttnn.from_device(tt_output)
+        tt_output = test_infra.run()
+        tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()

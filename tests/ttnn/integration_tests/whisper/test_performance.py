@@ -69,15 +69,14 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         )
 
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = functional_whisper.whisper(
-                config,
-                input_embeds,
-                decoder_hidden_states,
-                decoder_attention_mask=decoder_attention_mask,
-                parameters=parameters,
-            )
-            tt_output = ttnn.to_torch(tt_output)
+        tt_output = functional_whisper.whisper(
+            config,
+            input_embeds,
+            decoder_hidden_states,
+            decoder_attention_mask=decoder_attention_mask,
+            parameters=parameters,
+        )
+        tt_output = ttnn.to_torch(tt_output)
         end = time.time()
 
         duration = end - start

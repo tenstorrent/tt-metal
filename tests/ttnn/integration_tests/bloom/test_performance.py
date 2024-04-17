@@ -79,11 +79,10 @@ def test_performance_of_bloom_for_question_answering(
     durations = []
     for _ in range(2):
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = functional_bloom.bloom_for_question_answering(
-                config, input_ids, alibi, causal_mask, parameters=parameters
-            )
-            tt_output = ttnn.from_device(tt_output)
+        tt_output = functional_bloom.bloom_for_question_answering(
+            config, input_ids, alibi, causal_mask, parameters=parameters
+        )
+        tt_output = ttnn.from_device(tt_output)
         end = time.time()
 
         durations.append(end - start)
