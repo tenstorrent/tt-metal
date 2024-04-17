@@ -632,7 +632,14 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     DEBUG_STATUS('P', 'S', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(downstream_sync_sem_id));
-    while (*sem_addr != count);
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
+    while (*sem_addr != count) {
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
+    }
     DEBUG_STATUS('P', 'S', 'D');
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
