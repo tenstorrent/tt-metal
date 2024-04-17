@@ -45,7 +45,7 @@ class Kernel : public JitBuildSettings {
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
-    const std::unordered_set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
 
     void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
 
@@ -96,7 +96,7 @@ class Kernel : public JitBuildSettings {
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector<uint32_t> common_runtime_args_;
-    std::unordered_set<CoreCoord> core_with_runtime_args_;
+    std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_;             // For validation
     CoreCoord core_with_max_runtime_args_;              // For validation
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
