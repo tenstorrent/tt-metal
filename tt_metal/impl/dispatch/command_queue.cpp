@@ -1037,27 +1037,15 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t src_page_index = 0;
 
     if (is_sharded(buffer.buffer_layout())) {
-        const uint32_t half_scratch_space = dispatch_constants::get(dispatch_core_type).scratch_db_size() / 2;
         auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         // Note that the src_page_index is the device page idx, not the host page idx
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            std::vector<uint32_t> core_pages;
-            for (uint32_t i=0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
-                if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
-                    core_pages.push_back(i);
-                }
-            }
-
-            uint32_t num_pages = core_pages.size();
-            uint32_t max_pages_in_scratch = half_scratch_space / buffer.page_size();
-            TT_ASSERT(max_pages_in_scratch > 0);
-            uint32_t curr_page_idx_in_shard = 0;
-            while (num_pages != 0) {
-                uint32_t num_pages_to_read = std::min(num_pages, max_pages_in_scratch);
-                src_page_index = core_pages[curr_page_idx_in_shard];
-                // Unused. Remove?
-                unpadded_dst_offset = buffer_page_mapping.dev_page_to_host_page_mapping_[src_page_index] * buffer.page_size();
+            uint32_t num_pages_to_read = buffer_page_mapping.core_host_page_indices_[core_id].size();
+            if (num_pages_to_read > 0) {
+                uint32_t host_page = buffer_page_mapping.core_host_page_indices_[core_id][0];
+                src_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page];
+                unpadded_dst_offset = host_page * buffer.page_size();
 
                 auto command = EnqueueReadShardedBufferCommand(
                     this->id, this->device, buffer, dst, this->manager, this->expected_num_workers_completed, buffer_page_mapping, src_page_index, num_pages_to_read);
@@ -1068,8 +1056,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 this->num_entries_in_completion_q++;
 
                 this->enqueue_command(command, false);
-                curr_page_idx_in_shard += num_pages_to_read;
-                num_pages -= num_pages_to_read;
             }
         }
         if (blocking) {
@@ -1369,7 +1355,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     }
 }
 
-void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
+void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel) {
     const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id] = read_buffer_descriptor;
 
     uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
@@ -1448,7 +1434,7 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
                         src_offset_increment = (num_bytes_to_copy/sizeof(uint32_t));
                         // We finished copying the page
                         if (remaining_bytes_of_nonaligned_page == 0) {
-                            uint32_t rem_bytes_in_cq = num_bytes_remaining - remaining_bytes_of_nonaligned_page;
+                            uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
                             // There is more data after padding
                             if (rem_bytes_in_cq >= pad_size_bytes) {
                                 src_offset_increment += pad_size_bytes / sizeof(uint32_t);
@@ -1502,7 +1488,7 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
                     // We finished copying the page
                     if (remaining_bytes_of_nonaligned_page == 0) {
                         dev_page_id++;
-                        uint32_t rem_bytes_in_cq = num_bytes_remaining - remaining_bytes_of_nonaligned_page;
+                        uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
                         // There is more data after padding
                         if (rem_bytes_in_cq >= pad_size_bytes) {
                             src_offset_increment += pad_size_bytes / sizeof(uint32_t);
@@ -1561,20 +1547,15 @@ void HWCommandQueue::read_completion_queue() {
                     return;
                 }
 
-                uint32_t completion_queue_write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(
-                    this->device->id(), this->id, this->manager.get_cq_size());
-                uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
-
-                uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
-
                 std::visit(
                     [&](auto&& read_descriptor)
                     {
                         using T = std::decay_t<decltype(read_descriptor)>;
                         if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
-                            this->copy_into_user_space(read_descriptor, read_ptr, mmio_device_id, channel);
+                            this->copy_into_user_space(read_descriptor, mmio_device_id, channel);
                         }
                         else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                            uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
                             static std::vector<uint32_t> dispatch_cmd_and_event((sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE) / sizeof(uint32_t));
                             tt::Cluster::instance().read_sysmem(
                                 dispatch_cmd_and_event.data(), sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE, read_ptr, mmio_device_id, channel);
