@@ -62,6 +62,10 @@ ALWI void matmul_tiles(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile
     MATH(( llk_math_matmul<MATH_FIDELITY>(idst, transpose)  ));
 }
 
+ALWI void matmul_tiles_math(uint32_t idst) {
+    MATH(( llk_math_matmul<MATH_FIDELITY>(idst)  ));
+}
+
 /**
  * A short version of matmul_tiles initialization.
  * Configure the unpacker and math engine to matmul mode.
