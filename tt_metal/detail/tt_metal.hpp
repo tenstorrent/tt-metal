@@ -34,6 +34,7 @@ namespace tt::tt_metal{
         std::map<chip_id_t, Device *> CreateDevices(
             std::vector<chip_id_t> device_ids,
             const uint8_t num_hw_cqs = 1,
+            const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
             const std::vector<uint32_t> &l1_bank_remap = {});
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
@@ -337,7 +338,7 @@ namespace tt::tt_metal{
             std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
             for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
                 dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
-                dram_offsets_per_bank[bank_id] = device->dram_bank_offset_from_bank_id(bank_id);
+                dram_offsets_per_bank[bank_id] = device->bank_offset(BufferType::DRAM, bank_id);
             }
             const size_t num_l1_banks = device->num_banks(BufferType::L1); // 128
             const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
@@ -345,7 +346,7 @@ namespace tt::tt_metal{
             std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
             for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
                 l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(bank_id));
-                l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(bank_id);
+                l1_offset_per_bank[bank_id] = device->bank_offset(BufferType::L1, bank_id);
             }
 
             const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());

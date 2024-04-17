@@ -108,7 +108,8 @@ void TensorModule(py::module &m_tensor) {
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
-        .value("L1", BufferType::L1);
+        .value("L1", BufferType::L1)
+        .value("L1_SMALL", BufferType::L1_SMALL);
 
     // Fusible Activations
     detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");

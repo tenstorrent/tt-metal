@@ -124,7 +124,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
             block_sharding = shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
 
-            def get_memory_config(shard_shape):
+            def get_memory_config(shard_shape, buffer_type=ttl.tensor.BufferType.L1_SMALL):
                 shard_orientation = (
                     ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
                 )
@@ -135,7 +135,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                     if block_sharding
                     else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
                 )
-                mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
+                mem_config = ttl.tensor.MemoryConfig(mem_layout, buffer_type, shard_spec)
                 return mem_config
 
             def gen_per_core_gather_data_uint16_tensor(config: list):
@@ -193,7 +193,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 "padding_config": padding_config_tensor,
                 "local_config": local_config_tensor,
                 "remote_config": remote_config_tensor,
-                "out_mem_config": get_memory_config(out_shard_shape),
+                "out_mem_config": get_memory_config(out_shard_shape, buffer_type=ttl.tensor.BufferType.L1),
                 "remote_read": remote_read,
             }
 

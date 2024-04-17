@@ -15,7 +15,12 @@ namespace ttnn {
 namespace device {
 void py_module(py::module& module) {
     module.def(
-        "open_device", &ttnn::open_device, py::kw_only(), py::arg("device_id"), py::return_value_policy::reference);
+        "open_device",
+        &ttnn::open_device,
+        py::kw_only(),
+        py::arg("device_id"),
+        py::arg("l1_small_size"),
+        py::return_value_policy::reference);
 
     module.def("close_device", &ttnn::close_device, py::arg("device"), py::kw_only());
 

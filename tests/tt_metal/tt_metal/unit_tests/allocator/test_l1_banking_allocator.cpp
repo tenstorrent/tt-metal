@@ -12,7 +12,7 @@
 
 // TODO: Uplift to DeviceFixture once it does not skip GS
 TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
+    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
 
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
     size_t total_size_bytes = 0;
@@ -42,7 +42,7 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
 
 // TODO: Uplift to DeviceFixture once it does not skip GS
 TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
+    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
 
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
     const uint32_t interleaved_l1_bank_size = tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs());

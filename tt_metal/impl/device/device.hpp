@@ -68,7 +68,11 @@ class Device {
    public:
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
-    Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap = {});
+    Device(
+        chip_id_t device_id,
+        const uint8_t num_hw_cqs,
+        std::size_t l1_small_size,
+        const std::vector<uint32_t> &l1_bank_remap = {});
 
     ~Device();
 
@@ -139,9 +143,7 @@ class Device {
 
     CoreCoord core_from_dram_channel(uint32_t dram_channel) const;
 
-    int32_t l1_bank_offset_from_bank_id(uint32_t bank_id) const;
-
-    int32_t dram_bank_offset_from_bank_id(uint32_t bank_id) const;
+    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const;
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
@@ -150,6 +152,8 @@ class Device {
     const std::vector<uint32_t> &bank_ids_from_logical_core(const CoreCoord &logical_core) const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
+
+    size_t get_l1_small_size() const;
 
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
 
@@ -182,9 +186,9 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
+    bool initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_cluster();
-    void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
+    void initialize_allocator(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);

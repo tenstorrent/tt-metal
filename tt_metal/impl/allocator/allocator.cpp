@@ -42,9 +42,14 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     // For non pow2 num banks, special cases need to be added to avoid falling back to generic implementation.
     // See https://github.com/tenstorrent/tt-metal/issues/3321
     bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 94 or num_banks == 124);
-    bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
+    bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL;
+    bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
-        TT_THROW("Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo implementation", magic_enum::enum_name(buffer_type));
+        TT_THROW(
+            "Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo "
+            "implementation",
+            magic_enum::enum_name(buffer_type),
+            num_banks);
     }
 }
 
@@ -124,7 +129,8 @@ void BankManager::deallocate_all(){
 
 
 void BankManager::clear() {
-    this->allocator_->clear();
+    if (this->allocator_)
+        this->allocator_->clear();
 }
 
 BankManager::~BankManager() {
@@ -176,6 +182,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 }
 
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config) {
+    TT_ASSERT(alloc_config.l1_small_size == 0);
     uint32_t num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
     // Space up to L1_UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
     uint64_t offset_bytes = static_cast<uint64_t>(L1_UNRESERVED_BASE);
@@ -198,6 +205,7 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.num_banks();
         case BufferType::L1: return allocator.l1_manager.num_banks();
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.num_banks();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -209,6 +217,7 @@ uint32_t bank_size(const Allocator &allocator, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.bank_size();
         case BufferType::L1: return allocator.l1_manager.bank_size();
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.bank_size();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -226,12 +235,15 @@ CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id
     return allocator.bank_id_to_logical_core.at(bank_id);
 }
 
-int32_t l1_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id) {
-    return allocator.l1_manager.bank_offset(bank_id);
-}
-
-int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id) {
-    return allocator.dram_manager.bank_offset(bank_id);
+int32_t bank_offset(const Allocator &allocator, BufferType buffer_type, uint32_t bank_id) {
+    switch (buffer_type) {
+        case BufferType::DRAM: return allocator.dram_manager.bank_offset(bank_id);
+        case BufferType::L1: return allocator.l1_manager.bank_offset(bank_id);
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.bank_offset(bank_id);
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
 }
 
 const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel) {
@@ -253,6 +265,7 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.get_statistics();
         case BufferType::L1: return allocator.l1_manager.get_statistics();
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.get_statistics();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -266,6 +279,7 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
         break;
         case BufferType::L1: allocator.l1_manager.dump_blocks(out);
         break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -273,6 +287,7 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
 }
 
 std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, uint32_t bank_id) {
+    // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
@@ -285,6 +300,11 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, std::nullopt);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
+        case BufferType::L1_SMALL: {
+            TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
+            return allocator.descriptor.l1.alloc(
+                allocator.config, allocator.l1_small_manager, size, page_size, bottom_up, num_shards);
+        }
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -300,6 +320,7 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
         case BufferType::L1:
             allocator.l1_manager.deallocate_buffer(address);
         break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.deallocate_buffer(address); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -309,11 +330,13 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
 void deallocate_buffers(Allocator &allocator) {
     allocator.dram_manager.deallocate_all();
     allocator.l1_manager.deallocate_all();
+    allocator.l1_small_manager.deallocate_all();
 }
 
 void clear(Allocator &allocator) {
     allocator.dram_manager.clear();
     allocator.l1_manager.clear();
+    allocator.l1_small_manager.clear();
 }
 
 }  // namespace allocator
@@ -339,6 +362,7 @@ void Allocator::reset() {
 
     dram_manager.clear();
     l1_manager.clear();
+    l1_small_manager.clear();
     config.reset();
 }
 

@@ -15,13 +15,16 @@ std::vector<Device*> devices;
 
 } // device_pool
 
-Device &open_device(int device_id) {
+Device &open_device(int device_id, size_t l1_small_size) {
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     device_pool::devices.resize(num_devices, nullptr);
     TT_ASSERT(device_id < num_devices);
     if (device_pool::devices[device_id] == nullptr) {
-        device_pool::devices[device_id] = CreateDevice(device_id, 1);
+        device_pool::devices[device_id] = CreateDevice(device_id, 1, l1_small_size);
     }
+    TT_FATAL(
+        device_pool::devices[device_id]->get_l1_small_size() == l1_small_size,
+        "Device L1 small size mismatch, device already opened with different L1 small size.");
     return *device_pool::devices[device_id];
 }
 
