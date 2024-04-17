@@ -625,7 +625,14 @@ static void process_wait() {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     DPRINT << " DISPATCH WAIT " << HEX() << addr << " count " << count << ENDL();
-    while (*sem_addr < count); // XXXXX use a wrapping compare
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
+    while (*sem_addr < count) { // XXXXX use a wrapping compare
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
+    }
     DEBUG_STATUS('P', 'W', 'D');
 
     if (clear_count) {
