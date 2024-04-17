@@ -31,6 +31,7 @@ uint32_t kernel_size_g;
 uint32_t kernel_cycles_g;
 uint32_t n_cbs_g;
 uint32_t n_args_g;
+uint32_t n_common_args_g;
 uint32_t n_sems_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
@@ -51,6 +52,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
         log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
+        log_info(LogTest, "  -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, "  -r: run kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
@@ -68,6 +70,7 @@ void init(int argc, char **argv) {
     kernel_size_g = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K * 1024);
     n_cbs_g = test_args::get_command_option_uint32(input_args, "-c", 0);
     n_args_g = test_args::get_command_option_uint32(input_args, "-a", 0);
+    n_common_args_g = test_args::get_command_option_uint32(input_args, "-ca", 0);
     n_sems_g = test_args::get_command_option_uint32(input_args, "-S", 0);
     lazy_g = test_args::has_command_option(input_args, "-z");
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
@@ -82,6 +85,10 @@ void init(int argc, char **argv) {
     }
     if (n_args_g > MAX_ARGS) {
         log_fatal("Runtime arg count must be 0..{}", MAX_ARGS);
+        exit(0);
+    }
+    if (n_common_args_g > MAX_ARGS) {
+        log_fatal("Common Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (n_sems_g > NUM_SEMAPHORES) {
@@ -132,6 +139,8 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> args;
         args.resize(n_args_g);
+        vector<uint32_t> common_args;
+        common_args.resize(n_common_args_g);
 
         for (int i = 0; i < n_cbs_g; i++) {
             tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(16, {{i, tt::DataFormat::Float16_b}})
@@ -146,6 +155,7 @@ int main(int argc, char **argv) {
                 workers_g,
                 tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = pad_defines});
             set_runtime_args(program, dm0, args);
+            tt_metal::SetCommonRuntimeArgs(program, dm0, common_args);
         }
 
         if (ncrisc_enabled_g) {
@@ -155,6 +165,7 @@ int main(int argc, char **argv) {
                 workers_g,
                 tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = pad_defines});
             set_runtime_args(program, dm1, args);
+            tt_metal::SetCommonRuntimeArgs(program, dm1, common_args);
         }
 
         if (trisc_enabled_g) {
@@ -164,6 +175,7 @@ int main(int argc, char **argv) {
                 workers_g,
                 tt_metal::ComputeConfig{.defines = pad_defines});
             set_runtime_args(program, compute, args);
+            tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
         }
 
         // Cache stuff
@@ -188,11 +200,12 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
         log_info(LogTest, "Iterations: {}", iterations_g);
-        log_info(LogTest, "Grid: ({}-{})", workers_g.start.str(), workers_g.end.str());
+        log_info(LogTest, "Grid: ({}-{}) ({} cores)", workers_g.start.str(), workers_g.end.str(), workers_g.size());
         log_info(LogTest, "Kernel size: {}", kernel_size_g);
         log_info(LogTest, "Kernel cycles: {}", kernel_cycles_g);
         log_info(LogTest, "CBs: {}", n_cbs_g);
-        log_info(LogTest, "Args: {}", n_args_g);
+        log_info(LogTest, "UniqueRTArgs: {}", n_args_g);
+        log_info(LogTest, "CommonRTArgs: {}", n_common_args_g);
         log_info(LogTest, "Sems: {}", n_sems_g);
         log_info(LogTest, "Lazy: {}", lazy_g);
 
