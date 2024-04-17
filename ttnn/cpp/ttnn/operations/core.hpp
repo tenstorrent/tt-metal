@@ -4,15 +4,13 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_eager/tensor/types.hpp"
 #include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -26,7 +24,6 @@ static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
         {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
         true,
         true,
-        false,
         false},
 };
 
@@ -173,45 +170,12 @@ inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) 
 
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor) { return tensor.cpu(); }
 
-// TODO : @eyonland move these creation functions to creation.hpp
-template <typename T>
-inline ttnn::Tensor full(
-    const ttnn::Shape& shape,
-    const T value,
-    const DataType data_type,
-    const Layout layout,
-    Device& device,
-    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-    return tt::numpy::full(shape.with_tile_padding().value(), value, data_type, layout, &device, memory_config);
-}
-
-inline ttnn::Tensor zeros(
-    const ttnn::Shape& shape,
-    const DataType data_type,
-    const Layout layout,
-    Device& device,
-    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-    return full(shape, 0.0f, data_type, layout, device, memory_config);
-}
-
-inline ttnn::Tensor ones(
-    const ttnn::Shape& shape,
-    const DataType data_type,
-    const Layout layout,
-    Device& device,
-    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-    return full(shape, 1.0f, data_type, layout, device, memory_config);
-}
-
 }  // namespace core
 }  // namespace operations
 
 using operations::core::from_device;
-using operations::core::full;
-using operations::core::ones;
-using operations::core::zeros;
 using operations::core::reshape;
-using operations::core::unsqueeze_to_4D;
 using operations::core::squeeze_from_4D;
+using operations::core::unsqueeze_to_4D;
 
 }  // namespace ttnn

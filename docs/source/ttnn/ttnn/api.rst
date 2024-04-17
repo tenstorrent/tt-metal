@@ -161,8 +161,8 @@ Pointwise Binary
    :maxdepth: 1
 
    ttnn/add
-   ttnn/mul
-   ttnn/sub
+   ttnn/multiply
+   ttnn/subtract
    ttnn/pow
    ttnn/ldexp
    ttnn/logical_and

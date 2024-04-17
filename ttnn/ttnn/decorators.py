@@ -9,6 +9,7 @@ import inspect
 import os
 import time
 import traceback
+import types
 
 from loguru import logger
 
@@ -729,6 +730,7 @@ def register_operation(
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
     allow_to_fallback_to_golden_function_on_failure=False,
+    doc=None,
 ):
     if is_cpp_function:
         will_fallback_to_golden_function_on_failure = (
@@ -753,6 +755,20 @@ def register_operation(
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             return function
+
+        if isinstance(function, types.BuiltinFunctionType):
+            # Built-in functions need to be wrapped to be able to set documenation
+            def builtin_decorator(function):
+                @wraps(function)
+                def wrapper(*args, **kwargs):
+                    return function(*args, **kwargs)
+
+                return wrapper
+
+            function = builtin_decorator(function)
+
+        if doc is not None:
+            function.__doc__ = doc
 
         operation = Operation(
             name=name,

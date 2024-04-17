@@ -19,6 +19,32 @@ inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageT
     return tensor.storage_type() == storage_type;
 }
 
+inline const std::optional<MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) {
+    if (not tensor.is_allocated()) {
+        return std::nullopt;
+    }
+    return std::visit(
+        [](const auto& storage) -> std::optional<MemoryConfig> {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                try {
+                    return storage.memory_config();
+                } catch (...) {
+                    return std::nullopt;
+                }
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                try {
+                    return storage.memory_config();
+                } catch (...) {
+                    return std::nullopt;
+                }
+            } else {
+                return std::nullopt;
+            }
+        },
+        tensor.get_storage());
+}
+
 inline void set_printoptions(const std::string& profile) {
     tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
         magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
@@ -28,6 +54,7 @@ inline void set_printoptions(const std::string& profile) {
 
 }  // namespace core
 
+using core::get_memory_config;
 using core::has_storage_type_of;
 using core::set_printoptions;
 using tt::tt_metal::any_tensor_on_multi_device;

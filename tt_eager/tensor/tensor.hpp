@@ -206,6 +206,7 @@ struct Tensor {
     //                                      Getters
     // ======================================================================================
     const Storage &get_storage() const;
+    // [[deprecated("Use get_shape() instead.")]]
     const Shape &get_legacy_shape() const;
     const ttnn::Shape &get_shape() const;
     const DataType& get_dtype() const;
@@ -254,6 +255,7 @@ struct Tensor {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }
     }
+
     const MemoryConfig memory_config() const {
         return std::visit(
             [](const auto &storage) -> MemoryConfig {
