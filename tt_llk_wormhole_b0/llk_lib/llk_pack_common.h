@@ -75,11 +75,11 @@ inline void _llk_pack_dest_section_done_() {
     }
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
+template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false, bool diagonal = false>
 inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false) {
     TTI_STALLWAIT(p_stall::STALL_TDMA|p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
     if constexpr (untilize) {
-        const uint face_r_offset = ((face_r_dim == 1) || narrow_tile) ? FACE_R_DIM : (face_r_dim >> 1);
+        const uint face_r_offset = ((face_r_dim == 1) || narrow_tile || diagonal) ? FACE_R_DIM : (face_r_dim >> 1);
         if constexpr (FaceLayout == ColMajor) {
             // Packer0 :  0,32,  1,33 ...  7, 39
             // Packer1 :  8,40,  9,41 ... 15, 47
@@ -94,19 +94,35 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x18, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
         } else {
-            //For example if face_offset = 8:
-            // Packer0 :  0,16,  1,17 ...  7, 23
-            // Packer1 :  8,24,  9,25 ... 15, 31
-            // Packer2 : 32,48, 33,49 ... 39, 55
-            // Packer3 : 40,56, 41,57 ... 47, 63
-            TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-            TT_SETDMAREG(0, 0x000 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
-            TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
-            TT_SETDMAREG(0, 0x000 + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
-            TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
-            TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
-            TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
-            TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+            if constexpr (diagonal) {
+                //For example if face_offset = 8:
+                // Packer0 :  0,16,  1,17 ...  7, 23
+                // Packer1 :  8,24,  9,25 ... 15, 31
+                // Packer2 : 32,48, 33,49 ... 39, 55
+                // Packer3 : 40,56, 41,57 ... 47, 63
+                TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+                TT_SETDMAREG(0, 0x000 + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+                // TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+                // TT_SETDMAREG(0, 0x000 + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+                // TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+                // TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+            } else {
+                //For example if face_offset = 8:
+                // Packer0 :  0,16,  1,17 ...  7, 23
+                // Packer1 :  8,24,  9,25 ... 15, 31
+                // Packer2 : 32,48, 33,49 ... 39, 55
+                // Packer3 : 40,56, 41,57 ... 47, 63
+                TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+                TT_SETDMAREG(0, 0x000 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+                TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+                TT_SETDMAREG(0, 0x000 + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+                TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+            }
         }
     } else {
         if constexpr (FaceLayout == ColMajor) {
