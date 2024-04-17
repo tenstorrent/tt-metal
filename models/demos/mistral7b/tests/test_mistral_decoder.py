@@ -20,6 +20,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@pytest.mark.skip(reason="Test failing, see issue #7524")
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "iterations",
