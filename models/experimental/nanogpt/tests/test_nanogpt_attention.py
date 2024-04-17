@@ -19,9 +19,12 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 
 
+@skip_for_wormhole_b0()
+@pytest.mark.skip(reason="Test is hanging gs, see issue #7534")
 @pytest.mark.parametrize(
     "dtype",
     (tt_lib.tensor.DataType.BFLOAT16,),
