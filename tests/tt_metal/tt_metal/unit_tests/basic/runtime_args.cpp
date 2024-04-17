@@ -128,7 +128,7 @@ bool verify_results(
 
         // Verify common RT Args (same for all cores) if they exist.
         if (common_rt_args.size() > 0) {
-            const auto common_args_addr = rt_args_base_addr + common_rt_args_offset; // Common args are placed after unique args per core.
+            const auto common_args_addr = rt_args_base_addr + align(common_rt_args_offset, L1_ALIGNMENT); // Common args are placed after unique args per core. 16B aligned.
             for (auto &core_range : kernel->logical_coreranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {

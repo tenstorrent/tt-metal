@@ -76,7 +76,7 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
  */
 constexpr static uint32_t get_common_arg_addr(int arg_idx) {
     // args are 4B in size
-    return TRISC_L1_ARG_BASE + COMMON_RT_ARGS_OFFSET + (arg_idx << 2);
+    return L1_ARG_BASE + COMMON_RT_ARGS_OFFSET + (arg_idx << 2);
 }
 
 /**

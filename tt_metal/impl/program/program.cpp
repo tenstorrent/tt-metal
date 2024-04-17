@@ -569,6 +569,24 @@ void Program::invalidate_compile() {
     }
 }
 
+
+template <typename CoreRangeContainer>
+vector<pair<uint32_t, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
+    // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+    vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
+    for (const CoreRange& core_range : ranges) {
+        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
+        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
+
+        uint32_t dst_noc_multicast_encoding =
+            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+
+        uint32_t num_receivers = core_range.size();
+        dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
+    }
+    return dst_noc_multicast_info;
+}
+
 void Program::populate_dispatch_data(Device* device) {
     static const map<RISCV, uint32_t> processor_to_local_mem_addr = {
         {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
@@ -577,23 +595,6 @@ void Program::populate_dispatch_data(Device* device) {
         {RISCV::TRISC1, MEM_TRISC1_INIT_LOCAL_L1_BASE},
         {RISCV::TRISC2, MEM_TRISC2_INIT_LOCAL_L1_BASE},
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
-
-    auto extract_dst_noc_multicast_info =
-        [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
-        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
-        for (const CoreRange& core_range : ranges) {
-            CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
-            CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
-
-            uint32_t dst_noc_multicast_encoding =
-                NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-
-            uint32_t num_receivers = core_range.size();
-            dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
-        }
-        return dst_noc_multicast_info;
-    };
 
     auto extract_dst_noc_unicast_info =
         [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
@@ -623,7 +624,7 @@ void Program::populate_dispatch_data(Device* device) {
 
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
-            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
+            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info<std::set<CoreRange>>(device, semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info_2 transfer_info = {
                 .dst_base_addr = semaphore.address(),
                 .dst_noc_info = dst_noc_multicast_info,
@@ -648,7 +649,7 @@ void Program::populate_dispatch_data(Device* device) {
     // TODO: cleanup put the WORKERS and ETH logic together..
     for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
+            extract_dst_noc_multicast_info<std::set<CoreRange>>(device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
         vector<uint32_t> go_signals_data(sizeof(launch_msg_t) / sizeof(uint32_t));
@@ -835,9 +836,9 @@ void Program::update_runtime_args_transfer_info(Device* device) {
         }
         return dst_noc_unicast_info;
     };
-    this->program_transfer_info.runtime_args.clear();
-    // Runtime Args
-    // TODO: add multicasting
+    this->program_transfer_info.unicast_runtime_args.clear();
+    this->program_transfer_info.multicast_runtime_args.clear();
+    // Unique Runtime Args (Unicast)
     for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(*this, kernel_id);
 
@@ -853,7 +854,22 @@ void Program::update_runtime_args_transfer_info(Device* device) {
 
             transfer_info_2 transfer_info = {
                 .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
-            this->program_transfer_info.runtime_args[dst].push_back(transfer_info);
+            this->program_transfer_info.unicast_runtime_args[dst].push_back(transfer_info);
+        }
+
+        // Common Runtime Args (Multicast)
+        const auto &common_rt_args = kernel->common_runtime_args();
+
+        if (common_rt_args.size() > 0) {
+            uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
+            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+                extract_dst_noc_multicast_info<std::vector<CoreRange>>(device, kernel->logical_coreranges(),kernel->get_kernel_core_type());
+            transfer_info_2 transfer_info = {
+                .dst_base_addr = common_args_addr,
+                .dst_noc_info = dst_noc_multicast_info,
+                .linked = false,
+                .data = common_rt_args};
+            this->program_transfer_info.multicast_runtime_args[common_args_addr].push_back(transfer_info);
         }
     }
 }
