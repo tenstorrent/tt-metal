@@ -33,6 +33,7 @@ def close_device(device):
 
     Close the device and remove it from the device cache.
     """
+    synchronize_device(device)
     ttnn._ttnn.device.close_device(device)
 
 

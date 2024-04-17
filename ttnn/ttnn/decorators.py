@@ -682,18 +682,12 @@ class Operation:
 
         if self.will_fallback_to_golden_function_on_failure:
             function = fallback_to_golden_function_decorator(function)
-        self.function_with_fallback = function
 
-        if not ttnn.CONFIG.enable_fast_runtime_mode:
-            # If fast runtime mode is enabled during import-time, then don't decorate the original function
-            function = runtime_decorator(function)
+        function = runtime_decorator(function)
 
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
-        # If fast runtime mode is enabled during runtime, then only run the original function with the fallback
-        if ttnn.CONFIG.enable_fast_runtime_mode:
-            return self.function_with_fallback(*function_args, **function_kwargs)
         try:
             OPERATION_CALL_STACK.append(self.name)
             output = self.decorated_function(*function_args, **function_kwargs)

@@ -700,9 +700,7 @@ def preprocess_model(
         * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
     """
 
-    with ttnn.manage_config_attribute("enable_logging", False), ttnn.manage_config_attribute(
-        "enable_comparison_mode", False
-    ):
+    with ttnn.manage_config("enable_logging", False), ttnn.manage_config("enable_comparison_mode", False):
         return from_torch(
             model_name=model_name,
             version=version,
