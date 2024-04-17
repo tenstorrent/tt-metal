@@ -140,7 +140,8 @@ OutputTensors run_device_operation(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors) {
-    log_debug(tt::LogOp, "run_device_operation run_op.cpp - A");
+    log_debug(tt::LogOp, "run_device_operation run_op.cpp - A opt output - {}", optional_output_tensors.size());
+    // log_debug(tt::LogOp, "run_device_operation run_op.cpp - A opt output - {}", ( optional_output_tensors.at(0).has_value() ? true : false));
 
     ZoneScopedN("TT_DNN_DEVICE_OP");
     uint32_t op_id = assign_id();
@@ -200,21 +201,35 @@ OutputTensors run_device_operation(
         };
     } else {
         log_debug(tt::LogOp, "run_device_operation pgm cache not enabled  run_op.cpp - A");
-        get_or_create_program = [](const DeviceOperation<OutputTensors>& operation,
-        // get_or_create_program = [&optional_output_tensors](const DeviceOperation<OutputTensors>& operation,
+        // get_or_create_program = [](const DeviceOperation<OutputTensors>& operation,
+        get_or_create_program = [&optional_output_tensors](const DeviceOperation<OutputTensors>& operation,
                                    const Tensors& input_tensors,
                                    const OptionalConstTensors& optional_input_tensors,
                                    OutputTensors& output_tensors) -> std::shared_ptr<Program> {
-            log_debug(tt::LogOp, "run_device_operation pgm cache not enabled - creat_pgm run_op.cpp - A");
-            // operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+            log_debug(tt::LogOp, "run_device_operation- creat_pgm run_op.cpp - A, output_tensors {}", output_tensors.size());
+            log_debug(tt::LogOp, "run_device_operation- creat_pgm run_op.cpp - opt_output - {}", optional_output_tensors.size() );
+            if(optional_output_tensors.size()){
+                log_debug(tt::LogOp, "run_device_operation - optional_output_tensors is not empty" );
+                log_debug(tt::LogOp, "optional_output_tensors {}", typeid(decltype(optional_output_tensors)).name() );
+                log_debug(tt::LogOp, "run_device_operation - optional_output_tensors {}", optional_output_tensors.at(0).has_value());
+                operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+            }
+            else {
+                log_debug(tt::LogOp, "run_device_operation - optional_output_tensors is empty" );
+                log_debug(tt::LogOp, "optional_output_tensors {}", typeid(decltype(optional_output_tensors)).name() );
+                log_debug(tt::LogOp, "run_device_operation - output_tensors is {}", output_tensors.size() );
+                // optional_output_tensors.at(0).value() = output_tensors.at(0);
+            }
             auto program_with_callbacks =
                 operation.create_program(input_tensors, optional_input_tensors, output_tensors);
             log_debug(tt::LogOp, "run_device_operation pgm cache not enabled - creat_pgm run_op.cpp - Z");
             return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+    // operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+    log_debug(tt::LogOp, "run_device_operation- before create_output_tensors - opt output - {}", optional_output_tensors.size() );
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
+    log_debug(tt::LogOp, "run_device_operation - after create_output_tensors- opt output - {}", optional_output_tensors.size() );
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
@@ -424,7 +439,7 @@ OutputTensors run(
     //         TT_ASSERT(tensor.value().metadata_populated(), "Input tensors must be populated before running op.");
     //     }
     // }
-    log_debug(tt::LogOp, "in run = run<Tensors>(operation, , ); run_op.cpp - A");
+    log_debug(tt::LogOp, "in run = run<Tensors>(operation, , ); run_op.cpp - A, {}", optional_output_tensors.size());
     if (detail::any_tensor_on_multi_device(input_tensors)) {
         log_debug(tt::LogOp, "in run = multi dev run_op.cpp - A");
         return detail::decorate_device_operation(detail::run_multi_device_operation<OutputTensors>)(
@@ -542,6 +557,7 @@ Tensors run_with_autoformat(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
+    // const OptionalTensors& optional_output_tensors = {},
     const float pad_value,
     const bool pad_c
 ) {
@@ -584,6 +600,7 @@ Tensors run_with_autoformat(
     }
     log_debug(tt::LogOp, "run_with_autoformat run_op.cpp 1 - run");
     auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors);
+    // auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
 
@@ -656,6 +673,7 @@ void launch_with_autoformat(
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors
+    // const std::vector<std::optional<Tensor>> optional_output_tensors
 ) {
     log_debug(tt::LogOp, "launch_with_autoformat - run_op.cpp");
     // Mark each output tensor as having dynamic storage (can be on host or device, depending
@@ -664,6 +682,7 @@ void launch_with_autoformat(
         output_tensor.tensor_attributes->dynamic_storage = (output_tensor.workers.size() <= 1);
     }
     launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors);
+    // launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 void launch_op(
@@ -671,6 +690,7 @@ void launch_op(
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors
+    // const std::vector<std::optional<Tensor>> optional_output_tensors
 ) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
@@ -725,6 +745,7 @@ void launch_op(
                     optional_input_shards.push_back(std::nullopt);
                 }
             }
+            log_debug(tt::LogOp, "launch_op - op_func - A");
             auto local_tensors = op_func(input_shards, optional_input_shards);
             for (int i = 0; i < local_tensors.size(); i++) {
                 if (local_tensors.at(i).storage_type() == StorageType::OWNED) {
@@ -746,8 +767,9 @@ void launch_op(
                 }
             }
         });
-        log_debug(tt::LogOp, "launch_op - run_op.cpp - Z");
+        log_debug(tt::LogOp, "launch_op - run_op.cpp - op_func - Z");
     }
+    log_debug(tt::LogOp, "launch_op - run_op.cpp - ZZ");
 
     // Update ref counts of all tensors after push was performed (done only in main thread).
     for (int i = 0; i < async_safe_input_tensors.size(); i++) {
@@ -761,6 +783,7 @@ void launch_op(
     for (int i = 0; i < output_tensors.size(); i++) {
         output_tensors[i].tensor_attributes->update_main_thread_ref_count(workers.at(0), output_tensor_ref_count[i]);
     }
+    log_debug(tt::LogOp, "launch_op - run_op.cpp - ZZ");
 }
 
 void validate_workers_and_storage(const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs, const std::vector<Device*>& workers) {

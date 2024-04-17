@@ -190,9 +190,11 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
     if (this->in_place) {
+        log_debug(tt::LogOp, "create_output_tensors - inplace ");
         return {};
     }
     if (this->output_mem_config.is_sharded()) {
+        log_debug(tt::LogOp, "create_output_tensors - shard ");
         ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
             shard_spec = input_tensor_a.shard_spec().value();
@@ -211,6 +213,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
         mem_config.shard_spec = shard_spec;
         return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
     }
+    log_debug(tt::LogOp, "create_output_tensors - Z ");
     return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 

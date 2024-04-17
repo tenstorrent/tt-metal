@@ -118,12 +118,13 @@ struct make_eltwise_binary {
         const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::optional<const DataType> output_dtype = std::nullopt,
         std::optional<std::vector<Tensor>> opt_output_tensor = std::nullopt) const {
+        // std::optional<Tensor> opt_output_tensor = std::nullopt) const {
         // std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
         if(opt_output_tensor.has_value() && !(opt_output_tensor.value()).empty()){
             opt_output_tensor.value() = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-            log_debug(tt::LogOp, "opt_output_tensor bin op.hpp workers {}, {}", opt_output_tensor.has_value(), opt_output_tensor.value().at(0));
+            log_debug(tt::LogOp, "opt_output_tensor bin op.hpp workers {}, {}", opt_output_tensor.has_value(), opt_output_tensor.value());
             operation::launch_with_autoformat(
-            [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [fused_activations, output_mem_config, output_dtype, opt_output_tensor] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
                 Tensor in_a = input_tensors.at(0);
                 Tensor in_b = input_tensors.at(1);
                 Shape shape_a = in_a.get_legacy_shape();
@@ -151,15 +152,18 @@ struct make_eltwise_binary {
                             output_dtype.value_or(in_a.get_dtype()),
                             false},
                         {in_a, in_b});
+                        // {in_a, in_b}, {}, opt_output_tensor.value());
             },
         {input_tensor_a, input_tensor_b}, opt_output_tensor.value());
         log_debug(tt::LogOp, "return opt_output_tensor.value()).at(0) ");
         return (opt_output_tensor.value()).at(0);
         }
         else {
-            std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+            // std::optional<std::vector<Tensor>> output_tensors = std::nullopt;
+            std::vector<Tensor> output_tensors= {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+            // log_debug(tt::LogOp, "output_tensors bin op.hpp workers  {}", (output_tensors.value()).size());
              operation::launch_with_autoformat(
-            [fused_activations, output_mem_config, output_dtype ] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [fused_activations, output_mem_config, output_dtype, output_tensors] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
                 Tensor in_a = input_tensors.at(0);
                 Tensor in_b = input_tensors.at(1);
                 Shape shape_a = in_a.get_legacy_shape();
@@ -187,9 +191,11 @@ struct make_eltwise_binary {
                             output_dtype.value_or(in_a.get_dtype()),
                             false},
                         {in_a, in_b});
+                        // {in_a, in_b}, {}, {output_tensors.value()});
             },
         {input_tensor_a, input_tensor_b}, output_tensors);
-        log_debug(tt::LogOp, "return output_tensors.at(0) ");
+        // {input_tensor_a, input_tensor_b}, {}, {}, {output_tensors.value()});
+        log_debug(tt::LogOp, "return output_tensors.at(0) {}", output_tensors.at(0) );
         return output_tensors.at(0);
         }
 

@@ -25,6 +25,7 @@ auto generic_create_output_tensors(
     const Layout output_layout,
     const MemoryConfig& output_mem_config
 ) -> ProgramOutputTensors<ConcreteOperation> {
+    log_debug(tt::LogOp, "generic_create_output_tensors - A ");
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_shapes = operation.compute_output_shapes(input_tensors);
 
@@ -34,9 +35,11 @@ auto generic_create_output_tensors(
     OutputTensors output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
+        log_debug(tt::LogOp, "generic_create_output_tensors {}", output_shape);
         output_tensors.emplace_back(
             create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
     }
+    log_debug(tt::LogOp, "generic_create_output_tensors Z {} ", output_tensors.size() );
     return output_tensors;
 }
 
@@ -304,12 +307,17 @@ inline auto run(
     const OptionalConstTensors& optional_input_tensors={},
     const OptionalTensors& optional_output_tensors={}
 ) -> ProgramOutputTensors<ConcreteOperation> {
+    log_debug(tt::LogOp, "run run_op.hpp - A , {} ", optional_output_tensors.size());
+    // log_debug(tt::LogOp, "run run_op.hpp - A , {} ", optional_output_tensors.at(0).has_value());
+    log_debug(tt::LogOp, "run run_op.hpp , {} ",  typeid(decltype(optional_output_tensors)).name() );
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_host_operation<ConcreteOperation>()) {
         TT_ASSERT(optional_input_tensors.empty());
+        log_debug(tt::LogOp, "run run_op.hpp - host");
         const auto operation = HostOperation(concrete_op);
         return run<OutputTensors>(operation, input_tensors);
     } else if constexpr (detail::is_device_operation<ConcreteOperation>()) {
+        log_debug(tt::LogOp, "run run_op.hpp - device");
         const auto operation = DeviceOperation(concrete_op);
         return run<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
@@ -356,6 +364,7 @@ inline auto run_with_autoformat(
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c);
+    // return run_with_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c);
 }
 
 Tensors run_with_autoformat(
@@ -386,6 +395,7 @@ void launch_op(
     const std::vector<Tensor> input_tensors,
     std::vector<Tensor>& output_tensors,
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+    // const std::vector<std::optional<Tensor>> optional_output_tensors = {}
 );
 
 void launch_with_autoformat(

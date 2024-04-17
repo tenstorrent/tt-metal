@@ -32,6 +32,7 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
 
 operation::ProgramWithCallbacks MorehMatmul::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    log_debug(tt::LogOp, "create_program ");
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
     const auto& output_tensor = output_tensors.at(0);
@@ -69,6 +70,7 @@ inline void moreh_matmul_validate(
 
 inline Shape compute_output_shape(
     const Shape& input_shape, const Shape& other_shape, bool transpose_input, bool transpose_other) {
+    log_debug(tt::LogOp, "compute_output_shapes ");
     const auto& input_shape_wo_padding = input_shape.without_padding();
     const auto& other_shape_wo_padding = other_shape.without_padding();
 
@@ -91,16 +93,19 @@ std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>&
 }
 
 std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    log_debug(tt::LogOp, "create_output_tensors A");
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        log_debug(tt::LogOp, "create_output_tensors - optional ");
         return {output_tensors.at(0).value()};
     }
     const auto& output_shapes = this->compute_output_shapes(input_tensors);
     const auto& output_shape = output_shapes.at(0);
-
+    log_debug(tt::LogOp, "create_output_tensors Z");
     return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
 }
 
 void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    log_debug(tt::LogOp, "validate_with_output_tensors");
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
     TT_ASSERT(
@@ -120,6 +125,7 @@ void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_
 
 
     if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+            log_debug(tt::LogOp, "validate_with_output_tensors,  output_tensors.empty() {}" , output_tensors.size());
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
@@ -141,6 +147,8 @@ Tensor moreh_matmul_(
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
+
+    log_debug(tt::LogOp, "moreh_matmul_ A, {}", output_tensor.has_value());
 
     const auto& input_shape = input_tensor.get_legacy_shape();
     const auto& other_shape = other_tensor.get_legacy_shape();
@@ -184,6 +192,7 @@ Tensor moreh_matmul(
     if (is_dot_forward(input_tensor, other_tensor) && (!transpose_input && !transpose_other)) {
         return moreh_dot(input_tensor, other_tensor, mem_config);
     }
+    log_debug(tt::LogOp, "moreh_matmul A, {}", output_tensor.has_value());
     return moreh_matmul_(input_tensor, other_tensor, output_tensor, transpose_input, transpose_other, mem_config);
 }
 

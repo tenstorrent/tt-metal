@@ -543,6 +543,7 @@ struct DeviceOperation final {
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                const OptionalTensors& optional_output_tensors) -> void {
+                log_debug(tt::LogOp, "validate_impl_ op.hpp A ");
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr ((detail::implements_validate<T>() || detail::implements_validate_with_optional_input_tensors<T>()) &&
                         (detail::implements_validate_with_output_tensors<T>() || detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>())){
@@ -550,6 +551,7 @@ struct DeviceOperation final {
                 }
                 else if constexpr ((detail::implements_validate_with_output_tensors<T>() || detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>())
                     && not detail::implements_create_output_tensors_with_optional_output_tensors<T>()){
+                    log_debug(tt::LogOp, "Operation doesn't implement op.hpp Z ");
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_output_tensors with ant optional output tensors argument when using validate_with_output_tensors");
                 }
                 else if constexpr(detail::implements_validate<T>() && !detail::implements_create_program<T>()){
@@ -560,24 +562,32 @@ struct DeviceOperation final {
                 }
 
                 if constexpr (detail::implements_validate<T>()) {
+                    log_debug(tt::LogOp, "implements_validate op.hpp A ");
                     TT_FATAL(optional_input_tensors.empty());
                     operation.validate(input_tensors);
                 }
                 else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
+                    log_debug(tt::LogOp, "implements_validate_with_optional_input_tensors op.hpp A ");
                     TT_FATAL(not optional_input_tensors.empty());
                     operation.validate(input_tensors, optional_input_tensors);
                 }
                 else if constexpr (detail::implements_validate_with_output_tensors<T>()){
+                    log_debug(tt::LogOp, "implements_validate_with_output_tensors op.hpp A {} , {}", optional_input_tensors.size(), optional_output_tensors.size());
                     TT_FATAL(optional_input_tensors.empty());
-                    TT_FATAL(not optional_output_tensors.empty());
+                    log_debug(tt::LogOp, "implements_validate_with_output_tensors op.hpp op_out {}", optional_output_tensors.size() );
+                    TT_FATAL(not optional_output_tensors.empty(), "optional_output_tensors is empty");
+                    log_debug(tt::LogOp, "implements_validate_with_output_tensors op.hpp Z {}", (optional_output_tensors.at(0).has_value() ? true : false) );
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()){
+                    log_debug(tt::LogOp, "implements_validate_with_output_tensors_and_optional_input_tensors op.hpp Z ");
                     TT_FATAL(not optional_input_tensors.empty());
                     TT_FATAL(not optional_output_tensors.empty());
                     operation.validate_with_output_tensors(input_tensors, optional_input_tensors, optional_output_tensors);
                 }else{
+                    log_debug(tt::LogOp, "impl neither op.hpp Z ");
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation must implement either validate or validate_with_output_tensors");
                 }
+            log_debug(tt::LogOp, "validate_impl_ op.hpp Z ");
 
             }},
         compute_output_shapes_impl_{
@@ -589,6 +599,7 @@ struct DeviceOperation final {
             [](const storage_t& storage, const Tensors& input_tensors, const OptionalTensors& output_tensors) -> const Tensors {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
+                    log_debug(tt::LogOp, "create_output_tensors_impl_ ");
                     return operation.create_output_tensors(input_tensors, output_tensors);
                 }
                 else{

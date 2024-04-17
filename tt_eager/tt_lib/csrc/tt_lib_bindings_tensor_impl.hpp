@@ -25,7 +25,7 @@ void bind_op_with_mem_config_and_dtype_and_opt_output(py::module_ &module, std::
             dtype_name
         );
         const std::string opt_output_tensor_name = "opt_output_tensor";
-        std::optional<std::vector<Tensor>>  default_opt_output_tensor = std::nullopt;
+        std::optional<std::vector<Tensor>> default_opt_output_tensor = std::nullopt;
         docstring += fmt::format(R"doc(
             "{0}", "Optional output tensor", "Tensor", "Default is None", "No")doc",
             opt_output_tensor_name
@@ -54,6 +54,7 @@ void bind_op_with_mem_config_and_dtype_and_opt_output(py::module_ &module, std::
     } else if constexpr (opt_output_arg) {
         const std::string opt_output_tensor_name = "opt_output_tensor";
         std::optional<std::vector<Tensor>> default_opt_output_tensor = std::nullopt;
+        // std::optional<Tensor> default_opt_output_tensor = std::nullopt;
         docstring += fmt::format(R"doc(
             "{0}", "Optional output tensor", "Tensor", "Default is None", "No")doc",
             opt_output_tensor_name
