@@ -33,6 +33,7 @@ DTYPES_TT_DICT = {
     "BFLOAT8_B": tt_lib.tensor.DataType.BFLOAT8_B,
     "UINT32": tt_lib.tensor.DataType.UINT32,
     "UINT16": tt_lib.tensor.DataType.UINT16,
+    "INT32": tt_lib.tensor.DataType.INT32,
 }
 
 LAYOUTS_TT_DICT = {

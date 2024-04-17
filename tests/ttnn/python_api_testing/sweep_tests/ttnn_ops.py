@@ -47,6 +47,9 @@ def dtype_to_ttnn(dtype):
     elif dtype == tt_lib.tensor.DataType.UINT16:
         return ttnn.uint16
 
+    elif dtype == tt_lib.tensor.DataType.INT32:
+        return ttnn.int32
+
     else:
         assert False, "Unknown dtype passed"
 
