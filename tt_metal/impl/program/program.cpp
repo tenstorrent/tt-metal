@@ -92,6 +92,7 @@ namespace detail{
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
+    runtime_args_dirty = true;
     std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
     for (const auto& core_type : supported_core_types) {
         kernels_.insert({core_type, {}});
@@ -613,10 +614,6 @@ void Program::populate_dispatch_data(Device* device) {
         return dst_noc_unicast_info;
     };
 
-    // Runtime Args
-    // TODO: add multicasting
-    this->update_runtime_args_transfer_info(device);
-
     // Unicast/Multicast Semaphores
     for (const Semaphore& semaphore : this->semaphores()) {
         vector<uint32_t> semaphore_data(1);
@@ -836,40 +833,71 @@ void Program::update_runtime_args_transfer_info(Device* device) {
         }
         return dst_noc_unicast_info;
     };
-    this->program_transfer_info.unicast_runtime_args.clear();
-    this->program_transfer_info.multicast_runtime_args.clear();
-    // Unique Runtime Args (Unicast)
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(*this, kernel_id);
 
-        uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+    if (this->runtime_args_dirty) {
+        this->runtime_args_dirty = false;
 
-        for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-          // can make a vector of unicast encodings here
-            CoreCoord physical_core =
-                device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-            const auto& runtime_args_data = kernel->runtime_args(core_coord);
-            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
-                detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
+        this->program_transfer_info.unicast_runtime_args.clear();
+        this->program_transfer_info.multicast_runtime_args.clear();
 
-            transfer_info_2 transfer_info = {
-                .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
-            this->program_transfer_info.unicast_runtime_args[dst].push_back(transfer_info);
+        // Unique Runtime Args (Unicast)
+        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(*this, kernel_id);
+
+            uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+
+            for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+                // can make a vector of unicast encodings here
+                CoreCoord physical_core =
+                    device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
+                const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
+                    detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
+
+                transfer_info_2 transfer_info = {
+                    .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
+                this->program_transfer_info.unicast_runtime_args[dst].push_back(transfer_info);
+            }
+
+            // Common Runtime Args (Multicast)
+            const auto &common_rt_args = kernel->common_runtime_args();
+
+            if (common_rt_args.size() > 0) {
+                uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
+                vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+                    extract_dst_noc_multicast_info<std::vector<CoreRange>>(device, kernel->logical_coreranges(),kernel->get_kernel_core_type());
+                transfer_info_2 transfer_info = {
+                    .dst_base_addr = common_args_addr,
+                    .dst_noc_info = dst_noc_multicast_info,
+                    .linked = false,
+                    .data = common_rt_args};
+                this->program_transfer_info.multicast_runtime_args[common_args_addr].push_back(transfer_info);
+            }
         }
+    } else {
+        map<uint32_t, uint32_t> unicast_index = {
+            {BRISC_L1_ARG_BASE, 0},
+            {NCRISC_L1_ARG_BASE, 0},
+            {TRISC_L1_ARG_BASE, 0},
+            {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, 0},
+        };
+        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(*this, kernel_id);
 
-        // Common Runtime Args (Multicast)
-        const auto &common_rt_args = kernel->common_runtime_args();
+            uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
 
-        if (common_rt_args.size() > 0) {
-            uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
-            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-                extract_dst_noc_multicast_info<std::vector<CoreRange>>(device, kernel->logical_coreranges(),kernel->get_kernel_core_type());
-            transfer_info_2 transfer_info = {
-                .dst_base_addr = common_args_addr,
-                .dst_noc_info = dst_noc_multicast_info,
-                .linked = false,
-                .data = common_rt_args};
-            this->program_transfer_info.multicast_runtime_args[common_args_addr].push_back(transfer_info);
+            for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+                const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                this->program_transfer_info.unicast_runtime_args[dst][unicast_index[dst]].data = runtime_args_data;
+                unicast_index[dst]++;
+            }
+
+            // Common Runtime Args (Multicast)
+            const auto &common_rt_args = kernel->common_runtime_args();
+            if (common_rt_args.size() > 0) {
+                uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
+                this->program_transfer_info.multicast_runtime_args[common_args_addr][0].data = common_rt_args;
+            }
         }
     }
 }
