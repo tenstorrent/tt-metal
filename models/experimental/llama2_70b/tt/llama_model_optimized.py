@@ -267,9 +267,7 @@ class TtLlamaModel_optimized(nn.Module):
                 )
 
             try:
-                rot_mat_tt = ttnn.load_tensor(
-                    cache_file_name(f"rot_mat_decode_{start_pos}", ttnn.bfloat16, ttnn.TILE_LAYOUT)
-                )
+                rot_mat_tt = ttnn.load_tensor(cache_file_name(f"rot_mat_decode_{start_pos}", "BFLOAT16", "TILE"))
                 rot_mats = [
                     ttnn.to_device(rot_mat_tt, self.devices[device_id]) for device_id in range(self.num_devices)
                 ]
@@ -285,16 +283,22 @@ class TtLlamaModel_optimized(nn.Module):
                         )
                     )
 
+            padded_layer_past_len = nearest_32(start_pos + 1)
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
             try:
                 attn_mask_tt = ttnn.load_tensor(
-                    cache_file_name(f"attn_mask_decode_{start_pos}", ttnn.bfloat16, ttnn.TILE_LAYOUT)
+                    cache_file_name(f"attn_mask_decode_full_{start_pos}", "BFLOAT16", "TILE")
                 )
                 attn_masks = [
-                    ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
+                    ttnn.to_device(attn_mask_tt, self.devices[device_id], memory_config=attention_mask_memconfig)
+                    for device_id in range(self.num_devices)
                 ]
             except (FileNotFoundError, RuntimeError):
-                padded_layer_past_len = nearest_32(start_pos + 1)
-                attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+                attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
                 attn_mask = torch.zeros(*attn_mask_shape)
                 attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
                 attn_masks = []
@@ -305,26 +309,10 @@ class TtLlamaModel_optimized(nn.Module):
                             attn_mask.clone(),
                             ttnn.bfloat16,
                             ttnn.TILE_LAYOUT,
-                            f"attn_mask_decode_{start_pos}",
+                            f"attn_mask_decode_full_{start_pos}",
                             device_id,
                         )
                     )
-
-            repeat_shape = (batch, 1, 1, 1)
-            for i in range(self.num_devices):
-                attn_masks[i] = tt_lib.tensor.repeat(
-                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
-                )
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-            for i in range(self.num_devices):
-                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
-                )
 
         return (
             xs,
