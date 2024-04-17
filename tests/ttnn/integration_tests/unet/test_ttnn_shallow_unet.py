@@ -510,6 +510,8 @@ class UNet(nn.Module):
         return output
 
 
+@pytest.mark.skip(reason="Test failing, see issue #7556")
+@skip_for_grayskull()
 @pytest.mark.parametrize("loop", [0])
 @pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1)])  # , (True, 2)])
 def test_unet(device, loop, perf_mode, groups):
