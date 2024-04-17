@@ -95,16 +95,24 @@ def import_tracy_op_logs():
                     jsonStr = tmpStrs[-1]
                     opData = json.loads(jsonStr)
                     if "op_hash" in opData.keys():
-                        cached_ops[int(opData["op_hash"])] = opData.copy()
-                        del cached_ops[int(opData["op_hash"])]["global_call_count"]
+                        assert "device_id" in opData.keys()
+                        deviceID = int(opData["device_id"])
+                        opHash = int(opData["op_hash"])
+                        if deviceID in cached_ops.keys():
+                            cached_ops[deviceID][opHash] = opData.copy()
+                        else:
+                            cached_ops[deviceID] = {opHash: opData.copy()}
+                        del cached_ops[deviceID][opHash]["global_call_count"]
                 else:
                     opDataList = opDataStr.split(":", 1)[-1].split(",")
-                    assert len(opDataList) > 2, "Wrong cached op info format"
+                    assert len(opDataList) > 3, "Wrong cached op info format"
                     opCode = opDataList[0].strip()
                     opHash = int(opDataList[1])
-                    opID = int(opDataList[2])
-                    assert opHash in cached_ops.keys(), "Expected hashed op info is not found"
-                    opData = cached_ops[opHash].copy()
+                    deviceID = int(opDataList[2])
+                    opID = int(opDataList[3])
+                    assert deviceID in cached_ops.keys(), "Expected hashed op info is not found"
+                    assert opHash in cached_ops[deviceID].keys(), "Expected hashed op info is not found"
+                    opData = cached_ops[deviceID][opHash].copy()
                     opData["global_call_count"] = opID
                 opData["tracy_time"] = opDataTime
                 opsData.append(opData)
@@ -161,7 +169,7 @@ def append_device_data(ops, deviceLogFolder):
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
             assert len(deviceOps[device]) == len(
                 deviceOpsTime
-            ), f"Device data mismatch. Expected {len(deviceOps[device])} but recieved {len(deviceOpsTime)} ops on device {device}"
+            ), f"Device data mismatch. Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
