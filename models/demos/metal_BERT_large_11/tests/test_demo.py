@@ -10,6 +10,7 @@ from models.utility_functions import is_e75, skip_for_wormhole_b0, skip_for_gray
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="Hangs")
 @pytest.mark.parametrize("batch", (7,), ids=["batch_7"])
 @pytest.mark.parametrize(
     "input_path",
@@ -80,6 +81,7 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="Hangs")
 @pytest.mark.parametrize(
     "batch, exact, f1",
     (
