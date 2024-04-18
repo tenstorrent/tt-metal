@@ -40,9 +40,12 @@ jobs:
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local
           ls -al /mnt/MLPerf/bit_error_tests
-      - name: Set up dyanmic env vars for build
+      - name: Set up env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          # Use temp directory provided by GH runner service for cache
+          mkdir ${{ runner.temp }}/tt-metal-hf-cache
+          echo "HF_CACHE=${{ runner.temp }}/tt-metal-hf-cache" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}
