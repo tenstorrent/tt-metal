@@ -7,6 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "tt_dnn/op_library/move/move_op.hpp"
+
 namespace py = pybind11;
 
 namespace ttnn {
@@ -65,6 +67,21 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("memory_config"),
         py::arg("dtype") = std::nullopt);
+
+    module.def(
+        "reallocate",
+        [](ttnn::Tensor& input_tensor,
+           const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) -> ttnn::Tensor {
+            return reallocate(input_tensor, memory_config);
+        },
+        py::arg("tensor"),
+        py::arg("memory_config") = std::nullopt,
+        R"doc(
+Deallocates device tensor and returns a reallocated tensor
+
+Args:
+    * :attr:`input_tensor`: Input Tensor
+    )doc");
 }
 
 }  // namespace core

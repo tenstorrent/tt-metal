@@ -10,6 +10,7 @@
 #include "tt_eager/tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_eager/tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_eager/tt_dnn/op_library/move/move_op.hpp"
 #include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/types.hpp"
@@ -224,6 +225,15 @@ inline ttnn::Tensor to_memory_config(
 
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor) { return tensor.cpu(); }
 
+inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+    if(input_tensor.is_sharded()) {
+        return move_sharded(input_tensor, mem_config);
+    }
+    else {
+        return move(input_tensor, mem_config);
+    }
+}
+
 // TODO : @eyonland move these creation functions to creation.hpp
 template <typename T>
 inline ttnn::Tensor full(
@@ -261,8 +271,10 @@ using operations::core::from_device;
 using operations::core::full;
 using operations::core::ones;
 using operations::core::reshape;
+using operations::core::reallocate;
 using operations::core::squeeze_from_4D;
 using operations::core::unsqueeze_to_4D;
 using operations::core::zeros;
+
 
 }  // namespace ttnn
