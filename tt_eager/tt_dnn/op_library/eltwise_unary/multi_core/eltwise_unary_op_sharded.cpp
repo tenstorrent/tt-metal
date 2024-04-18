@@ -35,14 +35,9 @@ operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tenso
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
-    size_t shard_height = shard_spec.shape[0];
-
-    TT_FATAL((shard_spec.shape[1] * datum_size(act_df)) % L1_ALIGNMENT == 0, "Shard width should be multiple of L1_ADRESS_ALIGNMENT");
-    size_t shard_width = round_up_to_mul16(shard_spec.shape[1]); // rounding up is done to aligned with  --> tt-metal/tt_metal/detail/util.hpp:31
-    size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);
+    uint32_t shard_size_in_bytes = shard_spec.numel() * datum_size(act_df);
 
     uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size; //ceil value
-    TT_FATAL(shard_size_in_bytes % input_tile_size == 0, "Shard Size must be multiple of input_tile_size");
     TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
 
