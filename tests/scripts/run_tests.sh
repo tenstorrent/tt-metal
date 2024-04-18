@@ -84,15 +84,6 @@ run_eager_package_end_to_end_pipeline_tests() {
     env pytest -c conftest.py . -m $pipeline_type
 }
 
-run_frequent_models_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    echo "This pipeline should not be used anymore, and instead use tests/scripts/nightly. Dying"
-    exit 1
-}
-
 run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -212,8 +203,6 @@ run_pipeline_tests() {
     # Call the appropriate module tests based on pipeline
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_models" ]]; then
-        run_frequent_models_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_api" ]]; then
         run_frequent_api_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "eager_host_side" ]]; then
