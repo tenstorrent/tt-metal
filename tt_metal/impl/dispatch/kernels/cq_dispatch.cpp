@@ -284,7 +284,8 @@ FORCE_INLINE
 void process_write_host_d() {
 
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
-    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear_host.length;
+    // Remember: host transfer command includes the command in the payload, don't add it here
+    uint32_t length = cmd->write_linear_host.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
@@ -742,7 +743,7 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     default:
-        DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << "xx" << ENDL();
+        DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << cb_fence << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << "xx" << ENDL();
         DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
