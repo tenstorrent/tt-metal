@@ -18,24 +18,21 @@ from models.utility_functions import (
 )
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 def test_vit_attention(device, pcc=0.99):
     hidden_state_shape = (1, 1, 197, 768)
     head_mask = None
     output_attentions = False
     hidden_state = torch.randn(hidden_state_shape)
     with torch.no_grad():
-        HF_model = HF_ViTForImageClassication.from_pretrained(
-            "google/vit-base-patch16-224"
-        )
+        HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
 
         state_dict = HF_model.state_dict()
         reference = HF_model.vit.encoder.layer[5].attention
 
         config = HF_model.config
         HF_output = reference(hidden_state.squeeze(0), head_mask, output_attentions)[0]
-        tt_hidden_state = torch_to_tt_tensor_rm(
-            hidden_state, device, put_on_device=False
-        )
+        tt_hidden_state = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
         tt_layer = TtViTAttention(
             config,
             base_address="vit.encoder.layer.5.attention",

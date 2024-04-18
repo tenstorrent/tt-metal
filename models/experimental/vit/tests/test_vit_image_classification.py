@@ -23,6 +23,7 @@ from models.utility_functions import (
 pytest.skip(allow_module_level=True, reason="https://github.com/tenstorrent/tt-metal/issues/7508")
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 def test_vit_image_classification(device, hf_cat_image_sample_input, pcc=0.95):
     image = hf_cat_image_sample_input
 
