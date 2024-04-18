@@ -80,8 +80,6 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos, *args, **kwargs)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
-        logger.info(f"Decoding {start_pos+1}th tokens...")
-
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
 
         tt_logits = self.tt_model(
@@ -131,8 +129,11 @@ class TtLlamaModelForGeneration:
             del rot_mat
             del attn_mask
 
+            for device in self.devices:
+                tt_lib.device.Synchronize(device)
+
             logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
-            logits = logits[..., : self.params.vocab_size].float()
+            logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
             del tt_logits
 
             output_logits[user_id] = logits[:, :seq_len, :]
