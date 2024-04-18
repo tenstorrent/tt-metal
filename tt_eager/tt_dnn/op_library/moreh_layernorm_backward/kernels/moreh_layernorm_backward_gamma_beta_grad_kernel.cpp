@@ -268,7 +268,7 @@ void MAIN {
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
                 reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, 0, 0, dst0);
+                reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
                 reduce_revert_delta();
             } else {
                 // Just copy
@@ -292,7 +292,7 @@ void MAIN {
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
                 reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, 0, 0, dst0);
+                reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
                 reduce_revert_delta();
             } else {
                 // Just copy
