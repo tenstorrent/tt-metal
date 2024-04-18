@@ -89,8 +89,8 @@ run_frequent_models_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # Please put model runs in here from now on - thank you
-    ./tests/scripts/run_models.sh
+    echo "This pipeline should not be used anymore, and instead use tests/scripts/nightly. Dying"
+    exit 1
 }
 
 run_frequent_api_pipeline_tests() {
