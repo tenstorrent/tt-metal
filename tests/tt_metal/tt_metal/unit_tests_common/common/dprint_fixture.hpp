@@ -4,6 +4,7 @@
 
 #include "common_fixture.hpp"
 #include "impl/debug/dprint_server.hpp"
+#include "tt_metal/common/core_descriptor.hpp"
 
 // A version of CommonFixture with DPrint enabled on all cores.
 class DPrintFixture: public CommonFixture {
@@ -36,8 +37,10 @@ protected:
         int num_cqs = (num_cqs_str != nullptr)? std::stoi(num_cqs_str) : 1;
         std::map<CoreType, std::unordered_set<CoreCoord>> disabled;
         for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+            // TODO: Better way to get this info once we've solidified how it will be set.
+            const tt::core_descriptor_t &core_desc = tt::get_core_descriptor_config(id, num_cqs);
             for (auto core : tt::get_logical_dispatch_cores(id, num_cqs)) {
-                disabled[CoreType::WORKER].insert(core);
+                disabled[core_desc.dispatch_core_type].insert(core);
             }
         }
         tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
