@@ -38,17 +38,20 @@ from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
-def load_prompts_file(tokenizer, prefill_length=128):
-    # Load prompts
-    prompts = open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
-    tokenized = tokenizer.encode(prompts, bos=True, eos=False)
+def load_prompts_file(tokenizer, prefill_length, generation_length=128, gap=64):
+    with open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
+        tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
 
-    token_ids = []
-    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length):
-        window = tokenized[i : i + prefill_length]
-        if len(token_ids) == 32:
-            return token_ids, tokenizer.decode(token_ids)
-        token_ids.append(window)
+    token_windows = []
+    ground_truth_texts = []
+    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
+        token_windows.append(tokenized[i : i + prefill_length])
+        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length + 1])
+        ground_truth_texts.append(ground_truth_text)
+        if len(token_windows) == 32:
+            return token_windows, ground_truth_texts
+
+    return token_windows, ground_truth_texts
 
 
 def post_process(logits, index):
