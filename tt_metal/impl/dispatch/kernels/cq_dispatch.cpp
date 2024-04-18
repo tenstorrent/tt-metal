@@ -217,15 +217,17 @@ void relay_to_next_cb(uint32_t data_ptr,
     if (preamble_size > 0) {
         uint64_t downstream_noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
         noc_inline_dw_write(downstream_noc_addr, length + preamble_size);
+        downstream_cb_data_ptr += preamble_size;
     }
 
+    uint32_t extra = preamble_size;
     while (length > 0) {
         uint32_t avail = downstream_cb_end - downstream_cb_data_ptr;
 
-        uint32_t xfer_size = (length > dispatch_cb_page_size - preamble_size) ?
-            dispatch_cb_page_size - preamble_size :
+        uint32_t xfer_size = (length > dispatch_cb_page_size - extra) ?
+            dispatch_cb_page_size - extra :
             length;
-        uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr + preamble_size);
+        uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
 
         // Get a page if needed
         if (data_ptr + xfer_size > cb_fence) {
@@ -267,10 +269,12 @@ void relay_to_next_cb(uint32_t data_ptr,
 
         length -= xfer_size;
         data_ptr += xfer_size;
-        downstream_cb_data_ptr += xfer_size + preamble_size;
+        downstream_cb_data_ptr += xfer_size;
         if (downstream_cb_data_ptr == downstream_cb_end) {
             downstream_cb_data_ptr = downstream_cb_base;
         }
+
+        extra = 0;
     }
 
     cmd_ptr = data_ptr;
