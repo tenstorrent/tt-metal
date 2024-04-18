@@ -290,19 +290,12 @@ class TtFalconModelShared:
             presents += layer_output[1:]
             layer_output = layer_output[0]
 
-        layer_output = convert_to_layout(
-            layer_output, self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
-        )
         layer_output = tt_lib.tensor.all_gather(
             layer_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        layer_output = convert_to_layout(
-            layer_output, self.model_config["DEFAULT_MEMCFG"], self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
-
         # apply final norm layer
         layer_output = partial_layernorm(
             layer_output,
@@ -315,9 +308,6 @@ class TtFalconModelShared:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
-        )
-        layer_output = convert_to_layout(
-            layer_output, self.model_config["LN_F_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
         )
 
         return layer_output, presents

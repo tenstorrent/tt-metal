@@ -235,12 +235,6 @@ class TtFalconDecoderLayer:
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
-        replicated_hidden_states = convert_to_layout(
-            replicated_hidden_states,
-            self.model_config["DEFAULT_MEMCFG"],
-            self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
-
         attn_ln_output = partial_layernorm(
             replicated_hidden_states,
             self.ln_attn_gamma,
@@ -252,9 +246,6 @@ class TtFalconDecoderLayer:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
-        )
-        attn_ln_output = convert_to_layout(
-            attn_ln_output, self.model_config["LN_ATTN_OUTPUT_MEMCFG"], self.model_config["ATTN_INPUT_MEMCFG"]
         )
 
         mlp_ln_output = partial_layernorm(
@@ -268,9 +259,6 @@ class TtFalconDecoderLayer:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
-        )
-        mlp_ln_output = convert_to_layout(
-            mlp_ln_output, self.model_config["LN_MLP_OUTPUT_MEMCFG"], self.model_config["DEFAULT_MEMCFG"]
         )
 
         residual = hidden_states
