@@ -817,14 +817,9 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
     )
 
 
-@ttnn.register_operation(
-    name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, golden_function=_golden_function
+reallocate = ttnn.register_operation(name="ttnn.reallocate", is_cpp_function=True, golden_function=_golden_function)(
+    ttnn._ttnn.operations.core.reallocate
 )
-def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-    if ttnn.is_sharded(input_tensor):
-        return ttl.tensor.move_sharded(input_tensor)
-    else:
-        return ttl.tensor.move(input_tensor)
 
 
 def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):

@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Tensor &output);
 operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &output);
 
-inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config) {
+inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -113,7 +113,7 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     return output;
 }
 
-inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config) {
+inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
@@ -147,5 +147,4 @@ inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& me
 }
 
 }  // namespace tt_metal
-
 }  // namespace tt
