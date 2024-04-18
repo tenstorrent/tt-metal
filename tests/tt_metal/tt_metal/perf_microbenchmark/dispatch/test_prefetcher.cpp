@@ -736,6 +736,7 @@ void gen_host_test(Device *device,
                    uint32_t dst_addr) {
 
     std::vector<uint32_t> dispatch_cmds;
+
     gen_dispatcher_host_write_cmd(dispatch_cmds, 32);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
@@ -743,6 +744,9 @@ void gen_host_test(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
     gen_dispatcher_host_write_cmd(dispatch_cmds, 1024);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+    dispatch_cmds.resize(0);
+    gen_dispatcher_host_write_cmd(dispatch_cmds, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
     gen_dispatcher_host_write_cmd(dispatch_cmds, 16384);
