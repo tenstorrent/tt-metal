@@ -16,6 +16,9 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
+
+pytest tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py
+
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
 pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
