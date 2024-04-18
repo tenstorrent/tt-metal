@@ -9,12 +9,16 @@ from torch import nn
 import tt_lib
 import ttnn
 
-from models.experimental.llama2_70b.reference.llama.llama import Llama
-from models.experimental.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.experimental.llama2_70b.tt.model_config import (
+from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
+from models.demos.t3000.llama2_70b.tests.test_llama_perf import (
+    load_prompts_file,
+    intialize_inputs,
+)
+from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from models.experimental.llama2_70b.tt.llama_common import (
+from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_llama_path,
     MAX_SEQ_LEN,
     BASE_URL,
@@ -32,22 +36,6 @@ from models.perf.perf_utils import prep_perf_report
 from tracy import signpost
 
 
-def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
-    with open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
-        tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
-
-    token_windows = []
-    ground_truth_texts = []
-    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
-        token_windows.append(tokenized[i : i + prefill_length])
-        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length + 1])
-        ground_truth_texts.append(ground_truth_text)
-        if len(token_windows) == 32:
-            return token_windows, ground_truth_texts
-
-    return token_windows, ground_truth_texts
-
-
 def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
     # only replace token if prompt has already been generated
     next_token = torch.where(input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token)
@@ -57,17 +45,6 @@ def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
     prev_pos = cur_pos
 
     return tokens, eos_reached, prev_pos
-
-
-def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
-    # pad the model to maximum length
-    pad_id = tokenizer.pad_id
-    tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
-    for k, t in enumerate(prompt_tokens):
-        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu")
-
-    input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
-    return tokens, input_text_mask
 
 
 def get_decode_time(profiler, start_token, end_token):

@@ -163,6 +163,7 @@ def test_LlamaMLP_inference(
     n_devices,
     all_devices,
     emulated,
+    use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
@@ -171,9 +172,6 @@ def test_LlamaMLP_inference(
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-
-    for device in devices:
-        device.enable_program_cache()
 
     run_test_LlamaMLP_inference(
         devices,
