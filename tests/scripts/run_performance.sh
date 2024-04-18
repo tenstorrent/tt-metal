@@ -61,9 +61,7 @@ run_perf_models_llm_javelin() {
 
     env pytest models/demos/falcon7b/tests -m $test_marker
 
-    if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest models/demos/mistral7b/tests -m $test_marker
-    fi
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mistral7b/tests -m $test_marker  # -> hanging: issue #7540
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
