@@ -21,13 +21,13 @@ def _golden_function(
         input_tensor += residual_input_tensor
 
     if weight is not None:
-        if len(weight.shape) == 2:
-            weight = weight[0]
+        if len(weight.shape) >= 2:
+            weight = weight.squeeze()
         weight = weight.to(input_tensor.dtype)
 
     if bias is not None:
-        if len(bias.shape) == 2:
-            bias = bias[0]
+        if len(bias.shape) >= 2:
+            bias = bias.squeeze()
         bias = bias.to(input_tensor.dtype)
 
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)

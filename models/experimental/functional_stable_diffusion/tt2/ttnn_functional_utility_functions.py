@@ -172,3 +172,54 @@ def dealloc_input(fn, *args, **kwargs):
             if a.is_allocated():
                 ttnn.deallocate(a)
     return out
+
+
+def find_max_subblock(out_block_h, out_block_w):
+    max_product = 0
+    best_h = 1
+    best_w = 1
+
+    for h in range(1, out_block_h + 1):
+        if out_block_h % h == 0:  # h is a divisor of out_block_h
+            for w in range(1, out_block_w + 1):
+                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                    if h * w > max_product:
+                        max_product = h * w
+                        best_h = h
+                        best_w = w
+    if out_block_w > best_w:
+        best_h = 1
+    return best_h, best_w, max_product
+
+
+def determine_largest_subblock_size(block_height, block_width, fp32_accum=False):
+    subblocks = [
+        (2, 4),
+        (4, 2),
+        (1, 8),
+        (8, 1),
+        (1, 7),
+        (7, 1),
+        (2, 3),
+        (3, 2),
+        (1, 6),
+        (6, 1),
+        (1, 5),
+        (5, 1),
+        (2, 2),
+        (1, 4),
+        (4, 1),
+        (1, 3),
+        (3, 1),
+        (1, 2),
+        (2, 1),
+        (1, 1),
+    ]
+    for subblock_height, subblock_width in subblocks:
+        if fp32_accum and subblock_height * subblock_width > 4:
+            continue
+        if block_height % subblock_height == 0 and block_width % subblock_width == 0:
+            if subblock_width != block_width and subblock_height != 1:
+                continue
+            break
+    return subblock_height, subblock_width

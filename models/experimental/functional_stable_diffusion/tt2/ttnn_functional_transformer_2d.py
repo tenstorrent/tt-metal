@@ -270,7 +270,7 @@ class transformer_2d_model:
                 input_mask=self.norm_input_mask,
                 weight=self.parameters.norm.weight,
                 bias=self.parameters.norm.bias,
-                memory_config=ttnn.L1_MEMORY_CONFIG,  # get_memory_config(hidden_states),
+                memory_config=hidden_states.memory_config(),
                 core_grid=self.group_norm_core_grid,
             )
         hidden_states = ttnn.reshape(

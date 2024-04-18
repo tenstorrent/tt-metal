@@ -47,6 +47,13 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
 
     ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place.golden_function = _golden_function
 
+    def _golden_function(input_tensor, *args, **kwargs):
+        input_tensor = input_tensor.float()
+        ret = torch.softmax(input_tensor, dim=-1)
+        return ret
+
+    ttnn.experimental.operations.primary.softmax_in_place.golden_function = _golden_function
+
     def _golden_function(tensor, starts, stops, *args, **kwargs):
         for dim, (start, stop) in enumerate(zip(starts, stops)):
             tensor = torch.index_select(tensor, dim, torch.arange(start, stop + 1))
@@ -67,8 +74,6 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
     def _nop_golden_function(input_tensor, *args, **kwargs):
         return input_tensor
 
-    ttnn.experimental.tensor.sharded_to_interleaved.golden_function = _nop_golden_function
     ttnn.experimental.tensor.interleaved_to_sharded.golden_function = _nop_golden_function
     ttnn.experimental.tensor.reshard.golden_function = _nop_golden_function
     ttnn.experimental.tensor.tilize.golden_function = _nop_golden_function
-    ttnn.experimental.tensor.sharded_to_interleaved_partial.golden_function = _nop_golden_function
