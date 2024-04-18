@@ -141,7 +141,10 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
             TT_FATAL(input_tensor_a.volume() / (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) == 1, "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            // TODO ...
+            if (output_mem_config.is_sharded()) {
+                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            }
+            // What else?
         } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
             // Minor host code changes required to remove this restriction
