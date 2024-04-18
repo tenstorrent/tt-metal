@@ -664,6 +664,16 @@ class resnet50:
         x = self.layer3_module6(x)
 
         # do reshard before layer4
+        unpadded_shape = x.shape_without_padding()
+        if x.get_legacy_shape() != unpadded_shape:
+            x = ttnn.experimental.tensor.format_output_tensor(
+                x,
+                unpadded_shape,
+                x.device(),
+                x.get_layout(),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, self.layer4_module1.conv1.conv.input_sharded_memory_config)
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)
