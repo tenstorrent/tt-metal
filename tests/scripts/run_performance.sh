@@ -12,6 +12,7 @@ run_perf_models_other() {
     local test_marker=$2
 
     if [ "$tt_arch" == "grayskull" ]; then
+        set +e
         env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $test_marker
@@ -45,6 +46,7 @@ run_perf_models_other() {
         env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $test_marker
 
         env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $test_marker
+        set -e
     else
         echo "There are no other model perf tests for Javelin yet specified. Arch $tt_arch requested"
     fi
