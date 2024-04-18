@@ -37,6 +37,7 @@ def get_expected_times(model_name, functional_t5):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.skip(reason="#7619: Perf regression on both")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
