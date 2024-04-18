@@ -81,15 +81,19 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 
 inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args)
 {
-    detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
+    if (runtime_args.size() != 0) {
+        detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
+    }
 }
 
 
 inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args)
 {
-    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-            SetRuntimeArgs(program, kernel_id, CoreCoord(x,y), runtime_args);
+    if (runtime_args.size() != 0) {
+        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                SetRuntimeArgs(program, kernel_id, CoreCoord(x,y), runtime_args);
+            }
         }
     }
 }
@@ -906,8 +910,9 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
 void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
     TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetCommonRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
-    auto k = detail::GetKernel(program, kernel_id);
-    k->set_common_runtime_args(runtime_args);
+    if (runtime_args.size() != 0) {
+        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+    }
 }
 
 
