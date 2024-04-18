@@ -488,8 +488,9 @@ class SystemMemoryManager {
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id) {
         CoreType dispatch_core_type = dispatch_core_manager::get(this->num_hw_cqs).get_dispatch_core_type(this->device_id);
-        TT_ASSERT(command_size_B <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size(), "Generated prefetcher command exceeds max command size");
-        TT_ASSERT((command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+        uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+        TT_FATAL(command_size_B <= max_command_size_B, "Generated prefetcher command of size {} B exceeds max command size {} B", command_size_B, max_command_size_B);
+        TT_FATAL((command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
 
         if (this->bypass_enable) return;
         uint32_t command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
