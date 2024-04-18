@@ -103,10 +103,6 @@ def run_test_LlamaModel_end_to_end(
     devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
     logger.info(f"Running num_layer: {n_layers}")
 
-    # TODO: Disable for now since program cache is broken
-    # for device in devices:
-    #     device.enable_program_cache()
-
     generator = Llama.build(
         ckpt_dir,
         tokenizer_path,
@@ -299,6 +295,7 @@ def test_Llama_perf_host(
     expected_compile_time,
     expected_inference_time,
     all_devices,
+    # use_program_cache,
     n_layers=80,
     n_devices=8,
     emulated=False,
