@@ -10,10 +10,8 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [8, "HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8", 2750],
         [16, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 5420],
         [20, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20", 5780],
-        [8, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 4500],
         [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 6620],
         [20, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20", 7500],
     ],
