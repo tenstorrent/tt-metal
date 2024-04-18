@@ -283,13 +283,13 @@ class TtLlamaModel_optimized(nn.Module):
                         )
                     )
 
+            padded_layer_past_len = nearest_32(start_pos + 1)
             try:
                 attn_mask_tt = ttnn.load_tensor(cache_file_name(f"attn_mask_decode_{start_pos}", "BFLOAT16", "TILE"))
                 attn_masks = [
                     ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
                 ]
             except (FileNotFoundError, RuntimeError):
-                padded_layer_past_len = nearest_32(start_pos + 1)
                 attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
                 attn_mask = torch.zeros(*attn_mask_shape)
                 attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
