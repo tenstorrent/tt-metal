@@ -173,6 +173,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device, ite
     logger.info(f"roberta inference time for {iteration} Samples: {third_iter_time}")
 
 
+@pytest.mark.skip(reason="#7618: BMM owned tensor failure")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time, iterations",

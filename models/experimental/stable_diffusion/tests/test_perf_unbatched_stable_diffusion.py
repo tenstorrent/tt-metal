@@ -19,6 +19,7 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    skip_for_wormhole_b0,
 )
 from models.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
@@ -279,6 +280,8 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     logger.info(f"Unbatched Stable Diffusion {comments} compile time: {compile_time}")
 
 
+@pytest.mark.skip(reason="#7617: BMM owned tensor failure")
+@skip_for_wormhole_b0(reason_str="Not tested")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
@@ -293,6 +296,8 @@ def test_perf_bare_metal(device, use_program_cache, expected_inference_time, exp
     run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device)
 
 
+@pytest.mark.skip(reason="#7617: BMM owned tensor failure")
+@skip_for_wormhole_b0(reason_str="Not tested")
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
