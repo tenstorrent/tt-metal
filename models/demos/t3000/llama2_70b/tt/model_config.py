@@ -121,6 +121,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "LN_COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,

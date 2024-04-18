@@ -28,10 +28,9 @@ class TtLlamaDecoder_galaxy:
         model_config,
         configuration,
         batch,
+        transformation_mats,
         emulated=False,
-        load_weights=True,
         cache_path=None,
-        kv_cache_dir=None,
     ):
         super().__init__()
 
@@ -80,10 +79,9 @@ class TtLlamaDecoder_galaxy:
             layer_num,
             model_config,
             configuration,
+            transformation_mats,
             emulated=emulated,
-            load_weights=load_weights,
             cache_path=cache_path,
-            kv_cache_dir=kv_cache_dir,
         )
 
         self.mlp = TtLlamaMLP_galaxy(
@@ -94,13 +92,11 @@ class TtLlamaDecoder_galaxy:
             self.hidden_size,
             model_config,
             emulated=emulated,
-            load_weights=load_weights,
             cache_path=cache_path,
         )
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
-        if load_weights:
-            self.load_weights()
+        self.load_weights()
 
     def load_weights(self):
         """
@@ -115,7 +111,6 @@ class TtLlamaDecoder_galaxy:
         self.attn_norm_list = []
         self.ffn_norm_list = []
 
-        # TODO: Weight caching!
         test_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, self.num_devices - 1, self.num_devices)
         if test_cache_path.exists():
             for i in range(self.num_devices):
@@ -153,32 +148,6 @@ class TtLlamaDecoder_galaxy:
                     str(get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)), ffn_norm_host
                 )
                 self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-
-    def free_weights(self):
-        for i in range(self.num_devices):
-            self.attn_norm_list[i].deallocate()
-            self.ffn_norm_list[i].deallocate()
-        del self.attn_norm_list
-        del self.ffn_norm_list
-
-    def free_layer(self):
-        # All epilogue logic
-        self.attention.save_state()
-        self.attention.free_weights()
-        self.mlp.free_weights()
-
-        # Free this layer's weights (RMS norms)
-        self.free_weights()
-
-    def load_layer(self):
-        # All weight loading logic
-        ## Load weights
-        self.attention.load_weights()
-        self.attention.load_state()
-        self.mlp.load_weights()
-
-        # Load this layer's weights (RMS norms)
-        self.load_weights()
 
     def prepare_inputs(self, x, start_pos):
         # Only called by decoder tests
