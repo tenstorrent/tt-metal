@@ -65,6 +65,31 @@ class basic_transformer_block:
         elif use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
+        if hidden_states.memory_config().shard_spec.num_cores() == 64:
+            end_grid = ttnn.experimental.tensor.CoreCoord(7, 7)
+        elif hidden_states.memory_config().shard_spec.num_cores() == 40:
+            end_grid = ttnn.experimental.tensor.CoreCoord(4, 7)
+        elif hidden_states.memory_config().shard_spec.num_cores() == 32:
+            end_grid = ttnn.experimental.tensor.CoreCoord(7, 3)
+        output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), end_grid)}
+        )
+        output_shard_spec = ttnn.experimental.tensor.ShardSpec(
+            output_shard_grid,
+            hidden_states.memory_config().shard_spec.shape,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            output_shard_spec,
+        )
+        hidden_states = ttnn.experimental.tensor.reshard(
+            hidden_states,
+            output_mem_config,
+        )
+
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
         program_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -167,4 +192,30 @@ class basic_transformer_block:
         norm_hidden_states = ttnn.to_memory_config(norm_hidden_states, mem_cfg)
         hidden_states = ttnn.add(norm_hidden_states, hidden_states, memory_config=hidden_states.memory_config())
 
+        if hidden_states.memory_config().shard_spec.num_cores() == 64:
+            end_grid = ttnn.experimental.tensor.CoreCoord(7, 7)
+        elif hidden_states.memory_config().shard_spec.num_cores() == 40:
+            end_grid = ttnn.experimental.tensor.CoreCoord(7, 4)
+        elif hidden_states.memory_config().shard_spec.num_cores() == 32:
+            end_grid = ttnn.experimental.tensor.CoreCoord(3, 7)
+        else:
+            assert False, f"Unsupported number of cores: {hidden_states.memory_config().shard_spec.num_cores()}"
+        output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), end_grid)}
+        )
+        output_shard_spec = ttnn.experimental.tensor.ShardSpec(
+            output_shard_grid,
+            hidden_states.memory_config().shard_spec.shape,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            False,
+        )
+        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            output_shard_spec,
+        )
+        hidden_states = ttnn.experimental.tensor.reshard(
+            hidden_states,
+            output_mem_config,
+        )
         return hidden_states
