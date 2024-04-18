@@ -1,4 +1,5 @@
-# wormhole_b0 only
+echo "Running nightly tests for WH B0 only"
+
 env pytest tests/ttnn/integration_tests/unet                # -> failing: issue #7556
 # env pytest tests/ttnn/integration_tests/stable_diffusion    # -> failing/hanging: issue #7560
 

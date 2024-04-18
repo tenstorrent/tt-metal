@@ -1,3 +1,5 @@
+echo "Running nightly tests for GS only"
+
 env pytest tests/ttnn/integration_tests
 
 env pytest models/experimental/whisper/tests/test_whisper_encoder_layer.py

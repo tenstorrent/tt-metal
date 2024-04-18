@@ -1,3 +1,5 @@
+echo "Running common models for archs"
+
 env pytest models/experimental/whisper/tests/test_whisper_attention.py
 env pytest models/experimental/whisper/tests/test_whisper_decoder_layer.py
 

@@ -19,10 +19,10 @@ jobs:
       matrix:
         test-group:
           [
-            { name: "Common models GS", arch: grayskull, cmd: tests/scripts/nightly/run_models_2.sh },
-            { name: "Common models WH B0", arch: wormhole_b0, cmd: tests/scripts/nightly/run_models_2.sh },
-            { name: "GS-only models and ttnn nightly", arch: grayskull, cmd: tests/scripts/nightly/run_models_1.sh },
-            { name: "WH-only models", arch: wormhole_b0, cmd: tests/scripts/nightly/run_models_3.sh },
+            { name: "Common models GS", arch: grayskull, cmd: tests/scripts/nightly/run_common_models.sh },
+            { name: "Common models WH B0", arch: wormhole_b0, cmd: tests/scripts/nightly/run_common_models.sh },
+            { name: "GS-only models and ttnn nightly", arch: grayskull, cmd: tests/scripts/nightly/run_gs_only.sh },
+            { name: "WH-only models", arch: wormhole_b0, cmd: tests/scripts/nightly/run_wh_b0_only.sh },
             { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast },
             { name: "API tests WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast },
           ]
