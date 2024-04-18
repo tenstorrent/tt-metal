@@ -733,19 +733,10 @@ def register_operation(
     doc=None,
 ):
     if is_cpp_function:
-        will_fallback_to_golden_function_on_failure = (
-            allow_to_fallback_to_golden_function_on_failure and golden_function is not None
-        )
-        if will_fallback_to_golden_function_on_failure:
-            if validate_input_tensors is None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is required for cpp functions with fallbacks"
-                )
-        else:
-            if validate_input_tensors is not None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
-                )
+        if validate_input_tensors is not None:
+            raise RuntimeError(
+                f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
+            )
     else:
         if validate_input_tensors is None:
             raise RuntimeError(f"Registering {name}: validate_input_tensors is required for non-cpp functions")
