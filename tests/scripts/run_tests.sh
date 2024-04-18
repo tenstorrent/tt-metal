@@ -84,6 +84,15 @@ run_eager_package_end_to_end_pipeline_tests() {
     env pytest -c conftest.py . -m $pipeline_type
 }
 
+run_frequent_models_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    echo "This pipeline should not be used anymore, and instead use tests/scripts/nightly. Dying"
+    exit 1
+}
+
 run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
