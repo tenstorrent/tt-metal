@@ -68,7 +68,8 @@ def get_expected_times(bert):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("sequence_size", [384])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert])
+# Removed ttnn_bert from bert versions, as I'm unsure if we actually care about non-optimized versions.
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_optimized_sharded_bert])
 def test_performance(device, use_program_cache, model_name, sequence_size, bert):
     disable_persistent_kernel_cache()
 
