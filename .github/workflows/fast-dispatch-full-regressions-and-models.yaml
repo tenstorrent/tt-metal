@@ -124,3 +124,42 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           tests/scripts/nightly/run_models_3.sh
+  fd-frequent-api-tests:
+    needs: build-artifact
+    name: ${{ matrix.frequent-type }} ${{ matrix.arch }} tests
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull, wormhole_b0]
+        frequent-type: [api]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ci
+      LOGURU_LEVEL: INFO
+    runs-on: model-runner-${{ matrix.arch }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run frequent reg tests scripts
+        timeout-minutes: 75
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
