@@ -516,6 +516,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Ten
 namespace tt {
 namespace tt_metal {
 
+    /*
 void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -538,7 +539,9 @@ void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vecto
         TT_FATAL(this->output_dtype == DataType::BFLOAT16);
     }
 }
+*/
 
+/*
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto input_shape_a = input_tensors.at(0).get_legacy_shape();
     const auto input_shape_b = input_tensors.at(1).get_legacy_shape();
@@ -553,12 +556,16 @@ std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& inpu
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
     return {Shape(output_shape, padding)};
 }
+*/
 
+/*
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
+*/
 
+/*
 operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -614,7 +621,9 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
     }
 
 }
+*/
 
+/*
 operation::OpPerformanceModel Matmul::create_op_performance_model(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -622,9 +631,12 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
     ) const {
         return ::create_op_performance_model_for_matmul(input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config);
 }
+*/
+/*
 MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
+*/
 
 /**
  * Bert large matmuls using operations::primary::matmul + program_config
@@ -792,7 +804,7 @@ Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &i
         TT_FATAL((input_tensor_a.get_legacy_shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
         TT_FATAL((input_tensor_b.get_legacy_shape() == Shape({1, 1, 4544, 18176})), "Unsupported input shape");
         TT_FATAL(!fused_activation.has_value());
-        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+        return operation::run_with_autoformat(tt::operations::primary::Matmul{.program_config=tt::operations::primary::MatmulDefaultProgramConfig{}, .bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}).at(0);
     } else {
         CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
         auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded(), grid_size);
@@ -816,7 +828,7 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
                 TT_FATAL(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
                 TT_FATAL((input_tensor_a.get_legacy_shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
                 TT_FATAL((input_tensor_b.get_legacy_shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
-                return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}, {bias});
+                return operation::run_with_autoformat(tt::operations::primary::Matmul{.program_config=tt::operations::primary::MatmulDefaultProgramConfig{}, .bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}, {bias});
             },
         {input_tensor_a, input_tensor_b}, output_tensors, {bias});
 
@@ -1223,6 +1235,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulDefaultProgramConfig>) {
                 auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensors);
+		MatmulMultiCoreReuseMultiCast1DProgramConfig config;
                 switch (parallelization_strategy){
                     case MatmulParallelizationStrategy::MULTI_CORE:
                         return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
@@ -1239,23 +1252,33 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
+			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
                             input_tensor_a.device()->compute_with_storage_grid_size(),
                             this->compute_kernel_config,
+			    /*
                             2, 4, 2,
                             16, 16, false, std::nullopt, true,
+			    */
+			    config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
+			    config.per_core_M, config.per_core_N, false, std::nullopt, true,
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
+			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, false, false);
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
                             input_tensor_a.device()->compute_with_storage_grid_size(),
                             this->compute_kernel_config,
+			    /*
                             2, 4, 2,
                             16, 16, false, std::nullopt, false,
+			    */
+			    config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
+			    config.per_core_M, config.per_core_N, false, std::nullopt, false,
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
@@ -1266,7 +1289,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                 }
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-                broadcast_batch &= input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] > 1;
+                //broadcast_batch &= input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] > 1;
                 return bmm_multi_core_reuse_optimized(
                     input_tensor_a, input_tensor_b, output_tensor,
                     broadcast_batch,
