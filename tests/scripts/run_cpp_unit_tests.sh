@@ -14,7 +14,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
 else
     ./build/test/tt_metal/unit_tests_fast_dispatch
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
-        WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="-*WatcherFixture.*:*DPrintFixture.*:*DPrintErrorChecking.*:*DPrintFixtureDisableDevices.*"
+        WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/tt_metal/unit_tests_fast_dispatch
     fi
     env python tests/scripts/run_tt_eager.py --dispatch-mode fast
     env python tests/scripts/run_tt_metal.py --dispatch-mode fast
