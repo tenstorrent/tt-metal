@@ -330,8 +330,6 @@ class TtFalconAttention:
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                     grid=ttnn.CoreGrid(x=8, y=4) if q_len >= 512 else ttnn.CoreGrid(x=8, y=1),
                     transpose_mcast=True,
-                    overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
-                    overwrite_subblock_h=1,
                 )
             )
 
