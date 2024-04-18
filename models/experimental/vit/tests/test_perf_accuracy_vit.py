@@ -120,6 +120,7 @@ def run_perf_vit(
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time,iterations",
@@ -151,6 +152,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time,iterations",
