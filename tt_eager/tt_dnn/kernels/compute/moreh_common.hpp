@@ -385,7 +385,7 @@ ALWI void reduce_tile_to_cb(
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile(reduce_op, dim, icb0, icb1, x, bcast_scaler0, dst0);
+        reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
     }
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -649,7 +649,7 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile(reduce_op, dim, icb0, icb1, x, bcast_scaler0, dst0);
+        reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
     }
     if (pop0)
         cb_pop_front(icb0, pop0);
