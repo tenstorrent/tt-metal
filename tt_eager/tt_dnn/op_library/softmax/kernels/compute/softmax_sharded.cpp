@@ -142,7 +142,7 @@ void MAIN {
         cb_reserve_back(cb_recipsumexps, 1);
         for (uint32_t w = 0; w < block_w; w++) {
             constexpr uint32_t bcast_scaler0 = 0;
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
+            reduce_tile(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
         }
         reduce_revert_delta();
         recip_tile_init();

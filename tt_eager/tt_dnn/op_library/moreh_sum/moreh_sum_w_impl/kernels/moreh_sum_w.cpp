@@ -54,7 +54,7 @@ void MAIN {
                     cb_wait_front(cb_input, onetile);
 
                     reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-                    reduce_tile(REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     reduce_revert_delta();
 
                     cb_pop_front(cb_input, onetile);
@@ -92,7 +92,7 @@ void MAIN {
             }
 
             reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             reduce_revert_delta();
 
             cb_reserve_back(cb_out, onetile);

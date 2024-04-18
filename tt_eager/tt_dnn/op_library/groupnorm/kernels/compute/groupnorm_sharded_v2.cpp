@@ -221,7 +221,7 @@ void MAIN {
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
                     uint32_t index = index_h_offset + w;
-                    reduce_tile(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, index, scaler0, dst0);
+                    reduce_tile(cb_x, cb_scaler, index, scaler0, dst0);
                 }
                 index_h_offset += block_w;
             }
@@ -239,7 +239,7 @@ void MAIN {
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
                 tile_regs_commit();
                 tile_regs_wait();
@@ -339,7 +339,7 @@ void MAIN {
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
                     uint32_t index = index_h_offset + w;
-                    reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm, cb_scaler, index, scaler0, dst0);
+                    reduce_tile(cb_xmm, cb_scaler, index, scaler0, dst0);
                 }
                 index_h_offset += block_w;
             }
@@ -358,7 +358,7 @@ void MAIN {
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
                 tile_regs_commit();
                 tile_regs_wait();

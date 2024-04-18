@@ -32,7 +32,7 @@ void MAIN {
 
         ACQ();
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-        reduce_tile(REDUCE_OP, REDUCE_DIM, cb_tmp_weight, cb_one, 0, 0, dst0);
+        reduce_tile(cb_tmp_weight, cb_one, 0, 0, dst0);
         pack_tile(dst0, cb_output);
         reduce_revert_delta();
         REL();
