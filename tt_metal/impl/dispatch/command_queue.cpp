@@ -304,42 +304,65 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
 
     vector<DeviceCommand> runtime_args_command_sequences;
 
+    CoreType dispatch_core_type = dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+
+    auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast){
+        uint32_t sub_cmd_sizeB = is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+        uint32_t aligned_runtime_data_sizeB = num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+        return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+    };
+
     // Unicast unique runtime args per core.
     for (const auto& [dst, transfer_info] : program.program_transfer_info.unicast_runtime_args) {
-
         uint32_t num_packed_cmds = transfer_info.size();
-        uint32_t runtime_args_len = transfer_info[0].data.size();
+        uint32_t packed_cmd_idx = 0;
+        while (packed_cmd_idx < num_packed_cmds) {
+            uint32_t runtime_args_len = transfer_info[packed_cmd_idx].data.size();
 
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
-        uint32_t aligned_runtime_data_sizeB = 0;
-        for (int i = 0; i < num_packed_cmds; i++) {
-            TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
-            runtime_args_len = std::max(runtime_args_len, (uint32_t)transfer_info[i].data.size());
+            uint32_t num_packed_cmds_in_seq = 0;
+
+            for (int i = packed_cmd_idx; i < num_packed_cmds; i++) {
+                TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
+                uint32_t max_runtime_args_len = std::max(runtime_args_len, (uint32_t)transfer_info[i].data.size());
+                uint32_t next_cmd_sequence_sizeB = align(
+                    sizeof(CQPrefetchCmd) + get_runtime_payload_sizeB(num_packed_cmds_in_seq + 1, max_runtime_args_len, true), PCIE_ALIGNMENT);
+
+
+                if (next_cmd_sequence_sizeB > max_prefetch_command_size) {
+                    // If we hit this, then we send multiple write packed commands for each RT dst.
+                    // TODO: Revisit RT arg command sequence construction to be more performant
+                    break;
+                }
+                runtime_args_len = max_runtime_args_len;
+                num_packed_cmds_in_seq++;
+            }
+
+            uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds_in_seq, runtime_args_len, true);
+            uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
+            DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+            std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
+            std::vector<const void *> rt_data_and_sizes;
+
+            for (int i = packed_cmd_idx; i < (packed_cmd_idx + num_packed_cmds_in_seq); i++) {
+                unicast_sub_cmds.emplace_back(
+                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = transfer_info[i].dst_noc_info[0].first});
+                rt_data_and_sizes.emplace_back(transfer_info[i].data.data());
+            }
+
+            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                num_packed_cmds_in_seq,
+                dst,
+                runtime_args_len * sizeof(uint32_t),
+                rt_payload_sizeB,
+                unicast_sub_cmds,
+                rt_data_and_sizes);
+            runtime_args_command_sequences.emplace_back(command_sequence);
+
+            packed_cmd_idx += num_packed_cmds_in_seq;
         }
-        aligned_runtime_data_sizeB += num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
-
-        uint32_t rt_payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
-        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
-
-        DeviceCommand command_sequence(cmd_sequence_sizeB);
-
-        std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-        std::vector<const void *> rt_data_and_sizes;
-
-        for (int i = 0; i < num_packed_cmds; i++) {
-            unicast_sub_cmds.emplace_back(
-                CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = transfer_info[i].dst_noc_info[0].first});
-            rt_data_and_sizes.emplace_back(transfer_info[i].data.data());
-        }
-
-        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-            num_packed_cmds,
-            dst,
-            runtime_args_len * sizeof(uint32_t),
-            rt_payload_sizeB,
-            unicast_sub_cmds,
-            rt_data_and_sizes);
-        runtime_args_command_sequences.emplace_back(command_sequence);
     }
 
     // Muticast common runtime args (shared by all cores)
@@ -354,10 +377,8 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
             }
         }
 
-        uint32_t aligned_runtime_data_sizeB = align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) * num_packed_cmds;
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
-        uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
-        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) +  mcast_payload_sizeB, PCIE_ALIGNMENT);
+        uint32_t mcast_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, runtime_args_len, false);
+        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
 
         DeviceCommand command_sequence(cmd_sequence_sizeB);
 
