@@ -444,8 +444,14 @@ inline Tensor to_device(
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if (memory_config.is_sharded()) {
         auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
-        std::array<uint32_t, 2> tensor2d_size = {
-            shape[0] * shape[1] * shape[2] / page_shape[0], shape[3] / page_shape[1]};
+
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
+
+        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
     }
 
