@@ -153,10 +153,21 @@ namespace tt::tt_metal::detail
         py::arg("input").noconvert(),
         py::arg("num_q_heads").noconvert(),
         py::arg("num_kv_heads").noconvert() = std::nullopt,
-        py::arg("transpose_k_heads").noconvert() = false, // change this to true when the transposed impl is done
+        py::arg("transpose_k_heads").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         Splits a [B, 1, Seq_len, H] fused qkv matrix (where H is num_kv_heads * (num_q_heads/num_kv_heads + 2) * head_dim) into a Q tensor [B, num_q_heads, Seq_len, head_dim], K tensor [B, num_kv_heads, Seq_len, head_dim] (with the last two dims transposed if applicable) and V tensor [B, num_kv_heads, Seq_len, head_dim].
+        )doc");
+
+        m_tensor.def("create_qkv_heads_from_separate_tensors", &create_qkv_heads_from_separate_tensors,
+        py::arg("input_q").noconvert(),
+        py::arg("input_kv").noconvert(),
+        py::arg("num_q_heads").noconvert(),
+        py::arg("num_kv_heads").noconvert() = std::nullopt,
+        py::arg("transpose_k_heads").noconvert() = false,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        Splits a [B, 1, Seq_len, H] q matrix and fused kv matrix (where H is num_q_heads * head_dim for q and num_kv_heads * head_dim * 2 for kv) into a Q tensor [B, num_q_heads, Seq_len, head_dim], K tensor [B, num_kv_heads, Seq_len, head_dim] (with the last two dims transposed if applicable) and V tensor [B, num_kv_heads, Seq_len, head_dim].
         )doc");
     }
 
