@@ -107,31 +107,44 @@ def test_performance(device, use_program_cache, model_name, sequence_size, bert)
         device=device,
     )
 
-    durations = []
+    ttnn_bert_inputs_on_cpu = preprocess_inputs(
+        input_ids,
+        torch_token_type_ids,
+        position_ids,
+        torch_attention_mask,
+    )
+
+    start = time.time()
+    ttnn_bert_inputs = [
+        ttnn.to_device(tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG) if tensor is not None else tensor
+        for tensor in ttnn_bert_inputs_on_cpu
+    ]
+    tt_output = bert.bert_for_question_answering(
+        config,
+        *ttnn_bert_inputs,
+        parameters=parameters,
+    )
+    tt_output = ttnn.from_device(tt_output, blocking=True)
+    ttnn.synchronize_device(device)
+    end = time.time()
+    inference_and_compile_time = end - start
+    enable_persistent_kernel_cache()
+
+    start = time.time()
     for _ in range(num_iterations):
-        ttnn_bert_inputs = preprocess_inputs(
-            input_ids,
-            torch_token_type_ids,
-            position_ids,
-            torch_attention_mask,
-        )
-        start = time.time()
         ttnn_bert_inputs = [
             ttnn.to_device(tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG) if tensor is not None else tensor
-            for tensor in ttnn_bert_inputs
+            for tensor in ttnn_bert_inputs_on_cpu
         ]
         tt_output = bert.bert_for_question_answering(
             config,
             *ttnn_bert_inputs,
             parameters=parameters,
         )
-        tt_output = ttnn.from_device(tt_output)
-        end = time.time()
-        durations.append(end - start)
-        enable_persistent_kernel_cache()
-
-    inference_and_compile_time, *inference_times = durations
-    average_inference_time = sum(inference_times) / len(inference_times)
+        tt_output = ttnn.from_device(tt_output, blocking=True)
+    ttnn.synchronize_device(device)
+    end = time.time()
+    average_inference_time = (end - start) / num_iterations
 
     expected_compile_time, expected_inference_time = get_expected_times(bert)
     prep_perf_report(
@@ -146,6 +159,5 @@ def test_performance(device, use_program_cache, model_name, sequence_size, bert)
     )
 
     logger.info(f"Compile time: {inference_and_compile_time - average_inference_time}")
-    logger.info(f"Inference times: {inference_times}")
     logger.info(f"Average Inference time: {average_inference_time}")
     logger.info(f"Samples per second: {1 / average_inference_time * batch_size}")
