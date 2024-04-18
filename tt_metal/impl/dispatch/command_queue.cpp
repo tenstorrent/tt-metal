@@ -118,6 +118,7 @@ void EnqueueReadBufferCommand::process() {
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
     if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
         this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
     }
 
     this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
@@ -685,6 +686,7 @@ void EnqueueProgramCommand::process() {
         uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
         if (write_ptr + align(total_fetch_size_bytes, 32) > command_issue_limit) {
             this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         }
 
         write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
@@ -710,6 +712,7 @@ void EnqueueProgramCommand::process() {
         uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
         if (write_ptr + align(preamble_fetch_size_bytes, 32) > command_issue_limit) {
             this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         }
 
         this->manager.cq_write(preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
@@ -728,6 +731,7 @@ void EnqueueProgramCommand::process() {
             uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
             if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
                 this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+                write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             }
 
             this->manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
@@ -743,6 +747,7 @@ void EnqueueProgramCommand::process() {
         command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
         if (write_ptr + align(program_fetch_size_bytes, 32) > command_issue_limit) {
             this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         }
 
         this->manager.cq_write(program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
@@ -864,6 +869,12 @@ void EnqueueWaitForEventCommand::process() {
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    // Wrap issue queue
+    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
+        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    }
     this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
     this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
     this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
@@ -913,6 +924,12 @@ void EnqueueTraceCommand::process() {
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    // Wrap issue queue
+    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
+    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
+        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
+        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    }
     this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
     this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
     this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
