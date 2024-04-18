@@ -469,39 +469,19 @@ def concatenate_heads(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     """
-    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
 
     Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`memory_config`: Memory Config of the output tensor
+        * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
 
     """
-    batch_size, num_heads, sequence_size, head_size = input_tensor.shape
-    batch_size, num_heads, padded_sequence_size, padded_head_size = input_tensor.shape.with_tile_padding()
-
-    if head_size % ttnn.TILE_SIZE != 0:
-        raise RuntimeError(
-            f"Head size must be a multiple of {ttnn.TILE_SIZE}! Update matmul that uses the output of this operation to have the padding in the weights!"
-        )
-
-    if padded_head_size - head_size != 0:
-        raise RuntimeError("Head size cannot have tile padding!")
-
-    output_tensor = ttl.tensor.nlp_concat_heads(
+    return ttnn._ttnn.operations.transformer.concatenate_heads(
         input_tensor,
         memory_config,
     )
-    output_tensor = ttnn.reshape(
-        output_tensor,
-        ttnn.Shape(
-            (batch_size, sequence_size, num_heads * head_size),
-            (batch_size, padded_sequence_size, num_heads * padded_head_size),
-        ),
-    )
-
-    return output_tensor
 
 
 def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):
