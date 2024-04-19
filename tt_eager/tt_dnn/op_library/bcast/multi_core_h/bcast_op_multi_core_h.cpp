@@ -24,14 +24,8 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
-    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
-    uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
-    uint32_t H = ashape[-2];
-    uint32_t W = ashape[-1];
-    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
-    uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
+    uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
+    uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
     uint32_t NC = N*C;
     uint32_t HW = H*W;
 
@@ -201,18 +195,12 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 
 		const auto ashape = input_tensors.at(0).get_legacy_shape();
 		const auto bshape = input_tensors.at(1).get_legacy_shape();
-        uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
-        uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
-        uint32_t H = ashape[-2];
-        uint32_t W = ashape[-1];
-        uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
-        uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-        uint32_t bH = bshape[-2];
-        uint32_t bW = bshape[-1];
-        uint32_t NC = N * C;
-        uint32_t HW = H * W;
+		uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
+		uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+		uint32_t NC = N*C;
+		uint32_t HW = H*W;
 
-        uint32_t Wt = W/TILE_WIDTH;
+		uint32_t Wt = W/TILE_WIDTH;
 		uint32_t Ht = H/TILE_HEIGHT;
 
 		uint32_t num_tensor_tiles = NC*Ht*Wt;

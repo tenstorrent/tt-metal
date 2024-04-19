@@ -13,15 +13,29 @@ namespace ttnn {
 
 namespace validation {
 
+using TensorToValidate = std::variant<ttnn::Tensor, int, float>;
+
 static void validate_input_tensor(
-    const std::string& operation_name,
-    const std::optional<ttnn::Tensor>& optional_tensor,
+    const char* operation_name,
+    const std::optional<TensorToValidate>& optional_tensor_to_validate,
     const TensorSchema& input_schema) {
-    if (input_schema.is_optional && not optional_tensor.has_value()) {
+    if (input_schema.is_optional && not optional_tensor_to_validate.has_value()) {
         return;
     }
 
-    const auto& tensor = optional_tensor.value();
+    const auto& tensor_to_validate = optional_tensor_to_validate.value();
+
+    if (input_schema.can_be_a_scalar) {
+        if (std::holds_alternative<int>(tensor_to_validate) or std::holds_alternative<float>(tensor_to_validate)) {
+            return;
+        }
+    }
+
+    if (not std::holds_alternative<ttnn::Tensor>(tensor_to_validate)) {
+        TT_THROW("{}: Tensor must be of type ttnn.Tensor, but got {}", operation_name, tensor_to_validate.index());
+    }
+
+    const auto& tensor = std::get<ttnn::Tensor>(tensor_to_validate);
 
     if (tensor.get_shape().rank() < input_schema.min_rank or tensor.get_shape().rank() > input_schema.max_rank) {
         TT_THROW(

@@ -7,8 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/core.hpp"
-
 namespace py = pybind11;
 
 namespace ttnn {
