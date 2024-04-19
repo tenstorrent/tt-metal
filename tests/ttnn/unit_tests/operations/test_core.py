@@ -268,6 +268,23 @@ def test_reshard(
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
         ),
+        # only direct transfers for this size work, there is an interleaved_to_sharded and sharded_to_interleaved bug
+        # Issue: 7725
+        (
+            [1, 1, 8192, 512],
+            [320, 1024],
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+        ),
     ],
 )
 def test_shard_with_corerangeset(device, input_shape, input_shard_shape, input_sharded_memory_config_args):

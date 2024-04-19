@@ -606,7 +606,9 @@ std::vector<uint32_t> Tensor::host_page_ordering(){
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id]);
+        if(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].has_value()) {
+            ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].value());
+        }
     }
     return ret_vec;
 }
@@ -663,6 +665,8 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
+
+
 
 Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
