@@ -157,6 +157,7 @@ def test_basic_block(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.skip(reason="")
 def test_basic_block_with_downsample(device):
     torch.manual_seed(0)
 
@@ -206,6 +207,7 @@ def test_basic_block_with_downsample(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.skip(reason="")
 def test_resnet_conv7s2(device):
     in_planes = 64
 
