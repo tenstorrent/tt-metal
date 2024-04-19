@@ -97,12 +97,12 @@ def run_test_LlamaModel_stress_test(
 
     logger.info("Starting stress test...")
     # enable_persistent_kernel_cache()
-    for stress_test_iteration in tqdm(range(100), desc="Stress Test Progress"):
+    for stress_test_iteration in tqdm(range(3), desc="Stress Test Progress", colour="blue"):
         tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, num_users, total_len)
 
         start_pos = 0
         prev_pos = start_pos
-        for cur_pos in range(start_pos + 1, total_len):
+        for cur_pos in tqdm(range(start_pos + 1, total_len), desc="Decode to 2k Progress", leave=False, colour="green"):
             tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
             tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, attn_mask)
             del tt_inp_emb, rot_mat, attn_mask
@@ -119,7 +119,6 @@ def run_test_LlamaModel_stress_test(
 
             tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
 
-    # At the end of stress testing
     logger.info("Completed all stress test iterations.")
 
 
