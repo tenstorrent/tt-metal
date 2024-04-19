@@ -386,7 +386,7 @@ def attention_softmax(
     return output_tensor
 
 
-attention_softmax_docstring = r"""
+doc = r"""
 attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(),  memory_config: Optional[ttnn.MemoryConfig] = input_tensor.memory_config()) -> ttnn.Tensor
 
 In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
@@ -403,7 +403,7 @@ attention_softmax_ = ttnn.register_operation(
     name="ttnn.transformer.attention_softmax_",
     golden_function=_golden_function,
     is_cpp_function=True,
-    doc=attention_softmax_docstring,
+    doc=doc,
 )(ttnn._ttnn.operations.transformer.attention_softmax_)
 
 
@@ -419,7 +419,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-concatenate_heads_docstring = r"""
+doc = r"""
 concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
 
 Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
@@ -430,7 +430,7 @@ Args:
 """
 
 concatenate_heads = ttnn.register_operation(
-    name="ttnn.add", golden_function=_golden_function, is_cpp_function=True, doc=concatenate_heads_docstring
+    name="ttnn.transformer.concatenate_heads", golden_function=_golden_function, is_cpp_function=True, doc=doc
 )(ttnn._ttnn.operations.transformer.concatenate_heads)
 
 
