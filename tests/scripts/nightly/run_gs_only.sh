@@ -7,9 +7,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-echo "Running nightly tests for GS only"
-
-env pytest tests/ttnn/integration_tests
+echo "Running model nightly tests for GS only"
 
 env pytest models/experimental/whisper/tests/test_whisper_encoder_layer.py
 env pytest models/experimental/whisper/tests/test_whisper_encoder.py
