@@ -464,18 +464,8 @@ class HWCommandQueue {
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
 
-    void record_begin(std::shared_ptr<detail::TraceDescriptor> ctx) {
-        // Issue event as a barrier and a counter reset
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event, true);
-        // Record commands using bypass mode
-        this->trace_ctx = ctx;
-        this->manager.set_bypass_mode(true, true);  // start
-    }
-
-    void record_end() {
-        this->manager.set_bypass_mode(false, false);  // stop
-    }
+    void record_begin(std::shared_ptr<detail::TraceDescriptor> ctx);
+    void record_end();
 
     // Record all commands and metadata from run_commands function
     template <typename Func>
