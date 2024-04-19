@@ -21,16 +21,6 @@
 namespace tt {
 namespace stl {
 
-template <typename T>
-std::string get_type_name() {
-    return boost::core::demangle(typeid(T).name());
-}
-
-template <typename T>
-std::string get_type_name(const T& object) {
-    return get_type_name<T>();
-}
-
 // Forward Declare hash_object
 namespace hash {
 
@@ -256,7 +246,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
         os << object.to_string();
     } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
         constexpr auto num_attributes = detail::get_num_attributes<T>();
-        os << get_type_name<T>();
+        os << boost::core::demangle(typeid(T).name());
         os << "(";
 
         if constexpr (num_attributes > 0) {
@@ -282,7 +272,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
         os << ")";
     } else if constexpr (detail::supports_runtime_time_attributes_v<T>) {
         static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
-        os << get_type_name<T>();
+        os << boost::core::demangle(typeid(T).name());
         os << object.attributes();
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Type cannot be converted to string");
@@ -498,7 +488,7 @@ constexpr bool is_specialization_v = is_specialization<Test, Ref>::value;
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-        fmt::print("Hashing std::array<{}, {}>: {}\n", get_type_name<T>(), N, array);
+        fmt::print("Hashing std::array<{}, {}>: {}\n", boost::core::demangle(typeid(T).name()), N, array);
     }
     std::size_t hash = 0;
     [&array, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
@@ -524,12 +514,12 @@ template <typename T>
 inline hash_t hash_object(const T& object) noexcept {
     if constexpr (std::numeric_limits<T>::is_integer) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing integer of type {}: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing integer of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         return object;
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing {} using std::hash: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         return std::hash<T>{}(object);
     } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attributes>) {
@@ -543,12 +533,15 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (tt::stl::reflection::detail::supports_to_hash_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using to_hash method: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing struct {} using to_hash method: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         return object.to_hash();
     } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
+            fmt::print(
+                "Hashing struct {} using compile-time attributes: {}\n",
+                boost::core::demangle(typeid(T).name()),
+                object);
         }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         std::size_t hash = hash_objects(0, typeid(T).hash_code());
@@ -564,12 +557,13 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using run-time attributes: {}\n", get_type_name<T>(), object);
+            fmt::print(
+                "Hashing struct {} using run-time attributes: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         return hash_objects(0, typeid(T).hash_code(), object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing std::vector of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         auto hash = 0;
         for (const auto& element : object) {
@@ -578,7 +572,7 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (detail::is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing std::set of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         auto hash = 0;
         for (const auto& element : object) {
@@ -587,7 +581,7 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (detail::is_specialization_v<T, std::optional>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::optional of type {}: {}\n", get_type_name<T>(), object);
+            fmt::print("Hashing std::optional of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         if (object.has_value()) {
             return hash_object(object.value());

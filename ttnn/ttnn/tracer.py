@@ -174,9 +174,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         shapes = tuple(tensor.shape for tensor in output_tensors)
         dtypes = tuple(tensor.dtype for tensor in output_tensors)
         layouts = tuple(tensor.layout for tensor in output_tensors)
-        memory_configs = tuple(
-            ttnn.get_memory_config(tensor) if isinstance(tensor, ttnn.Tensor) else None for tensor in output_tensors
-        )
+        memory_configs = tuple(ttnn.get_memory_config(tensor) for tensor in output_tensors)
 
         unique_id = torchtrail.tracer.get_unique_id()
         node_name = f"{pretty_operation_name}_{unique_id}"
