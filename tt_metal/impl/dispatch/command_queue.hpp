@@ -369,7 +369,7 @@ struct IssuedReadData {
     TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
-    vector<uint32_t> dev_page_to_host_page_mapping;
+    vector<std::optional<uint32_t> > dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
