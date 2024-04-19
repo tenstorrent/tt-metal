@@ -1649,6 +1649,20 @@ volatile bool HWCommandQueue::is_noc_hung() {
     return illegal_noc_txn_hang;
 }
 
+void HWCommandQueue::record_begin(std::shared_ptr<detail::TraceDescriptor> ctx) {
+    // Issue event as a barrier and a counter reset
+    std::shared_ptr<Event> event = std::make_shared<Event>();
+    this->enqueue_record_event(event, true);
+    // Record commands using bypass mode
+    this->trace_ctx = ctx;
+    this->manager.set_bypass_mode(true, true);  // start
+}
+
+void HWCommandQueue::record_end() {
+    this->trace_ctx = nullptr;
+    this->manager.set_bypass_mode(false, false);  // stop
+}
+
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id);
