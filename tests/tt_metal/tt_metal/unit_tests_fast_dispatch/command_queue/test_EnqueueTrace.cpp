@@ -284,7 +284,7 @@ TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommandViaDevice) {
     }
 }
 
-TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
+TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -324,13 +324,12 @@ TEST_F(CommandQueueFixture, EnqueueTraceProgramCommand) {
     Finish(command_queue);
 }
 
-TEST_F(CommandQueueFixture, EnqueueTraceProgramCommandViaDevice) {
+TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue();
 
-    Program simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -341,20 +340,31 @@ TEST_F(CommandQueueFixture, EnqueueTraceProgramCommandViaDevice) {
     vector<uint32_t> trace_output_data;
     trace_output_data.resize(input_data.size());
 
-    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
-    EnqueueProgram(command_queue, simple_program, true);
-    EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
-
-    EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+    bool has_eager = true;
+    // EAGER MODE EXECUTION
+    if (has_eager) {
+        Program simple_program = create_simple_unary_program(input, output);
+        EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
+        EnqueueProgram(command_queue, simple_program, true);
+        EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
+    }
 
     // DEVICE CAPTURE AND REPLAY MODE
-    detail::BeginTraceCapture(this->device_);
-    EnqueueProgram(command_queue, simple_program, false);
-    detail::EndTraceCapture(this->device_);
+    bool has_trace = false;
+    for (int i = 0; i < 1; i++) {
+        EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
 
-    detail::ExecuteLastTrace(this->device_, true);
-    EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
-    EXPECT_TRUE(eager_output_data == trace_output_data);
+        if (!has_trace) {
+            detail::BeginTraceCapture(this->device_);
+            EnqueueProgram(command_queue, std::make_shared<Program>(create_simple_unary_program(input, output)), true);
+            detail::EndTraceCapture(this->device_);
+            has_trace = true;
+        }
+        detail::ExecuteLastTrace(this->device_, true);
+
+        EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
+        if (has_eager) EXPECT_TRUE(eager_output_data == trace_output_data);
+    }
 
     // Done
     Finish(command_queue);

@@ -116,11 +116,10 @@ uint32_t Trace::instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor
 
     vector<uint32_t> data = cmds;
     // Add command to terminate the trace buffer
-    CQPrefetchCmd cmd;
-    cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
-    uint32_t* ptr = (uint32_t*)&cmd;
-    for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
-        data.push_back(*ptr++);
+    DeviceCommand command_sequence(CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+    command_sequence.add_prefetch_exec_buf_end();
+    for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
+        data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
 
     uint64_t unpadded_size = data.size() * sizeof(uint32_t);
