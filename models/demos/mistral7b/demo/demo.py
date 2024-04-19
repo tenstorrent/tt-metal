@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
 import json
+from time import time
 from loguru import logger
 import ttnn
 from models.demos.mistral7b.tt.mistral_common import (
@@ -15,6 +17,7 @@ from models.demos.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.mistral7b.tt.mistral_embedding import TtMistralEmbedding
 from models.demos.mistral7b.tt.model_config import TtModelArgs
 from models.demos.mistral7b.reference.tokenizer import Tokenizer
+from models.utility_functions import enable_persistent_kernel_cache
 
 
 class Emb(torch.nn.Module):
@@ -84,8 +87,9 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
 def run_mistral_demo(user_input, batch_size, device):
     assert batch_size == 32, "Batch size must be 32"
 
+    # enable_persistent_kernel_cache()
     instruct_mode = True
-
+    embed_on_device = False
     dtype = ttnn.bfloat8_b
 
     logger.info(f"Reading inputs...")
@@ -97,9 +101,6 @@ def run_mistral_demo(user_input, batch_size, device):
     # Load model args, weights, and tokenizer
     # Specify model_base_path=<MISTRAL_WEIGHTS_PATH> below to use your own weights
     model_args = TtModelArgs(device, instruct=instruct_mode)  # TtModelArgs(model_base_path=<weights_path>)
-
-    model_args.n_layers = 32
-
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -123,7 +124,6 @@ def run_mistral_demo(user_input, batch_size, device):
     users_decoding = True
 
     # Preprocess initial prompt inputs
-
     tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
@@ -143,7 +143,6 @@ def run_mistral_demo(user_input, batch_size, device):
         rot_mat=rot_emb_matrix_list,
         start_pos=generation_start_pos,
     )
-    # Load TTNN embedding module
     tt_embd = TtMistralEmbedding(
         device=device,
         args=model_args,
@@ -160,6 +159,7 @@ def run_mistral_demo(user_input, batch_size, device):
     iteration = 0
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     while users_decoding:
+        iteration_time_start = time()
         curr_pos = generation_start_pos + iteration
 
         # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
@@ -210,17 +210,27 @@ def run_mistral_demo(user_input, batch_size, device):
                     if all(user_done):
                         users_decoding = False
 
-        # Embedding on device
-        # TODO send tensor to host can be remove when argmax on device is working
-        tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_decode_input = tt_embd(tt_out_tok)
+        if embed_on_device:
+            tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tt_decode_input = tt_embd(tt_out_tok)
+        else:
+            tt_decode_input = embd(tt_out_tok)
 
         # Print out generated outputs for each user at the end of every iteration
+        iteration_time = time() - iteration_time_start
+        tokens_per_second_per_user = 1 / iteration_time
         if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
         else:
             for user in range(batch_size):
-                logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                if len(text) > 100:
+                    text = "..." + text[-97:]
+                text = text.replace("\n", " ")
+                logger.info("[User {}] {}".format(user, text))
+        logger.info(
+            f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+        )
 
         iteration += 1
 
