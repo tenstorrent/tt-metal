@@ -1656,6 +1656,10 @@ op_map = {
         "tt_lib_op": ttnn_ops.global_avg_pool2d,
         "pytorch_op": pytorch_ops.global_avg_pool2d,
     },
+    "ttnn-max-pool2d": {
+        "tt_lib_op": ttnn_ops.max_pool2d_tt,
+        "pytorch_op": pytorch_ops.max_pool2d,
+    },
     "ttnn-upsample": {
         "tt_lib_op": ttnn_ops.upsample,
         "pytorch_op": pytorch_ops.upsample,
