@@ -32,7 +32,9 @@ void py_module(py::module& module) {
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor { return ttnn::reshape(tensor, shape); },
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape);
+        },
         py::arg("tensor"),
         py::arg("shape"));
 
@@ -56,6 +58,13 @@ void py_module(py::module& module) {
         "unsqueeze_to_4D",
         [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttnn::unsqueeze_to_4D(tensor); },
         py::arg("tensor"));
+
+    module.def(
+        "to_memory_config",
+        &ttnn::operations::core::to_memory_config,
+        py::arg("tensor"),
+        py::arg("memory_config"),
+        py::arg("dtype") = std::nullopt);
 }
 
 }  // namespace core

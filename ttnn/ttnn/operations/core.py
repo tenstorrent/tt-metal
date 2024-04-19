@@ -520,13 +520,7 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.to_memory_config",
-    validate_input_tensors=_to_memory_config_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[ttnn.DataType] = None):
-    """
+doc = r"""
     to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: Optional[DataType] = None) -> ttnn.Tensor
 
     Converts a tensor to the desired mem_config, used for converting tensors to sharded tensors or interleaved, and to convert DRAM to L1 and vice versa
@@ -544,47 +538,9 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig, dtype: Optional[t
         >>> tensor = ttnn.to_memory_config(tensor, memory_config)
     """
 
-    original_shape = tensor.shape
-    tensor = ttnn.unsqueeze_to_4D(tensor)
-
-    if ttnn.get_memory_config(tensor) == memory_config:
-        return tensor
-
-    # to_sharded path
-    if memory_config.is_sharded():
-        if tensor.is_sharded():
-            # reshard
-            input_memory_config = ttnn.get_memory_config(tensor)
-            input_shard_spec = input_memory_config.shard_spec
-            output_shard_spec = memory_config.shard_spec
-            if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
-                if dtype is not None:
-                    raise RuntimeError("dtype cannot be specified when converting sharded tensor to sharded tensor")
-                tensor = ttl.tensor.reshard(tensor, memory_config)
-
-            else:
-                # for row-major tensors where shard-spec[1] is different for input shard and output shard
-                tensor = ttl.tensor.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG, dtype)
-                tensor = ttl.tensor.interleaved_to_sharded(
-                    tensor,
-                    memory_config,
-                    dtype,
-                )
-
-        else:
-            tensor = ttl.tensor.interleaved_to_sharded(
-                tensor,
-                memory_config,
-                dtype,
-            )
-    # to_interleaved path
-    else:
-        if not tensor.is_sharded():
-            # L1 to DRAM or DRAM to L1
-            tensor = ttl.tensor.clone(tensor, memory_config, dtype)
-        else:
-            tensor = ttl.tensor.sharded_to_interleaved(tensor, memory_config, dtype)
-    return ttnn.reshape(tensor, original_shape)
+to_memory_config = ttnn.register_operation(
+    name="ttnn.to_memory_config", golden_function=_golden_function, is_cpp_function=True, doc=doc
+)(ttnn._ttnn.operations.core.to_memory_config)
 
 
 def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
