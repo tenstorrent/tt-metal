@@ -124,6 +124,7 @@ class BUDAEagerBuild(build_ext):
             return
 
         build_env = BUDAEagerBuild.get_buda_eager_build_env()
+
         subprocess.check_call(["make", "build"], env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], env=build_env)
 
@@ -166,7 +167,7 @@ build_constants_lookup = {
 
 setup(
     url="http://www.tenstorrent.com",
-    #use_scm_version="0.0.1",
+    use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={
         "": "tt_eager",

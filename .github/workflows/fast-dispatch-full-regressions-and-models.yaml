@@ -20,12 +20,21 @@ jobs:
         test-group:
           [
             { name: "Common models GS", arch: grayskull, cmd: ARCH_NAME=grayskull tests/scripts/nightly/run_common_models.sh },
+<<<<<<< HEAD
             { name: "Common models N300 WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tests/scripts/nightly/run_common_models.sh },
             { name: "GS-only ttnn nightly", arch: grayskull, cmd: tox -e nightly_fast_dispatch_ttnn },
             { name: "GS-only models", arch: grayskull, cmd: ARCH_NAME=grayskull tox -e nightly_fast_dispatch_gs_only },
             { name: "N300 WH-only models", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tox -e nightly_fast_dispatch_wh_only },
             { name: "API tests GS", arch: grayskull, cmd: ARCH_NAME=grayskull MODEL_TYPE=api tox -e nightly_fast_dispatch },
             { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 MODEL_TYPE=api tox -e nightly_fast_dispatch },
+=======
+            { name: "Common models WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tests/scripts/nightly/run_common_models.sh },
+            { name: "GS-only ttnn nightly", arch: grayskull, cmd: tox -e nightly_fast_dispatch_ttnn },
+            { name: "GS-only models", arch: grayskull, cmd: ARCH_NAME=grayskull tox -e nightly_fast_dispatch_gs_only },
+            { name: "WH-only models", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tox -e nightly_fast_dispatch_wh_only },
+            { name: "API tests GS", arch: grayskull, cmd: ARCH_NAME=grayskull MODEL_TYPE=api tox -e nightly_fast_dispatch },
+            { name: "API tests WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 MODEL_TYPE=api tox -e nightly_fast_dispatch },
+>>>>>>> 7787fb98a ( #6858: Add tox targets to Github workflows)
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -54,7 +63,6 @@ jobs:
         timeout-minutes: 40
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
-          pip install tox
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           VENV_DIR=${{ github.workspace }}/python_env ARCH_NAME=${{ matrix.arch }} FREQUENT_TYPE=${{ matrix.frequent-type }} tox -e nightly_fast_dispatch
