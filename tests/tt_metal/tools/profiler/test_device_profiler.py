@@ -97,7 +97,6 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
-    pytest.skip("Re-enable when #7385 is fixed")
     OP_COUNT = 26
     RISC_COUNT = 5
     ZONE_COUNT = 125
