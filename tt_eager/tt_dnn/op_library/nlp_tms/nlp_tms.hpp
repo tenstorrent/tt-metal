@@ -128,6 +128,9 @@ namespace operations {
 namespace transformer {
 
 struct ConcatenateHeads : public NlpConcatHeads {
+    static inline const std::vector<TensorSchema> input_schemas{
+        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false}};
+
     void validate(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
@@ -135,9 +138,11 @@ struct ConcatenateHeads : public NlpConcatHeads {
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
             fmt::format(
-                "Head size must be a multiple of {} but was found to be {}! Update matmul that uses the output of this operation to have the "
+                "Head size must be a multiple of {} but was found to be {}! Update matmul that uses the output of this "
+                "operation to have the "
                 "padding in the weights!",
-                ttnn::types::TILE_SIZE, head_size));
+                ttnn::types::TILE_SIZE,
+                head_size));
         TT_FATAL(padded_head_size - head_size == 0, "Head size cannot have tile padding!");
 
         NlpConcatHeads::validate(input_tensors);
@@ -162,20 +167,25 @@ struct ConcatenateHeads : public NlpConcatHeads {
     }
 
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec = input_tensor.shard_spec().value();
-        uint32_t num_cores = shard_spec.num_cores();
-        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
-        shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        const auto& input_tensor = input_tensors.at(0);
+        if (this->output_mem_config.is_sharded()) {
+            ShardSpec shard_spec = input_tensor.shard_spec().value();
+            uint32_t num_cores = shard_spec.num_cores();
+            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
+            shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
+            auto mem_config = this->output_mem_config;
+            mem_config.shard_spec = shard_spec;
+            return {create_sharded_device_tensor(
+                this->compute_output_shapes(input_tensors).at(0),
+                input_tensor.get_dtype(),
+                Layout::TILE,
+                input_tensor.device(),
+                mem_config)};
+        } else {
+            return operation::generic_create_output_tensors(
+                *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        }
     }
-}
-
 };
 
 inline Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
@@ -184,12 +194,14 @@ inline Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<
         [&input_tensor, &memory_config](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, input_tensors);
+            return operation::run(
+                ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, input_tensors);
         },
         {input_tensor},
         output_tensors);
     return output_tensors.at(0);
 }
+
 }  // namespace transformer
 }  // namespace operations
 }  // namespace ttnn

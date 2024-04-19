@@ -6,6 +6,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
 #include "ttnn/operations/transformer.hpp"
 
 namespace py = pybind11;
@@ -15,24 +16,33 @@ namespace operations {
 namespace transformer {
 
 void py_module(py::module& module) {
+    module.def(
+        "concatenate_heads",
+        [](const ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt)
+            -> ttnn::Tensor { return ttnn::operations::transformer::concatenate_heads(input_tensor, memory_config); },
+        py::arg("input_tensor"),
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt);
 
-    module.def("concatenate_heads",
-     [](const ttnn::Tensor& input_tensor,
-           const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) -> ttnn::Tensor {
-            return ttnn::operations::transformer::concatenate_heads(input_tensor, memory_config);
+    module.def(
+        "attention_softmax_",
+        [](const ttnn::Tensor& tensor,
+           const std::optional<int> head_size,
+           const std::optional<const ttnn::Tensor>& attention_mask,
+           const tt::operations::primary::transformers::SoftmaxProgramConfig& program_config,
+           const std::optional<bool> causal_mask,
+           const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::operations::transformer::attention_softmax_(
+                tensor, head_size, attention_mask, program_config, causal_mask, memory_config);
         },
-            py::arg().noconvert(), py::arg("memory_config") = std::nullopt, R"doc(
-concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
-
-Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
-
-Args:
-    * :attr:`input_tensor`: Input Tensor
-    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
-    )doc");
-
+        py::arg("tensor"),
+        py::kw_only(),
+        py::arg("head_size") = std::nullopt,
+        py::arg("attention_mask") = std::nullopt,
+        py::arg("program_config").noconvert() = tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+        py::arg("causal_mask") = false,
+        py::arg("memory_config") = std::nullopt);
 }
-
 }  // namespace transformer
 }  // namespace operations
 }  // namespace ttnn

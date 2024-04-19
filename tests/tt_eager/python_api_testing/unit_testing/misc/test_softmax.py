@@ -126,7 +126,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype, cb_dtype):
     ids=["64", "384"],
 )
 @pytest.mark.parametrize(
-    "casual_mask",
+    "causal_mask",
     [True, False],
     ids=["causal", "no-causal"],
 )
@@ -146,7 +146,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype, cb_dtype):
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
-def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mask, seq_len):
+def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mask, seq_len):
     if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -165,7 +165,7 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mas
     # scale = 1.0
     scale = 1 / math.sqrt(hidden_dim // num_heads)
 
-    if casual_mask == False:
+    if causal_mask == False:
         attention_mask = torch.rand(batch, 1, 32, seq_len)
         mask = torch.rand_like(attention_mask) < 0.2
         attention_mask[mask] = float("-inf")
@@ -216,7 +216,7 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mas
         in1_t,
         scale,
         attention_mask_t,
-        is_causal_mask=casual_mask,
+        is_causal_mask=causal_mask,
         compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
     )
 
@@ -224,7 +224,7 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mas
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
 
-    if casual_mask == False:
+    if causal_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 32, seq_len)[:, :, 0, :]
     else:
         attention_mask = attention_mask.repeat(1, 1, num_cores_r * fuse_head, 1)

@@ -100,7 +100,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
 
 
 @pytest.mark.parametrize(
-    "casual_mask",
+    "causal_mask",
     [True, False],
     ids=["causal", "no-causal"],
 )
@@ -119,7 +119,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     ),
     ids=["FLOAT32", "BFLOAT8_B"],
 )
-def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
+def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -141,7 +141,7 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
     # scale = 1.0
     scale = 1 / math.sqrt(hidden_dim // num_heads)
 
-    if casual_mask == False:
+    if causal_mask == False:
         # attention_mask = torch.zeros(1, 1, 1, 384 * batch)
         attention_mask = torch.rand(batch, 1, 1, 384)
         attention_mask = (attention_mask > 0.5).float()
@@ -185,7 +185,7 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
     )
 
     tt_output_sharded = sm_op(
-        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=causal_mask
     )
 
     tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
@@ -193,7 +193,7 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
 
-    if casual_mask == False:
+    if causal_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 1, 384)
     else:
         attention_mask = attention_mask.repeat(1, 1, fuse_head, 1)
@@ -210,7 +210,7 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
 
 
 @pytest.mark.parametrize(
-    "casual_mask",
+    "causal_mask",
     [True, False],
     ids=["causal", "no-causal"],
 )
@@ -226,7 +226,7 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
     (ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.BFLOAT8_B),
     ids=["FLOAT32", "BFLOAT8_B"],
 )
-def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
+def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -249,7 +249,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
     # scale = 1.0
     scale = 1 / math.sqrt(hidden_dim // num_heads)
 
-    if casual_mask == False:
+    if causal_mask == False:
         # attention_mask = torch.zeros(batch, 1, 1, 384)
         attention_mask = torch.rand(batch, 1, 1, 384)
         attention_mask = (attention_mask > 0.5).float()
@@ -292,7 +292,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
     )
 
     tt_output_sharded = sm_op(
-        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=causal_mask
     )
 
     tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
@@ -300,7 +300,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
 
-    if casual_mask == False:
+    if causal_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 1, 384)
     else:
         attention_mask = attention_mask.repeat(1, 1, fuse_head, 1)
@@ -351,9 +351,9 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         attention_mask,
         device,
         tt_memory_config=in0_mem_config,
-        tt_dtype=ttl.tensor.DataType.FLOAT32
-        if in_dtype == ttl.tensor.DataType.FLOAT32
-        else ttl.tensor.DataType.BFLOAT16,
+        tt_dtype=(
+            ttl.tensor.DataType.FLOAT32 if in_dtype == ttl.tensor.DataType.FLOAT32 else ttl.tensor.DataType.BFLOAT16
+        ),
     )
     attention_mask_t_shard = ttl.tensor.interleaved_to_sharded(
         attention_mask_t,
