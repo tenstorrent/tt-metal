@@ -32,11 +32,7 @@ def is_sharded(tensor) -> bool:
     return tensor.is_sharded()
 
 
-def get_memory_config(tensor) -> Optional[ttnn.MemoryConfig]:
-    if is_tensor_storage_on_device(tensor):
-        return tensor.memory_config()
-    else:
-        None
+get_memory_config = ttnn._ttnn.core.get_memory_config
 
 
 def has_tile_padding(tensor):

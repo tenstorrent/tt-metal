@@ -670,6 +670,8 @@ def operation_tensor_report(operation_id):
 
         file_name = ttnn.database.get_tensor_file_name_by_id(get_report_path(), tensor_record.tensor_id)
         tensor = ttnn.database.load_tensor_by_id(get_report_path(), tensor_record.tensor_id)
+        if tensor is None:
+            return "", "", ""
 
         if isinstance(tensor, ttnn.Tensor):
             tensor = ttnn.to_torch(tensor)
@@ -724,6 +726,8 @@ def operation_tensor_report(operation_id):
             return ""
 
         tensor = ttnn.database.load_tensor_by_id(get_report_path(), tensor_record.tensor_id)
+        if tensor is None:
+            return ""
 
         if isinstance(tensor, ttnn.Tensor):
             tensor = ttnn.to_torch(tensor)
