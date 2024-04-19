@@ -419,7 +419,7 @@ def upsample(
     return output_tensor
 
 
-@ttnn.register_operation(name="ttnn.compare", is_cpp_function=True)
+@ttnn.register_operation(name="ttnn.compare", validate_input_tensors=lambda *args, **kwargs: None)
 def pearson_correlation_coefficient(expected, actual):
     import torch
     import numpy as np
