@@ -124,7 +124,7 @@ def test_performance(device, use_program_cache, model_name, sequence_size, bert)
         *ttnn_bert_inputs,
         parameters=parameters,
     )
-    tt_output = ttnn.from_device(tt_output, blocking=True)
+    tt_output = ttnn.from_device(tt_output, blocking=False)
     ttnn.synchronize_device(device)
     end = time.time()
     inference_and_compile_time = end - start
@@ -141,7 +141,7 @@ def test_performance(device, use_program_cache, model_name, sequence_size, bert)
             *ttnn_bert_inputs,
             parameters=parameters,
         )
-        tt_output = ttnn.from_device(tt_output, blocking=True)
+        tt_output = ttnn.from_device(tt_output, blocking=False)
     ttnn.synchronize_device(device)
     end = time.time()
     average_inference_time = (end - start) / num_iterations

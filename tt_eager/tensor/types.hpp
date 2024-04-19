@@ -721,7 +721,6 @@ struct TensorSchema {
     const std::set<Layout> layouts;
     const bool can_be_on_device;
     const bool can_be_on_cpu;
-    const bool can_be_a_scalar;
     const bool is_optional;
 };
 
