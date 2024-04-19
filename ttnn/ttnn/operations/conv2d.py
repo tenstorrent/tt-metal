@@ -127,7 +127,7 @@ class Conv2d:
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.original_weight = ttnn.to_torch(weight)
-        self.original_bias = ttnn.to_torch(bias)
+        self.original_bias = None if bias is None else ttnn.to_torch(bias)
         self.stride_h = stride_h
         self.stride_w = stride_w
         self.pad_h = pad_h
