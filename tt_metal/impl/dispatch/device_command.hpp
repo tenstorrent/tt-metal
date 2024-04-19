@@ -45,6 +45,8 @@ class DeviceCommand {
 
     void add_prefetch_terminate();
 
+    void add_prefetch_exec_buf_end();
+
     void update_cmd_sequence(uint32_t cmd_idx, const void *new_data, uint32_t data_sizeB) {
         memcpy(this->cmd_sequence.data() + cmd_idx, new_data, data_sizeB);
     }
@@ -67,6 +69,8 @@ class DeviceCommand {
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
         CQDispatchCmd write_packed_cmd;
+        if (!zero_init_disable) DeviceCommand::zero(write_packed_cmd);
+
         write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
         write_packed_cmd.write_packed.is_multicast = multicast;
         write_packed_cmd.write_packed.count = num_sub_cmds;
@@ -89,6 +93,9 @@ class DeviceCommand {
     }
 
    private:
+
+    static bool zero_init_disable;
+
     void add_prefetch_relay_inline(bool flush, uint32_t lengthB);
 
     void validate_cmd_write(uint32_t data_sizeB) const {
@@ -104,6 +111,13 @@ class DeviceCommand {
         memcpy(this->cmd_sequence.data() + this->cmd_write_idx, data, data_sizeB);
         uint32_t increment_sizeB = alignmentB.has_value() ? align(data_sizeB, alignmentB.value()) : data_sizeB;
         this->cmd_write_idx += (increment_sizeB / sizeof(uint32_t));
+    }
+
+    template<typename Command>
+    static void zero(Command &cmd) {
+        for (int i = 0; i < sizeof(Command); i++) {
+            ((uint8_t *)&cmd)[i] = 0;
+        }
     }
 
     std::vector<uint32_t> cmd_sequence;
