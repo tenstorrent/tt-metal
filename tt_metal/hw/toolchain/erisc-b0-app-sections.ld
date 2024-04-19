@@ -22,7 +22,7 @@ SECTIONS
 
   erisc_l1_code :
   {
-    *(erisc_l1_code)
+    *(SORT(erisc_l1_code.*))
   } > REGION_APP_CODE
   code_l1 :
   {
