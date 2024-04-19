@@ -371,7 +371,6 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
 }
 
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
-    GTEST_SKIP();
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
 
