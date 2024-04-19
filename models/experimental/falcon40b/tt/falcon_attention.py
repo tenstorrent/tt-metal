@@ -563,9 +563,7 @@ class TtFalconAttention:
                     value_layer[i],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_HIFI4_CONFIG_FP16_DEST"],
                     output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config[
-                        "ATTENTION_MM_2_PROGCFG"
-                    ],  # TODO: comment this line to workaround the bad PCC issue!!
+                    program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
                 )
             )
