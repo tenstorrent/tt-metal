@@ -604,6 +604,9 @@ class Operation:
                     if ttnn.CONFIG.report_path is not None:
                         decorated_function = operation_history_decorator(decorated_function)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
+                        ttnn.database.insert_stack_trace(
+                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
+                        )
                         ttnn.database.insert_operation_arguments(
                             ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
                         )
@@ -633,7 +636,7 @@ class Operation:
                         ttnn.synchronize_device(device)
 
                     output, duration = output.output, output.duration
-                    logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
+                    logger.debug(f"Finished {self.name:50}")
 
                     output_tensors = get_all_tensors(output)
 
@@ -641,9 +644,6 @@ class Operation:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
                         ttnn.database.store_operation_history_records(ttnn.CONFIG.report_path, operation_id)
-                        ttnn.database.insert_stack_trace(
-                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
-                        )
                         ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
