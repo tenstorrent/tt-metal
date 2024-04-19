@@ -9,4 +9,4 @@ fi
 
 echo "Running ttnn nightly tests for GS only"
 
-env pytest tests/ttnn/integration_tests
+env pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal"
