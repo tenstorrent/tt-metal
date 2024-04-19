@@ -22,7 +22,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const float scalar,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::add(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
         },
         py::arg("input_tensor_a"),
@@ -36,7 +36,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const ttnn::Tensor& input_tensor_b,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::add(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
         },
         py::arg("input_tensor_a"),
@@ -50,7 +50,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const float scalar,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::subtract(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
         },
         py::arg("input_tensor_a"),
@@ -64,7 +64,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const ttnn::Tensor& input_tensor_b,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::subtract(
                 input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
         },
@@ -79,7 +79,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const float scalar,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::multiply(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
         },
         py::arg("input_tensor_a"),
@@ -93,7 +93,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& input_tensor_a,
            const ttnn::Tensor& input_tensor_b,
            const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
+           const std::optional<const DataType> dtype = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::binary::multiply(
                 input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
         },

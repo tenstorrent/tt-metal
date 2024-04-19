@@ -352,14 +352,14 @@ template Tensors run_multi_device_operation(
 
 }  // namespace detail
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
     return detail::decorate_host_operation(detail::run_host_operation<OutputTensors>)(operation, input_tensors);
 }
 template Tensors run(const HostOperation<Tensors>& operation, const Tensors& input_tensors);
 template OptionalTensors run(const HostOperation<OptionalTensors>& operation, const Tensors& input_tensors);
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(
     CommandQueue& queue,
     const DeviceOperation<OutputTensors>& operation,
@@ -398,7 +398,7 @@ template OptionalTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
@@ -480,7 +480,7 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalConstTensors& optional_input_tensors
 );
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,

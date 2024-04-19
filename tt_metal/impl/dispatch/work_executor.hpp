@@ -38,7 +38,7 @@ class WorkExecutor {
     }
 
     WorkExecutor(WorkExecutor &&other) = default;
-    WorkExecutor& operator=(WorkExecutor &&other) = default;
+    WorkExecutor& operator=(WorkExecutor &&other) = delete;
 
     ~WorkExecutor() {
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {

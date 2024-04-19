@@ -77,7 +77,7 @@ class Device {
     Device& operator=(const Device &other) = delete;
 
     Device(Device &&other) = default;
-    Device& operator=(Device &&other) = default;
+    Device& operator=(Device &&other) = delete;
 
     tt::ARCH arch() const;
 
