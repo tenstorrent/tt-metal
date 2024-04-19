@@ -42,7 +42,7 @@
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b) (t/s/u) | 129th              | 32                   | 9.9                         | 13.5                        | 14             |
 | [Mistral-7B-decode](./models/demos/mistral7b) (t/s/u)       |  33rd              | 32                   | 7.9                         | 10.9                        | 14             |
 | [Mamba-2.8B-decode](./models/demos/mamba) (t/s/u)           |  any               | 32                   | 1.7                         | 2.0                         | 17             |
-| Stable Diffusion 1.4 512x512                                | 1                  | coming soon          |                             |                             |                |
+| Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                             |                             |                |
 
 
 ## T3000 (2x4 mesh of WHs) Models
