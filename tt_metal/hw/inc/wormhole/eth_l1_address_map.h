@@ -24,29 +24,14 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
   static constexpr std::int32_t TOOLS_MAX_L1_SIZE = 3 * 1024;
-  // Base addresses
+  static constexpr std::int32_t ERISC_L1_ARGS_SIZE = 96 * 4;
 
+  // Base addresses
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
   static constexpr std::int32_t L1_EPOCH_Q_BASE = 0x9000;  // Epoch Q start in L1.
   static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
   static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
-
-  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = COMMAND_Q_BASE - 128;
-  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR - 256;
-  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER - PROFILER_L1_BUFFER_SIZE;
-  static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER - PROFILER_L1_CONTROL_BUFFER_SIZE;
-
-  static_assert(PROFILER_L1_BUFFER_CONTROL > (COMMAND_Q_BASE - TOOLS_MAX_L1_SIZE));
-  static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
-  static_assert((PRINT_BUFFER_ER % 32) == 0);
-  static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
-  static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
-
-  // Extra 12 bytes is to make sure that the launch message is properly aligned.
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = PROFILER_L1_BUFFER_CONTROL - 128 - 12;
-  // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
   // TT Metal Specific
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
@@ -67,10 +52,28 @@ struct address_map {
   static constexpr uint32_t ISSUE_CQ_CB_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;  // SIZE from shared common addr
   static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
-  static constexpr std::int32_t ERISC_L1_ARG_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
+  // Extra 4 bytes is to make sure that the launch message is properly aligned.
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT + 4;
+  // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
-  static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = TILE_HEADER_BUFFER_BASE + 1024;
+  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = ERISC_MEM_MAILBOX_BASE + 128 + 12;
+  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR + RING_BUFFER_SIZE;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER + 256;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
+
+  static constexpr std::int32_t ERISC_L1_ARG_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
+
+  static_assert(ERISC_L1_ARG_BASE - ERISC_RING_BUFFER_ADDR <= TOOLS_MAX_L1_SIZE);
+  static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
+  static_assert((PRINT_BUFFER_ER % 32) == 0);
+  static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
+  static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
+
+  static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = ERISC_L1_ARG_BASE + ERISC_L1_ARGS_SIZE;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
+
+  static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
   static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
 
