@@ -180,9 +180,9 @@ reshape = ttnn.register_operation(
 
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-@ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)
-def unsqueeze_to_4D(tensor):
-    return ttnn._ttnn.operations.core.unsqueeze_to_4D(tensor)
+unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)(
+    ttnn._ttnn.operations.core.unsqueeze_to_4D
+)
 
 
 def squeeze(tensor, dim):
