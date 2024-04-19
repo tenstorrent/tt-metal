@@ -9,6 +9,7 @@ import inspect
 import os
 import time
 import traceback
+import types
 
 from loguru import logger
 
@@ -603,6 +604,9 @@ class Operation:
                     if ttnn.CONFIG.report_path is not None:
                         decorated_function = operation_history_decorator(decorated_function)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
+                        ttnn.database.insert_stack_trace(
+                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
+                        )
                         ttnn.database.insert_operation_arguments(
                             ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
                         )
@@ -632,7 +636,7 @@ class Operation:
                         ttnn.synchronize_device(device)
 
                     output, duration = output.output, output.duration
-                    logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
+                    logger.debug(f"Finished {self.name:50}")
 
                     output_tensors = get_all_tensors(output)
 
@@ -640,9 +644,6 @@ class Operation:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
                         ttnn.database.store_operation_history_records(ttnn.CONFIG.report_path, operation_id)
-                        ttnn.database.insert_stack_trace(
-                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
-                        )
                         ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
@@ -729,21 +730,13 @@ def register_operation(
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
     allow_to_fallback_to_golden_function_on_failure=False,
+    doc=None,
 ):
     if is_cpp_function:
-        will_fallback_to_golden_function_on_failure = (
-            allow_to_fallback_to_golden_function_on_failure and golden_function is not None
-        )
-        if will_fallback_to_golden_function_on_failure:
-            if validate_input_tensors is None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is required for cpp functions with fallbacks"
-                )
-        else:
-            if validate_input_tensors is not None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
-                )
+        if validate_input_tensors is not None:
+            raise RuntimeError(
+                f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
+            )
     else:
         if validate_input_tensors is None:
             raise RuntimeError(f"Registering {name}: validate_input_tensors is required for non-cpp functions")
@@ -753,6 +746,20 @@ def register_operation(
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             return function
+
+        if isinstance(function, types.BuiltinFunctionType):
+            # Built-in functions need to be wrapped to be able to set documenation
+            def builtin_decorator(function):
+                @wraps(function)
+                def wrapper(*args, **kwargs):
+                    return function(*args, **kwargs)
+
+                return wrapper
+
+            function = builtin_decorator(function)
+
+        if doc is not None:
+            function.__doc__ = doc
 
         operation = Operation(
             name=name,

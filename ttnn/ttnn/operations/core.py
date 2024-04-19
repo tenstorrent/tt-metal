@@ -101,18 +101,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 ttnn.Tensor.__getitem__ = __getitem__
 
 
-def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
 def _preprocess_shape(input_shape, shape):
     if isinstance(shape, tuple):
         if not (0 <= shape.count(-1) <= 1):
@@ -161,40 +149,40 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
     return tensor
 
 
-@ttnn.register_operation(
+doc = r"""
+reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
+
+Reshape :attr:`input_tensor` into :attr:`shape`.
+
+Args:
+    * :attr:`input_tensor`: the input tensor
+    * :attr:`shape`: the desired shape.
+
+Example::
+
+    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((64, 32), dtype=torch.bfloat16)), device)
+    >>> output = ttnn.reshape(tensor, (32, 64))
+    >>> print(output.shape)
+    ttnn.Shape([32, 64])
+
+"""
+
+
+reshape = ttnn.register_operation(
     name="ttnn.reshape",
     is_cpp_function=True,
-    validate_input_tensors=_reshape_validate_input_tensors,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
     allow_to_fallback_to_golden_function_on_failure=True,
-)
-def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
-    r"""
-    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
-
-    Reshape :attr:`input_tensor` into :attr:`shape`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`shape`: the desired shape.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.reshape(tensor, (32, 64))
-        >>> print(output.shape)
-        ttnn.Shape([32, 64])
-
-    """
-    return ttnn._ttnn.operations.core.reshape(input_tensor, shape)
+    doc=doc,
+)(ttnn._ttnn.operations.core.reshape)
 
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-@ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)
-def unsqueeze_to_4D(tensor):
-    return ttnn._ttnn.operations.core.unsqueeze_to_4D(tensor)
+unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)(
+    ttnn._ttnn.operations.core.unsqueeze_to_4D
+)
 
 
 def squeeze(tensor, dim):
@@ -409,46 +397,35 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors, golden_function=_golden_function
-)
-def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG):
-    """
-    to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+doc = """
+to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
-    The tensor may be placed in DRAM or L1 memory.
+Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
+The tensor may be placed in DRAM or L1 memory.
 
-    Currently memory_config must be of an Interleaved tensor (not sharded)
+Currently memory_config must be of an Interleaved tensor (not sharded)
 
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`device`: the ttnn.Device
-        * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
+Args:
+    * :attr:`tensor`: the ttnn.Tensor
+    * :attr:`device`: the ttnn.Device
+    * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
 
-    Example::
+Example::
 
-        >>> device_id = 0
-        >>> device = ttnn.open_device(device_id=device_id)
-        >>> tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
-        >>> tensor_on_device = ttnn.to_device(tensor_on_host, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        >>> print(tensor_on_device[0,0,:3])
-        Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
-    """
+    >>> device_id = 0
+    >>> device = ttnn.open_device(device_id=device_id)
+    >>> tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
+    >>> tensor_on_device = ttnn.to_device(tensor_on_host, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    >>> print(tensor_on_device[0,0,:3])
+    Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
+"""
 
-    def impl(tensor, device, *, memory_config):
-        return tensor.to(device, memory_config)
-
-    original_rank = len(tensor.shape)
-    if len(tensor.shape) < 4:
-        tensor = ttnn.unsqueeze_to_4D(tensor)
-
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_device")(
-        tensor, device, memory_config=memory_config
-    )
-    while len(tensor.shape) != original_rank:
-        tensor = squeeze(tensor, 0)
-    return tensor
+to_device = ttnn.register_operation(
+    name="ttnn.to_device",
+    validate_input_tensors=_to_device_validate_input_tensors,
+    golden_function=_golden_function,
+    doc=doc,
+)(lambda tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG: tensor.to(device, memory_config))
 
 
 def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -467,33 +444,30 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_operation(
+doc = """
+from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
+
+Copies the `ttnn.Tensor` :attr:`tensor` to the host.
+
+Args:
+    * :attr:`tensor`: the ttnn.Tensor
+
+Example::
+    >>> device_id = 0
+    >>> device = ttnn.open_device(device_id=device_id)
+    >>> tensor_on_device = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+    >>> tensor_on_host = ttnn.from_device(tensor_on_device)
+    >>> print(tensor_on_host[0,0,:3])
+    Tensor([ 0.365234, 0.130859, 0.75], dtype=bfloat16 )
+"""
+
+
+from_device = ttnn.register_operation(
     name="ttnn.from_device",
     validate_input_tensors=_from_device_validate_input_tensors,
     golden_function=_golden_function,
-)
-def from_device(tensor):
-    """
-    from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
-
-    Copies the `ttnn.Tensor` :attr:`tensor` to the host.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open_device(device_id=device_id)
-        >>> tensor_on_device = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor_on_host = ttnn.from_device(tensor_on_device)
-        >>> print(tensor_on_host[0,0,:3])
-        Tensor([ 0.365234, 0.130859, 0.75], dtype=bfloat16 )
-    """
-
-    def impl(tensor):
-        return tensor.cpu()
-
-    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_device")(tensor)
+    doc=doc,
+)(lambda tensor, blocking=True: tensor.cpu(blocking=blocking))
 
 
 def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -508,25 +482,26 @@ def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
     )
 
 
-@ttnn.register_operation(name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors)
-def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
-    """
-    deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
+doc = """
+deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
 
-    Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
+Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`force`: the optional boolean to force deallocation even if buffer may have multiple references. Defaults to True.
+Args:
+    * :attr:`tensor`: the ttnn.Tensor
+    * :attr:`force`: the optional boolean to force deallocation even if buffer may have multiple references. Defaults to True.
 
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open_device(device_id=device_id)
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-        >>> ttnn.deallocate(tensor)
-    """
-    tensor.deallocate(force=force)
+Example::
+    >>> device_id = 0
+    >>> device = ttnn.open_device(device_id=device_id)
+    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+    >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+    >>> ttnn.deallocate(tensor)
+"""
+
+deallocate = ttnn.register_operation(
+    name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors, doc=doc
+)(lambda tensor, force=True: tensor.deallocate(force=force))
 
 
 def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):

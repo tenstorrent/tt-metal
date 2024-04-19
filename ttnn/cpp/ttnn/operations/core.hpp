@@ -42,8 +42,6 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
         return tensor.reshape(shape.value());
     });
 
-    //
-
     const auto layout = tensor.get_layout();
 
     if (layout == ttnn::Layout::ROW_MAJOR) {
@@ -85,23 +83,7 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
             return reshape_helper(tensor, shape);
         }
     }
-
-    if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE) and tensor_shape.rank() == 4 and
-        shape.rank() == 4 and tensor.get_dtype() == ttnn::bfloat16) {
-        auto shape_with_tile_padding = shape.with_tile_padding();
-        const auto w = shape_with_tile_padding[0];
-        const auto z = shape_with_tile_padding[1];
-        const auto y = shape_with_tile_padding[2];
-        const auto x = shape_with_tile_padding[3];
-
-        auto output_tensor = tt::tt_metal::reshape(tensor, w, z, y, x);
-        return reshape_helper(output_tensor, shape);
-
-    } else {
-        TT_THROW("Unable to reshape given tensor!");
-    }
-
-    return tensor;
+    TT_THROW("Unable to reshape given tensor!");
 }
 
 template <std::size_t Rank>

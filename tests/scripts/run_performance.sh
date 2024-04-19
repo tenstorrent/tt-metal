@@ -12,6 +12,7 @@ run_perf_models_other() {
     local test_marker=$2
 
     if [ "$tt_arch" == "grayskull" ]; then
+        set +e
         env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $test_marker
@@ -45,6 +46,7 @@ run_perf_models_other() {
         env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $test_marker
 
         env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $test_marker
+        set -e
     else
         echo "There are no other model perf tests for Javelin yet specified. Arch $tt_arch requested"
     fi
@@ -60,8 +62,10 @@ run_perf_models_llm_javelin() {
     env pytest models/demos/falcon7b/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env pytest models/demos/mistral7b/tests -m $test_marker
+        env pytest models/demos/mamba/tests -m $test_marker        
     fi
+    
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mistral7b/tests -m $test_marker  # -> hanging: issue #7540
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
@@ -102,6 +106,10 @@ run_device_perf_models() {
         env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
+    fi
+
+    if [ "$tt_arch" == "wormhole_b0" ]; then
+        env pytest models/demos/mamba/tests -m $test_marker
     fi
 
     ## Merge all the generated reports

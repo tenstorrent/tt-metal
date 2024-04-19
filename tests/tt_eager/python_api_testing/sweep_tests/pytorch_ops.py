@@ -1827,7 +1827,9 @@ def ttnn_groupnorm(x, y, z, *args, **kwargs):
 
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
-    return torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    x = x.to(torch.float32)
+    output = torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    return output
 
 
 def upsample(x, *args, scale_factor, **kwargs):

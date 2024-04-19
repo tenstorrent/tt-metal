@@ -629,8 +629,13 @@ class resnet50:
         if is_wormhole_b0() and self.batch_size == 20:
             # TODO: fix the need to do the reshard here
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
+            x = ttnn.to_layout(
+                x,
+                ttnn.ROW_MAJOR_LAYOUT,
+                use_multicore=True,
+                memory_config=self.max_pool.max_pool.input_sharded_memory_config,
+            )
+            # x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
         x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
@@ -664,6 +669,16 @@ class resnet50:
         x = self.layer3_module6(x)
 
         # do reshard before layer4
+        unpadded_shape = x.shape_without_padding()
+        if x.get_legacy_shape() != unpadded_shape:
+            x = ttnn.experimental.tensor.format_output_tensor(
+                x,
+                unpadded_shape,
+                x.device(),
+                x.get_layout(),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, self.layer4_module1.conv1.conv.input_sharded_memory_config)
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)

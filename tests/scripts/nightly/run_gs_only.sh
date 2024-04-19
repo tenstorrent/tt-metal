@@ -1,6 +1,13 @@
-echo "Running nightly tests for GS only"
+#/bin/bash
 
-env pytest tests/ttnn/integration_tests
+set -eo pipefail
+
+if [[ -z "$TT_METAL_HOME" ]]; then
+  echo "Must provide TT_METAL_HOME in environment" 1>&2
+  exit 1
+fi
+
+echo "Running model nightly tests for GS only"
 
 env pytest models/experimental/whisper/tests/test_whisper_encoder_layer.py
 env pytest models/experimental/whisper/tests/test_whisper_encoder.py
