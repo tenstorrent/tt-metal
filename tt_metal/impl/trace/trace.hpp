@@ -36,6 +36,8 @@ struct TraceDescriptor {
     uint32_t num_completion_q_reads;
     uint32_t num_completion_worker_cores;
 
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
+
     TraceDescriptor() {
         this->reset();
     }
@@ -45,6 +47,7 @@ struct TraceDescriptor {
         this->traced_completion_q_reads.clear();
         this->num_completion_q_reads = 0;
         this->num_completion_worker_cores = 0;
+        this->owned_buffer_pool.clear();
     }
 
     // Calculate relative offset to the initial event ID of the trace

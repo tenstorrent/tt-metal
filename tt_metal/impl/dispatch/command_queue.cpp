@@ -1282,6 +1282,7 @@ void HWCommandQueue::enqueue_program(
 
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
+        this->trace_ctx->owned_buffer_pool.insert(this->trace_ctx->owned_buffer_pool.end(), program.kg_buffers.begin(), program.kg_buffers.end());
     } else {
         this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
     }
