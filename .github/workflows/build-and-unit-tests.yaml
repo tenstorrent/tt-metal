@@ -42,4 +42,4 @@ jobs:
         timeout-minutes: 15
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
+          VENV_DIR=${{ github.workspace }}/python_env TT_ARCH=$ARCH_NAME tox -e post_commit_sd

@@ -87,7 +87,6 @@ def get_version(buda_eager_build_config):
         "local_scheme": partial(get_buda_eager_local_version_scheme, buda_eager_build_config),
     }
 
-
 @dataclass(frozen=True)
 class BUDAEagerBuildConfig:
     is_dev_build = get_is_dev_build()
@@ -120,6 +119,7 @@ class BUDAEagerBuild(build_ext):
             len(self.extensions) == 1
         ), f"Detected more than 1 extension module - aborting because we shouldn't be doing more yet"
 
+
         ext = self.extensions[0]
         if self.is_editable_install_():
             assert (
@@ -128,6 +128,7 @@ class BUDAEagerBuild(build_ext):
             return
 
         build_env = BUDAEagerBuild.get_buda_eager_build_env()
+
         subprocess.check_call(["make", "build"], env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], env=build_env)
 
@@ -157,16 +158,11 @@ packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn"]
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [buda_eager_lib_C]
-print("VERSION!!!")
-version = get_version(buda_eager_build_config)
-
-print(str(version["version_scheme"]))
-print(str(version["local_scheme"]))
 
 
 setup(
     url="http://www.tenstorrent.com",
-    #use_scm_version="0.0.1",
+    use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={
         "": "tt_eager",

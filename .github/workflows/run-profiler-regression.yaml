@@ -39,4 +39,7 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install tox==4.11.4
+          ARCH_NAME=${{ matrix.runner-info.arch }} tox -e run_profile_regression

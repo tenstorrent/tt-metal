@@ -19,12 +19,13 @@ jobs:
       matrix:
         test-group:
           [
-            { name: "Common models GS", arch: grayskull, cmd: tests/scripts/nightly/run_models_2.sh },
-            { name: "Common models WH B0", arch: wormhole_b0, cmd: tests/scripts/nightly/run_models_2.sh },
-            { name: "GS-only models and ttnn nightly", arch: grayskull, cmd: tests/scripts/nightly/run_models_1.sh },
-            { name: "WH-only models", arch: wormhole_b0, cmd: tests/scripts/nightly/run_models_3.sh },
-            { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast },
-            { name: "API tests WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast },
+            { name: "Common models GS", arch: grayskull, cmd: ARCH_NAME=grayskull tests/scripts/nightly/run_common_models.sh },
+            { name: "Common models WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tests/scripts/nightly/run_common_models.sh },
+            { name: "GS-only ttnn nightly", arch: grayskull, cmd: tox -e nightly_fast_dispatch_ttnn },
+            { name: "GS-only models", arch: grayskull, cmd: ARCH_NAME=grayskull tox -e nightly_fast_dispatch_gs_only },
+            { name: "WH-only models", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 tox -e nightly_fast_dispatch_wh_only },
+            { name: "API tests GS", arch: grayskull, cmd: ARCH_NAME=grayskull MODEL_TYPE=api tox -e nightly_fast_dispatch },
+            { name: "API tests WH B0", arch: wormhole_b0, cmd: ARCH_NAME=wormhole_b0 MODEL_TYPE=api tox -e nightly_fast_dispatch },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -53,7 +54,6 @@ jobs:
         timeout-minutes: 90
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
-          pip install tox
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+          VENV_DIR=${{ github.workspace }}/python_env ${{ matrix.test-group.cmd }}
