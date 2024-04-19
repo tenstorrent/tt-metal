@@ -893,50 +893,30 @@ class TTPyCompositeConv(TTPyOp):
         return conv_input_on_device
 
     def conv_input_interleaved_to_sharded(self, conv_input_on_device: ttl.tensor.Tensor):
-        num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
-        num_cores_w = self.sliding_window_op_params.num_cores_w
-        num_cores_h = self.sliding_window_op_params.num_cores_h
-
-        input_channels = self.input_tensor_shape[3]
-        padded_input_channels = conv_input_on_device.get_legacy_shape()[3]
-        assert padded_input_channels >= input_channels
-        assert padded_input_channels == self.padded_input_channels
-        grid_size = (num_cores_w, num_cores_h)
-
-        input_size_to_shard_evenly = _nearest_y(
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
-        )
-        untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
-        # Convert interleaved to sharded
-        if self.is_1d_systolic:
-            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
-                conv_input_on_device,
-                grid_size,
-                [
-                    untilize_with_halo_input_shard_height,
-                    padded_input_channels,
-                ],  # act_block_w_datums may include reads of multiple pixels in window
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-            )
-        else:
-            grid_size_y = self.opt_conv_parall_conf_auto.grid_size.y
-            assert padded_input_channels % grid_size_y == 0
-            assert (
-                not self.use_shallow_conv_variant
-            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
-            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
-                conv_input_on_device,
-                grid_size,
-                [
-                    untilize_with_halo_input_shard_height,
-                    (int)(padded_input_channels / grid_size_y),
-                ],  # act_block_w_datums may include reads of multiple pixels in window
-                ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
-            )
-
-        return conv_input_on_device
+        has_padding = conv_input_on_device.get_legacy_shape() != conv_input_on_device.shape_without_padding()
+        if has_padding:
+            num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
+            padded_h = self.input_sharded_memory_config.shard_spec.shape[0] * num_cores_nhw
+            input_padded_shape = list(conv_input_on_device.get_legacy_shape())
+            input_padded_shape[2] = padded_h
+            if conv_input_on_device.get_legacy_shape()[2] < input_padded_shape[2]:
+                conv_input_on_device = ttl.tensor.format_input_tensor(
+                    conv_input_on_device,
+                    self.device,
+                    input_padded_shape,
+                    0.0,
+                    ttl.tensor.Layout.TILE,
+                    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+                )
+            elif conv_input_on_device.get_legacy_shape()[2] > input_padded_shape[2]:
+                conv_input_on_device = ttl.tensor.format_output_tensor(
+                    conv_input_on_device,
+                    input_padded_shape,
+                    self.device,
+                    ttl.tensor.Layout.TILE,
+                    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+                )
+        return ttl.tensor.interleaved_to_sharded(conv_input_on_device, self.input_sharded_memory_config)
 
     def copy_input_to_device(self, conv_input: ttl.tensor.Tensor, layout=ttl.tensor.Layout.TILE):
         interleaved_mem_config = ttl.tensor.MemoryConfig(
