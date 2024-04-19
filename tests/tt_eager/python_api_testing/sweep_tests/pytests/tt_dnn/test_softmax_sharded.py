@@ -42,7 +42,7 @@ seq_lens = [32, 64, 256, 384, 512]
     ids=[f"grid_size_{x}_{y}" for x, y in grid_sizes],
 )
 @pytest.mark.parametrize(
-    "casual_mask",
+    "causal_mask",
     [True, False],
     ids=["causal", "no-causal"],
 )
@@ -54,7 +54,7 @@ seq_lens = [32, 64, 256, 384, 512]
     ),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
-def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
+def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     torch.manual_seed(0)
 
     fuse_head = 768 // seq_len if 768 // seq_len > 0 else 1
@@ -70,7 +70,7 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
     # scale = 1.0
     scale = 1 / math.sqrt(hidden_dim // num_heads)
 
-    if casual_mask == False:
+    if causal_mask == False:
         # attention_mask = torch.zeros(batch, 1, 1, seq_len)
         attention_mask = torch.rand(batch, 1, 1, seq_len)
         attention_mask = (attention_mask > 0.5).float()
@@ -123,7 +123,7 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
 
     if scale_mask:
         tt_output_sharded = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+            in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=causal_mask
         )
     else:
         tt_output_sharded = ttl.operations.primary.softmax_in_place(in1_t_shard, program_config=program_config)
@@ -133,7 +133,7 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
 
-    if casual_mask == False:
+    if causal_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 1, seq_len)
 
     if scale_mask:

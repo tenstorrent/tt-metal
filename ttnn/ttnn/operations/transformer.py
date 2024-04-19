@@ -386,52 +386,25 @@ def attention_softmax(
     return output_tensor
 
 
-@ttnn.register_operation(
+attention_softmax_docstring = r"""
+attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(),  memory_config: Optional[ttnn.MemoryConfig] = input_tensor.memory_config()) -> ttnn.Tensor
+
+In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
+
+Args:
+    * :attr:`tensor`: Input Tensor
+    * :attr:`head_size`: Number of heads
+    * :attr:`attention_mask`: Attention Mask
+    * :attr:`program_config`: Program Config of the output tensor
+    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+
+"""
+attention_softmax_ = ttnn.register_operation(
     name="ttnn.transformer.attention_softmax_",
-    validate_input_tensors=_attention_softmax_validate_input_tensors,
     golden_function=_golden_function,
-)
-def attention_softmax_(
-    tensor: ttnn.Tensor,
-    *,
-    head_size: Optional[int],
-    attention_mask: Optional[ttnn.Tensor],
-    program_config: Optional[
-        ttl.operations.primary.transformers.SoftmaxProgramConfig
-    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
-    casual_mask: Optional[bool] = False,
-) -> ttnn.Tensor:
-    """
-    attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
-
-    In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
-
-    Args:
-        * :attr:`tensor`: Input Tensor
-        * :attr:`head_size`: Number of heads
-        * :attr:`attention_mask`: Attention Mask
-        * :attr:`program_config`: Program Config of the output tensor
-
-
-    """
-    if len(tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
-
-    if tensor.layout != ttnn.TILE_LAYOUT:
-        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
-
-    if head_size is not None:
-        scaler = 1 / (head_size**0.5)
-    else:
-        scaler = 1.0
-
-    if attention_mask is not None:
-        tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            tensor, scaler, attention_mask, program_config=program_config, is_causal_mask=casual_mask
-        )
-        return tensor
-    else:
-        raise RuntimeError("Cannot apply divide by sqrt(head_size) using in-place version!")
+    is_cpp_function=True,
+    doc=attention_softmax_docstring,
+)(ttnn._ttnn.operations.transformer.attention_softmax_)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
@@ -446,42 +419,19 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-def _concatenate_heads_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+concatenate_heads_docstring = r"""
+concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
 
+Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
-@ttnn.register_operation(
-    name="ttnn.transformer.concatenate_heads",
-    validate_input_tensors=_concatenate_heads_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def concatenate_heads(
-    input_tensor: ttnn.Tensor,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """
-    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
+Args:
+    * :attr:`input_tensor`: Input Tensor
+    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+"""
 
-    Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
-
-    Args:
-        * :attr:`input_tensor`: Input Tensor
-        * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
-
-    """
-    return ttnn._ttnn.operations.transformer.concatenate_heads(
-        input_tensor,
-        memory_config,
-    )
+concatenate_heads = ttnn.register_operation(
+    name="ttnn.add", golden_function=_golden_function, is_cpp_function=True, doc=concatenate_heads_docstring
+)(ttnn._ttnn.operations.transformer.concatenate_heads)
 
 
 def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):

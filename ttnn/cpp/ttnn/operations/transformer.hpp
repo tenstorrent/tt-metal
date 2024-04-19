@@ -6,3 +6,4 @@
 
 // This is a place holder for when the cpp/ttnn folder structure and ttnn namespace is moved over to tt_eager.
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"

@@ -103,7 +103,7 @@ def test_transformer_attention_softmax_(
     )
 
     output_tensor = ttnn.transformer.attention_softmax_(
-        input_tensor, head_size=None, attention_mask=attention_mask, casual_mask=True
+        input_tensor, head_size=None, attention_mask=attention_mask, causal_mask=True
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
