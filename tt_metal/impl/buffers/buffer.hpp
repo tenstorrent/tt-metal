@@ -58,7 +58,7 @@ struct ShardSpec {
                     orientation(shard_orientation_), halo(halo_)
                     {;}
 
-    const uint32_t num_cores() const { return this->grid.num_cores(); }
+    const uint32_t num_cores() const {return this->grid.num_cores();}
     const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
     tt::stl::reflection::Attributes attributes() const;
 
@@ -103,11 +103,14 @@ struct ShardSpecBuffer {
     bool halo() const {
         return tensor_shard_spec.halo;
     }
-    uint32_t size() const{
+    std::array<uint32_t, 2> shape_in_pages() const {
         auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
         auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
-        return width_in_pages * height_in_pages;
-
+        return {width_in_pages, height_in_pages};
+    }
+    uint32_t size() const{
+        auto shape_in_pages_ = this->shape_in_pages();
+        return shape_in_pages_[0] * shape_in_pages_[1];
     }
 };
 
@@ -140,11 +143,17 @@ struct BufferPageMapping {
     std::vector< uint32_t> core_bank_indices_;
     std::vector< std::vector<uint32_t> > core_host_page_indices_;
     std::vector<uint32_t> dev_page_to_core_mapping_;
-    std::vector<uint32_t> dev_page_to_host_page_mapping_;
+
+    //some dev pages don't have mapping to host (in case of padding)
+    std::vector<std::optional<uint32_t> > dev_page_to_host_page_mapping_;
     std::vector<uint32_t> host_page_to_dev_page_mapping_;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
     std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
+    std::vector < std::array<uint32_t, 2> > core_shard_shape_;
+
 };
+
+
 
 class Buffer {
    public:
@@ -177,6 +186,15 @@ class Buffer {
     uint32_t page_size() const { return page_size_; }
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
+
+    uint32_t num_dev_pages() const {
+        if (!is_sharded(this->buffer_layout_)) {
+            return this->num_pages();
+        }
+        else {
+            return this->shard_spec().size() * this->num_cores();
+        }
+    }
 
     BufferType buffer_type() const { return buffer_type_; }
 
@@ -212,7 +230,6 @@ class Buffer {
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
-
 
    private:
     void allocate();
