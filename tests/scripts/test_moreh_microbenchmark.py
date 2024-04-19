@@ -95,6 +95,14 @@ def profile_results_kernel_duration():
     return total_cycle
 
 
+def get_device_freq():
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    freq = deviceData["deviceInfo"]["freq"]
+    return freq
+
+
 def profile_noc_results():
     setup = device_post_proc_config.test_noc()
     setup.deviceInputLog = profiler_log_path
@@ -527,22 +535,22 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index",
+    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0, 1661931.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0, 1661960.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 0, 920207.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 0, 920232.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
         # ########################### 512 512 256x8 subblock 4 2 num_block 2 #####################
         # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 2, 0, 0, 0, 0),
         # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 2, 0, 0, 0, 0),
@@ -690,10 +698,11 @@ def test_matmul_single_core_sharded(
     fp32_dest_acc,
     interm_cb_dtype,
     subblock_index,
+    baseline,
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_single_core_Matmul_Sharded.csv"
     header = ["Kernel Duration (Cycles)"]
-    data = []
+    kernel_durations_cycle = []
     for vec in test_vector:
         m = int(vec[0])
         n = int(vec[1])
@@ -712,14 +721,28 @@ def test_matmul_single_core_sharded(
             subblock_index,
         )
         cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
         logger.info("cycle: " + str(cycle))
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([cycle])
+        kernel_durations_cycle.append([cycle])
+
+    max_diff = 0.01
+
+    percentage_diff = np.abs(kernel_durations_cycle[0][0] - baseline) / baseline
+    is_within_range = percentage_diff < max_diff
+    if is_within_range == False:
+        logger.info(
+            "Diff is too large! kernel duration: {}, baseline: {}, diff: {}",
+            kernel_durations_cycle[0][0],
+            baseline,
+            percentage_diff,
+        )
+
     write_header = not os.path.exists(file_name)
-    append_to_csv(file_name, header, data, write_header)
-    return
+    append_to_csv(file_name, header, kernel_durations_cycle, write_header)
+    assert is_within_range
 
 
 @pytest.mark.parametrize(
