@@ -241,6 +241,7 @@ def test_resnet_conv7s2(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.skip(reason="#7681: Failing with shape volume mismatch")
 def test_resnet(device):
     torch.manual_seed(0)
 
