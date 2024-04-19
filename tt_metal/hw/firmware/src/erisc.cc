@@ -50,7 +50,7 @@ void __attribute__((section("code_l1"))) risc_init() {
     }
 }
 
-void __attribute__((section("erisc_l1_code"))) Application(void) {
+void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     DEBUG_STATUS('I');
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -89,7 +89,7 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
     }
     internal_::disable_erisc_app();
 }
-void __attribute__((section("erisc_l1_code"), naked)) ApplicationHandler(void) {
+void __attribute__((section("erisc_l1_code.0"), naked)) ApplicationHandler(void) {
     // Save the registers, stack pointer, return address so that we can early exit in the case of
     // an error.
     __asm__(

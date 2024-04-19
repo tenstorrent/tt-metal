@@ -99,7 +99,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+            range_max = eth_l1_mem::address_map::COMMAND_Q_BASE;
             break;
         case 6:
             range_min = MEM_IERISC_FIRMWARE_BASE;
