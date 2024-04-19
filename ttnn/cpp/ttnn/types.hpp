@@ -39,6 +39,7 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
+static constexpr auto MULTI_DEVICE_STORAGE_TYPE = StorageType::MULTI_DEVICE;
 
 struct CoreGrid {
     std::size_t x;
