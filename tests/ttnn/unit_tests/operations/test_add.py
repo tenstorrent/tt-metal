@@ -129,3 +129,21 @@ def test_add_with_broadcast_on_batch(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [(8, 16, 384, 384)])
+@pytest.mark.parametrize("scalar", [0.125])
+def test_add_attention_scores_to_scalar(device, shape, scalar):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor + scalar
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.add(input_tensor, scalar, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert output_tensor.shape == shape

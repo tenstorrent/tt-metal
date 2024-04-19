@@ -21,7 +21,7 @@ namespace binary {
 enum class BinaryProgramType {
     ElementWiseSingleCore,
     ElementWiseMultiCore,
-    BroadcastWidthtMultiCore,
+    BroadcastWidthMultiCore,
     BroadcastHeightMultiCore,
     BroadcastHeightAndWidthMultiCore,
 };
@@ -30,7 +30,6 @@ inline BinaryProgramType get_program_type(const Binary& operation, const std::ve
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto original_shape = input_tensor_a.get_shape();
     const auto input_shape_b = input_tensor_b.get_shape();
 
     std::size_t height_b{};
@@ -53,7 +52,7 @@ inline BinaryProgramType get_program_type(const Binary& operation, const std::ve
         } else if (height_b == 1) {
             return BinaryProgramType::BroadcastHeightMultiCore;
         } else if (width_b == 1) {
-            return BinaryProgramType::BroadcastWidthtMultiCore;
+            return BinaryProgramType::BroadcastWidthMultiCore;
         } else {
             TT_THROW("Invalid broadcasting dimensions");
         }
@@ -225,7 +224,7 @@ operation::ProgramWithCallbacks Binary::create_program(
                 output_tensor,
                 binary_op_type_to_bcast_op_math.at(this->program_config.op_type),
                 tt::tt_metal::BcastOpDim::H);
-        case BinaryProgramType::BroadcastWidthtMultiCore:
+        case BinaryProgramType::BroadcastWidthMultiCore:
             return bcast_multi_core_w(
                 input_tensor_a,
                 input_tensor_b,

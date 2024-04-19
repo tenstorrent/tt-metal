@@ -132,7 +132,10 @@ struct MakeBinary {
                 DataType::BFLOAT16,
                 Layout::TILE)
                 .to(input_tensor_a.device());
-        return this->operator()(input_tensor_a, scalar_tensor, memory_config, dtype, fused_activations);
+
+        // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
+        return this->operator()(
+            input_tensor_a, scalar_tensor, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
     }
 };
 }  // namespace detail
@@ -163,4 +166,9 @@ ttnn::Tensor operator*(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
 
 }  // namespace operations
 using operations::binary::add;
+using operations::binary::add_;
+using operations::binary::multiply;
+using operations::binary::multiply_;
+using operations::binary::subtract;
+using operations::binary::subtract_;
 }  // namespace ttnn
