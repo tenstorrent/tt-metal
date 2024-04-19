@@ -3,7 +3,7 @@ name: "Multi-chip unit tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1,4,7,9,14,17,19,21 * * *"
+    - cron: "0 */3 * * *"
 
 jobs:
   tests-multi-device:

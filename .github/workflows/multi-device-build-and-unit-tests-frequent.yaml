@@ -3,7 +3,7 @@ name: "Nightly multi-chip tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1,6 * * *"
+    - cron: "0 */4 * * *"
 
 jobs:
   tests-multi-device:
