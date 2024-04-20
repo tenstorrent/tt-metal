@@ -28,7 +28,6 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
 
-@pytest.mark.skip(reason="#7664: Mixing single and multi device tensors error")
 @pytest.mark.parametrize(
     "llm_mode, device_batch_size, seq_len, kv_cache_len",
     (
