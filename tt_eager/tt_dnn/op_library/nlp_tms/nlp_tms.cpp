@@ -407,8 +407,6 @@ void CreateQKVHeadsSeparateTensors::validate(const std::vector<Tensor> &input_te
     uint32_t k_shard_wt = (kv_input_shape[3] / (2 * num_w_cores * TILE_WIDTH));
     uint32_t k_shard_ht = ((kv_input_shape[0] * kv_input_shape[2]) / (num_h_cores * TILE_HEIGHT));
 
-    std::cout<<fmt::format("Hidden dimension {} Num W Cores {} Tile Width {}", kv_input_shape[3], num_w_cores, TILE_WIDTH);
-
     TT_FATAL(q_shard_ht > 0, "0 height shards on Q");
     TT_FATAL(q_shard_wt > 0, "0 width shards on Q");
     TT_FATAL(k_shard_ht > 0, "0 height shards on K");

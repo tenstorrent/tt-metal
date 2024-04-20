@@ -52,12 +52,12 @@ config_override = {
 
 split_chunks = {
     (320, 960, 64, 64): 2,
-    (640, 1920, 32, 32): 3,
-    (640, 1280, 32, 32): 2,
-    (640, 960, 32, 32): 2,
-    (1280, 1920, 16, 16): 3,
-    (1280, 2560, 8, 8): 2,
-    (1280, 2560, 16, 16): 2,
+    (640, 1920, 32, 32): 2,
+    # (640, 1280, 32, 32): 2,
+    # (640, 960, 32, 32): 2,
+    (1280, 1920, 16, 16): 2,
+    # (1280, 2560, 8, 8): 2,
+    (1280, 2560, 16, 16): 2,  # TODO: Can remove with reallocation
 }
 
 
@@ -333,6 +333,46 @@ class resnetBlock2D:
             self.parameters.time_emb_proj.weight = weight_to_bfp8(self.parameters.time_emb_proj.weight)
             self.parameters.time_emb_proj.bias = weight_to_bfp8(self.parameters.time_emb_proj.bias)
 
+    def reshard_to(self, tensor, grid_size, layout):
+        if layout == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+            shard_spec = [tensor.volume() // tensor.shape[-1] // grid_size[0], tensor.shape[-1] // grid_size[1]]
+        elif layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+            num_cores = grid_size[0] * grid_size[1]
+            shard_spec = [tensor.volume() // tensor.shape[-1] // num_cores, tensor.shape[-1]]
+        output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                )
+            }
+        )
+        output_shard_spec = ttnn.experimental.tensor.ShardSpec(
+            output_shard_grid,
+            shard_spec,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            False,
+        )
+        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            layout,
+            ttnn.experimental.tensor.BufferType.L1,
+            output_shard_spec,
+        )
+        if tensor.is_sharded():
+            tensor = ttnn.experimental.tensor.reshard(
+                tensor,
+                output_mem_config,
+            )
+        else:
+            tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+                tensor,
+                grid_size,
+                shard_spec,
+                layout,
+                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            )
+        return tensor
+
     def __call__(
         self,
         input_tensor,
@@ -361,13 +401,17 @@ class resnetBlock2D:
 
         out_channels = in_channels if out_channels is None else out_channels
 
-        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+        # print(input_tensor.shape)
+        # print(input_tensor.memory_config())
+        hidden_states = ttnn.to_layout(
+            input_tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
-            hidden_states = ttnn.reshape(
-                hidden_states, (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, in_channels)
-            )
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
 
+        hidden_states = ttnn.reshape(
+            hidden_states, (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, in_channels)
+        )
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=groups,
@@ -383,7 +427,6 @@ class resnetBlock2D:
             hidden_states,
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, in_channels),
         )
-
         if up:
             assert False, "Up block within residual block is not implemented!"
         elif down:
@@ -391,6 +434,7 @@ class resnetBlock2D:
 
         conv1_split_chunks = len(self.conv1s)
         if conv1_split_chunks == 1:
+            # Once https://github.com/tenstorrent/tt-metal/issues/7071 is in convert to reshard
             hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
                 hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
             )
@@ -422,7 +466,9 @@ class resnetBlock2D:
                             hidden_states.shape[2] - 1,
                             output_tensor_end_width_dim - 1,
                         ],
-                        # output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+                        output_mem_config=ttl.tensor.MemoryConfig(
+                            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+                        ),
                     )
                 )
                 output_tensor_start_width_dim += split_input_channels
@@ -448,7 +494,10 @@ class resnetBlock2D:
             split_hidden_states = []
 
         if temb is not None:
-            temb = nonlinearity(temb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            grid_size = (2, self.conv1s[0].conv.grid_size[1])
+            # num_cores = grid_size[0] * grid_size[1]
+            # temb = self.reshard_to(temb, grid_size, ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED)
+            temb = nonlinearity(temb, memory_config=temb.memory_config())
             if temb_channels is not None:
                 if time_embedding_norm == "default":
                     time_emb_proj_out_channels = out_channels
@@ -456,24 +505,50 @@ class resnetBlock2D:
                     time_emb_proj_out_channels = out_channels * 2
                 else:
                     raise ValueError(f"unknown time_embedding_norm : {time_embedding_norm} ")
-                temb = ttnn.linear(
+                program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=grid_size,
+                    in0_block_w=temb.shape[-1] // grid_size[1] // 32,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=self.parameters.time_emb_proj.weight.shape[-1] // grid_size[1] // 32,
+                    transpose_mcast=True,
+                    fused_activation=None,
+                )
+                compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=False,
+                )
+                l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
+                    memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+                    buffer_type=ttnn.experimental.tensor.BufferType.L1,
+                )
+                temb = ttnn.experimental.operations.primary.matmul(
                     temb,
                     self.parameters.time_emb_proj.weight,
                     bias=self.parameters.time_emb_proj.bias,
-                    core_grid=temb.device().core_grid,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    program_config=program_config,
+                    output_mem_config=l1_memory_config,
+                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    compute_kernel_config=compute_kernel_config,
                 )
 
         if temb is not None and time_embedding_norm == "default":
+            # Need block and width sharded broadcast to eliminate interleaved.
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
                 hidden_states,
                 (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, out_channels),
             )
-            hidden_states = ttnn.add(hidden_states, temb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.add(hidden_states, temb, memory_config=hidden_states.memory_config())
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+        # print(hidden_states.shape)
+        # print(hidden_states.memory_config())
+        hidden_states = ttnn.to_layout(
+            hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         hidden_states = ttnn.to_memory_config(hidden_states, self.second_gn_expected_input_sharded_memory_config)
         hidden_states = ttnn.group_norm(
             hidden_states,
