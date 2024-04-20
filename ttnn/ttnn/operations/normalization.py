@@ -77,58 +77,9 @@ def _layer_norm_validate_input_tensors(
     )
 
 
-@ttnn.register_operation(
-    name="ttnn.layer_norm",
-    validate_input_tensors=_layer_norm_validate_input_tensors,
-    golden_function=_golden_function,
+layer_norm = ttnn.register_operation(name="ttnn.layer_norm", is_cpp_function=True, golden_function=_golden_function)(
+    ttnn._ttnn.operations.normalization.layer_norm
 )
-def layer_norm(
-    input_tensor: ttnn.Tensor,
-    *,
-    epsilon: float = 1e-12,
-    weight: Optional[ttnn.Tensor] = None,
-    bias: Optional[ttnn.Tensor] = None,
-    residual_input_tensor: Optional[ttnn.Tensor] = None,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    program_config: Optional[ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig] = None,
-) -> ttnn.Tensor:
-    r"""
-    layer_norm(input_tensor: ttnn.Tensor, *, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Compute layer_norm over :attr:`input_tensor`.
-
-    """
-
-    if program_config is None:
-        if residual_input_tensor is not None:
-            output_tensor = ttnn.experimental.tensor.add_layernorm(
-                input_tensor, residual_input_tensor, epsilon, weight, bias, output_mem_config=memory_config
-            )
-        else:
-            output_tensor = ttnn.experimental.tensor.layernorm(
-                input_tensor,
-                epsilon,
-                weight,
-                bias,
-                output_mem_config=memory_config,
-            )
-    else:
-        if residual_input_tensor is not None:
-            output_tensor = ttnn.experimental.operations.primary.add_layernorm(
-                input_tensor,
-                residual_input_tensor,
-                epsilon,
-                weight,
-                bias,
-                output_mem_config=memory_config,
-                program_config=program_config,
-            )
-        else:
-            output_tensor = ttnn.experimental.operations.primary.layernorm(
-                input_tensor, epsilon, weight, bias, output_mem_config=memory_config, program_config=program_config
-            )
-
-    return output_tensor
 
 
 def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
