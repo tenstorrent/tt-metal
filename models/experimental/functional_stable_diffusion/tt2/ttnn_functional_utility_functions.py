@@ -4,6 +4,7 @@
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
+import math
 
 import torch
 from typing import Optional, Dict
@@ -223,3 +224,14 @@ def determine_largest_subblock_size(block_height, block_width, fp32_accum=False)
                 continue
             break
     return subblock_height, subblock_width
+
+
+def determine_blocking(M, K, N, grid_size, transpose_mcast=False):
+    logical_grid_size = grid_size if transpose_mcast == False else (grid_size[1], grid_size[0])
+
+    in0_block_h = M // logical_grid_size[1] // 32
+    in0_block_w = K // logical_grid_size[0] // 32
+    out_block_h = math.ceil(M / logical_grid_size[1] / 32)
+    out_block_w = math.ceil(N / logical_grid_size[0] / 32)
+    out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
+    return in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w

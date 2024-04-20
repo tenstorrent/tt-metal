@@ -231,6 +231,8 @@ class transformer_2d_model:
         if spilled_residual:
             residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
 
+        # print(hidden_states.shape)
+        # print(hidden_states.memory_config())
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.ROW_MAJOR_LAYOUT,

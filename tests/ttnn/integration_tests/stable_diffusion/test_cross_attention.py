@@ -250,8 +250,7 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
     hidden_states = hidden_states.reshape(1, 1, N * C * H, W)
     ttnn_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
-    # ttnn.CONFIG.enable_logging = True
-    # ttnn.CONFIG.enable_comparison_mode = True
+
     model = tt2_ttnn_cross_attention(device, parameters)
     ttnn_output = model(
         ttnn_hidden_states,
