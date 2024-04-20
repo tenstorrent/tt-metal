@@ -107,8 +107,8 @@ def tt_all_gather_torch(tensors, dim=-1):
     return res
 
 
-def generate_rot_emb(dhead, end):
-    cos, sin = precompute_freqs(dhead, end)
+def generate_rot_emb(dhead, end, theta: float = 10000.0):
+    cos, sin = precompute_freqs(dhead, end, theta)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 
