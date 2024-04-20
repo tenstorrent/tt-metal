@@ -213,11 +213,12 @@ struct ConcatenateHeads : public NlpConcatHeads {
 inline Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [&input_tensor, &memory_config](
+        [memory_config](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor = input_tensors.at(0);
             return operation::run(
-                ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, input_tensors);
+                ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor});
         },
         {input_tensor},
         output_tensors);

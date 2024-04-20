@@ -23,7 +23,7 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const auto input_shape = input_tensor.get_legacy_shape();
     TT_FATAL(input_shape.rank() == 3, "Input Tensor must have strictly 3 dimensions!");
     TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::TILE,"Input Tensor must be in a TILE_LAYOUT!");
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,  "Input_tensor must be on device!");
+    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE or input_tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE,  "Input_tensor must be on device!");
 
     if (num_kv_heads.has_value()) {
         TT_FATAL(transpose_k_heads == false, "Transpose = true and separate num_kv_heads is not supported");
