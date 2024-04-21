@@ -429,19 +429,20 @@ bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const 
 
 
 // Verify RT args for a core at a given address by comparing to expected values.
-bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, uint32_t addr, std::vector<uint32_t> expected_rt_args, uint32_t incr_val) {
+bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const tt::RISCV &riscv, uint32_t addr, std::vector<uint32_t> expected_rt_args, uint32_t incr_val) {
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
-    log_debug(tt::LogTest, "Verifying {} {} RT args for {} at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, logical_core.str(), addr, incr_val);
-
-    std::vector<uint32_t> written_args;
-    tt::tt_metal::detail::ReadFromDeviceL1(device, logical_core, addr, expected_rt_args.size() * sizeof(uint32_t), written_args);
+    // Same idea as ReadFromDeviceL1() but with ETH support.
+    tt::Cluster::instance().l1_barrier(device->id());
+    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core) : device->worker_core_from_logical_core(logical_core);
+    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
     for(int i=0; i<expected_rt_args.size(); i++){
         uint32_t expected_val = expected_rt_args[i] + incr_val;
-        log_debug(tt::LogTest, "Checking {} RT Arg. i: {} expected: {} observed: {}", label, i, expected_val, written_args[i]);
-        EXPECT_EQ(written_args[i], expected_val);
-        pass &= (written_args[i] == expected_val);
+        log_debug(tt::LogTest, "Checking {} RT Arg. i: {} expected: {} observed: {}", label, i, expected_val, args_readback[i]);
+        EXPECT_EQ(args_readback[i], expected_val);
+        pass &= (args_readback[i] == expected_val);
     }
     return pass;
 }
@@ -495,7 +496,15 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
                 });
             break;
         case tt::RISCV::ERISC:
-            TT_ASSERT("ERISC not yet supported in test");
+            unique_args_addr = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+            kernel_id = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
+                cr_set,
+                tt::tt_metal::EthernetConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = compile_args,
+                });
             break;
         default: TT_THROW("Unsupported {} processor in test.", riscv);
     }
@@ -528,8 +537,8 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 CoreCoord core_coord(x, y);
-                pass &= verify_rt_args(true, device, core_coord, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
-                pass &= verify_rt_args(false, device, core_coord, common_args_addr, common_runtime_args, common_arg_incr_val);
+                pass &= verify_rt_args(true, device, core_coord, riscv, unique_args_addr, unique_runtime_args, unique_arg_incr_val);
+                pass &= verify_rt_args(false, device, core_coord, riscv, common_args_addr, common_runtime_args, common_arg_incr_val);
             }
         }
     }
@@ -745,6 +754,19 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreComput
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
+    }
+}
+
+// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return 0 active eth cores, that's okay.
+TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
+    for (Device *device : devices_) {
+        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+            CoreRange cr0(eth_core);
+            CoreRangeSet cr_set({cr0});
+            DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+            log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+        }
     }
 }
 
