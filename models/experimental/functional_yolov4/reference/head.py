@@ -6,7 +6,7 @@ class Head(nn.Module):
     def __init__(self):
         super().__init__()
         # left side of graph
-        self.c1 = nn.Conv2d(128, 256, 3, 1, 1, bias=False)
+        self.c1 = nn.Conv2d(128, 256, 3, 2, 1, bias=False)
         self.b1 = nn.BatchNorm2d(256)
         self.relu = nn.ReLU(inplace=True)
 
@@ -48,7 +48,7 @@ class Head(nn.Module):
         self.c10 = nn.Conv2d(256, 255, 1, 1, 0, bias=False)
 
         # CBR bellow output2 on the right graph BUT takes the output of self.relu(6)
-        self.c11 = nn.Conv2d(256, 512, 3, 1, 1, bias=False)
+        self.c11 = nn.Conv2d(256, 512, 3, 2, 1, bias=False)
         self.b11 = nn.BatchNorm2d(512)
         self.relu = nn.ReLU(inplace=True)
 
@@ -73,12 +73,12 @@ class Head(nn.Module):
         self.b16 = nn.BatchNorm2d(512)
         self.relu = nn.ReLU(inplace=True)
 
-        self.c16 = nn.Conv2d(512, 1024, 3, 1, 1, bias=False)
-        self.b16 = nn.BatchNorm2d(1024)
+        self.c17 = nn.Conv2d(512, 1024, 3, 1, 1, bias=False)
+        self.b17 = nn.BatchNorm2d(1024)
         self.relu = nn.ReLU(inplace=True)
 
         # last stand alone conv from right side of graph. outputs output3
-        self.c17 = nn.Conv2d(1024, 255, 1, 1, 0, bias=False)
+        self.c18 = nn.Conv2d(1024, 255, 1, 1, 0, bias=False)
 
     def forward(self, input: torch.Tensor):
         x1 = self.c1(input)
@@ -145,12 +145,18 @@ class Head(nn.Module):
         x15 = self.c15(x14_r)
         x15_b = self.b15(x15)
         x15_r = self.relu(x15_b)
-
+        num_channels = x15_r.size(1)  # Get the number of channels
+        print("the number of channels in x15_r are: ", num_channels)
+        print("self.c16: ", self.c16)
         x16 = self.c16(x15_r)
         x16_b = self.b16(x16)
         x16_r = self.relu(x16_b)
 
         # generates output3
         x17 = self.c17(x16_r)
+        x17_b = self.b17(x17)
+        x17_r = self.relu(x17_b)
 
-        return x8, x10, x17
+        x18 = self.c18(x17_r)
+
+        return x8, x10, x18

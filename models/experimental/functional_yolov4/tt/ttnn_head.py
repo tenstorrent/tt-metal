@@ -10,6 +10,7 @@ import tt_lib
 class TtHead:
     def __init__(self, device, parameters) -> None:
         self.device = device
+        print("keys in parameters in TtHead are: ", parameters.keys())
         self.c1 = parameters.c1
         self.c2 = parameters.c2
         self.c3 = parameters.c3
@@ -35,8 +36,9 @@ class TtHead:
         outNeck1 = torch.ones([1, 256, 20, 20])
         outNeck1 = torch.permute(outNeck1, (0, 2, 3, 1))
         outNeck1 = outNeck1.reshape(outNeck1.shape[0], 1, outNeck1.shape[1] * outNeck1.shape[2], outNeck1.shape[3])
-        outNeck1 = ttnn.from_torch(outNeck1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        outNeck1 = outNeck1.to(device, self.c1.conv.input_sharded_memory_config)
+        outNeck1 = ttnn.from_torch(outNeck1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        outNeck1 = outNeck1.to(device)
+        # outNeck1 = outNeck1.to(device, self.c1.conv.input_sharded_memory_config)
         output_tensor = tt_lib.tensor.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         output_tensor = ttnn.concat([output_tensor, outNeck1], dim=3)
