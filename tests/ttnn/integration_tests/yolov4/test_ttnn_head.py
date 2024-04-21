@@ -143,7 +143,8 @@ def create_custom_preprocessor(device):
             parameters["c7"], c7_parallel_config = preprocess_conv2d(
                 conv7_weight, conv7_bias, ttnn_module_args.c7, return_parallel_config=True
             )
-
+            print("parameters['c7'] type is: ", type(parameters["c7"]))
+            print("parameters['c7'] is: ", parameters["c7"])
             ttnn_module_args.c8["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c8["use_shallow_conv_variant"] = (
                 False if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 else True
@@ -157,11 +158,11 @@ def create_custom_preprocessor(device):
             print("conv8_weight: ", conv8_weight)
             conv8_bias = None
             update_ttnn_module_args(ttnn_module_args.c8)
-            #            parameters["c8"] = {}
-            #            parameters["c8"]["weight"] = conv8_weight
-            parameters["c8"], c8_parallel_config = preprocess_conv2d(
-                conv8_weight, conv8_bias, ttnn_module_args.c8, return_parallel_config=True
-            )
+            parameters["c8"] = {}
+            parameters["c8"]["weight"] = conv8_weight
+            #            parameters["c8"], c8_parallel_config = preprocess_conv2d(
+            #                conv8_weight, conv8_bias, ttnn_module_args.c8, return_parallel_config=True
+            #            )
 
             ttnn_module_args.c9["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c9["use_shallow_conv_variant"] = (
