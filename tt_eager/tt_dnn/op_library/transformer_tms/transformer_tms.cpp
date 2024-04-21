@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
-
-#include "tt_metal/host_api.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace tt {
 namespace operations {
@@ -22,13 +21,18 @@ void SplitFusedQKVAndSplitHeads::validate(const std::vector<Tensor>& input_tenso
     TT_FATAL((input_tensor.get_legacy_shape() == Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(
+        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format");
 
     if (input_tensor.is_sharded() == false) {
         TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
     } else {
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
-        TT_FATAL((bbox.end.x < this->compute_with_storage_grid_size.x && bbox.end.y < this->compute_with_storage_grid_size.y));
+        TT_FATAL(
+            (bbox.end.x < this->compute_with_storage_grid_size.x &&
+             bbox.end.y < this->compute_with_storage_grid_size.y));
         TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
         TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     }
@@ -39,9 +43,12 @@ std::vector<Shape> SplitFusedQKVAndSplitHeads::compute_output_shapes(const std::
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     uint32_t num_heads = this->num_heads;
     uint32_t num_output_tensors = 3;
-    uint32_t M = input_tensor.get_legacy_shape()[2]; // 384
-    uint32_t K = input_tensor.get_legacy_shape()[-1] / num_output_tensors / num_heads; // 64
-    return {Shape{batch_size, this->num_heads, M, K}, Shape{batch_size, this->num_heads, K, M}, Shape{batch_size, this->num_heads, M, K}};
+    uint32_t M = input_tensor.get_legacy_shape()[2];                                    // 384
+    uint32_t K = input_tensor.get_legacy_shape()[-1] / num_output_tensors / num_heads;  // 64
+    return {
+        Shape{batch_size, this->num_heads, M, K},
+        Shape{batch_size, this->num_heads, K, M},
+        Shape{batch_size, this->num_heads, M, K}};
 }
 
 std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -49,52 +56,66 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
 
     if (input_tensor.is_sharded()) {
         // tensor dim
-        uint32_t batch = input_tensor.get_legacy_shape()[0]; // 12
+        uint32_t batch = input_tensor.get_legacy_shape()[0];  // 12
         uint32_t num_heads = this->num_heads;
         uint32_t num_output_tensors = 3;
-        uint32_t M = input_tensor.get_legacy_shape()[2]; // 384
-        uint32_t K = input_tensor.get_legacy_shape()[-1] / num_output_tensors / num_heads; // 64
+        uint32_t M = input_tensor.get_legacy_shape()[2];                                    // 384
+        uint32_t K = input_tensor.get_legacy_shape()[-1] / num_output_tensors / num_heads;  // 64
         // core range
         CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
         ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
         auto bbox = all_cores.bounding_box();
         uint32_t num_M_cores = shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end.x + 1 : bbox.end.y + 1;
         // shard spec
-        uint32_t per_core_M_qv = (num_heads / num_M_cores) * M; // 768
-        uint32_t per_core_N_qv = K; // 64
+        uint32_t per_core_M_qv = (num_heads / num_M_cores) * M;  // 768
+        uint32_t per_core_N_qv = K;                              // 64
         ShardSpec shard_spec_qv = ShardSpec{all_cores, {per_core_M_qv, per_core_N_qv}, shard_orientation};
-        uint32_t per_core_M_k = (num_heads / num_M_cores) * K; // 128
-        uint32_t per_core_N_k = M; // 384
+        uint32_t per_core_M_k = (num_heads / num_M_cores) * K;  // 128
+        uint32_t per_core_N_k = M;                              // 384
         ShardSpec shard_spec_k = ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, shard_orientation};
         // create sharded tensors
         auto mem_config_qv = this->output_mem_config;
         mem_config_qv.shard_spec = shard_spec_qv;
         auto mem_config_k = this->output_mem_config;
         mem_config_k.shard_spec = shard_spec_k;
-        auto out_tensor_q = create_sharded_device_tensor(Shape{batch, num_heads, M, K}, input_tensor.get_dtype(),
-                Layout::TILE, input_tensor.device(), mem_config_qv);
-        auto out_tensor_k = create_sharded_device_tensor(Shape{batch, num_heads, K, M}, input_tensor.get_dtype(),
-                Layout::TILE, input_tensor.device(), mem_config_k);
-        auto out_tensor_v = create_sharded_device_tensor(Shape{batch, num_heads, M, K}, input_tensor.get_dtype(),
-                Layout::TILE, input_tensor.device(), mem_config_qv);
+        auto out_tensor_q = create_sharded_device_tensor(
+            Shape{batch, num_heads, M, K},
+            input_tensor.get_dtype(),
+            Layout::TILE,
+            input_tensor.device(),
+            mem_config_qv);
+        auto out_tensor_k = create_sharded_device_tensor(
+            Shape{batch, num_heads, K, M}, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+        auto out_tensor_v = create_sharded_device_tensor(
+            Shape{batch, num_heads, M, K},
+            input_tensor.get_dtype(),
+            Layout::TILE,
+            input_tensor.device(),
+            mem_config_qv);
         return {out_tensor_q, out_tensor_k, out_tensor_v};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
-
 }
 
-operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
+    TT_ASSERT(
+        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+        "Unsupported grid shape");
 
     if (input_tensor.is_sharded()) {
-        return multi_core_split_query_key_value_and_split_heads_sharded(input_tensor, output_tensors, this->compute_with_storage_grid_size);
+        return multi_core_split_query_key_value_and_split_heads_sharded(
+            input_tensor, output_tensors, this->compute_with_storage_grid_size);
     } else {
-        return multi_core_split_query_key_value_and_split_heads(input_tensor, output_tensors, this->compute_with_storage_grid_size);
+        return multi_core_split_query_key_value_and_split_heads(
+            input_tensor, output_tensors, this->compute_with_storage_grid_size);
     }
 }
 
@@ -114,7 +135,10 @@ void ConcatenateHeads::validate(const std::vector<Tensor>& input_tensors) const 
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(
+        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format");
 
     TT_FATAL((input_tensor.get_legacy_shape() == Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
 }
@@ -127,16 +151,21 @@ std::vector<Shape> ConcatenateHeads::compute_output_shapes(const std::vector<Ten
 
 std::vector<Tensor> ConcatenateHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks ConcatenateHeads::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks ConcatenateHeads::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
 
     auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
+    TT_ASSERT(
+        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+        "Unsupported grid shape");
 
     return multi_core_concat_heads(input_tensor, output_tensor, this->compute_with_storage_grid_size);
 }
@@ -157,34 +186,49 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE), "Inputs to matmul must be tilized");
+    TT_FATAL(
+        (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
+        "Inputs to matmul must be tilized");
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Operands to matmul need to be on device!");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
     const auto ashape = input_tensor_a.get_legacy_shape();
     const auto bshape = input_tensor_b.get_legacy_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
-    TT_FATAL((bshape[1] == 1), "Number of kv_heads must be 1!"); // TODO: May need to uplift to support falcon-40B
+    TT_FATAL((bshape[1] == 1), "Number of kv_heads must be 1!");  // TODO: May need to uplift to support falcon-40B
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
 
     bool read_from_kv_cache = false;
     if (this->num_tokens.has_value() or this->transpose_hw.has_value()) {
-        TT_FATAL((this->num_tokens.has_value() and this->transpose_hw.has_value()), "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
+        TT_FATAL(
+            (this->num_tokens.has_value() and this->transpose_hw.has_value()),
+            "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
         TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
         read_from_kv_cache = true;
     }
 
     if (read_from_kv_cache) {
         if (this->transpose_hw.value()) {
-            TT_FATAL(ashape[3] == bshape[3] && "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]"); // A.K == B.K
+            TT_FATAL(
+                ashape[3] == bshape[3] &&
+                "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]");  // A.K == B.K
         } else {
-            TT_FATAL(ashape[3] == this->num_tokens && "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the length of the cache we read"); // A.K == B.K
+            TT_FATAL(
+                ashape[3] == this->num_tokens &&
+                "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the "
+                "length of the cache we read");  // A.K == B.K
         }
     } else {
-        TT_FATAL(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op"); // A.K == B.K
+        TT_FATAL(
+            ashape[3] == bshape[2] &&
+            "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
     }
 }
 
@@ -208,18 +252,30 @@ std::vector<Shape> AttnMatmul::compute_output_shapes(const std::vector<Tensor>& 
 
 std::vector<Tensor> AttnMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks AttnMatmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks AttnMatmul::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
-    TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
+    TT_ASSERT(
+        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+        "Unsupported grid shape");
 
-    return multi_core_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->compute_with_storage_grid_size, this->compute_kernel_config);
+    return multi_core_attn_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        output_tensor,
+        this->num_tokens,
+        this->transpose_hw,
+        this->compute_with_storage_grid_size,
+        this->compute_kernel_config);
 }
 
 tt::stl::reflection::Attributes AttnMatmul::attributes() const {
@@ -231,7 +287,7 @@ tt::stl::reflection::Attributes AttnMatmul::attributes() const {
     };
 }
 
-const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<AttnMatmul>(
         this->transpose_hw,
         this->output_mem_config,
@@ -239,10 +295,8 @@ const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).get_dtype(),
         input_tensors.at(1).memory_config(),
-        input_tensors.at(1).get_dtype()
-    );
+        input_tensors.at(1).get_dtype());
 }
-
 
 void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -253,11 +307,17 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE), "Inputs to matmul must be tilized");
+    TT_FATAL(
+        (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
+        "Inputs to matmul must be tilized");
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Operands to matmul need to be on device!");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
     const auto ashape = input_tensor_a.get_legacy_shape();
@@ -268,22 +328,29 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((bshape[0] == 32), "Only batch 32 is supported for group attention matmul!");
 
     const auto num_cores_used = std::max(ashape[1], TILE_HEIGHT);  // Need at least 32 cores for mcasting KV heads
-    TT_FATAL((num_cores_used <= this->compute_with_storage_grid_size.x * this->compute_with_storage_grid_size.y), "Compute grid size is too small for group attention matmul! For now, we require at most 1 q_heads per core.");
-
+    TT_FATAL(
+        (num_cores_used <= this->compute_with_storage_grid_size.x * this->compute_with_storage_grid_size.y),
+        "Compute grid size is too small for group attention matmul! For now, we require at most 1 q_heads per core.");
 
     // Any sharded memory configs must be HEIGHT_SHARDED and have the same orientation
     ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
     if (input_tensor_a.is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(input_tensor_a.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
-        TT_FATAL(input_tensor_a.shard_spec().value().num_cores() == ashape[1], "Q heads must be sharded on number of q heads!");
+        TT_FATAL(
+            input_tensor_a.shard_spec().value().orientation == shard_orientation,
+            "Any sharded memory configs must have the same shard orientation as one another!");
+        TT_FATAL(
+            input_tensor_a.shard_spec().value().num_cores() == ashape[1],
+            "Q heads must be sharded on number of q heads!");
         auto shard_shape = input_tensor_a.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] == ashape[2]);
         TT_FATAL(shard_shape[1] == ashape[3]);
     }
     if (input_tensor_b.is_sharded()) {
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(input_tensor_b.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
+        TT_FATAL(
+            input_tensor_b.shard_spec().value().orientation == shard_orientation,
+            "Any sharded memory configs must have the same shard orientation as one another!");
         TT_FATAL(input_tensor_b.shard_spec().value().num_cores() == bshape[0], "KV heads must be sharded on batch!");
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] == bshape[1] * bshape[2]);
@@ -292,15 +359,22 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     if (this->output_mem_config.is_sharded()) {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
 
-        // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in GroupAttnMatmul::create_output_tensors
+        // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
+        // GroupAttnMatmul::create_output_tensors
         if (this->output_mem_config.shard_spec.has_value()) {
             const Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
-            CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
+            CoreRangeSet all_cores =
+                num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
             auto shard_shape = this->output_mem_config.shard_spec.value().shape;
-            TT_FATAL(this->output_mem_config.shard_spec.value().grid == all_cores, "Shard spec in output mem config must match shard spec calculated in GroupAttnMatmul::create_output_tensors!");
-            TT_FATAL(this->output_mem_config.shard_spec.value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
+            TT_FATAL(
+                this->output_mem_config.shard_spec.value().grid == all_cores,
+                "Shard spec in output mem config must match shard spec calculated in "
+                "GroupAttnMatmul::create_output_tensors!");
+            TT_FATAL(
+                this->output_mem_config.shard_spec.value().orientation == shard_orientation,
+                "Any sharded memory configs must have the same shard orientation as one another!");
             TT_FATAL(shard_shape[0] == output_shape[2]);
             TT_FATAL(shard_shape[1] == output_shape[3]);
         }
@@ -308,19 +382,28 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
 
     bool read_from_kv_cache = false;
     if (this->num_tokens.has_value() or this->transpose_hw.has_value()) {
-        TT_FATAL((this->num_tokens.has_value() and this->transpose_hw.has_value()), "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
+        TT_FATAL(
+            (this->num_tokens.has_value() and this->transpose_hw.has_value()),
+            "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
         TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
         read_from_kv_cache = true;
     }
 
     if (read_from_kv_cache) {
         if (this->transpose_hw.value()) {
-            TT_FATAL(ashape[3] == bshape[3] && "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]"); // A.K == B.K
+            TT_FATAL(
+                ashape[3] == bshape[3] &&
+                "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]");  // A.K == B.K
         } else {
-            TT_FATAL(ashape[3] == this->num_tokens && "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the length of the cache we read"); // A.K == B.K
+            TT_FATAL(
+                ashape[3] == this->num_tokens &&
+                "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the "
+                "length of the cache we read");  // A.K == B.K
         }
     } else {
-        TT_FATAL(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op"); // A.K == B.K
+        TT_FATAL(
+            ashape[3] == bshape[2] &&
+            "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
     }
 }
 
@@ -352,27 +435,48 @@ std::vector<Tensor> GroupAttnMatmul::create_output_tensors(const std::vector<Ten
         } else {
             const Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
-            CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
+            CoreRangeSet all_cores =
+                num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
-            ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
+            ShardOrientation shard_orientation =
+                this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
             output_mem_config.shard_spec = shard_spec;
         }
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), output_mem_config)};
+        return {create_sharded_device_tensor(
+            this->compute_output_shapes(input_tensors).at(0),
+            this->output_dtype,
+            Layout::TILE,
+            input_tensor_a.device(),
+            output_mem_config)};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
 }
 
-operation::ProgramWithCallbacks GroupAttnMatmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks GroupAttnMatmul::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
-    TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
+    TT_ASSERT(
+        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+        "Unsupported grid shape");
 
-    return multi_core_group_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->out_subblock_w, this->compute_with_storage_grid_size, this->row_major, this->compute_kernel_config);
+    return multi_core_group_attn_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        output_tensor,
+        this->num_tokens,
+        this->transpose_hw,
+        this->out_subblock_w,
+        this->compute_with_storage_grid_size,
+        this->row_major,
+        this->compute_kernel_config);
 }
 
 tt::stl::reflection::Attributes GroupAttnMatmul::attributes() const {
@@ -386,8 +490,7 @@ tt::stl::reflection::Attributes GroupAttnMatmul::attributes() const {
     };
 }
 
-
-const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
@@ -406,29 +509,41 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
         input_tensor_b.memory_config().memory_layout,
         input_tensor_b.memory_config().buffer_type,
         input_tensor_b.get_dtype(),
-        input_tensor_b.device()->id()
-    );
+        input_tensor_b.device()->id());
 }
-
 
 // SSM eltwise mul
 void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE), "Inputs to ssm_eltwise_mul must be tilized");
+    TT_FATAL(
+        (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
+        "Inputs to ssm_eltwise_mul must be tilized");
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to ssm_eltwise_mul need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to ssm_eltwise_mul need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to ssm_eltwise_mul need to be on the same device!");
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Operands to ssm_eltwise_mul need to be on device!");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        "Operands to ssm_eltwise_mul need to be allocated in buffers on device!");
+    TT_FATAL(
+        input_tensor_a.device() == input_tensor_b.device(),
+        "Operands to ssm_eltwise_mul need to be on the same device!");
 
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for input a!");
-    TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for input b!");
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for input a!");
+    TT_FATAL(
+        input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for input b!");
     TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input a!");
     TT_FATAL(input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input b!");
 
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for output!");
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for output!");
     TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for output!");
 
     const auto ashape = input_tensor_a.get_legacy_shape();
@@ -451,20 +566,79 @@ std::vector<Shape> SSMEltwiseMul::compute_output_shapes(const std::vector<Tensor
 }
 
 std::vector<Tensor> SSMEltwiseMul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks SSMEltwiseMul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks SSMEltwiseMul::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
-    return multi_core_ssm_eltwise_mul(input_tensor_a, input_tensor_b, output_tensor, device_compute_with_storage_grid_size);
+    return multi_core_ssm_eltwise_mul(
+        input_tensor_a, input_tensor_b, output_tensor, device_compute_with_storage_grid_size);
 }
 
 tt::stl::reflection::Attributes SSMEltwiseMul::attributes() const {
+    return {
+        {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
+    };
+}
+
+void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 1);
+    const auto& input_tensor_a = input_tensors.at(0);
+    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to ssm_1d_sum_reduce must be tilized");
+
+    // TODO: Uplift to support BFLOAT8_B and mixed precision
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to ssm_1d_sum_reduce need to be on device!");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr, "Operands to ssm_1d_sum_reduce need to be allocated in buffers on device!");
+
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for input a!");
+    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input a!");
+
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for output!");
+    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for output!");
+
+    constexpr uint32_t latent = 32;
+    const auto ashape = input_tensor_a.get_legacy_shape();
+    TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Dim 1 and 2 are expected to be 1 in input a!");
+    TT_FATAL((ashape[2] == TILE_HEIGHT), "Batch size must be 32 for input a!");
+    TT_FATAL((ashape[3] % TILE_WIDTH == 0), "Final dim must be a multiple of 32!");
+    TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
+}
+
+std::vector<Shape> SSM1DSumReduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    constexpr uint32_t latent = 32;
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto shape_a = input_tensor_a.get_legacy_shape();
+    return {Shape{shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent}};
+}
+
+std::vector<Tensor> SSM1DSumReduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+}
+
+operation::ProgramWithCallbacks SSM1DSumReduce::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
+    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    return multi_core_ssm_1d_sum_reduce(input_tensor_a, output_tensor, device_compute_with_storage_grid_size);
+}
+
+tt::stl::reflection::Attributes SSM1DSumReduce::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},
