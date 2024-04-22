@@ -14,9 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
-          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
+          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
         ]
+    name: "${{ matrix.runner-info.name }} device perf"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
