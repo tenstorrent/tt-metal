@@ -809,12 +809,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         ),
-        "DEFAULT_MATMUL_EQUIVALENT_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_approx_mode=True,
