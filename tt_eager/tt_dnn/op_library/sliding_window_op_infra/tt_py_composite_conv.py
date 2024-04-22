@@ -314,7 +314,7 @@ def determine_1x1conv_as_matmul_config(
             out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
             per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
-            transpose_mcast=True,
+            transpose_mcast=False,
             fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
             if fuse_relu
             else None,
@@ -878,7 +878,7 @@ class TTPyCompositeConv(TTPyOp):
         shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), self.ncores_nhw)
         assert self.is_1d_systolic == (shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
         shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
+            ttl.tensor.ShardOrientation.ROW_MAJOR  # if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )
         shard_halo = False
         shard_shape = [
@@ -933,7 +933,8 @@ class TTPyCompositeConv(TTPyOp):
                     (int)(padded_input_channels / grid_size_y),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                # ttl.tensor.ShardOrientation.COL_MAJOR,
             )
 
         return conv_input_on_device

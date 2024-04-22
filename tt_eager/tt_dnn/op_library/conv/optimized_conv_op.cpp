@@ -172,7 +172,8 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
             CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::COL_MAJOR};
+            // auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::COL_MAJOR};
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};

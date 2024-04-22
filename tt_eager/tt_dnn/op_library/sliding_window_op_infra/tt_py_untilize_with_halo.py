@@ -126,7 +126,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
             def get_memory_config(shard_shape):
                 shard_orientation = (
-                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
+                    ttl.tensor.ShardOrientation.ROW_MAJOR
+                    # ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
                 )
                 shard_halo = False
                 shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
