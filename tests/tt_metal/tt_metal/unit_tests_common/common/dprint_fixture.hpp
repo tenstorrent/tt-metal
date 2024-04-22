@@ -43,7 +43,8 @@ protected:
                 disabled[core_desc.dispatch_core_type].insert(core);
             }
         }
-        tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
+        if (!this->slow_dispatch_)
+            tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
 
         ExtraSetUp();
 

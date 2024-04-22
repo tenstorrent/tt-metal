@@ -32,11 +32,18 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
         }
         logical_core = *(device->get_active_ethernet_cores().begin());
         phys_core = device->ethernet_core_from_logical_core(logical_core);
+    } else if (riscv_type == DebugIErisc) {
+        if (device->get_inactive_ethernet_cores().empty()) {
+            log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+            GTEST_SKIP();
+        }
+        logical_core = *(device->get_inactive_ethernet_cores().begin());
+        phys_core = device->ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
         phys_core = device->worker_core_from_logical_core(logical_core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, phys_core);
 
 
     // Set up the kernel on the correct risc
@@ -104,6 +111,17 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
                 }
             );
             break;
+        case DebugIErisc:
+            assert_kernel = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                logical_core,
+                EthernetConfig{
+                    .eth_mode = Eth::IDLE,
+                    .noc = tt_metal::NOC::NOC_0
+                }
+            );
+            break;
         default:
             log_info("Unsupported risc type: {}, skipping test...", riscv_type);
             GTEST_SKIP();
@@ -165,6 +183,14 @@ TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
+            device
+        );
+    }
+}
+TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
+    for (Device* device : this->devices_) {
+        this->RunTestOnDevice(
+            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},
             device
         );
     }
