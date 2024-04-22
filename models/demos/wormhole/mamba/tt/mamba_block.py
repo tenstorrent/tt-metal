@@ -10,9 +10,9 @@ from typing import Callable
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.helper_funcs import Linear
-from models.demos.mamba.reference.args import ModelArgs
-from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
+from models.demos.wormhole.mamba.reference.args import ModelArgs
+from models.demos.wormhole.mamba.tt.mamba_one_step_ssm import TtMambaSSM
+from models.demos.wormhole.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtMambaBlock(torch.nn.Module):

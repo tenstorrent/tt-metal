@@ -8,8 +8,8 @@ from loguru import logger
 from typing import Optional
 from transformers import AutoTokenizer
 
-from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.demos.mamba.reference.model import Mamba
+from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.wormhole.mamba.reference.model import Mamba
 
 
 def generate_through_selective_scan(

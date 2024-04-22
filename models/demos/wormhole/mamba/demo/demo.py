@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 from transformers import AutoTokenizer
 
-from models.demos.mamba.reference.decode_model import MambaPretrainedModelName
+from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 
 
 def get_cpu_reference_model(version: MambaPretrainedModelName, batch_size: int):
-    from models.demos.mamba.reference.decode_model import MambaDecode
+    from models.demos.wormhole.mamba.reference.decode_model import MambaDecode
 
     return MambaDecode.from_pretrained(version, batch_size=batch_size)
 
@@ -26,8 +26,8 @@ def get_cpu_reference_model(version: MambaPretrainedModelName, batch_size: int):
 def get_tt_metal_model(
     version: MambaPretrainedModelName, device: ttnn.Device, cache_dir: Optional[str] = None, batch_size: int = 32
 ):
-    from models.demos.mamba.tt.full_model import MambaTT
-    from models.demos.mamba.tt import model_config
+    from models.demos.wormhole.mamba.tt.full_model import MambaTT
+    from models.demos.wormhole.mamba.tt import model_config
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
     if cache_dir:

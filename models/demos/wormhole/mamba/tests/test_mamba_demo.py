@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.mamba.demo.demo import run_mamba_demo
+from models.demos.wormhole.mamba.demo.demo import run_mamba_demo
 import pytest
 
 

@@ -7,10 +7,10 @@ import pytest
 from loguru import logger
 from typing import Optional
 import ttnn
-from models.demos.mamba.tt.full_model import TtTensorLoader, MambaSsmBlockTransformer
-from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.demos.mamba.tt.mamba_block import TtMambaBlock
-from models.demos.mamba.tt import model_config
+from models.demos.wormhole.mamba.tt.full_model import TtTensorLoader, MambaSsmBlockTransformer
+from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.wormhole.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.wormhole.mamba.tt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,

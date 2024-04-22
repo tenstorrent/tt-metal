@@ -12,14 +12,14 @@ echo "Running nightly tests for WH B0 only"
 env pytest tests/ttnn/integration_tests/unet                # -> failing: issue #7556
 # env pytest tests/ttnn/integration_tests/stable_diffusion    # -> failing/hanging: issue #7560
 
-env pytest models/demos/mamba/tests/test_mamba_ssm.py
-env pytest models/demos/mamba/tests/test_mamba_block.py
-env pytest models/demos/mamba/tests/test_residual_block.py
-env pytest models/demos/mamba/tests/test_full_model_loop.py
-env pytest models/demos/mamba/tests/test_benchmarks.py
-env pytest models/demos/mamba/tests/test_reference_model.py
-env pytest models/demos/mamba/tests/test_transforms.py
-env pytest models/demos/mamba/tests/test_mamba_demo.py
+env pytest models/demos/wormhole/mamba/tests/test_mamba_ssm.py
+env pytest models/demos/wormhole/mamba/tests/test_mamba_block.py
+env pytest models/demos/wormhole/mamba/tests/test_residual_block.py
+env pytest models/demos/wormhole/mamba/tests/test_full_model_loop.py
+env pytest models/demos/wormhole/mamba/tests/test_benchmarks.py
+env pytest models/demos/wormhole/mamba/tests/test_reference_model.py
+env pytest models/demos/wormhole/mamba/tests/test_transforms.py
+env pytest models/demos/wormhole/mamba/tests/test_mamba_demo.py
 
 env pytest models/demos/mistral7b/tests/test_mistral_embedding.py
 env pytest models/demos/mistral7b/tests/test_mistral_rms_norm.py

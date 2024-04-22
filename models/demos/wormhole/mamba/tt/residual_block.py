@@ -8,9 +8,9 @@ import ttnn
 
 from typing import Callable
 
-from models.demos.mamba.reference.args import ModelArgs
-from models.demos.mamba.tt.mamba_block import TtMambaBlock
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
+from models.demos.wormhole.mamba.reference.args import ModelArgs
+from models.demos.wormhole.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.wormhole.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtResidualBlock(torch.nn.Module):

@@ -10,8 +10,8 @@ from loguru import logger
 from pathlib import Path
 from typing import Callable, Optional
 
-from models.demos.mamba.tt.residual_block import TtResidualBlock
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
+from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
+from models.demos.wormhole.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtTensorLoader:

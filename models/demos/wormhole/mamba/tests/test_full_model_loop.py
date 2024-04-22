@@ -8,8 +8,8 @@ from loguru import logger
 from transformers import AutoTokenizer
 from typing import Optional
 import ttnn
-from models.demos.mamba.reference.decode_model import MambaPretrainedModelName
-from models.demos.mamba.tests.test_full_model import run_inference
+from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
+from models.demos.wormhole.mamba.tests.test_full_model import run_inference
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,

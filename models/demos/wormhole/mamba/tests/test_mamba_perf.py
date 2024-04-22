@@ -8,7 +8,7 @@ import ttnn
 import time
 import json
 
-from models.demos.mamba.demo.demo import (
+from models.demos.wormhole.mamba.demo.demo import (
     get_tokenizer,
     get_cpu_reference_model,
     get_tt_metal_model,
@@ -40,7 +40,7 @@ def test_mamba_e2e_perf(
     profiler.clear()
 
     # Load prompts
-    with open("models/demos/mamba/demo/prompts.json", "r") as f:
+    with open("models/demos/wormhole/mamba/demo/prompts.json", "r") as f:
         prompts = json.load(f)
 
     profiler.start("pytorch_ref_model_setup")
@@ -127,7 +127,7 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
         inference_iterations = 2
     else:
         inference_iterations = 1
-    command = f"pytest models/demos/mamba/tests/test_full_model.py::test_device_perf[{inference_iterations}]"
+    command = f"pytest models/demos/wormhole/mamba/tests/test_full_model.py::test_device_perf[{inference_iterations}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # convert expected perf (ms) to samples/s
