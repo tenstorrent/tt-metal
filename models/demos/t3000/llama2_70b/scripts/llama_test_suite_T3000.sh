@@ -12,7 +12,7 @@ export LLAMA_TOKENIZER_PATH="/home/llama-data/tokenizer.model"
 export LLAMA_CACHE_PATH="/home/llama-data-cache/weights-cache-4"
 
 # Run 8-chip tests on T3000s
-pytest models/demos/t3000/llama2_70b/tests -k test_llama_mlp_t3000
-pytest models/demos/t3000/llama2_70b/tests -k test_llama_attention_t3000
-pytest models/demos/t3000/llama2_70b/tests -k test_llama_decoder_t3000
-pytest models/demos/t3000/llama2_70b/tests -k test_llama_model_t3000
+pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py
