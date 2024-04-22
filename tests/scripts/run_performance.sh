@@ -93,6 +93,12 @@ run_device_perf_models() {
     env python models/perf/merge_device_perf_results.py
 }
 
+run_device_perf_ops() {
+    local test_marker=$1
+
+    env pytest tests/tt_eager/ops_device_perf/run_op_profiling.py -m $test_marker
+}
+
 main() {
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
@@ -136,6 +142,7 @@ main() {
 
     if [[ "$pipeline_type" == *"device_performance"* ]]; then
         run_device_perf_models "$test_marker"
+        run_device_perf_ops "$test_marker"
     elif [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then
         run_perf_models_llm_javelin "$tt_arch" "$test_marker"
     elif [[ "$pipeline_type" == "cnn_javelin_models_performance"* ]]; then

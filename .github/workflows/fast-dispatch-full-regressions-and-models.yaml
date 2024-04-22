@@ -20,12 +20,12 @@ jobs:
         test-group:
           [
             { name: "Common models GS", arch: grayskull, cmd: tests/scripts/nightly/run_common_models.sh },
-            { name: "Common models WH B0", arch: wormhole_b0, cmd: tests/scripts/nightly/run_common_models.sh },
+            { name: "Common models N300 WH B0", arch: wormhole_b0, cmd: tests/scripts/nightly/run_common_models.sh },
             { name: "GS-only ttnn nightly", arch: grayskull, cmd: tests/scripts/nightly/run_ttnn.sh },
             { name: "GS-only models", arch: grayskull, cmd: tests/scripts/nightly/run_gs_only.sh },
-            { name: "WH-only models", arch: wormhole_b0, cmd: tests/scripts/nightly/run_wh_b0_only.sh },
+            { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/nightly/run_wh_b0_only.sh },
             { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast },
-            { name: "API tests WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast },
+            { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -51,7 +51,7 @@ jobs:
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
-        timeout-minutes: 90
+        timeout-minutes: 40
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

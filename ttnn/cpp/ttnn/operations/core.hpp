@@ -4,17 +4,19 @@
 
 #pragma once
 
-#include "tt_eager/tensor/types.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_eager/tensor/types.hpp"
+#include "tt_eager/tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_eager/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace ttnn {
+
 namespace operations {
 namespace core {
 
@@ -111,9 +113,7 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t
 
 inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
     if (is_multi_device_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& device_tensor) {
-            return unsqueeze_to_4D(device_tensor);
-        });
+        return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
     const auto tensor_shape = tensor.get_shape();
@@ -151,6 +151,75 @@ inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) 
         case 4: return tensor;
         default: TT_THROW("Invalid choice!");
     }
+}
+
+inline bool is_tensor_storage_on_device(const ttnn::Tensor& tensor) {
+    const auto storage_type = tensor.storage_type();
+    if (storage_type == DEVICE_STORAGE_TYPE) {
+        return true;
+    }
+    if (storage_type == MULTI_DEVICE_STORAGE_TYPE) {
+        return true;
+    }
+    return false;
+}
+
+inline auto get_memory_config(const ttnn::Tensor& tensor) -> std::optional<ttnn::MemoryConfig> {
+    return is_tensor_storage_on_device(tensor) ? tensor.memory_config()
+                                               : std::optional<ttnn::MemoryConfig>{std::nullopt};
+}
+
+
+inline ttnn::Tensor to_memory_config(
+    const ttnn::Tensor& tensor,
+    const ttnn::MemoryConfig& memory_config,
+    std::optional<ttnn::DataType> dtype = std::nullopt) {
+
+    const auto original_memory_config = get_memory_config(tensor);
+    if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
+        return tensor;
+    }
+
+    const auto original_shape = tensor.get_shape();
+    const auto tensor_4D = unsqueeze_to_4D(tensor);
+
+    if (memory_config.is_sharded()) {
+        // to_sharded path
+        if (tensor_4D.is_sharded()) {
+            // reshard
+            const auto input_memory_config = get_memory_config(tensor_4D);
+            const auto input_shard_spec = input_memory_config.value().shard_spec.value();
+            const auto output_shard_spec = memory_config.shard_spec.value();
+            if (tensor_4D.get_layout() == ttnn::TILE_LAYOUT ||
+                input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
+                if (dtype.has_value()) {
+                    throw runtime_error("dtype cannot be specified when converting sharded tensor to sharded tensor");
+                }
+                return reshape(tt::tt_metal::reshard(tensor_4D, memory_config), original_shape);
+            } else {
+                // for row-major tensors where shard-spec[1] is different for input shard and output shard
+                return reshape(
+                    tt::tt_metal::interleaved_to_sharded(
+                        tt::tt_metal::sharded_to_interleaved(tensor_4D, ttnn::DRAM_MEMORY_CONFIG, dtype),
+                        memory_config,
+                        dtype),
+                    original_shape);
+            }
+        } else {
+            return reshape(tt::tt_metal::interleaved_to_sharded(tensor_4D, memory_config, dtype), original_shape);
+        }
+    } else {
+        // to_interleaved path
+        if (tensor_4D.is_sharded()) {
+            return reshape(
+                tt::tt_metal::sharded_to_interleaved(tensor_4D, memory_config, dtype), original_shape);
+        } else {
+            // L1 to DRAM or DRAM to L1
+            return reshape(tt::tt_metal::clone(tensor_4D, memory_config, dtype), original_shape);
+        }
+    }
+
+    return reshape(tensor_4D, original_shape);
 }
 
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor) { return tensor.cpu(); }
@@ -191,9 +260,9 @@ inline ttnn::Tensor ones(
 using operations::core::from_device;
 using operations::core::full;
 using operations::core::ones;
-using operations::core::zeros;
 using operations::core::reshape;
-using operations::core::unsqueeze_to_4D;
 using operations::core::squeeze_from_4D;
+using operations::core::unsqueeze_to_4D;
+using operations::core::zeros;
 
 }  // namespace ttnn
