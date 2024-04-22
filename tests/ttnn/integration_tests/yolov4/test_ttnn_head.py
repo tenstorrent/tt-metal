@@ -143,8 +143,6 @@ def create_custom_preprocessor(device):
             parameters["c7"], c7_parallel_config = preprocess_conv2d(
                 conv7_weight, conv7_bias, ttnn_module_args.c7, return_parallel_config=True
             )
-            print("parameters['c7'] type is: ", type(parameters["c7"]))
-            print("parameters['c7'] is: ", parameters["c7"])
             ttnn_module_args.c8["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c8["use_shallow_conv_variant"] = (
                 False if device.arch() == tt_lib.device.Arch.WORMHOLE_B0 else True
@@ -154,15 +152,14 @@ def create_custom_preprocessor(device):
             ttnn_module_args.c8["deallocate_activation"] = True
             ttnn_module_args.c8["conv_blocking_and_parallelization_config_override"] = None
             # conv8_weight, conv8_bias = model.c8, model.b8
-            conv8_weight = model.c8.weight
-            print("conv8_weight: ", conv8_weight)
-            conv8_bias = None
+            conv8_weight = model.c8.weight.detach()
+            conv8_bias = torch.zeros(256)
             update_ttnn_module_args(ttnn_module_args.c8)
-            parameters["c8"] = {}
-            parameters["c8"]["weight"] = conv8_weight
-            #            parameters["c8"], c8_parallel_config = preprocess_conv2d(
-            #                conv8_weight, conv8_bias, ttnn_module_args.c8, return_parallel_config=True
-            #            )
+            # parameters["c8"] = {}
+            # parameters["c8"]["weight"] = conv8_weight
+            parameters["c8"], c8_parallel_config = preprocess_conv2d(
+                weight=conv8_weight, bias=conv8_bias, ttnn_module_args=ttnn_module_args.c8, return_parallel_config=True
+            )
 
             ttnn_module_args.c9["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c9["use_shallow_conv_variant"] = (
@@ -354,9 +351,6 @@ def test_head(device, reset_seeds):
 
     # Update the parameters in the model
     torch_model.load_state_dict(new_state_dict)
-
-    #    # Update the parameters in the model
-    #    torch_model.load_state_dict(new_state_dict)
 
     torch_model.eval()
 

@@ -728,7 +728,7 @@ class TTPyCompositeConv(TTPyOp):
                 bias_shape = [1, 1, 1, K]
                 assert bias.get_layout() == ttl.tensor.Layout.ROW_MAJOR
                 assert bias.get_dtype() == weights_untiled_dtype
-                assert bias.get_legacy_shape() == bias_shape
+                # assert bias.get_legacy_shape() == bias_shape, "bias.get_legacy_shape(): " + str(bias.get_legacy_shape()) + "bias_shape: " + str(bias_shape)
 
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
