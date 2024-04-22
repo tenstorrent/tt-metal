@@ -170,6 +170,16 @@ static void RunTestEth(WatcherFixture* fixture, Device* device) {
     RunTestOnCore(fixture, device, core, true, SanitizeAddress);
 }
 
+static void RunTestIEth(WatcherFixture* fixture, Device* device) {
+    // Run on the first ethernet core (if there are any).
+    if (device->get_inactive_ethernet_cores().empty()) {
+        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        GTEST_SKIP();
+    }
+    CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
+    RunTestOnCore(fixture, device, core, true, SanitizeAddress);
+}
+
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(Device *device) {
     // Try reading from a core that doesn't exist
