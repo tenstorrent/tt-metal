@@ -42,6 +42,6 @@ class TtLlamaEmbedding(torch.nn.Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i in range(self.num_devices):
-            x[i] = tt_lib.tensor.embeddings(x[i], self.embd_weights[i], tilized=True, output_dtype=ttnn.bfloat8_b)
+            x[i] = tt_lib.tensor.embeddings(x[i], self.embd_weights[i], tilized=True)
 
         return x
