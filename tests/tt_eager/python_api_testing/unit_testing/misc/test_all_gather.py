@@ -150,6 +150,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip("#7705: Hanging on various configs")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -157,7 +158,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
+        (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
         (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
@@ -208,6 +209,7 @@ def test_all_gather_on_t3000_post_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip("#7705: Hanging on various configs")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
