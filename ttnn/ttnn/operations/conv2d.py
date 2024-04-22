@@ -435,15 +435,20 @@ def conv2d(
     bias_tensor: ttnn.Tensor = None,
     conv_config: ConvConfig = None,  # manual override by user
     reshard_if_not_optimal=False,  # default
+    conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
+    if "reader_patterns_cache" not in conv_op_cache:
+        conv_op_cache["reader_patterns_cache"] = {}
     weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
     if bias_tensor is not None:
         bias_is_on_device = ttnn.is_tensor_storage_on_device(bias_tensor)
         assert (
             weight_is_on_device == bias_is_on_device
         ), "Both weight and bias tensors both must be pre-processed if one of them is pre-processed."
+
+    # Input processing. TODO: Cache input processing decisions
     if conv_config is None:
         conv_config = ConvConfig()
     config_shard_grid = None
@@ -481,15 +486,16 @@ def conv2d(
     else:
         needs_reshard = True
     parallel_config = None
-    optimal_parallel_config = determine_parallel_config(
-        True if conv_config.height_sharding is None else conv_config.height_sharding,
-        batch_size,
-        in_channels,
-        output_height,
-        output_width,
-        out_channels,
-        device,
-    )
+    if reshard_if_not_optimal or needs_reshard:
+        optimal_parallel_config = determine_parallel_config(
+            True if conv_config.height_sharding is None else conv_config.height_sharding,
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device,
+        )
     if needs_reshard:
         if conv_config.height_sharding is None:
             # default shard scheme is height sharding
@@ -554,51 +560,61 @@ def conv2d(
     is_1x1_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-
-    # Following code will be removed after op refactoring
-    block_and_parallel_config_override = {}
-    if conv_config.act_block_h is not None:
-        block_and_parallel_config_override["act_block_h"] = conv_config.act_block_h
-    assert parallel_config is not None
-    block_and_parallel_config_override["grid_size"] = [parallel_config.grid_size.x, parallel_config.grid_size.y]
-    block_and_parallel_config_override["num_cores_nhw"] = parallel_config.num_cores_nhw
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=conv_config.math_fidelity,
-            math_approx_mode=conv_config.math_approx_mode,
-        )
+    input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
+    assert input_is_on_device
+    if weight_tensor in conv_op_cache:
+        assert weight_is_on_device
+        # Run conv
+        conv = conv_op_cache[weight_tensor]
+        assert conv.conv.weight == weight_tensor
+        assert conv.conv.bias == bias_tensor
     else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        # Following code will be removed after op refactoring
+        block_and_parallel_config_override = {}
+        if conv_config.act_block_h is not None:
+            block_and_parallel_config_override["act_block_h"] = conv_config.act_block_h
+        assert parallel_config is not None
+        block_and_parallel_config_override["grid_size"] = [parallel_config.grid_size.x, parallel_config.grid_size.y]
+        block_and_parallel_config_override["num_cores_nhw"] = parallel_config.num_cores_nhw
+        if is_grayskull():
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                math_fidelity=conv_config.math_fidelity,
+                math_approx_mode=conv_config.math_approx_mode,
+            )
+        else:
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=conv_config.math_fidelity,
+                math_approx_mode=conv_config.math_approx_mode,
+                fp32_dest_acc_en=conv_config.fp32_dest_acc_en,
+                packer_l1_acc=conv_config.packer_l1_acc,
+            )
+        # Build conv op object
+        conv = ttnn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            dtype=conv_config.dtype,
+            device=device,
+            use_1d_systolic_array=parallel_config.shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            weight=weight_tensor,
+            bias=bias_tensor,
             math_fidelity=conv_config.math_fidelity,
-            math_approx_mode=conv_config.math_approx_mode,
-            fp32_dest_acc_en=conv_config.fp32_dest_acc_en,
-            packer_l1_acc=conv_config.packer_l1_acc,
+            weights_dtype=conv_config.weights_dtype,
+            conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
+            compute_kernel_config=compute_kernel_config,
+            activation=conv_config.activation,
+            using_parameters_cache=weight_is_on_device,
+            reader_patterns_cache=conv_op_cache["reader_patterns_cache"],
         )
-    # Build conv op object
-    conv = ttnn.Conv2d(
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        dtype=conv_config.dtype,
-        device=device,
-        use_1d_systolic_array=parallel_config.shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        reader_patterns_cache={},
-        weight=weight_tensor,
-        bias=bias_tensor,
-        math_fidelity=conv_config.math_fidelity,
-        weights_dtype=conv_config.weights_dtype,
-        conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
-        compute_kernel_config=compute_kernel_config,
-        activation=conv_config.activation,
-        using_parameters_cache=weight_is_on_device,
-    )
+        # Cache conv by weight tensor
+        conv_op_cache[conv.conv.weight] = conv
     # Run conv
     return (conv(input_tensor), output_height, output_width, conv.conv.weight, conv.conv.bias)
 
