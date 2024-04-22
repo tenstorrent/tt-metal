@@ -33,16 +33,15 @@ operation::ProgramWithCallbacks moreh_sgd_(
     const CoreRange core_range) {
     // split work
     auto shape = param_in.get_legacy_shape();
-    auto N = shape[0];
-    auto C = shape[1];
-    auto H = shape[2];
-    auto W = shape[3];
+    auto H = shape[-2];
+    auto W = shape[-1];
+    auto num = param_in.volume() / H / W;
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
     bool has_momentum_buffer = momentum_buffer_in.has_value() && momentum_buffer_out.has_value();
 
-    uint32_t units_to_divide = N * C * Ht * Wt;
+    uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
     uint32_t core_h = core_range.end.y - core_range.start.y + 1;
 

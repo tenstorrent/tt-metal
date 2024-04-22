@@ -30,7 +30,7 @@ def create_tt_tensor(tensor, device):
 @pytest.mark.parametrize(
     "shape",
     (
-        (1, 1, 32, 32),  # single
+        (32, 32),  # single
         (12, 6, 64, 64),  # multiple tiles
     ),
 )
@@ -49,15 +49,13 @@ def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momen
     torch.manual_seed(0)
 
     # make model and compute grad
-    N, C, H, W = shape
-
-    x_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
-    y_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
+    x_data = torch.rand(shape).to(torch.bfloat16)
+    y_data = torch.rand(shape).to(torch.bfloat16)
 
     class SimpleModel(nn.Module):
         def __init__(self):
             super(SimpleModel, self).__init__()
-            self.weight = nn.Parameter(torch.randn(N, C, H, W).to(torch.bfloat16)).to(torch.bfloat16)
+            self.weight = nn.Parameter(torch.randn(shape).to(torch.bfloat16)).to(torch.bfloat16)
 
         def forward(self, x):
             return torch.mul(x, self.weight)
