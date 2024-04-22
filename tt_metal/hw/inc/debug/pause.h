@@ -5,6 +5,8 @@
 #pragma once
 
 #include "watcher_common.h"
+#include "ring_buffer.h"
+#include "status.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE)
 
@@ -12,6 +14,9 @@ void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.
     debug_pause_msg_t tt_l1_ptr *pause_msg = GET_MAILBOX_ADDRESS_DEV(pause_status);
     pause_msg->flags[debug_get_which_riscv()] = 1;
+    WATCHER_RING_BUFFER_PUSH((uint32_t) pause_msg);
+    WATCHER_RING_BUFFER_PUSH(debug_get_which_riscv());
+    DEBUG_STATUS('P', 'A', 'U', 'S');
 
     // Wait for the pause flag to be cleared.
     while (pause_msg->flags[debug_get_which_riscv()]) {

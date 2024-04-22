@@ -27,7 +27,7 @@ inline void print_test_data() {
     DPRINT << DEFAULTFLOAT();
     DPRINT << "SETW:\n" << SETW(10) << my_uint32 << my_uint32 << SETW(4) << "ab" << ENDL();
     DPRINT << "HEX/OCT/DEC:\n" << HEX() << my_uint32 << OCT() << my_uint32 << DEC() << my_uint32 << ENDL();
-#ifndef COMPILE_FOR_ERISC
+#if !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
     // Eth cores don't have CBs, so don't try TSLICE printing.
     DPRINT << "SLICE:\n";
     cb_wait_front(tt::CB::c_in0, 1);

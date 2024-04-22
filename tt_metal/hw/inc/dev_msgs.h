@@ -13,12 +13,14 @@
 #include "noc/noc_parameters.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
-#ifdef COMPILE_FOR_ERISC
+#define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
+#if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_HOST(x) GET_ETH_MAILBOX_ADDRESS_HOST(x)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+#define GET_MAILBOX_ADDRESS_HOST(x) GET_IERISC_MAILBOX_ADDRESS_HOST(x)
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
 #else
-#define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
-#define GET_IERISC_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
 #endif
@@ -121,6 +123,7 @@ typedef enum debug_sanitize_which_riscv {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
+    DebugIErisc = 6,
     DebugNumUniqueRiscs
 } riscv_id_t;
 
