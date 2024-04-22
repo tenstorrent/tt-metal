@@ -829,6 +829,19 @@ void TensorModule(py::module &m_tensor) {
         +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
     )doc");
 
+    m_tensor.def(
+        "scan_only",
+        &scan_only,
+        py::arg().noconvert(),
+        R"doc(
+        Reverses previous tiles rearrangement. It is not meant to be used as a standalone operation.
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+        | Argument          | Description                                                                       | Data type     | Valid range | Required |
+        +===================+===================================================================================+===============+=============+==========+
+        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+    )doc");
+
     detail::TensorModuleCompositeOPs( m_tensor);
     detail::TensorModuleBackwardOPs( m_tensor);
     detail::TensorModulePyTensor ( m_tensor);
