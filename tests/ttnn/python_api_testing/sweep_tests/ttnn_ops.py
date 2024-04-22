@@ -3167,7 +3167,6 @@ def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_
         input_width=input_width,
         reader_patterns_cache={},
     )
-    # device: Device, batch_size: int, input_height: int, input_width: int, reader_patterns_cache: Dict
 
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = m(t0)
