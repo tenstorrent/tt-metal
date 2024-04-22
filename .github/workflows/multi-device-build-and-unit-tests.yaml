@@ -6,7 +6,7 @@ on:
     - cron: "0 */3 * * *"
 
 jobs:
-  tests-multi-device:
+  multi-chip-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
