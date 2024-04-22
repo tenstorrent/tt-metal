@@ -102,7 +102,7 @@ class resnet50Bottleneck:
         # logger.info("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
         # print("Running conv1")
-        x = ttnn.conv2d(
+        x, input_height, input_width, self.identity_conv_weight_tensor, _ = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.identity_conv_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -121,7 +121,7 @@ class resnet50Bottleneck:
             ),
         )
 
-        out = ttnn.conv2d(
+        out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -143,7 +143,7 @@ class resnet50Bottleneck:
         )
 
         if self.downsample:
-            ds_out = ttnn.conv2d(
+            ds_out, _, _, self.ds_conv_weight_tensor, self.ds_conv_bias_tensor = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
                 in_channels=self.ds_conv_input_channels,
@@ -167,7 +167,7 @@ class resnet50Bottleneck:
             ds_out = x
 
         # print("Running conv2")
-        out = ttnn.conv2d(
+        out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             in_channels=self.conv2_input_channels,
@@ -188,11 +188,9 @@ class resnet50Bottleneck:
             ),
         )
 
-        input_height = input_height // (2 if self.downsample else 1)
-        input_width = input_width // (2 if self.downsample else 1)
         # conv3 is 1x1 conv
         # print("Running conv3")
-        out = ttnn.conv2d(
+        out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             in_channels=self.conv3_input_channels,
@@ -644,29 +642,28 @@ def build_run_and_validate_ttnn_model_new(
     # Test new API i.e. "JIT" conv
     ttnn_model = resnet50Bottleneck(parameters, downsample, model_config)
 
-    output_height = input_height // (2 if downsample else 1)
-    output_width = input_width // (2 if downsample else 1)
-
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     ## reshape to [1, 1, N*H*W, C]
     torch_input_tensor = torch.reshape(torch_input_tensor, (1, 1, -1, torch_input_tensor.shape[-1]))
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Run ttnn model (1 resnet50 block)
-    ttnn_out_tensor = ttnn_model(ttnn_input_tensor, device, batch_size, input_height, input_width)
+    # Run 2 iterations. First iteration is warm-up i.e. W/B preprocessing and conv object caching
+    for i in range(2):
+        # Run ttnn model (1 resnet50 block)
+        ttnn_out_tensor = ttnn_model(ttnn_input_tensor, device, batch_size, input_height, input_width)
 
-    # output post-processing
-    ttnn_out_tensor = ttnn.to_memory_config(ttnn_out_tensor, ttnn.L1_MEMORY_CONFIG)
-    ttnn_out_tensor = ttnn.to_layout(ttnn_out_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    torch_out_tensor = ttnn.to_torch(ttnn_out_tensor)
-    output_height = input_height // (2 if downsample else 1)
-    output_width = input_width // (2 if downsample else 1)
-    torch_out_tensor = torch.reshape(
-        torch_out_tensor, (batch_size, output_height, output_width, torch_out_tensor.shape[-1])
-    )
-    torch_out_tensor = torch.permute(torch_out_tensor, (0, 3, 1, 2))
-    pcc_passed, pcc_message = assert_with_pcc(torch_golden_out_tensor_nchw, torch_out_tensor, pcc=0.99)
+        # output post-processing
+        ttnn_out_tensor = ttnn.to_memory_config(ttnn_out_tensor, ttnn.L1_MEMORY_CONFIG)
+        ttnn_out_tensor = ttnn.to_layout(ttnn_out_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        torch_out_tensor = ttnn.to_torch(ttnn_out_tensor)
+        output_height = input_height // (2 if downsample else 1)
+        output_width = input_width // (2 if downsample else 1)
+        torch_out_tensor = torch.reshape(
+            torch_out_tensor, (batch_size, output_height, output_width, torch_out_tensor.shape[-1])
+        )
+        torch_out_tensor = torch.permute(torch_out_tensor, (0, 3, 1, 2))
+        pcc_passed, pcc_message = assert_with_pcc(torch_golden_out_tensor_nchw, torch_out_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(

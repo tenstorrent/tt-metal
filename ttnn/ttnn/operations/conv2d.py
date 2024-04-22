@@ -435,9 +435,15 @@ def conv2d(
     bias_tensor: ttnn.Tensor = None,
     conv_config: ConvConfig = None,  # manual override by user
     reshard_if_not_optimal=False,  # default
-) -> ttnn.Tensor:
+) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
+    weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
+    if bias_tensor is not None:
+        bias_is_on_device = ttnn.is_tensor_storage_on_device(bias_tensor)
+        assert (
+            weight_is_on_device == bias_is_on_device
+        ), "Both weight and bias tensors both must be pre-processed if one of them is pre-processed."
     if conv_config is None:
         conv_config = ConvConfig()
     config_shard_grid = None
@@ -591,9 +597,10 @@ def conv2d(
         conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
         compute_kernel_config=compute_kernel_config,
         activation=conv_config.activation,
+        using_parameters_cache=weight_is_on_device,
     )
     # Run conv
-    return conv(input_tensor)
+    return (conv(input_tensor), output_height, output_width, conv.conv.weight, conv.conv.bias)
 
 
 __all__ = []
