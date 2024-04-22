@@ -14,7 +14,7 @@ from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDeco
 from models.demos.t3000.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    generate_rot_emb,
+    freqs_to_rotation_matrix,
     get_weight_cache_path,
     get_rotation_mat,
     precompute_freqs,
@@ -80,7 +80,7 @@ class TtLlamaModel_optimized(nn.Module):
 
         # Rotary Embedding
         self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for prefill
-        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for decode
+        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
             devices,
