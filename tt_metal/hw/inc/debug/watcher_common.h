@@ -22,7 +22,7 @@ inline uint32_t debug_get_which_riscv()
 #elif defined(COMPILE_FOR_ERISC)
     return DebugErisc;
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-    return DebugErisc;
+    return DebugIErisc;
 #else
     return DebugTrisc0 + COMPILE_FOR_TRISC;
 #endif
