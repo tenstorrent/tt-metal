@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from enum import Enum
 
 
 @pytest.mark.parametrize(
@@ -231,6 +232,22 @@ def test_reshard(
     assert_with_pcc(torch_input_tensor, output, 1.0)
 
 
+class DirectReadWriteType(Enum):
+    READ_ONLY = 0
+    WRITE_ONLY = 1
+    READ_WRITE = 2
+    NONE = 3
+
+
+@pytest.mark.parametrize(
+    "data_transfer_strategy",
+    [
+        (DirectReadWriteType.READ_ONLY),
+        (DirectReadWriteType.WRITE_ONLY),
+        (DirectReadWriteType.NONE),
+        (DirectReadWriteType.READ_WRITE),
+    ],
+)
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,  input_sharded_memory_config_args",
     [
@@ -287,24 +304,40 @@ def test_reshard(
         ),
     ],
 )
-def test_shard_with_corerangeset(device, input_shape, input_shard_shape, input_sharded_memory_config_args):
+def test_shard_with_corerangeset(
+    device, input_shape, input_shard_shape, input_sharded_memory_config_args, data_transfer_strategy
+):
     if device.core_grid.y == 7 and input_shard_shape == [32, 128]:
+        pytest.skip()
+    if (
+        ((not (input_shape[2] % input_shard_shape[0] == 0)) or (not (input_shape[3] % input_shard_shape[1] == 0)))
+        and (not (data_transfer_strategy == DirectReadWriteType.READ_WRITE))
+        and (not (input_sharded_memory_config_args["strategy"] == ttnn.ShardStrategy.HEIGHT))
+    ):
         pytest.skip()
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
-    interleaved_input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
     input_shard_memory_config = ttnn.create_sharded_memory_config(
         input_shard_shape, **input_sharded_memory_config_args, use_height_and_width_as_shard_shape=True
     )
-    # interleaved_to_sharded
-    sharded_input_tensor = ttnn.to_memory_config(interleaved_input_tensor, input_shard_memory_config)
 
-    # sharded_to_interleaved
-    interleaved_output_tensor = ttnn.to_memory_config(sharded_input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if data_transfer_strategy == DirectReadWriteType.READ_ONLY or data_transfer_strategy == DirectReadWriteType.NONE:
+        interleaved_input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # interleaved_to_sharded
+        sharded_input_tensor = ttnn.to_memory_config(interleaved_input_tensor, input_shard_memory_config)
+    else:
+        sharded_input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_shard_memory_config
+        )
 
-    output = ttnn.to_torch(interleaved_output_tensor)
+    if data_transfer_strategy == DirectReadWriteType.WRITE_ONLY or data_transfer_strategy == DirectReadWriteType.NONE:
+        # sharded_to_interleaved
+        interleaved_output_tensor = ttnn.to_memory_config(sharded_input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_torch(interleaved_output_tensor)
+    else:
+        output = ttnn.to_torch(sharded_input_tensor)
 
     assert_with_pcc(torch_input_tensor, output, 1.0)
 

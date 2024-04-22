@@ -256,6 +256,18 @@ def get_tensor(shape, dtype):
             ),
             DirectReadWriteType.READ_WRITE,
         ),
+        (
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+            [1, 1, 8192, 512],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            (1024, 320),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 4)),  # 40 cores
+                }
+            ),
+            DirectReadWriteType.READ_WRITE,
+        ),
     ],
 )
 def test_tensor_conversion_between_torch_and_tt_tile(
