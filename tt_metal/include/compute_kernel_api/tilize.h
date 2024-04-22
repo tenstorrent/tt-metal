@@ -63,7 +63,7 @@ ALWI void tilizeA_B_dot_product_init(uint32_t icb0, uint32_t icb1_scaler, uint32
 {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler) ));
-    UNPACK(( llk_unpack_tilizeA_B_init<false, false, true>(icb0, icb1_scaler, block, num_faces, face_r_dim, 1) ));
+    UNPACK(( llk_unpack_tilizeA_B_init<false, false, true>(icb0, icb1_scaler, block, num_faces, face_r_dim, face_r_dim) ));
 
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(icb0, icb1_scaler) ));
     MATH(( llk_math_pack_sync_init() ));

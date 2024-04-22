@@ -102,22 +102,28 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
     llk_unpack_tilizeA_B_hw_configure(&llk_unpack_tilizeA_B);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool reuse_srcB = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces) {
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reuse_srcB ? 0b010010 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr::UNP_NEGINFSRC); // Needed for max pool
+    static constexpr uint unpack_srcb_no_dat_valid = TT_OP_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // needed for dot product
+    static constexpr uint unpack_src_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 1, 0b0001); // Needed for dot product
 
-    constexpr uint32_t innerloop = 1;
+    constexpr uint32_t innerloop = reuse_srcB ? 2 : 1;
     const uint32_t outerloop = (num_faces>2) ? num_faces/2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
-    if constexpr (neginf_srcA) {
+    if constexpr (reuse_srcB) {
+        tmp.set_start_op(unpack_srcb_no_dat_valid);
+        tmp.set_last_inner_loop_instr(unpack_src_set_z);
+        tmp.set_last_outer_loop_instr(TT_OP_NOP);
+    } else if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
     }
     tmp.program(instrn_buffer);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool reuse_srcB = false>
 inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
     std::uint32_t operandA_id = get_operand_id(operandA);
@@ -141,7 +147,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB>(num_faces);
+    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB,reuse_srcB>(num_faces);
 }
 
 inline void llk_unpack_tilizeA_B(
