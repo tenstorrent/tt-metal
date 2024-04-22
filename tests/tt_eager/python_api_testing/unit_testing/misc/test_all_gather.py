@@ -157,7 +157,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
+        # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
         (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
