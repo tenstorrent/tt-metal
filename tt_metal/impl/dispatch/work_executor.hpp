@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <thread>
+#include <unistd.h>
 
 #include "common/env_lib.hpp"
 #include "lock_free_queue.hpp"
@@ -122,11 +123,14 @@ class WorkExecutor {
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
         this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
         // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
+        static int num_online_cores = sysconf(_SC_NPROCESSORS_ONLN);
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(managed_device_id % std::thread::hardware_concurrency(), &cpuset);
+        CPU_SET(managed_device_id % num_online_cores, &cpuset);
         int rc = pthread_setaffinity_np(worker_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
-        TT_FATAL(rc == 0, "Unable to bind worker thread to CPU Core");
+        if (rc) {
+            log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}", rc);
+        }
     }
 
     inline void stop_worker() {
