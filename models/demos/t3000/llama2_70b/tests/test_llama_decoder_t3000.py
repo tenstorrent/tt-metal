@@ -14,7 +14,13 @@ from models.demos.t3000.llama2_70b.tests.test_llama_decoder import run_test_Llam
     ((32, 1, 0.9993), (1, 128, 0.9996), (1, 2048, 0.9994)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
-def test_LlamaDecoder_inference_t3000(batch, seq_len, pcc, all_devices, use_program_cache):
+def test_LlamaDecoder_inference_t3000(
+    batch,
+    seq_len,
+    pcc,
+    all_devices,
+    # use_program_cache,# Enable once prefill_2k works
+):
     n_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
