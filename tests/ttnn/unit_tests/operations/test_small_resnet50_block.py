@@ -4,7 +4,7 @@
 import pytest
 import ttnn
 import torch
-
+import time
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
@@ -650,9 +650,10 @@ def build_run_and_validate_ttnn_model_new(
 
     # Run 2 iterations. First iteration is warm-up i.e. W/B preprocessing and conv object caching
     for i in range(2):
+        start_time = time.time()
         # Run ttnn model (1 resnet50 block)
         ttnn_out_tensor = ttnn_model(ttnn_input_tensor, device, batch_size, input_height, input_width)
-
+        print("--- Execution time for this iteration - %s seconds ---" % (time.time() - start_time))
         # output post-processing
         ttnn_out_tensor = ttnn.to_memory_config(ttnn_out_tensor, ttnn.L1_MEMORY_CONFIG)
         ttnn_out_tensor = ttnn.to_layout(ttnn_out_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -675,6 +676,7 @@ def build_run_and_validate_ttnn_model_new(
 )
 def test_small_resnet50_block(
     device,
+    use_program_cache,
     batch_size,
     input_height,
     input_width,
