@@ -59,10 +59,9 @@ ALWI void tilize_to_dst(uint32_t block_cb, uint32_t dst_cb) {
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(0);
-    uint32_t tiles_per_col = get_arg_val<uint32_t>(1);
-    uint32_t reshapes_per_row = get_arg_val<uint32_t>(2);
-    uint32_t total_tiles = get_arg_val<uint32_t>(3);
+    uint32_t tiles_per_col = get_arg_val<uint32_t>(0);
+    uint32_t reshapes_per_row = get_arg_val<uint32_t>(1);
+    uint32_t total_tiles = get_arg_val<uint32_t>(2);
 
     pack_untilize_init<tiles_per_block>(cb_src, cb_block);
 
@@ -112,7 +111,7 @@ void MAIN {
 
             // copy the last tile from cb_scanned back to cb_factors
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_scanned);
+            copy_tile_to_dst_init_short(cb_scanned2);
             copy_tile(cb_scanned2, tiles_per_reshape - 1, 0);
             tile_regs_commit();
             tile_regs_wait();

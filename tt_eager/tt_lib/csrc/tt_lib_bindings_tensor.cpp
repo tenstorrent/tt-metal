@@ -803,6 +803,32 @@ void TensorModule(py::module &m_tensor) {
         +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
     )doc");
 
+    m_tensor.def(
+        "retile_to_row_major",
+        &retile_to_row_major,
+        py::arg().noconvert(),
+        R"doc(
+        Rearranges tiles of a tensor so that each input row is packed in a row of tiles.
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+        | Argument          | Description                                                                       | Data type     | Valid range | Required |
+        +===================+===================================================================================+===============+=============+==========+
+        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+    )doc");
+
+    m_tensor.def(
+        "undo_retile_to_row_major",
+        &undo_retile_to_row_major,
+        py::arg().noconvert(),
+        R"doc(
+        Reverses previous tiles rearrangement. It is not meant to be used as a standalone operation.
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+        | Argument          | Description                                                                       | Data type     | Valid range | Required |
+        +===================+===================================================================================+===============+=============+==========+
+        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+    )doc");
+
     detail::TensorModuleCompositeOPs( m_tensor);
     detail::TensorModuleBackwardOPs( m_tensor);
     detail::TensorModulePyTensor ( m_tensor);

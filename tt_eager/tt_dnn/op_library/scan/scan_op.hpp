@@ -15,15 +15,7 @@ enum class ScanOpParallelizationStrategy { SHARDED_MULTI_CORE = 0 };
 
 enum class ScanOpDirection { ROWS, COLS, ROWS_REVERSED, COLS_REVERSED };
 
-struct Scan {
-    ScanOpDirection direction = ScanOpDirection::COLS_REVERSED;
-    uint32_t n_tile_columns;
-
-    void validate(const std::vector<Tensor> &input_tensors) const;
-
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
+struct ScanBase {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
         return {};  // In-place
     }
@@ -35,12 +27,47 @@ struct Scan {
     ScanOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
         return ScanOpParallelizationStrategy::SHARDED_MULTI_CORE;
     }
+};
 
-    static constexpr auto attribute_names = std::make_tuple("direction", "n_tile_columns");
+struct Scan : ScanBase {
+    ScanOpDirection direction = ScanOpDirection::COLS_REVERSED;
 
-    const auto attribute_values() const { return std::make_tuple(direction, n_tile_columns); }
+    void validate(const std::vector<Tensor> &input_tensors) const;
+
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple("direction");
+
+    const auto attribute_values() const { return std::make_tuple(direction); }
+};
+
+struct RetileToRowMajor : ScanBase {
+    void validate(const std::vector<Tensor> &input_tensors) const;
+
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple();
+
+    const auto attribute_values() const { return std::make_tuple(); }
+};
+
+struct UndoRetileToRowMajor : ScanBase {
+    void validate(const std::vector<Tensor> &input_tensors) const;
+
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple();
+
+    const auto attribute_values() const { return std::make_tuple(); }
 };
 
 Tensor scan(Tensor &a);
+
+Tensor retile_to_row_major(Tensor &a);
+
+Tensor undo_retile_to_row_major(Tensor &a);
 
 }  // namespace tt::tt_metal
