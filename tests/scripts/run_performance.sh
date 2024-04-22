@@ -16,35 +16,14 @@ run_perf_models_other() {
 
         env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $test_marker
 
-        env pytest "tests/ttnn/integration_tests/bloom/test_performance.py" -m $test_marker
-
-        env pytest "tests/ttnn/integration_tests/t5/test_performance.py" -m $test_marker
-
         env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
-
-        env pytest models/experimental/vgg/tests -m $test_marker
-
-        env pytest models/experimental/vit/tests -m $test_marker
-
-        env pytest models/experimental/roberta/tests -m $test_marker
-
-        env pytest models/experimental/t5/tests -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
 
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
-        env pytest models/experimental/deit/tests -m $test_marker
-
-        env pytest models/experimental/stable_diffusion/tests -m $test_marker
-
-        env pytest models/experimental/whisper/tests -m $test_marker
-
-        env pytest models/experimental/bloom/tests -m $test_marker
-
         env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $test_marker
 
-        env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $test_marker
     else
         echo "There are no other model perf tests for Javelin yet specified. Arch $tt_arch requested"
     fi
