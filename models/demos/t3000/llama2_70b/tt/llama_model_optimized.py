@@ -53,7 +53,7 @@ class TtLlamaModel_optimized(nn.Module):
         self.vocab_size = configuration.vocab_size
         self.norm_eps = configuration.norm_eps
         self.llama3 = self.vocab_size == 128256
-        self.rope_theta = configuration.rope_theta if self.llama3 else 100000.0
+        self.rope_theta = configuration.rope_theta if self.llama3 else 10000.0
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
