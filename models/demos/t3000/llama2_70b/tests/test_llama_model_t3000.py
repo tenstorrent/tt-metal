@@ -28,6 +28,7 @@ def test_LlamaModel_inference(
     pcc,
     n_layers,
     all_devices,
+    # use_program_cache, # Enable once decode and prefill_2k works
 ):
     n_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices)
