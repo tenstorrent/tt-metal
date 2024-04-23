@@ -60,10 +60,9 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         runner-hw-info: [
-          {arch: grayskull},
           {arch: wormhole_b0},
         ]
-    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
+    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}", "issue-miw-162"]
     environment: production
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
