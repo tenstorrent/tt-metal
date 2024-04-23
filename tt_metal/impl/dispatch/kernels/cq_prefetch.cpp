@@ -1074,6 +1074,7 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
     } else if (is_h_variant) {
@@ -1083,5 +1084,9 @@ void kernel_main() {
     } else {
         ASSERT(0);
     }
+
+    // Confirm expected number of pages, spinning here is a leak
+    cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }
