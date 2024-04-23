@@ -1466,10 +1466,11 @@ inline void RISC_POST_HEARTBEAT(uint32_t &heartbeat) {
   ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 }
 
-enum class BufferType: uint8_t {
+enum class BufferType : uint8_t {
     DRAM = 0,
     L1 = 1,
-    SYSTEM_MEMORY = 2
+    SYSTEM_MEMORY = 2,
+    L1_SMALL = 3,
 };
 
 FORCE_INLINE
@@ -1565,6 +1566,10 @@ class Buffer {
             case BufferType::DRAM:          this->get_noc_addr_helper = get_dram_noc_addr; break;
             case BufferType::L1:            this->get_noc_addr_helper = get_l1_noc_addr; break;
             case BufferType::SYSTEM_MEMORY: this->get_noc_addr_helper = get_system_memory_noc_addr; break;
+            case BufferType::L1_SMALL:
+                // L1 small region is not supported here
+                this->get_noc_addr_helper = (decltype(get_noc_addr_helper))0xFFFFFFFF;
+                break;
         }
     }
     uint64_t get_noc_addr_(const uint32_t id, const uint32_t offset = 0) {

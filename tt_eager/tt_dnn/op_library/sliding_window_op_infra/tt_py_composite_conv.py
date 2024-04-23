@@ -651,7 +651,7 @@ class TTPyCompositeConv(TTPyOp):
             shard_halo = False
             shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, shard_halo)
             mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1_SMALL, shard_spec
             )
             conv_reader_indices_sharded_tensor = (
                 conv_reader_indices_tt_tensor.to(device, mem_config)

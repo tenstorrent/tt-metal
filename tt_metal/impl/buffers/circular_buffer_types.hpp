@@ -33,7 +33,7 @@ class CircularBufferConfig {
         total_size_(total_size),
         dynamic_cb_(true),
         max_size_(buffer.size()) {
-        if (buffer.buffer_type() != BufferType::L1) {
+        if (not buffer.is_l1()) {
             TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
         if (total_size > buffer.size()) {
@@ -89,7 +89,7 @@ class CircularBufferConfig {
     }
 
     CircularBufferConfig set_globally_allocated_address(const Buffer &buffer) {
-        if (buffer.buffer_type() != BufferType::L1) {
+        if (not buffer.is_l1()) {
             TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
         this->globally_allocated_address_ = buffer.address();
