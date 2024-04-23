@@ -29,12 +29,7 @@ def test_softmax_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -63,12 +58,7 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -104,12 +94,7 @@ def test_softmax_not_multiple_of_32_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
@@ -120,7 +105,7 @@ def test_softmax_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     tt_cpu = torch.softmax(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -147,12 +132,7 @@ def test_softmax_for_dim_nc(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)
@@ -160,7 +140,7 @@ def test_softmax_for_dim_nc(shape_dim, device):
 
     tt_cpu = torch.softmax(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -221,7 +201,7 @@ def test_softmax_backward_large_algorithmfor_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    x = torch.randint(low=0, high=4, size=shape).reshape(shape).to(torch.bfloat16).requires_grad_(True)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
     dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
@@ -345,12 +325,7 @@ def test_softmax_callback(shape_dim_strategy, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -418,12 +393,7 @@ def test_softmax_optional_output_tensor(shape_dim, optional_output_tensor, devic
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     # cpu calculation
     tt_cpu = torch.softmax(x, dim)
