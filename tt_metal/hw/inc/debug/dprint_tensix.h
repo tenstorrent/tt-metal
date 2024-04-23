@@ -38,10 +38,26 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         // Print the contents
         DPRINT << FIXED() << SETPRECISION(2);
         uint32_t rd_data[8+1]; // data + array_type
-        for (int row = 0; row < 64; row++) {
+
+        // print faces 0 & 1
+        int face_r_dim = 16;
+        for (int row = 0; row < face_r_dim; row++) {
+            // face 0
             dbg_read_dest_acc_row(row + 64 * tile_id, rd_data);
             DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
-            if (row % 2 == 1) DPRINT << ENDL();
+            // face 1
+            dbg_read_dest_acc_row(row + face_r_dim + 64 * tile_id, rd_data);
+            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
+        }
+
+        // print faces 2 & 3
+        for (int row = 0; row < face_r_dim; row++) {
+            // face 2
+            dbg_read_dest_acc_row(row + 2*face_r_dim + 64 * tile_id, rd_data);
+            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
+            // face 3
+            dbg_read_dest_acc_row(row + 3*face_r_dim + 64 * tile_id, rd_data);
+            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
         }
     })
     dbg_unhalt();
