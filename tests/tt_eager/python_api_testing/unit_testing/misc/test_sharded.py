@@ -534,13 +534,7 @@ def test_sharded_partial_op(
     "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
 )
 def test_block_sharded_partial_op(
-    device,
-    H,
-    W,
-    num_cores,
-    activations_dtype,
-    output_dtype,
-    function_level_defaults,
+    device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults, use_program_cache
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
