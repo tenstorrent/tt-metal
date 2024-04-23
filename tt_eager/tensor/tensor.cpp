@@ -682,7 +682,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.shard_spec.has_value());
-    TT_ASSERT(memory_config.buffer_type == BufferType::L1);
+    TT_ASSERT(memory_config.is_l1());
 
     auto shard_spec = memory_config.shard_spec.value();
     auto& shard_shape = shard_spec.shape;

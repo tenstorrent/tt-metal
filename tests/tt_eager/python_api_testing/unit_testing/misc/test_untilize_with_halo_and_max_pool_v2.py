@@ -33,6 +33,7 @@ def volume(shape):
 ## pad_h, pad_w
 ## dilation_h, dilation_w
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (

@@ -26,9 +26,9 @@ class Device;
 enum class BufferType {
     DRAM,
     L1,
-    SYSTEM_MEMORY
+    SYSTEM_MEMORY,
+    L1_SMALL,
 };
-
 
 enum class TensorMemoryLayout {
     INTERLEAVED,
@@ -198,6 +198,9 @@ class Buffer {
 
     BufferType buffer_type() const { return buffer_type_; }
 
+    bool is_l1() const { return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL; }
+    bool is_dram() const { return buffer_type() == BufferType::DRAM; }
+
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
@@ -236,6 +239,8 @@ class Buffer {
 
     void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
+
+    uint64_t translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
     Device *device_;
     uint64_t size_;                 // Size in bytes

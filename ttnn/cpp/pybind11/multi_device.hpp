@@ -16,15 +16,24 @@ namespace ttnn {
 namespace multi_device {
 
 void py_module(py::module& module) {
-
     py::class_<DeviceMesh>(module, "DeviceMesh")
-        .def(py::init<DeviceGrid, std::vector<int>>(), py::kw_only(), py::arg("device_grid"), py::arg("device_ids"))
+        .def(
+            py::init<DeviceGrid, std::vector<int>, size_t>(),
+            py::kw_only(),
+            py::arg("device_grid"),
+            py::arg("device_ids"),
+            py::arg("l1_small_size"))
         .def("get_device", &ttnn::multi_device::DeviceMesh::get_device, py::return_value_policy::reference)
         .def("get_num_devices", &ttnn::multi_device::DeviceMesh::num_devices)
         .def("get_device_ids", &ttnn::multi_device::DeviceMesh::get_device_ids);
 
     module.def(
-        "open_device_mesh", &open_device_mesh, py::kw_only(), py::arg("device_grid"), py::arg("device_ids"));
+        "open_device_mesh",
+        &open_device_mesh,
+        py::kw_only(),
+        py::arg("device_grid"),
+        py::arg("device_ids"),
+        py::arg("l1_small_size"));
 
     module.def("close_device_mesh", &close_device_mesh, py::arg("device_mesh"), py::kw_only());
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());

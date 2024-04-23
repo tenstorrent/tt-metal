@@ -18,6 +18,7 @@ import ttnn
 ## stride_h, stride_w
 ## pad_h, pad_w
 ## dilation_h, dilation_w
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -211,6 +212,7 @@ def test_run_max_pool(
         assert isequal
 
 
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override, xfail",
     (

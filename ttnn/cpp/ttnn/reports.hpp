@@ -64,7 +64,7 @@ struct BufferInfo {
 std::vector<BufferInfo> get_buffers() {
     std::vector<BufferInfo> buffer_infos;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP.value()) {
-        if (buffer->buffer_type() != BufferType::L1) {
+        if (not buffer->is_l1()) {
             continue;
         }
 
@@ -129,7 +129,7 @@ struct BufferPageInfo {
 std::vector<BufferPageInfo> get_buffer_pages() {
     std::vector<BufferPageInfo> buffer_page_infos;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP.value()) {
-        if (buffer->buffer_type() != BufferType::L1) {
+        if (not buffer->is_l1()) {
             continue;
         }
 

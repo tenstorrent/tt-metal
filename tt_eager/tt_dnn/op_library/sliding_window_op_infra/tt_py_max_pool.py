@@ -196,7 +196,7 @@ class TTPyMaxPool(TTPyOp):
             shard_spec = ttl.tensor.ShardSpec(
                 self.shard_grid, [1, reader_indices_tt_tensor.get_legacy_shape()[-1]], shard_orientation, shard_halo
             )
-            mem_config = ttl.tensor.MemoryConfig(self.shard_layout, ttl.tensor.BufferType.L1, shard_spec)
+            mem_config = ttl.tensor.MemoryConfig(self.shard_layout, ttl.tensor.BufferType.L1_SMALL, shard_spec)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(self.device, mem_config)
 
             reader_patterns_cache[sliding_window_op_params_hash] = reader_indices_sharded_tensor

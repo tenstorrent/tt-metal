@@ -27,7 +27,12 @@ void DeviceModule(py::module &m_device) {
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
     auto pyDevice = py::class_<Device>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
-    pyDevice.def(py::init<>([](int device_id) { return Device(device_id, 1); }), "Create device.")
+    pyDevice
+        .def(
+            py::init<>([](int device_id, size_t l1_small_size) { return Device(device_id, 1, l1_small_size); }),
+            "Create device.",
+            py::arg("device_id"),
+            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE)
         .def("id", &Device::id, "Device's ID")
         .def("arch", &Device::arch, "Device's arch")
         .def(
@@ -38,9 +43,18 @@ void DeviceModule(py::module &m_device) {
             "worker_core_from_logical_core",
             &Device::worker_core_from_logical_core,
             "Convert a logical core coordinate into a physical worker core coordinate")
-        .def("enable_program_cache", &Device::enable_program_cache, "Enable caching for all programs sent to this device")
-        .def("disable_and_clear_program_cache", &Device::disable_and_clear_program_cache, "Disable and clear program cache for this device")
-        .def("num_program_cache_entries", &Device::num_program_cache_entries, "Number of entries in the program cache for this device")
+        .def(
+            "enable_program_cache",
+            &Device::enable_program_cache,
+            "Enable caching for all programs sent to this device")
+        .def(
+            "disable_and_clear_program_cache",
+            &Device::disable_and_clear_program_cache,
+            "Disable and clear program cache for this device")
+        .def(
+            "num_program_cache_entries",
+            &Device::num_program_cache_entries,
+            "Number of entries in the program cache for this device")
         .def("enable_async", &Device::enable_async);
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
@@ -55,7 +69,10 @@ void DeviceModule(py::module &m_device) {
         | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
         )doc");
-    m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id, 1); }, R"doc(
+    m_device.def(
+        "CreateDevice",
+        [](int device_id, size_t l1_small_size) { return CreateDevice(device_id, 1, l1_small_size); },
+        R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
@@ -63,8 +80,15 @@ void DeviceModule(py::module &m_device) {
         +==================+========================+=====================+==============================+==========+
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
-    )doc");
-    m_device.def("CreateDevices", [](std::vector<int> device_ids) { return tt::tt_metal::detail::CreateDevices(device_ids); }, R"doc(
+    )doc",
+        py::arg("device_id"),
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
+    m_device.def(
+        "CreateDevices",
+        [](std::vector<int> device_ids, size_t l1_small_size) {
+            return tt::tt_metal::detail::CreateDevices(device_ids, 1, l1_small_size);
+        },
+        R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
@@ -72,7 +96,9 @@ void DeviceModule(py::module &m_device) {
         +==================+========================+=====================+==============================+==========+
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
-    )doc");
+    )doc",
+        py::arg("device_ids"),
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -169,6 +195,8 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
+
+    m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
 }
 
 void ProfilerModule(py::module &m_profiler) {

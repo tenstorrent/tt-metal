@@ -224,7 +224,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
             host_input[0] = bank_id + 1;
             bank_id_to_value[bank_id] = host_input.at(0);
             CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t write_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            uint32_t write_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
@@ -247,7 +247,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
             CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t read_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            uint32_t read_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
             ASSERT_TRUE(output.size() == host_input.size());
             uint32_t expected_value =

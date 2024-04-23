@@ -23,7 +23,7 @@ public:
     DeviceGrid device_grid;
     std::vector<std::pair<int, std::unique_ptr<Device>>> managed_devices;
 
-    DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids);
+    DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size);
     ~DeviceMesh() = default;
 
     DeviceMesh(const DeviceMesh &) = delete;

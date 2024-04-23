@@ -214,6 +214,8 @@ struct MemoryConfig {
     BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool is_sharded() const;
+    bool is_l1() const;
+    bool is_dram() const;
 
     static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type", "shard_spec");
     const auto attribute_values() const {

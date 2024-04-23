@@ -60,6 +60,7 @@ def test_linear(device, model_name, batch_size, m_size, k_size, n_size):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -108,6 +109,7 @@ def test_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv_relu_conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -180,6 +182,7 @@ def test_conv_relu_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "nested_conv_relu_conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -261,6 +264,7 @@ def test_nested_conv_relu_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv_relu_linear"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -378,6 +382,7 @@ def test_module_with_childen_and_parameters(device, batch_size, m_size, k_size, 
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize("use_conv_bias", [True, False])
 def test_conv2d_with_batch_norm2d(device, use_conv_bias):
     torch.manual_seed(0)
@@ -470,6 +475,7 @@ def test_conv2d_with_batch_norm2d(device, use_conv_bias):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 def test_resnet_with_module_cache(device):
     torch.manual_seed(0)
 

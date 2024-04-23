@@ -146,10 +146,9 @@ struct OpPerformanceModel {
 
         auto tensor_ns = [peak_dram_bw, noc_l1_bisection_bw](const Tensor& t) {
             int size_bytes = t.volume() * t.element_size();
-            if(t.memory_config().buffer_type == BufferType::DRAM) {
+            if (t.memory_config().is_dram()) {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
-            }
-            else if(t.memory_config().buffer_type == BufferType::L1) {
+            } else if (t.memory_config().is_l1()) {
                 return 1.0f; // TODO: figure out better modelling scheme for L1->L1 Transfers
                 //return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             }

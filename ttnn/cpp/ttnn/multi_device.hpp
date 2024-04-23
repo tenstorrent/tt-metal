@@ -20,8 +20,8 @@ using DeviceGrid = std::pair<int, int>;
 using DeviceIds = std::vector<int>;
 
 
-inline DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids) {
-    return DeviceMesh(device_grid, device_ids);
+inline DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids, size_t l1_small_size) {
+    return DeviceMesh(device_grid, device_ids, l1_small_size);
 }
 
 inline void close_device_mesh(DeviceMesh &multi_device) {

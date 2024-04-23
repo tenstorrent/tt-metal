@@ -82,9 +82,7 @@ uint32_t dram_channel_from_bank_id(const Allocator &allocator, uint32_t bank_id)
 
 CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
-int32_t l1_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
-
-int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
+int32_t bank_offset(const Allocator &allocator, BufferType buffer_type, uint32_t bank_id);
 
 const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
 
@@ -112,6 +110,7 @@ struct Allocator {
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
+    allocator::BankManager l1_small_manager;
 
     // TODO: Track lowest l1 addresses!
 

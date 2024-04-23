@@ -256,7 +256,7 @@ def reset_tensix(request, silicon_arch_name):
 
 
 @pytest.fixture(scope="function")
-def device_init_destroy(request):
+def device_l1_small_size(request):
     import tt_lib as ttl
 
     device_id = request.config.getoption("device_id")
@@ -264,7 +264,11 @@ def device_init_destroy(request):
     num_devices = ttl.device.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
 
-    device = ttl.device.CreateDevice(device_id)
+    if hasattr(request, "param"):
+        l1_small_size = request.param
+        device = ttl.device.CreateDevice(device_id, l1_small_size)
+    else:
+        device = ttl.device.CreateDevice(device_id)
     ttl.device.SetDefaultDevice(device)
 
     yield device
@@ -274,7 +278,7 @@ def device_init_destroy(request):
 
 
 @pytest.fixture(scope="function")
-def device(device_init_destroy):
+def device(device_l1_small_size):
     import tt_lib as ttl
 
     device = ttl.device.GetDefaultDevice()

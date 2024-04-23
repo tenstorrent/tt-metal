@@ -58,11 +58,12 @@ void ActiveDevices::deactivate_device(chip_id_t id) {
     this->active_devices_[id] = ActiveState::INACTIVE;
 }
 
-Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id)
-{
+Device::Device(
+    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap) :
+    id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id) {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
-    this->initialize(l1_bank_remap);
+    this->initialize(l1_small_size, l1_bank_remap);
 }
 
 void Device::initialize_cluster() {
@@ -76,23 +77,28 @@ void Device::initialize_cluster() {
 #endif
 }
 
-void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
+void Device::initialize_allocator(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     // Construct allocator config from soc_desc
-    AllocatorConfig config({
-        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
-        .dram_bank_size = soc_desc.dram_bank_size,
-        .dram_bank_offsets = {},
-        .worker_grid_size = this->logical_grid_size(),
-        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .l1_bank_size = static_cast<size_t>(get_storage_core_bank_size(this->id_, this->num_hw_cqs_)),
-        .core_type_from_noc_coord_table = {}, // Populated later
-        .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
-        .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
-        .l1_bank_remap = l1_bank_remap,
-        .compute_grid_size = this->compute_with_storage_grid_size()
-    });
+    AllocatorConfig config(
+        {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
+         .dram_bank_size = soc_desc.dram_bank_size,
+         .dram_bank_offsets = {},
+         .worker_grid_size = this->logical_grid_size(),
+         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
+         .l1_bank_size = static_cast<size_t>(get_storage_core_bank_size(this->id_, this->num_hw_cqs_)),
+         .l1_small_size = l1_small_size,
+         .core_type_from_noc_coord_table = {},  // Populated later
+         .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
+         .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
+         .l1_bank_remap = l1_bank_remap,
+         .compute_grid_size = this->compute_with_storage_grid_size()});
+    TT_FATAL(config.l1_small_size < config.l1_bank_size, "Reserved size must be less than bank size");
+    TT_FATAL(
+        config.l1_small_size % ADDRESS_ALIGNMENT == 0,
+        "Reserved size must be aligned to ADDRESS_ALIGNMENT",
+        ADDRESS_ALIGNMENT);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -916,12 +922,12 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
-bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
+bool Device::initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is NOT enabled", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
-    this->initialize_allocator(l1_bank_remap);
+    this->initialize_allocator(l1_small_size, l1_bank_remap);
     this->initialize_build();
     if (!already_initialized) {
         this->build_firmware();
@@ -1093,14 +1099,9 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
     return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
 }
 
-int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {
+int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
     this->check_allocator_is_initialized();
-    return allocator::l1_bank_offset_from_bank_id(*this->allocator_, bank_id);
-}
-
-int32_t Device::dram_bank_offset_from_bank_id(uint32_t bank_id) const {
-    this->check_allocator_is_initialized();
-    return allocator::dram_bank_offset_from_bank_id(*this->allocator_, bank_id);
+    return allocator::bank_offset(*this->allocator_, buffer_type, bank_id);
 }
 
 CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
@@ -1121,6 +1122,11 @@ const std::vector<uint32_t> &Device::bank_ids_from_logical_core(const CoreCoord 
 allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
     this->check_allocator_is_initialized();
     return allocator::get_statistics(*this->allocator_, buffer_type);
+}
+
+size_t Device::get_l1_small_size() const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->config.l1_small_size;
 }
 
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
