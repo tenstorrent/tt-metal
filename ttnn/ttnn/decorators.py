@@ -694,6 +694,10 @@ class Operation:
             OPERATION_CALL_STACK.pop()
         return output
 
+    def __eq__(self, other: callable):
+        return self.decorated_function == other
+
+    __name__ = property(lambda self: self.python_fully_qualified_name)
     __doc__ = property(lambda self: self.decorated_function.__doc__)
 
 
@@ -761,6 +765,19 @@ def register_operation(
         if ttnn.CONFIG.enable_fast_runtime_mode:
             OPERATION_TO_GOLDEN_FUNCTION[function] = golden_function
             OPERATION_TO_FALLBACK_FUNCTION[function] = fallback_function
+            # Wrap functions before attaching name to avoid errors
+            if hasattr(function, "python_fully_qualified_name"):
+
+                def name_decorator(function):
+                    @wraps(function)
+                    def wrapper(*args, **kwargs):
+                        return function(*args, **kwargs)
+
+                    return wrapper
+
+                python_fully_qualified_name = function.python_fully_qualified_name
+                function = name_decorator(function)
+                function.__name__ = python_fully_qualified_name
             return function
 
         is_cpp_function = hasattr(function, "__ttnn__")
