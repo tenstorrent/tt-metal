@@ -6,6 +6,7 @@
 
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -158,7 +159,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             tt_metal::ComputeConfig{});
     }
 
-    uint32_t curr_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
@@ -202,7 +204,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                  shard_width,
                  num_units_offset,
                  curr_num_units_per_shard,
-                 curr_idx_h + curr_idx_w});
+                 curr_idx_h + curr_idx_w,
+                 starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w == num_units_per_row) {
                 curr_idx_w = 0;
@@ -269,24 +272,28 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         }
     }
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+                                                   const std::vector<Tensor>& output_tensors
+                                                   ) {
 
+        auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto shard_spec = output_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.grid;
+        bool partial_op = num_slices > 1;
+        uint32_t starting_idx_h = 0;
+        if (partial_op) {
+            uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+            starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
+        }
 
         for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-            }
+            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+            runtime_args[6] = starting_idx_h;
         }
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
@@ -416,7 +423,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
-    uint32_t curr_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t starting_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
@@ -460,7 +468,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
                  shard_width,
                  num_units_offset,
                  num_units_per_shard,
-                 curr_idx_h + curr_idx_w});
+                 curr_idx_h + curr_idx_w,
+                 starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -516,23 +525,27 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
         auto src_buffer = input_tensors.at(0).buffer();
 
         Buffer* dst_buffer = nullptr;
-        if (num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0)) {
+        uint32_t starting_idx_h = 0;
+        bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
+        if (partial_op) {
             // If we have num_slices > 1, it means that our op is S->I partial.
             // And currently we store output tensors there as input[1]
             // If we have num_slices == 1, and output_tensors.size() == 0,
             // it also means we are in S->I partial and must read from output from inputs[1]
             dst_buffer = input_tensors.at(1).buffer();
+
+            // Calculate starting_idx_h
+            uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+            starting_idx_h = calculate_starting_idx_h(input_tensors.at(1), num_slices, runtime_slice_index);
         } else {
             dst_buffer = output_tensors.at(0).buffer();
         }
-
-        auto shard_spec = input_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.grid;
 
         for (const auto& core : cores) {
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                runtime_args[8] = starting_idx_h;
             }
         }
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
