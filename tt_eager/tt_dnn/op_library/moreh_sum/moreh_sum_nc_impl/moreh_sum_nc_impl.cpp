@@ -15,9 +15,30 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim) {
-    TT_ASSERT(dim == 0 || dim == 1);
+namespace {
+inline
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim) {
+    const auto rank = shape.rank();
 
+    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
+    uint32_t Wt = shape[-1] / TILE_WIDTH;
+    uint32_t Ht = shape[-2] / TILE_HEIGHT;
+
+    uint32_t reduce_dim = shape[dim];
+    uint32_t inner_dims_product = 1;
+    for (auto i = dim + 1; i < rank - 2; ++i) {
+        inner_dims_product *= shape[i];
+    }
+
+    uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
+    uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
+
+    return { Wt, Ht, inner_tile_size, reduce_tile_size};
+}
+
+}
+
+operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -32,24 +53,16 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
 
     const auto &input_shape = input.get_legacy_shape();
     const auto &input_shape_without_padding = input_shape.without_padding();
-
-    const auto N = input_shape[0];
-    const auto C = input_shape[1];
-    const auto Ht = input_shape[2] / TILE_HEIGHT;
-    const auto Wt = input_shape[3] / TILE_WIDTH;
-    const auto HtWt = Ht * Wt;
-    const auto CHtWt = C * Ht * Wt;
+    const auto [Wt, Ht, inner_tile_size, reduce_tile_size] = extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
-    const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_output_tiles = output.volume() / TILE_HW;
 
-    log_debug(LogOp, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
+    log_debug(LogOp, "reduce_tile_size {} inner_tile_size {} Ht {} Wt {}", reduce_tile_size, inner_tile_size, Ht, Wt);
     log_debug(
         LogOp,
-        "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
+        "dim {} num_reduce_input_tile {} num_output_tiles {}",
         dim,
         num_reduce_input_tile,
-        input_tile_offset,
         num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -136,12 +149,11 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
             {input.buffer()->address(),
              num_reduce_input_tile,
              num_tiles_per_core,
-             input_tile_offset,
              tile_offset,
              static_cast<uint32_t>(is_dram(input)),
-             HtWt,
-             CHtWt,
-             static_cast<uint32_t>(dim)
+             static_cast<uint32_t>(dim),
+             reduce_tile_size,
+             inner_tile_size
              });
 
         SetRuntimeArgs(

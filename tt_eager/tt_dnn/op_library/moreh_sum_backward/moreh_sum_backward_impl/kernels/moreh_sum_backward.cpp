@@ -7,10 +7,8 @@ namespace NAMESPACE {
 void MAIN {
     ArgFetcher arg_fetcher;
     const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto n_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto c_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto ht_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto wt_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto ht_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
 
     constexpr auto cb_in0 = tt::CB::c_in0;  // input
     constexpr auto cb_in1 = tt::CB::c_in1;  // zero tile
