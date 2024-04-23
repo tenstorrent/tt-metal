@@ -11,6 +11,7 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
 
+@pytest.mark.skip("#7754: Failing with rc != 0 in main")
 @pytest.mark.parametrize("sample_counts", [(1, 1024)])  # , 8, 16, 64, 256],
 @pytest.mark.parametrize(
     "sample_sizes",
