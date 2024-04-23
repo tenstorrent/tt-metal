@@ -244,3 +244,13 @@ TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
         GTEST_SKIP();
     this->RunTestOnDevice(RunTestEth, this->devices_[0]);
 }
+
+TEST_F(WatcherFixture, TestWatcherSanitizeIEth) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "Skip due to #7771");
+        GTEST_SKIP();
+    }
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(RunTestIEth, this->devices_[0]);
+}

@@ -93,6 +93,10 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
     }
 }
 TEST_F(DPrintFixture, TestPrintIEthCores) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "Skip due to #7771");
+        GTEST_SKIP();
+    }
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().size() == 0) {

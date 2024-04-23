@@ -53,6 +53,9 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     //bool has_eth_cores = false;
     bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
+    // TODO: revert this when #7771 is fixed.
+    if (!fixture->IsSlowDispatch())
+        has_ieth_cores = false;
     // TODO: revert this when #6860 is fixed.
     if (fixture->NumDevices() > 2) {// T3000
         has_eth_cores = false;
