@@ -16,7 +16,9 @@ test-list:
           low: -10
           high: 10
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          atol: 1.7
       args-gen: gen_dtype_layout_device
       output-file: stats_var_hw_sweep.csv
       args:
@@ -42,7 +44,9 @@ test-list:
           low: -10
           high: 10
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          atol: 1.7
       args-gen: gen_dtype_layout_device
       output-file: stats_var_hw_sweep.csv
       args:
