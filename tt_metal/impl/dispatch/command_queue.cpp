@@ -87,44 +87,31 @@ void EnqueueReadShardedBufferCommand::add_prefetch_relay(DeviceCommand &command)
     );
 }
 
-const DeviceCommand EnqueueReadBufferCommand::assemble_device_commands() {
+void EnqueueReadBufferCommand::process() {
+    // accounts for padding
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
         CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_STALL
         CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
 
-    DeviceCommand command(cmd_sequence_sizeB);
 
-    command.add_dispatch_wait_with_prefetch_stall(true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+
+    command_sequence.add_dispatch_wait_with_prefetch_stall(true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     bool flush_prefetch = false;
-    command.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
+    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
 
-    this->add_prefetch_relay(command);
+    this->add_prefetch_relay(command_sequence);
 
-    return command;
-}
-
-void EnqueueReadBufferCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    // Wrap issue queue
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
-        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    }
-
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 // EnqueueWriteBufferCommand section
@@ -156,26 +143,26 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
-void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence, void *data_to_write) {
+void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence) {
     uint8_t is_dram = uint8_t(this->buffer.buffer_type() == BufferType::DRAM);
     TT_ASSERT(this->dst_page_index <= 0xFFFF, "Page offset needs to fit within range of uint16_t, bank_base_address was computed incorrectly!");
     uint16_t start_page = uint16_t(this->dst_page_index & 0xFFFF);
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_paged(
-        flush_prefetch, is_dram, start_page, this->bank_base_address, this->padded_page_size, this->pages_to_write, data_to_write);
+        flush_prefetch, is_dram, start_page, this->bank_base_address, this->padded_page_size, this->pages_to_write);
 }
 
-void EnqueueWriteShardedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence, void *data_to_write) {
+void EnqueueWriteShardedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
     CoreCoord logical_core = this->buffer_page_mapping.all_cores_[this->buffer_page_mapping.dev_page_to_core_mapping_[this->dst_page_index]];
     CoreCoord core = this->buffer.device()->worker_core_from_logical_core(logical_core);
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
-        flush_prefetch, 0, get_noc_unicast_encoding(core), this->bank_base_address, data_size_bytes, data_to_write);
+        flush_prefetch, 0, get_noc_unicast_encoding(core), this->bank_base_address, data_size_bytes);
 }
 
-const DeviceCommand EnqueueWriteBufferCommand::assemble_device_commands() {
+void EnqueueWriteBufferCommand::process() {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
 
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + (CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR)
@@ -183,13 +170,16 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_commands() {
     if (this->issue_wait) {
         cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE; // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     if (this->issue_wait) {
         command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     }
 
-    std::vector<uint32_t> data_to_write(data_size_bytes / sizeof(uint32_t), 0);
+    this->add_dispatch_write(command_sequence);
 
     uint32_t full_page_size = align(this->buffer.page_size(), 32); // this->padded_page_size could be a partial page if buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
@@ -203,13 +193,12 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_commands() {
         uint32_t unpadded_src_offset = buffer_addr_offset;
         uint32_t src_address_offset = unpadded_src_offset;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes; sysmem_address_offset += this->padded_page_size) {
-            uint32_t sysmem_address_offset_words = sysmem_address_offset / sizeof(uint32_t);
             uint32_t page_size_to_copy = this->padded_page_size;
             if (src_address_offset + this->padded_page_size > buffer.page_size()) {
                 // last partial page being copied from unpadded src buffer
                 page_size_to_copy -= padding;
             }
-            memcpy(data_to_write.data() + sysmem_address_offset_words, (char*)this->src + src_address_offset, page_size_to_copy);
+            command_sequence.add_data((char*)this->src + src_address_offset, page_size_to_copy, this->padded_page_size);
             src_address_offset += page_size_to_copy;
         }
     } else {
@@ -218,36 +207,19 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_commands() {
             // If page size is not 32B-aligned, we cannot do a contiguous write
             uint32_t src_address_offset = unpadded_src_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes; sysmem_address_offset += this->padded_page_size) {
-                uint32_t sysmem_address_offset_words = sysmem_address_offset / sizeof(uint32_t);
-                memcpy(data_to_write.data() + sysmem_address_offset_words, (char*)this->src + src_address_offset, this->buffer.page_size());
+                command_sequence.add_data((char*)this->src + src_address_offset, this->buffer.page_size(), this->padded_page_size);
                 src_address_offset += this->buffer.page_size();
             }
         } else {
-            memcpy(data_to_write.data(), (char*)this->src + unpadded_src_offset, data_size_bytes);
+            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
         }
     }
 
-    this->add_dispatch_write(command_sequence, data_to_write.data());
-
-    return command_sequence;
-}
-
-void EnqueueWriteBufferCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-
-    // We already checked for issue queue wrap when setting up the cmd, no need to check again here
-
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-
-
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 // EnqueueProgramCommand Section
@@ -266,7 +238,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
-const DeviceCommand EnqueueProgramCommand::assemble_preamble_commands() {
+void EnqueueProgramCommand::assemble_preamble_commands() {
     if (not program.loaded_onto_device) {
         // Wait command so previous program finishes
         // Wait command with barrier for binaries to commit to DRAM
@@ -275,34 +247,30 @@ const DeviceCommand EnqueueProgramCommand::assemble_preamble_commands() {
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        DeviceCommand command_sequence(cmd_sequence_sizeB);
+        this->preamble_command_sequence = DeviceCommand(cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
         // wait for binaries to commit to dram, also wait for previous program to be done
         // Wait Noc Write Barrier, wait for binaries to be written to worker cores
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
-        command_sequence.add_dispatch_wait_with_prefetch_stall(
+        this->preamble_command_sequence.add_dispatch_wait_with_prefetch_stall(
             true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
         program.loaded_onto_device = true;
-        return command_sequence;
     } else {
         // Wait command so previous program finishes
         uint32_t cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-        DeviceCommand command_sequence(cmd_sequence_sizeB);
-        command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
-        return command_sequence;
+        this->preamble_command_sequence = DeviceCommand(cmd_sequence_sizeB);
+        this->preamble_command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     }
 }
 
 // Generate command sequence for unique (unicast) and common (multicast) runtime args
-const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_commands() {
+void EnqueueProgramCommand::assemble_runtime_args_commands() {
     program.update_runtime_args_transfer_info(this->device);
-
-    vector<DeviceCommand> runtime_args_command_sequences;
 
     CoreType dispatch_core_type = dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
@@ -402,13 +370,11 @@ const vector<DeviceCommand> EnqueueProgramCommand::assemble_runtime_args_command
             multicast_sub_cmds,
             rtarg_data
         );
-        runtime_args_command_sequences.emplace_back(command_sequence);
+        this->runtime_args_command_sequences.emplace_back(command_sequence);
     }
-
-    return runtime_args_command_sequences;
 }
 
-const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
+void EnqueueProgramCommand::assemble_device_commands() {
     if (program.cached_device_commands.size() == 0) {
         // Calculate size of command and fill program indices of data to update
         // TODO: Would be nice if we could pull this out of program
@@ -486,7 +452,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
             }
         }
 
-        DeviceCommand command_sequence(cmd_sequence_sizeB);
+        this->program_command_sequence = DeviceCommand(cmd_sequence_sizeB);
 
         // Semaphores
         // Multicast Semaphore Cmd
@@ -512,7 +478,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                 sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT);
             uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
 
-            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+            this->program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                 num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, multicast_sub_cmds, sem_data);
         }
 
@@ -540,7 +506,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                 sizeof(CQDispatchCmd) + num_packed_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT);
             uint32_t payload_sizeB = dispatch_cmd_sizeB + aligned_semaphore_data_sizeB;
 
-            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+            this->program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                 num_packed_cmds, dst, write_packed_len * sizeof(uint32_t), payload_sizeB, unicast_sub_cmds, sem_data);
         }
 
@@ -567,7 +533,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                     cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
                 }
             }
-            command_sequence.add_dispatch_write_linear(
+            this->program_command_sequence.add_dispatch_write_linear<true>(
                 true,  // flush_prefetch
                 num_receivers,
                 dst_noc_multicast_encoding,
@@ -581,7 +547,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
             const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
             for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
                 for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
-                    command_sequence.add_dispatch_write_linear(
+                    this->program_command_sequence.add_dispatch_write_linear(
                         false,                // flush_prefetch
                         dst_noc_info.second,  // num_mcast_dests
                         dst_noc_info.first,   // noc_xy_addr
@@ -609,7 +575,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                         page_offset = kg_transfer_info.page_offsets[kernel_idx];
                     }
 
-                    command_sequence.add_prefetch_relay_paged(
+                    this->program_command_sequence.add_prefetch_relay_paged(
                         true,  // is_dram
                         page_offset,
                         base_address,
@@ -624,13 +590,13 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
         if (program.program_transfer_info.num_active_cores > 0) {
             // Wait Noc Write Barrier, wait for binaries to be written to worker cores
             // TODO: any way to not have dispatcher poll the addr here?
-            command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0);
+            this->program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0);
         }
 
         // Go Signals
         for (const auto& transfer_info : program.program_transfer_info.go_signals) {
             for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
-                command_sequence.add_dispatch_write_linear(
+                this->program_command_sequence.add_dispatch_write_linear<true>(
                     true,                 // flush_prefetch
                     dst_noc_info.second,  // num_mcast_dests
                     dst_noc_info.first,   // noc_xy_addr
@@ -640,11 +606,10 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
             }
         }
         // TODO: add GO for FD2.1
-        program.cached_device_commands = command_sequence.cmd_vector();
-        return command_sequence;
+        program.cached_device_commands = this->program_command_sequence.cmd_vector();
     } else {
-        DeviceCommand command_sequence(program.cached_device_commands.size() * sizeof(uint32_t));
-        command_sequence.update_cmd_sequence(
+        this->program_command_sequence = DeviceCommand(program.cached_device_commands.size() * sizeof(uint32_t));
+        this->program_command_sequence.update_cmd_sequence(
             0, program.cached_device_commands.data(), program.cached_device_commands.size() * sizeof(uint32_t));
 
         uint32_t cb_payload_index = program.command_indices.cb_configs_payload_start;
@@ -662,16 +627,14 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_commands() {
                     cb_config_payload[base_index + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
                 }
             }
-            command_sequence.update_cmd_sequence(
-                cb_payload_index, cb_config_payload.data(), cb_config_payload.size() * sizeof(uint32_t));
+            this->program_command_sequence.update_cmd_sequence(
+                cb_payload_index * sizeof(uint32_t), cb_config_payload.data(), cb_config_payload.size() * sizeof(uint32_t));
             cb_payload_index += (align(
                                     CQ_PREFETCH_CMD_BARE_MIN_SIZE + (UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG *
                                                                      NUM_CIRCULAR_BUFFERS * sizeof(uint32_t)),
                                     PCIE_ALIGNMENT)) /
                                 sizeof(uint32_t);
         }
-
-        return command_sequence;
     }
 }
 
@@ -679,101 +642,73 @@ void EnqueueProgramCommand::process() {
     // Calculate all commands size and determine how many fetch q entries to use
 
     // Preamble, some waits and stalls
-    DeviceCommand preamble_command_sequence = this->assemble_preamble_commands();
+    // can be written directly to the issue queue
+    this->assemble_preamble_commands();
 
-    uint32_t preamble_fetch_size_bytes = preamble_command_sequence.size_bytes();
+    uint32_t preamble_fetch_size_bytes = this->preamble_command_sequence.size_bytes();
 
     // Runtime Args Command Sequence
-    vector<DeviceCommand> runtime_args_command_sequences = this->assemble_runtime_args_commands();
+    this->assemble_runtime_args_commands();
     uint32_t runtime_args_fetch_size_bytes = 0;
-    for (const auto& cmds : runtime_args_command_sequences) {
+    for (const auto& cmds : this->runtime_args_command_sequences) {
         // BRISC, NCRISC, TRISC...
         runtime_args_fetch_size_bytes += cmds.size_bytes();
     }
 
     // Main Command Sequence
-    DeviceCommand program_command_sequence = this->assemble_device_commands();
-    uint32_t program_fetch_size_bytes = program_command_sequence.size_bytes();
+    this->assemble_device_commands();
+    uint32_t program_fetch_size_bytes = this->program_command_sequence.size_bytes();
 
     uint32_t total_fetch_size_bytes =
         preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     CoreType dispatch_core_type = dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
     if (total_fetch_size_bytes <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size()) {
+
+        this->manager.issue_queue_reserve(total_fetch_size_bytes, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
         uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        // Wrap issue queue
-        uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-        if (write_ptr + align(total_fetch_size_bytes, 32) > command_issue_limit) {
-            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        }
 
-        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        this->manager.cq_write(preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        this->manager.cq_write(this->preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
         this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
 
-        for (const auto& cmds : runtime_args_command_sequences) {
+        for (const auto& cmds : this->runtime_args_command_sequences) {
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
             this->manager.issue_queue_push_back(cmds.size_bytes(), this->command_queue_id);
         }
+
         write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        this->manager.cq_write(program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
+        this->manager.cq_write(this->program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
         this->manager.issue_queue_push_back(program_fetch_size_bytes, this->command_queue_id);
 
         // One fetch queue entry for entire program
         this->manager.fetch_queue_write(total_fetch_size_bytes, this->command_queue_id);
     } else {
+        this->manager.issue_queue_reserve(preamble_fetch_size_bytes, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
         uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        // Wrap issue queue
-        uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-        if (write_ptr + align(preamble_fetch_size_bytes, 32) > command_issue_limit) {
-            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        }
-
-        this->manager.cq_write(preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        this->manager.cq_write(this->preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
         this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
-
         // One fetch queue entry for just the wait and stall, very inefficient
         this->manager.fetch_queue_write(preamble_fetch_size_bytes, this->command_queue_id);
 
-        for (const auto& cmds : runtime_args_command_sequences) {
+        for (const auto& cmds : this->runtime_args_command_sequences) {
             uint32_t fetch_size_bytes = cmds.size_bytes();
-
+            this->manager.issue_queue_reserve(fetch_size_bytes, this->command_queue_id);
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
             uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-            // Wrap issue queue
-            uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-            if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
-                this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-                write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-            }
-
             this->manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
             this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-
             // One fetch queue entry for each runtime args write location, e.g. BRISC/NCRISC/TRISC/ERISC
             this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
         }
+
+        this->manager.issue_queue_reserve(program_fetch_size_bytes, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
         write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        // Wrap issue queue
-        command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-        if (write_ptr + align(program_fetch_size_bytes, 32) > command_issue_limit) {
-            this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-        }
-
-        this->manager.cq_write(program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
+        this->manager.cq_write(this->program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
         this->manager.issue_queue_push_back(program_fetch_size_bytes, this->command_queue_id);
-
         // One fetch queue entry for rest of program commands
         this->manager.fetch_queue_write(program_fetch_size_bytes, this->command_queue_id);
     }
@@ -793,7 +728,7 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     expected_num_workers_completed(expected_num_workers_completed),
     clear_count(clear_count) {}
 
-const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
+void EnqueueRecordEventCommand::process() {
     std::vector<uint32_t> event_payload(dispatch_constants::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = this->event_id;
 
@@ -806,7 +741,9 @@ const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
         packed_write_sizeB + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event payload
         align(CQ_PREFETCH_CMD_BARE_MIN_SIZE + dispatch_constants::EVENT_PADDED_SIZE, PCIE_ALIGNMENT); // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
         false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
@@ -834,23 +771,13 @@ const DeviceCommand EnqueueRecordEventCommand::assemble_device_commands() {
     );
 
     bool flush_prefetch = true;
-    command_sequence.add_dispatch_write_host(flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, event_payload.data());
+    command_sequence.add_dispatch_write_host<true>(flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, event_payload.data());
 
-    return command_sequence;
-}
-
-void EnqueueRecordEventCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
@@ -871,34 +798,21 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     //     event, command_queue_id);
 }
 
-const DeviceCommand EnqueueWaitForEventCommand::assemble_device_commands() {
+void EnqueueWaitForEventCommand::process() {
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE; // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     uint32_t last_completed_event_address = sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
     command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
 
-    return command_sequence;
-}
-
-void EnqueueWaitForEventCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    // Wrap issue queue
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
-        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    }
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 EnqueueTraceCommand::EnqueueTraceCommand(
@@ -914,12 +828,14 @@ EnqueueTraceCommand::EnqueueTraceCommand(
     expected_num_workers_completed(expected_num_workers_completed),
     clear_count(true) {}
 
-const DeviceCommand EnqueueTraceCommand::assemble_device_commands() {
+void EnqueueTraceCommand::process() {
     uint32_t cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_EXEC_BUF
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
         false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
@@ -934,26 +850,11 @@ const DeviceCommand EnqueueTraceCommand::assemble_device_commands() {
 
     command_sequence.add_prefetch_exec_buf(buffer.address(), page_size_log2, buffer.num_pages());
 
-    return command_sequence;
-}
-
-void EnqueueTraceCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    // Wrap issue queue
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->command_queue_id);
-    if (write_ptr + align(fetch_size_bytes, 32) > command_issue_limit) {
-        this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
-        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    }
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
     // log_trace(LogDispatch, "EnqueueTraceCommand issued write_ptr={}, fetch_size={}, commands={}", write_ptr, fetch_size_bytes, this->commands);
 }
 
@@ -963,29 +864,22 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
     SystemMemoryManager& manager) :
     command_queue_id(command_queue_id), device(device), manager(manager) {}
 
-const DeviceCommand EnqueueTerminateCommand::assemble_device_commands() {
+void EnqueueTerminateCommand::process() {
     uint32_t cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_TERMINATE
 
-    DeviceCommand command_sequence(cmd_sequence_sizeB);
+    void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+
+    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     command_sequence.add_dispatch_terminate();
     command_sequence.add_prefetch_terminate();
 
-    return command_sequence;
-}
-
-void EnqueueTerminateCommand::process() {
-    DeviceCommand command_sequence = this->assemble_device_commands();
-
-    uint32_t fetch_size_bytes = command_sequence.size_bytes();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    this->manager.cq_write(command_sequence.data(), fetch_size_bytes, write_ptr);
-    this->manager.issue_queue_push_back(fetch_size_bytes, this->command_queue_id);
-    this->manager.fetch_queue_write(fetch_size_bytes, this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 
@@ -1018,9 +912,6 @@ HWCommandQueue::~HWCommandQueue() {
     if (this->exit_condition) {
         this->completion_queue_thread.join();  // We errored out already prior
     } else {
-
-        // TODO: SEND THE TERMINATE CMD?
-
         TT_ASSERT(
             this->issued_completion_q_reads.empty(),
             "There should be no reads in flight after closing our completion queue thread");

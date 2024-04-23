@@ -94,7 +94,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device *device, CommandQueue 
     // Clear out command queue
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(device->id(), channel) / device->num_hw_cqs();
+    uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / device->num_hw_cqs();
 
     std::vector<uint32_t> cq_zeros((cq_size - CQ_START) / sizeof(uint32_t), 0);
 

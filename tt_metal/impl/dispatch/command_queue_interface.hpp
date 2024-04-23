@@ -210,6 +210,7 @@ class SystemMemoryManager {
 
     bool bypass_enable;
     vector<uint32_t> bypass_buffer;
+    uint32_t bypass_buffer_write_offset;
 
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
@@ -217,7 +218,8 @@ class SystemMemoryManager {
         num_hw_cqs(num_hw_cqs),
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
-        bypass_enable(false) {
+        bypass_enable(false),
+        bypass_buffer_write_offset(0) {
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
@@ -311,6 +313,7 @@ class SystemMemoryManager {
         this->bypass_enable = enable;
         if (clear) {
             this->bypass_buffer.clear();
+            this->bypass_buffer_write_offset = 0;
         }
     }
 
@@ -354,28 +357,33 @@ class SystemMemoryManager {
         return this->cq_size;
     }
 
-    // TODO: rename issue_queue_reserve?
-    void issue_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) {
-        if (this->bypass_enable) return;
+    void *issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+        if (this->bypass_enable) {
+            TT_FATAL(cmd_size_B % sizeof(uint32_t) == 0, "Data cmd_size_B={} is not {}-byte aligned", cmd_size_B, sizeof(uint32_t));
+            uint32_t curr_size = this->bypass_buffer.size();
+            uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
+            this->bypass_buffer.resize(new_size);
+            return (void *)((char *)this->bypass_buffer.data() + (curr_size * sizeof(uint32_t)));
+        }
 
-        uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
+        uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
+        if (issue_q_write_ptr + align(cmd_size_B, PCIE_ALIGNMENT) > command_issue_limit) {
+            this->wrap_issue_queue_wr_ptr(cq_id);
+            issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
+        }
 
-        uint32_t rd_ptr_and_toggle;
-        uint32_t rd_ptr;
-        uint32_t rd_toggle;
-        do {
-            rd_ptr_and_toggle = get_cq_issue_rd_ptr<true>(this->device_id, cq_id, this->cq_size);
-            rd_ptr = rd_ptr_and_toggle & 0x7fffffff;
-            rd_toggle = rd_ptr_and_toggle >> 31;
-        } while (
-            cq_interface
-                .issue_fifo_wr_ptr < rd_ptr and cq_interface.issue_fifo_wr_ptr + cmd_size_16B > rd_ptr or
+        // Currently read / write pointers on host and device assumes contiguous ranges for each channel
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        //  but on host, we access a region of sysmem using addresses relative to a particular channel
+        //  this->cq_sysmem_start gives start of hugepage for a given channel
+        //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
+        //  so channel offset needs to be subtracted to get address relative to channel
+        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
+        void* issue_q_region = this->cq_sysmem_start + (issue_q_write_ptr - this->channel_offset);
 
-            // This is the special case where we wrapped our wr ptr and our rd ptr
-            // has not yet moved
-            (rd_toggle != cq_interface.issue_fifo_wr_toggle and cq_interface.issue_fifo_wr_ptr == rd_ptr));
+        return issue_q_region;
     }
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
@@ -390,7 +398,7 @@ class SystemMemoryManager {
 
         if (this->bypass_enable) {
             TT_FATAL(size_in_bytes % sizeof(uint32_t) == 0, "Data size_in_bytes={} is not {}-byte aligned", size_in_bytes, sizeof(uint32_t));
-            this->bypass_buffer.insert(this->bypass_buffer.end(), (uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t));
+            std::copy((uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t), this->bypass_buffer.begin() + this->bypass_buffer_write_offset);
         } else {
             memcpy(user_scratchspace, data, size_in_bytes);
         }
@@ -398,7 +406,11 @@ class SystemMemoryManager {
 
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
-        if (this->bypass_enable) return;
+        if (this->bypass_enable) {
+            TT_FATAL(push_size_B % sizeof(uint32_t) == 0, "Data push_size_B={} is not {}-byte aligned", push_size_B, sizeof(uint32_t));
+            this->bypass_buffer_write_offset += (push_size_B / sizeof(uint32_t));
+            return;
+        }
 
         // All data needs to be 32B aligned
         uint32_t push_size_16B = align(push_size_B, 32) >> 4;
