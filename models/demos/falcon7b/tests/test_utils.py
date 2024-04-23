@@ -3,7 +3,39 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import tt_lib
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+
+def create_prefill_attn_mask_for_sharded_softmax(attention_mask, num_attn_heads, seq_len):
+    if seq_len == 2048:
+        num_slices = 16
+    elif seq_len == 128:
+        num_slices = 1
+    elif seq_len == 1024:
+        num_slices = 4
+    else:
+        raise ValueError("Unsupported seq_len for optimizations")
+
+    attn_masks_per_slice = []
+    attention_mask_starting_index_per_slice = 0
+    slice_length = (num_attn_heads * seq_len) // num_slices
+    number_of_attention_mask_elements_used_per_slice = slice_length - seq_len * (slice_length // seq_len)
+    for _ in range(num_slices):
+        torch_attn_mask_per_slice = torch.cat(
+            [
+                attention_mask[:, :, attention_mask_starting_index_per_slice:, :],
+                attention_mask[:, :, :attention_mask_starting_index_per_slice, :],
+            ],
+            dim=2,
+        )
+        attn_masks_per_slice.append(torch_attn_mask_per_slice)
+
+        attention_mask_starting_index_per_slice = (
+            attention_mask_starting_index_per_slice + number_of_attention_mask_elements_used_per_slice
+        ) % seq_len
+
+    return attn_masks_per_slice
 
 
 def get_rand_falcon_inputs(
@@ -18,6 +50,7 @@ def get_rand_falcon_inputs(
     configuration,
     num_layers=1,
     generate_attention_inputs=True,
+    optimized=False,
 ):
     # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
@@ -43,12 +76,21 @@ def get_rand_falcon_inputs(
                     attention_input_i = attention_input[batch * i : batch * (i + 1)]
                     attention_mask_bool_i = attention_mask_bool[batch * i : batch * (i + 1)]
                     tt_attention_input.append(torch2tt_tensor(attention_input_i.unsqueeze(1), device))
-                    tt_attention_mask.append(
-                        torch2tt_tensor(
-                            (attention_mask_bool_i * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
-                            device,
+                    if seq_len in [2048, 128, 1024] and optimized:
+                        attn_masks = create_prefill_attn_mask_for_sharded_softmax(
+                            (attention_mask_bool_i * -1e5),
+                            configuration.num_attention_heads,
+                            q_len,
                         )
-                    )
+                        tt_attn_masks = [torch2tt_tensor(attn_mask, device) for attn_mask in attn_masks]
+                        tt_attention_mask.append(tt_attn_masks)
+                    else:
+                        tt_attention_mask.append(
+                            torch2tt_tensor(
+                                (attention_mask_bool_i * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
+                                device,
+                            )
+                        )
                 tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
                 tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
                 tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)

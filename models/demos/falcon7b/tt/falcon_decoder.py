@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from torch import nn
 from typing import Optional, Tuple
 
+import pytest
+import torch
 import tt_lib
-
-from models.demos.falcon7b.tt.falcon_attention import TtFalconAttention
-from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLP
+from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b.tt.model_utils import get_weights_cached
+from torch import nn
 
 
 class TtFalconDecoderLayer(nn.Module):
@@ -35,10 +34,11 @@ class TtFalconDecoderLayer(nn.Module):
         self.layer_num = layer_num
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
+        self.weights_dict = {}
 
         assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
-        self.self_attn = TtFalconAttention(
+        self.self_attn_prefill = TtFalconAttentionPrefill(
             devices=devices,
             state_dict=state_dict,
             base_url=base_url,
@@ -48,16 +48,44 @@ class TtFalconDecoderLayer(nn.Module):
             max_position_embeddings=max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=self.weights_dict,
         )
 
-        self.mlp = TtFalconMLP(
+        self.self_attn_decode = TtFalconAttentionDecode(
             devices=devices,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
             hidden_size=config.hidden_size,
+            num_heads=config.num_attention_heads,
+            max_position_embeddings=max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=self.weights_dict,
+        )
+
+        self.mlp_prefill = TtFalconMLPPrefill(
+            devices=devices,
+            state_dict=state_dict,
+            base_url=base_url,
+            layer_num=layer_num,
+            hidden_size=config.hidden_size,
+            max_position_embeddings=max_position_embeddings,
+            model_config=model_config,
+            tt_cache_path=tt_cache_path,
+            weights_dict=self.weights_dict,
+        )
+
+        self.mlp_decode = TtFalconMLPDecode(
+            devices=devices,
+            state_dict=state_dict,
+            base_url=base_url,
+            layer_num=layer_num,
+            hidden_size=config.hidden_size,
+            max_position_embeddings=max_position_embeddings,
+            model_config=model_config,
+            tt_cache_path=tt_cache_path,
+            weights_dict=self.weights_dict,
         )
 
         layer_name = f"{base_url}.{layer_num}"
@@ -130,23 +158,40 @@ class TtFalconDecoderLayer(nn.Module):
 
         residual = hidden_states
 
-        # Self Attention
-        attn_outputs = self.self_attn(
-            hidden_states=layernorm_output,
-            alibi=alibi,
-            attention_mask=attention_mask,
-            llm_mode=llm_mode,
-            user_id=user_id,
-            layer_past=layer_past,
-            layer_past_len=layer_past_len,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-        attention_output, layer_present = attn_outputs[0], attn_outputs[1]
-
-        # MLP
+        # Attention and MLP execution
         # mlp will deallocate layernorm_output
-        mlp_output = self.mlp(layernorm_output)
+        if llm_mode == "prefill":
+            attn_outputs = self.self_attn_prefill(
+                hidden_states=layernorm_output,
+                alibi=alibi,
+                attention_mask=attention_mask,
+                llm_mode=llm_mode,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+            attention_output, layer_present = attn_outputs[0], attn_outputs[1]
+            mlp_output = self.mlp_prefill(layernorm_output)
+
+        elif llm_mode == "decode":
+            attn_outputs = self.self_attn_decode(
+                hidden_states=layernorm_output,
+                alibi=alibi,
+                attention_mask=attention_mask,
+                llm_mode=llm_mode,
+                user_id=user_id,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+            attention_output, layer_present = attn_outputs[0], attn_outputs[1]
+            mlp_output = self.mlp_decode(layernorm_output)
+
+        else:
+            raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
         output = []
         for i in range(self.num_devices):

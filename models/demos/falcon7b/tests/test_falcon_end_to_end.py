@@ -2,40 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import numpy as np
-from sklearn.metrics import top_k_accuracy_score
-
+import pytest
+import torch
 import tt_lib
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+from loguru import logger
+from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.falcon7b.tests.test_utils import concat_device_out_layer_present, get_rand_falcon_inputs
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 # TODO: Remove this?
-from models.demos.falcon7b.tt.falcon_common import (
-    PytorchFalconCausalLM,
-)
-
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-)
-from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_out_layer_present
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
+from models.demos.falcon7b.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.falcon7b.tt.model_config import get_model_config
 from models.utility_functions import (
+    disable_compilation_reports,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_e75,
+    profiler,
+    skip_for_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
-    profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-    disable_compilation_reports,
-    is_e75,
-    skip_for_wormhole_b0,
 )
+from sklearn.metrics import top_k_accuracy_score
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
@@ -123,6 +113,7 @@ def run_test_FalconCausalLM_end_to_end(
         max_position_embeddings,
         model_config,
         tt_cache_path,
+        seq_len,
     )
     profiler.end("TtFalcon_model_setup")
 
@@ -301,10 +292,11 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 2, 128, 0),
+        ("prefill", 2, 1024, 0),
         ("decode", 32, 1, 128),
         ("decode", 32, 1, 1024),
     ),
-    ids=["prefill_seq128", "decode_batch32", "decode_batch32_1024"],
+    ids=["prefill_seq128", "prefill_seq1024", "decode_batch32", "decode_batch32_1024"],
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
@@ -361,7 +353,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
             "Single-card falcon cannot run this config on non-Grayskull: BFLOAT16-L1-falcon_7b-layers_32-decode_batch32"
         )
 
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

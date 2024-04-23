@@ -120,6 +120,7 @@ def run_test_FalconCausalLM_inference(
         max_position_embeddings,
         model_config,
         tt_cache_path,
+        seq_len,
     )
 
     # TODO: Generate attention_mask on device
