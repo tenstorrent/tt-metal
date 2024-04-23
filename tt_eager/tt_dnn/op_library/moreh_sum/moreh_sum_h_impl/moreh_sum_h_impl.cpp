@@ -17,13 +17,14 @@ namespace operations {
 
 namespace primary {
 
+
 operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output) {
     tt_metal::ReduceOpMath reduce_op = tt_metal::ReduceOpMath::SUM;
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::H;
     float scaler = 1.0f;
 
     const auto shape = a.get_legacy_shape();
-    uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -31,7 +32,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
 
     // check mask for h-dim
     const auto input_shape_without_padding = shape.without_padding();
-    const auto origin_H = input_shape_without_padding[2];
+    const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
@@ -55,7 +56,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto num_cols = NC * Wt;
+    auto num_cols = other_dims_product * Wt;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
