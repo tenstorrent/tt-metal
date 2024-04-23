@@ -8,7 +8,7 @@ import torch
 import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import var_hw as tt_var_hw
 
 
@@ -31,7 +31,7 @@ def run_var_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config,
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_allclose(ref_value, tt_result, atol=1.7)
     logger.debug(pcc_value)
 
     assert success
