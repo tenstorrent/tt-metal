@@ -1,6 +1,6 @@
 ---
 
-# Functional Bloom Model for Question Answering (QA) Demo
+# Functional Bloom Model Demos For Text Generation and Question Answering
 
 ## Introduction
 
@@ -68,6 +68,7 @@ To run the demo for question answering using the Bloom model, follow these instr
   ```
   pytest --disable-warnings models/demos/grayskull/functional_bloom/demo/demo_qa.py::test_demo_squadv2
   ```
+
 ## Inputs
 
 The demo receives inputs from respective input_data.json by default. To modify the inputs or specify a different path, adjust the input_path parameter in the command accordingly. It's recommended to avoid direct modifications to the input_data.json file.
