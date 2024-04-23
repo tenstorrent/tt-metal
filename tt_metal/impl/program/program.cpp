@@ -810,12 +810,6 @@ void Program::populate_dispatch_data(Device* device) {
 }
 
 void Program::update_runtime_args_transfer_info(Device* device) {
-    static const map<RISCV, uint32_t> processor_to_l1_arg_base_addr = {
-        {RISCV::BRISC, BRISC_L1_ARG_BASE},
-        {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
-        {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
-        {RISCV::ERISC, eth_l1_mem::address_map::ERISC_L1_ARG_BASE},
-    };
     // TODO: commonize
     auto extract_dst_noc_unicast_info =
         [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
@@ -843,8 +837,7 @@ void Program::update_runtime_args_transfer_info(Device* device) {
         // Unique Runtime Args (Unicast)
         for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
             auto kernel = detail::GetKernel(*this, kernel_id);
-
-            uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+            auto dst = detail::GetL1ArgBaseAddr(kernel);
 
             for (const auto& core_coord : kernel->cores_with_runtime_args()) {
                 // can make a vector of unicast encodings here
@@ -898,8 +891,7 @@ void Program::update_runtime_args_transfer_info(Device* device) {
         };
         for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
             auto kernel = detail::GetKernel(*this, kernel_id);
-
-            uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+            uint32_t dst = detail::GetL1ArgBaseAddr(kernel);
 
             for (const auto& core_coord : kernel->cores_with_runtime_args()) {
                 const auto& runtime_args_data = kernel->runtime_args(core_coord);
