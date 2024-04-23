@@ -23,14 +23,14 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
 
     // split work
     auto shape = input_grad.get_legacy_shape();
-    auto N = shape[0];
-    auto C = shape[1];
-    auto H = shape[2];
-    auto W = shape[3];
+    auto H = shape[-2];
+    auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
-    uint32_t num_cols_tiles = N * C * Wt;
+    auto num = input_grad.volume() / H / W;
+
+    uint32_t num_cols_tiles = num * Wt;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
     uint32_t core_h = core_range.end.y - core_range.start.y + 1;
 
@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[2] % TILE_HEIGHT;
+        uint32_t mask_h = shape.without_padding()[-2] % TILE_HEIGHT;
         if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<uint32_t> reader_args = {
             output.buffer()->address(),
