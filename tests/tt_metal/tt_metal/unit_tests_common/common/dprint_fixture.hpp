@@ -40,11 +40,11 @@ protected:
             // TODO: Better way to get this info once we've solidified how it will be set.
             const tt::core_descriptor_t &core_desc = tt::get_core_descriptor_config(id, num_cqs);
             for (auto core : tt::get_logical_dispatch_cores(id, num_cqs)) {
+                log_info(tt::LogTest, "Disable dprint on Device {}: {}", id, core);
                 disabled[core_desc.dispatch_core_type].insert(core);
             }
         }
-        if (!this->slow_dispatch_)
-            tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
+        tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
 
         ExtraSetUp();
 
