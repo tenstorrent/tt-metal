@@ -35,7 +35,6 @@ def get_expected_times(functional_vit):
     }[functional_vit]
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @skip_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
@@ -122,7 +121,6 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @skip_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
@@ -199,7 +197,7 @@ def test_performance_vit_e2e(
 
     # tracyProfiler = tracy.Profiler()
     # tracyProfiler.enable()
-    for _ in range(2):
+    for _ in range(10):
         start = time.time()
         pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
@@ -239,26 +237,28 @@ def test_performance_vit_e2e(
             position_embeddings,
             parameters=parameters,
         )
-        tt_output = ttnn.from_device(tt_output)
+        tt_output = ttnn.from_device(tt_output, blocking=False)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()
 
     # tracyProfiler.disable()
-    inference_and_compile_time, inference_time, *_ = durations
+    inference_and_compile_time, *inference_times = durations
+    average_inference_time = sum(inference_times) / len(inference_times)
 
     expected_compile_time, expected_inference_time = get_expected_times(functional_vit)
     prep_perf_report(
         model_name=tt_model_name,
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
+        inference_time=average_inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="",
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    logger.info(f"Compile time: {inference_and_compile_time - average_inference_time}")
+    logger.info(f"Inference time: {average_inference_time}")
+    logger.info(f"Inference times: {inference_times}")
+    logger.info(f"Samples per second: {1 / average_inference_time * batch_size}")
