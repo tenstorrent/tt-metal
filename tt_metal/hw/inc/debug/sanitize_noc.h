@@ -152,7 +152,7 @@ uint32_t debug_sanitize_noc_addr(
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
         }
     } else if (NOC_ETH_XY_P(x, y)) {
-        if (!DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
+        if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
         }
     } else if (NOC_WORKER_XY_P(x, y)) {

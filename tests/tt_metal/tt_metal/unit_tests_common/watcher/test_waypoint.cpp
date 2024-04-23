@@ -136,13 +136,15 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             if (is_eth_core) {
                 //     blank | prefetch, dispatch kernels | 5 kernels/prev device | brisc,ncrisc,trisc kernels on current device
                 int k_id = 1 + 2 * fixture->NumDevices() + 5 * device->id() + 3;
-                if (!is_active)
-                    k_id += 1; // Inactive erisc 1 higher than active erisc
+                // Inactive erisc 1 higher than active erisc, except if there's only one device
+                if (!is_active && tt::tt_metal::GetNumAvailableDevices() > 1)
+                    k_id += 1;
                 // Different k_ids for slow dispatch
                 if (fixture->IsSlowDispatch()) {
                     k_id = 5 * device->id() + 4;
-                    if (!is_active)
-                        k_id += 1; // Inactive erisc 1 higher than active erisc
+                    // Inactive erisc 1 higher than active erisc, except if there's only one device
+                    if (!is_active && tt::tt_metal::GetNumAvailableDevices() > 1)
+                        k_id += 1;
                 }
                 string k_id_s = fmt::format("{}", k_id);
                 if (fixture->NumDevices() > 2) {
