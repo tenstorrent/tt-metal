@@ -35,18 +35,18 @@ class Emb(torch.nn.Module):
 @pytest.mark.skip(reason="Issue #7540: Hanging")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch, iterations, expected_compile_time, expected_inference_time",
-    ((32, 12, 15, 0.16),),
+    "kv_cache_len, expected_compile_time, expected_inference_time",
+    (
+        (32, 15, 0.16),
+        (128, 15, 0.40),
+    ),
 )
 def test_mistral_model_perf(
-    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
     dtype = ttnn.bfloat8_b
 
-    run_ref_pt = False
-
     model_args = TtModelArgs(device)
-    model_args.max_batch_size = batch
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Clear global profiler state before starting measurements
@@ -65,27 +65,15 @@ def test_mistral_model_perf(
     profiler.end("weight_loading")
 
     prompts = ["This is a test"] * 32
-
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
-
-    if run_ref_pt:
-        profiler.start("Mistral_pytorch_ref_model_setup")
-        reference_model = Transformer(args=model_args)
-        reference_model.load_state_dict(state_dict)
-
-        cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-        freqs_cis = torch.complex(cos, sin)
-        profiler.end("Mistral_pytorch_ref_model_setup")
 
     # Embedding on host
     embd = Emb()
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
     # TODO Add argmax + embedding on device, same as the demo.py code
 
-    generation_start_pos = 0
-    generation_length = iterations
-    seqlen = 1  # Generating one token per user at a time
-    batch = 32
+    generation_start_pos = kv_cache_len
+    generation_length = 1
 
     profiler.start("TtMistral_model_setup")
 
@@ -122,94 +110,71 @@ def test_mistral_model_perf(
     )
     profiler.end("TtMistral_model_setup")
 
+    # Call the function
+    profiler.start(f"end_to_end_inference_with_compile")
+    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    profiler.end(f"end_to_end_inference_with_compile")
+    profiler.print()
+    compile_and_iter_time = profiler.get("model_run_for_inference_0")
+
+    profiler.clear()
+    profiler.start(f"end_to_end_inference")
+    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    profiler.end(f"end_to_end_inference")
+    profiler.print()
+    iter_time = profiler.get("model_run_for_inference_0")
+
+    comment = f"num_layers={model_args.n_layers}"
+    iter_time = profiler.get("model_run_for_inference_0")
+
+    prep_perf_report(
+        model_name=f"Mistral7B",
+        batch_size=model_args.max_batch_size,
+        inference_and_compile_time=compile_and_iter_time,
+        inference_time=iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comment,
+    )
+
+
+def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
+    seqlen = 1  # Generating one token per user at a time
+    batch = tt_model.args.max_batch_size
+
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-
     tt_decode_input = pt_decode_input
 
-    profiler.disable()  # Disable profiler for first 10 iterations
     for i in range(generation_length):
         current_pos = generation_start_pos + i
-
-        if i == 0 or i == 10:  # Skip the first few iterations to warm up
-            profiler.enable()
-            profiler.start(f"input_processing_{i}")
 
         decode_input, pos = prepare_inputs_ttnn(
             tt_decode_input,
             current_pos,
-            model_args.dim,
-            model_args.sliding_window,
+            tt_model.args.dim,
+            tt_model.args.sliding_window,
             tt_model.device,
         )
 
-        if i == 0 or i == 10:  # Skip the first few iterations to warm up
-            profiler.end(f"input_processing_{i}")
-            profiler.start(f"model_run_for_inference_{i}")
-
         # Run TT model
+        profiler.start(f"model_run_for_inference_{i}")
         tt_out = tt_model(decode_input, pos)
 
-        if i == 0 or i == 10:  # Skip the first few iterations to warm up
-            profiler.start(f"result_wait_for_inference_{i}")
         # Convert ttnn tensor to torch tensor
+        profiler.start(f"result_wait_for_inference_{i}")
         tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
-        if i == 0 or i == 10:  # Skip the first few iterations to warm up
-            profiler.end(f"model_run_for_inference_{i}")
-            profiler.end(f"result_wait_for_inference_{i}")
+        profiler.end(f"model_run_for_inference_{i}")
+        profiler.end(f"result_wait_for_inference_{i}")
 
-        if run_ref_pt:  # Run reference model
-            if i == 0:  # Skip the first few iterations to warm up
-                profiler.start(f"ref_model_run_for_inference_{i}")
-
-            freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
-            positions = torch.tensor([current_pos])
-            ref_output = reference_model(pt_decode_input, freqs_cis_i, positions)
-
-            if i == 0:  # Skip the first few iterations to warm up
-                profiler.end(f"ref_model_run_for_inference_{i}")
-
-        # While in "prefill" mode, use the prompt tokens as the output
-        if i in range(len(encoded_prompts[0])):
-            # tt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
-            tt_out_tok = ttnn.from_torch(
-                encoded_prompts_tensor[:, i].unsqueeze(-1),
-                device=device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            tt_decode_input = tt_embd(tt_out_tok)  # Embedding on device
-            if run_ref_pt:
-                pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
-        else:
-            # Greedy decode (temperature = 0) the generated token and save it to print out later
-            tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
-            tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_decode_input = tt_embd(tt_out_tok)  # Embedding on device
-            if run_ref_pt:
-                pt_out_tok = sample(ref_output, temperature=0, top_p=0.8)
-                pt_decode_input = embd(pt_out_tok)
-
-    profiler.print()
-    comment = f"num_layers={model_args.n_layers}"
-    weight_loading = profiler.get("weight_loading")
-    input_processing = profiler.get("input_processing")
-    ref_model_run_for_inference = profiler.get("ref_model_run_for_inference_0")
-    first_iter_time = profiler.get("model_run_for_inference_0")
-    second_iter_time = profiler.get("model_run_for_inference_10")
-
-    prep_perf_report(
-        model_name=f"Mistral7B",
-        batch_size=batch,
-        inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        inference_time_cpu=ref_model_run_for_inference,
-        comments=comment,
-    )
+        # Greedy decode the generated token and pass it back in, this is just a perf test
+        tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
+        tt_out_tok = ttnn.from_torch(
+            tt_out_tok, device=tt_model.device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        tt_decode_input = tt_embd(tt_out_tok)  # Embedding on device
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
