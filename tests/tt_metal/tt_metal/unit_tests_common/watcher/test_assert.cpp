@@ -230,6 +230,10 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "Skip due to #7771");
+        GTEST_SKIP();
+    }
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
