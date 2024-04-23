@@ -30,12 +30,7 @@ def test_softmin_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -64,12 +59,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
@@ -104,12 +94,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
@@ -120,7 +105,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     tt_cpu = F.softmin(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -147,12 +132,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     dev_x = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)
@@ -160,7 +140,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
 
     tt_cpu = F.softmin(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -189,22 +169,12 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     y.backward(dy)
@@ -231,22 +201,12 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     y.backward(dy)
@@ -280,17 +240,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = (
@@ -300,7 +250,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
         .to(device)
     )
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     dev_dy = (
         ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("20"))
@@ -310,7 +260,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -337,17 +287,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = (
@@ -357,7 +297,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
         .to(device)
     )
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     dev_dy = (
         ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("10"))
@@ -367,7 +307,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
@@ -391,12 +331,7 @@ def test_softmin_optional_output_tensor(shape_dim, optional_output_tensor, devic
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     # cpu calculation
     tt_cpu = F.softmin(x, dim)
@@ -432,21 +367,11 @@ def test_softmin_backward_optional_output_tensor(shape_dim, optional_output_tens
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
     # cpu calculation
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     y.backward(dy)
 
     # npu calculation
