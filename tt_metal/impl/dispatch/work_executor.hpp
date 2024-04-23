@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <functional>
 #include <pthread.h>
 #include <sched.h>
@@ -41,8 +42,10 @@ class WorkExecutor {
         }
     }
 
-    WorkExecutor(WorkExecutor &&other) = default;
-    WorkExecutor& operator=(WorkExecutor &&other) = default;
+    WorkExecutor(WorkExecutor &&other) {
+        worker_state = other.worker_state;
+        managed_device_id = other.managed_device_id;
+    }
 
     ~WorkExecutor() {
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
@@ -52,17 +55,19 @@ class WorkExecutor {
 
     inline void run_worker() {
         while (true) {
-            if(this->worker_queue.empty()) {
-                if (this->worker_state == WorkerState::TERMINATE) {
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds(5));
+            {
+                // Worker stalls until queue is non-empty or terminate signal is set
+                std::unique_lock<std::mutex> lock(this->cv_mutex);
+                this->cv.wait(lock, [this] {return (not this->worker_queue.empty()) or this->worker_state == WorkerState::TERMINATE;});
             }
-            else {
-                ZoneScopedN("PopWork");
-                auto func = this->worker_queue.pop();
-                (*func)();
+            if (this->worker_state == WorkerState::TERMINATE) {
+                // Terminate signal set, and queue is empty - worker exits
+                if(this->worker_queue.empty()) break;
             }
+            ZoneScopedN("PopWork");
+            // Queue non-empty: run command
+            auto func = this->worker_queue.pop();
+            (*func)();
         }
     }
 
@@ -72,6 +77,10 @@ class WorkExecutor {
             if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
                 // Push function executor to worker queue
                 this->worker_queue.push(work_executor);
+                {
+                    std::lock_guard lock(this->cv_mutex);
+                    cv.notify_one();
+                }
                 if (blocking) {
                     this->synchronize();
                 }
@@ -89,6 +98,10 @@ class WorkExecutor {
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS and std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
             // Blocking = wait for queue flushed. Only main thread can explcitly insert a synchronize, otherwise we have a deadlock.
             this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
+            {
+                std::lock_guard lock(this->cv_mutex);
+                cv.notify_one();
+            }
             // Wait for queue empty, i.e. flush command picked up
             while(not this->worker_queue.empty()) {
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
@@ -116,6 +129,8 @@ class WorkExecutor {
     std::thread worker_thread;
     WorkerState worker_state = WorkerState::IDLE;
     int managed_device_id = 0;
+    std::condition_variable cv;
+    std::mutex cv_mutex;
 
     inline void start_worker() {
         this->worker_queue.parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
@@ -138,6 +153,10 @@ class WorkExecutor {
             return;
         }
         this->worker_state = WorkerState::TERMINATE;
+        {
+            std::lock_guard lock(this->cv_mutex);
+            cv.notify_one();
+        }
         this->worker_thread.join();
         this->worker_state = WorkerState::IDLE;
     }
