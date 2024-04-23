@@ -123,8 +123,8 @@ class Device {
     }
 
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const {
-        return tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores).find(logical_core)
-            != tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores).end();
+        auto active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
+        return active_ethernet_cores.find(logical_core) != active_ethernet_cores.end();
     }
 
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const {
@@ -132,8 +132,8 @@ class Device {
     }
 
     bool is_inactive_ethernet_core(CoreCoord logical_core) const {
-        return tt::Cluster::instance().get_inactive_ethernet_cores(this->id_).find(logical_core)
-            != tt::Cluster::instance().get_inactive_ethernet_cores(this->id_).end();
+        auto inactive_ethernet_cores = tt::Cluster::instance().get_inactive_ethernet_cores(this->id_);
+        return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
     }
 
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
