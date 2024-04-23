@@ -17,7 +17,6 @@ from models.demos.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.mistral7b.tt.mistral_embedding import TtMistralEmbedding
 from models.demos.mistral7b.tt.model_config import TtModelArgs
 from models.demos.mistral7b.reference.tokenizer import Tokenizer
-from models.utility_functions import enable_persistent_kernel_cache
 
 
 class Emb(torch.nn.Module):
@@ -87,7 +86,6 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
 def run_mistral_demo(user_input, batch_size, device):
     assert batch_size == 32, "Batch size must be 32"
 
-    # enable_persistent_kernel_cache()
     instruct_mode = True
     embed_on_device = False
     dtype = ttnn.bfloat8_b
