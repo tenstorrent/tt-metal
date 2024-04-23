@@ -113,6 +113,19 @@ namespace tt::tt_metal{
          */
         void CompileProgram(Device *device, Program &program);
 
+
+        /**
+         * Get the base address in L1 of the runtime args for a given processor used by the kernel.
+         *
+         * Return value: uint32_t (base address)
+         *
+         * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+         * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+         * | kernel       | The kernel that the runtime args are for                               | std::shared_ptr<Kernel>       |                                    | Yes      |
+         */
+
+        uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel);
+
         /**
          * Writes runtime args that are saved in the program to device
          *

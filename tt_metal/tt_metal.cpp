@@ -601,41 +601,45 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         return pass;
     }
 
+
+    // Return base address in L1 for Runtime Args given processor type (and eth mode in case of ERISC).
+    uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel) {
+
+        const RISCV &riscv = kernel->processor();
+        uint32_t l1_arg_base = 0;
+
+        switch (riscv) {
+            case RISCV::BRISC: {
+                l1_arg_base = BRISC_L1_ARG_BASE;
+            } break;
+            case RISCV::NCRISC: {
+                l1_arg_base = NCRISC_L1_ARG_BASE;
+            } break;
+            case RISCV::ERISC: {
+                auto config = std::get<EthernetConfig>(kernel->config());
+                if (config.eth_mode == Eth::IDLE) {
+                    l1_arg_base = IDLE_ERISC_L1_ARG_BASE;
+                } else {
+                    l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+                }
+            } break;
+            case RISCV::COMPUTE: {
+                l1_arg_base = TRISC_L1_ARG_BASE;
+            }
+            break;
+            default: TT_THROW("Unsupported {} processor does not support runtime args", riscv);
+        }
+        return l1_arg_base;
+    }
+
     void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
         ZoneScoped;
         auto device_id = device->id();
         detail::DispatchStateCheck( false );
 
-        auto get_l1_arg_base_addr = [](const RISCV &riscv, std::shared_ptr<Kernel> kernel) {
-            uint32_t l1_arg_base = 0;
-            switch (riscv) {
-                case RISCV::BRISC: {
-                    l1_arg_base = BRISC_L1_ARG_BASE;
-                } break;
-                case RISCV::NCRISC: {
-                    l1_arg_base = NCRISC_L1_ARG_BASE;
-                } break;
-                case RISCV::ERISC: {
-                    auto config = std::get<EthernetConfig>(kernel->config());
-                    if (config.eth_mode == Eth::IDLE) {
-                        l1_arg_base = IDLE_ERISC_L1_ARG_BASE;
-                    } else {
-                        l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
-                    }
-                } break;
-                case RISCV::COMPUTE: {
-                    l1_arg_base = TRISC_L1_ARG_BASE;
-                }
-                break;
-                default: TT_THROW("Unsupported {} processor does not support runtime args", riscv);
-            }
-            return l1_arg_base;
-        };
-
         for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             const auto kernel = detail::GetKernel(program, kernel_id);
-            auto processor = kernel->processor();
-            auto args_base_addr = get_l1_arg_base_addr(processor, kernel);
+            auto args_base_addr = detail::GetL1ArgBaseAddr(kernel);
 
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
                 auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());

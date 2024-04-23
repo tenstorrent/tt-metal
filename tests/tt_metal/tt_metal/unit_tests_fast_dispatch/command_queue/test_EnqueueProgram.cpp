@@ -448,7 +448,7 @@ bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const t
 }
 
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
-bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv) {
+bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv, bool idle_eth = false) {
 
     Program program;
     bool pass = true;
@@ -496,12 +496,13 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
                 });
             break;
         case tt::RISCV::ERISC:
-            unique_args_addr = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+            unique_args_addr = idle_eth ? IDLE_ERISC_L1_ARG_BASE: eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
                 cr_set,
                 tt::tt_metal::EthernetConfig{
+                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
@@ -766,6 +767,35 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMo
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+        }
+    }
+}
+
+// Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may return 0 active eth cores, that's okay.
+// FIXME - Disabled due to #7771 kernels not running on idle eth cores. At one point this was passing, but then before merging same day
+// it started hanging just like below inactive-idle-eth test.
+TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
+    for (Device *device : devices_) {
+        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+            CoreRange cr0(eth_core);
+            CoreRangeSet cr_set({cr0});
+            DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+            log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+        }
+    }
+}
+
+// Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some arch may return 0 active eth cores, that's okay.
+// FIXME - Disabled due to #7771 kernels not running on idle eth cores.
+TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
+    for (Device *device : devices_) {
+        for (const auto &eth_core : device->get_inactive_ethernet_cores()) {
+            CoreRange cr0(eth_core);
+            CoreRangeSet cr_set({cr0});
+            DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+            log_info(tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
         }
     }
 }
