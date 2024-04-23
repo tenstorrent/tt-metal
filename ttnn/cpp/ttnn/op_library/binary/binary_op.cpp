@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "tt_dnn/op_library/binary/binary_op.hpp"
+
+#include "ttnn/op_library/binary/binary_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"

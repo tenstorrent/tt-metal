@@ -14,7 +14,6 @@ import ttnn
 SQLITE_DB_PATH = "db.sqlite"
 TENSORS_PATH = "tensors"
 OPERATION_HISTORY_CSV = "operation_history.csv"
-OPERATION_HISTORY_PATH = "operation_history"
 GRAPHS_PATH = "graph"
 CONFIG_PATH = "config.json"
 
@@ -274,14 +273,6 @@ def insert_operation(report_path, operation_id, operation, duration):
             duration=EXCLUDED.duration;"""
     )
     sqlite_connection.commit()
-
-
-def store_operation_history_records(report_path, operation_id):
-    operation_history_csv = report_path / OPERATION_HISTORY_CSV
-    operation_history_path = report_path / OPERATION_HISTORY_PATH
-    operation_history_path.mkdir(parents=True, exist_ok=True)
-    if operation_history_csv:
-        shutil.copy(operation_history_csv, operation_history_path / f"{operation_id}.csv")
 
 
 def insert_stack_trace(report_path, operation_id, stack_trace):

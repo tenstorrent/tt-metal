@@ -439,8 +439,6 @@ class Operation:
             def call_wrapper(*function_args, **function_kwargs):
                 original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
                 os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_CSV)
-                if hasattr(ttnn._tt_lib.operations, "clear_operation_history"):
-                    ttnn._tt_lib.operations.clear_operation_history()
                 output = function(*function_args, **function_kwargs)
                 if hasattr(ttnn._tt_lib.operations, "dump_operation_history_to_csv"):
                     ttnn._tt_lib.operations.dump_operation_history_to_csv()
@@ -643,7 +641,6 @@ class Operation:
                     if ttnn.CONFIG.report_path is not None:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
-                        ttnn.database.store_operation_history_records(ttnn.CONFIG.report_path, operation_id)
                         ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
@@ -690,12 +687,12 @@ class Operation:
 
     def __call__(self, *function_args, **function_kwargs):
         try:
+            if not OPERATION_CALL_STACK:
+                ttnn._ttnn.increment_operation_id()
             OPERATION_CALL_STACK.append(self.name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
-            if not OPERATION_CALL_STACK:
-                ttnn._ttnn.increment_operation_id()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)

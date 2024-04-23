@@ -5,4 +5,4 @@
 
 #pragma once
 
-#include "tt_eager/tt_dnn/op_library/binary/binary_op.hpp"
+#include "ttnn/op_library/binary/binary_op.hpp"
