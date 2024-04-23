@@ -12,7 +12,7 @@ void kernel_main() {
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
 
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    //constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
 
     constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
 
-    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
+    //constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
     // MCAST args
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(32);
@@ -77,8 +77,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
     const uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
 
-    const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
-    const DataFormat out_df = get_dataformat(cb_id_out0);
+    //const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
+    //const DataFormat out_df = get_dataformat(cb_id_out0);
 
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
@@ -92,11 +92,11 @@ void kernel_main() {
     // Copy packed reader indices to local memory for faster access
     constexpr bool cache_packed_reader_indices = act_block_h_datums_read <= LOCAL_PACKED_READER_INDICES_MAX_SIZE;
 
-    const InterleavedAddrGenFast<out_in_dram> s = {
-        .bank_base_address = out_addr,
-        .page_size = tile_nbytes,
-        .data_format = out_df
-    };
+    // const InterleavedAddrGenFast<out_in_dram> s = {
+    //     .bank_base_address = out_addr,
+    //     .page_size = tile_nbytes,
+    //     .data_format = out_df
+    // };
 
     // read in bias if enabled (done only once for all batches)
     #ifdef FUSE_BIAS
@@ -237,7 +237,7 @@ void kernel_main() {
             }
             #endif
 
-            #ifndef SHARDED_OUT
+            /*#ifndef SHARDED_OUT
             uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
             uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
             for(uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
@@ -280,7 +280,7 @@ void kernel_main() {
             } // out_num_subblocks_h
             out_block_h_start_tile_id += out_next_block_stride_h;
             out_block_h_start_tile_id_h += out_block_height_num_tiles;
-            #endif
+            #endif*/
 
             start_reader_idx = reader_idx + act_block_h_datums_read;
         } // out_num_blocks_h
@@ -292,6 +292,6 @@ void kernel_main() {
     } // out_num_blocks_w
 
     #ifdef SHARDED_OUT
-    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    //cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
     #endif
 }

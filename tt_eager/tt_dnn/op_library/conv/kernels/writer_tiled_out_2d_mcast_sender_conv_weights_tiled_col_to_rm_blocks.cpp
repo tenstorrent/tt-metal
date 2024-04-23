@@ -11,7 +11,7 @@ void kernel_main() {
     // This writer is for output tensor in tile format
 
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    //constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
 
     constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
@@ -88,14 +88,14 @@ void kernel_main() {
     weights_mcast_receiver_semaphore_addr);
     #endif
 
-    const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
-    const DataFormat out_df = get_dataformat(cb_id_out0);
+    // const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
+    // const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<out_in_dram> s = {
-        .bank_base_address = out_addr,
-        .page_size = tile_nbytes,
-        .data_format = out_df
-    };
+    // const InterleavedAddrGenFast<out_in_dram> s = {
+    //     .bank_base_address = out_addr,
+    //     .page_size = tile_nbytes,
+    //     .data_format = out_df
+    // };
 
     // read in bias if enabled (done only once for all batches)
     #ifdef FUSE_BIAS
@@ -268,7 +268,7 @@ void kernel_main() {
             }
             #endif
 
-            #ifndef SHARDED_OUT
+            /*#ifndef SHARDED_OUT
             uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
             uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
             for(uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
@@ -311,7 +311,7 @@ void kernel_main() {
             } // out_num_subblocks_h
             out_block_h_start_tile_id += out_next_block_stride_h;
             out_block_h_start_tile_id_h += out_block_height_num_tiles;
-            #endif
+            #endif*/
         } // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;
@@ -320,6 +320,6 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     } // out_num_blocks_w
     #ifdef SHARDED_OUT
-    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    //cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
     #endif
 }
