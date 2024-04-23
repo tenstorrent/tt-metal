@@ -49,11 +49,11 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     constexpr uint MOP_OUTER_LOOP = block_ct_dim;
 
     if constexpr (diagonal) {
-        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 7, 0, 7),
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 1, 0, 1),
                     TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-        tmp.set_end_ops(TT_OP_SETADCXX(p_setadc::PAC, 1-1, 0x0),//TT_OP_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_X, 0),
+        tmp.set_end_ops(TT_OP_SETADCXX(p_setadc::PAC, 1-1, 0x0),
                     TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0));  // w cnt points to the next tile
         tmp.program(instrn_buffer);
     } else {

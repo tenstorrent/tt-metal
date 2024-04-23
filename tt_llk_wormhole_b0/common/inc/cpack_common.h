@@ -157,7 +157,7 @@ namespace ckernel::packer
       uint z_stride = PACK_CNT*FACE_C_DIM*y_stride;
       uint w_stride = z_stride;
 
-      TT_SETDMAREG(0, LOWER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); //x-stride not used!
+      TT_SETDMAREG(0, LOWER_HALFWORD((x_stride<<PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0));
       TT_SETDMAREG(0, UPPER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
       TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
       TT_SETDMAREG(0, LOWER_HALFWORD((w_stride<<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); //z-stride not used!
