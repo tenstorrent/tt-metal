@@ -19,7 +19,7 @@ from models.demos.mistral7b.reference.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache, skip_for_grayskull
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 class Emb(torch.nn.Module):
@@ -134,7 +134,6 @@ def test_mistral_model_perf(
 
         if i == 0 or i == 10:  # Skip the first few iterations to warm up
             profiler.enable()
-            enable_persistent_kernel_cache()
             profiler.start(f"input_processing_{i}")
 
         decode_input, pos = prepare_inputs_ttnn(
