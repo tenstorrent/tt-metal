@@ -259,7 +259,7 @@ uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
 }
 
 CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
-    TT_ASSERT(this->buffer_type_ == BufferType::L1, "Expected L1 buffer!");
+    TT_ASSERT(this->is_l1(), "Expected L1 buffer!");
     return this->device_->logical_core_from_bank_id(bank_id);
 }
 
@@ -269,15 +269,14 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
             return llrt::get_core_for_dram_channel(dram_channel, this->device_->id());
         }
-        case BufferType::L1: {
+        case BufferType::L1:  // fallthrough
+        case BufferType::L1_SMALL: {
             auto logical_core = this->logical_core_from_bank_id(bank_id);
             return this->device_->worker_core_from_logical_core(logical_core);
         }
-        break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
-        }
-        break;
+        } break;
         default:
             TT_ASSERT(false && "Unsupported buffer type!");
     }
@@ -291,27 +290,23 @@ CoreCoord Buffer::noc_coordinates() const {
 uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-
-    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
-    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM ?
-        this->address_ :
-        this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
-
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
-    return base_page_address + offset;
+    return translate_page_address(offset, bank_id);
 }
 
 uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_ASSERT(is_sharded(this->buffer_layout()));
-
-    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
-    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM ?
-        this->address_ :
-        this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
-
     int pages_offset_within_bank = page_index % shard_spec().size();
     auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
+    return translate_page_address(offset, bank_id);
+}
+
+uint64_t Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
+    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
+    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM
+                                     ? this->address_
+                                     : this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 

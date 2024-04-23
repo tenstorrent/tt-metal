@@ -185,6 +185,10 @@ bool MemoryConfig::is_sharded() const {
     }
 }
 
+bool MemoryConfig::is_l1() const { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
+
+bool MemoryConfig::is_dram() const { return buffer_type == BufferType::DRAM; }
+
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
     return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout && config_a.shard_spec == config_b.shard_spec;
 }
