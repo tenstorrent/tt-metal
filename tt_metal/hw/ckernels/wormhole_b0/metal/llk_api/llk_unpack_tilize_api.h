@@ -141,11 +141,9 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
-    static constexpr uint unpack_srca_dat_valid = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb_dat_valid = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);     // Needed for dot product
 
     constexpr uint32_t innerloop = 1;
@@ -155,7 +153,6 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
         tmp.set_start_op(unpack_neginf_srca);
     } else if constexpr (zero_srcA) {
         tmp.set_start_op(unpack_zero_srca);
-        tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
     }
     tmp.program(instrn_buffer);
 }
@@ -172,8 +169,13 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     const std::uint32_t block_c_dim = ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM);
 
     // Set face dim
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
+    if constexpr (zero_srcA) {
+        TT_SETADCXX(p_setadc::UNP_A, num_faces*unpA_face_r_dim*FACE_C_DIM-1, 0x0);
+        TT_SETADCXX(p_setadc::UNP_B, num_faces*unpB_face_r_dim*FACE_C_DIM-1, 0x0);
+    } else {
+        TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
+        TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
+    }
 
     // Override default settings to enable tilize mode
     unpack_config_u config = {0};
