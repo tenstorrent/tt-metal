@@ -133,6 +133,7 @@ def run_test_FalconCausalLM_end_to_end(
         max_position_embeddings,
         model_config,
         tt_cache_path,
+        seq_len,
     )
     profiler.end("TtFalcon_model_setup")
 
