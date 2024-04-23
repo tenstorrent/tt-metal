@@ -14,6 +14,166 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 
+def find_max_subblock(out_block_h, out_block_w):
+    max_product = 0
+    best_h = 1
+    best_w = 1
+
+    for h in range(1, out_block_h + 1):
+        if out_block_h % h == 0:  # h is a divisor of out_block_h
+            for w in range(1, out_block_w + 1):
+                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                    if h * w > max_product:
+                        max_product = h * w
+                        best_h = h
+                        best_w = w
+    if out_block_w > best_w:
+        best_h = 1
+    return best_h, best_w, max_product
+
+
+from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_grayskull(), reason="no llama2 test on GS")
+@pytest.mark.parametrize(
+    "packer_l1_acc",
+    [
+        True,
+    ],
+    ids=["pack_l1"],
+)
+@pytest.mark.parametrize(
+    "fp32_acc_mode",
+    [
+        False,
+    ],
+    ids=["no_fp32"],
+)
+@pytest.mark.parametrize(
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["LoFi"],
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [
+        False,
+    ],
+    ids=["no_bias"],
+)
+@pytest.mark.parametrize(
+    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size",
+    [
+        (False, True, True, 32, 8192, 1280, None, (8, 1)),
+        (False, True, True, 32, 8192, 4096, None, (8, 4)),
+        (False, True, True, 32, 8192, 1024, None, (8, 4)),
+        (False, True, True, 32, 32768, 1024, None, (8, 4)),
+    ],
+)
+def test_llama2_matmul(
+    device,
+    in0_sharded,
+    out_sharded,
+    in1_in_dram,
+    M,
+    K,
+    N,
+    fidelity,
+    has_bias,
+    activation,
+    packer_l1_acc,
+    fp32_acc_mode,
+    grid_size,
+    function_level_defaults,
+):
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, N]
+    num_cores = grid_size[0] * grid_size[1]
+
+    in0_block_h = M // 32
+    in0_block_w = K // num_cores // 32
+    out_block_h = M // 32
+    out_block_w = N // num_cores // 32
+
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    logger.debug("in0 block h w " + str(in0_block_h * 32) + " " + str(in0_block_w * 32))
+    logger.debug("in1 block h w " + str(in0_block_w * 32) + " " + str(out_block_w * 32))
+    logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
+    logger.debug("out subblock h w " + str(out_subblock_h * 32) + " " + str(out_subblock_w * 32))
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    output_mem_config = sharded_mem_config
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    in1_t = torch2tt_tensor(
+        in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            grid_size,
+            [M, int(in0_block_w * 32)],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    output_t = ttl.operations.primary.matmul_1d(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+        output_dtype=ttl.tensor.DataType.BFLOAT8_B,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
 @skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
