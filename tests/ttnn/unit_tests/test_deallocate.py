@@ -16,10 +16,6 @@ def test_deallocate(device, h, w):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
 
-    with pytest.raises(RuntimeError) as exception:
-        ttnn.deallocate(input_tensor)
-    assert "ttnn.deallocate: Tensor must be on device!" in str(exception.value)
-
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = input_tensor + input_tensor
 

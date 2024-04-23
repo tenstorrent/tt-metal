@@ -158,7 +158,6 @@ def run_conv(
         tt_input_tensor_on_device = conv.copy_input_to_device(tt_input_tensor)
     tt_output_tensor_on_device = conv(tt_input_tensor_on_device)
     if enable_auto_formatting:
-        tt_output_tensor_on_device = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
         torch_output_tensor = ttnn.to_torch(tt_output_tensor)
         torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]

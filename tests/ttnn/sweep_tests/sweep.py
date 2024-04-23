@@ -129,7 +129,7 @@ def run_sweep(sweep_file_name, *, device):
     logger.info(f"Saved sweep results to {file_name}")
 
 
-def run_all_tests(*, device, include):
+def run_sweeps(*, device, include):
     logger.info(f"Deleting old sweep results in {SWEEP_RESULTS_DIR}")
     if SWEEP_RESULTS_DIR.exists():
         for file_name in SWEEP_RESULTS_DIR.glob("*.csv"):

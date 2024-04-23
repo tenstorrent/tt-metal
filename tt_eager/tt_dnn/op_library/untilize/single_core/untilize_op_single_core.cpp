@@ -182,7 +182,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize, bool fp32_dest_acc_en) {
-
+    const Shape input_shape = a.get_legacy_shape();
     const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -208,14 +208,24 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t num_padded_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * a.get_legacy_shape()[2];
-    uint32_t num_unpadded_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * output_shape[2];
-    uint32_t padded_stick_size = a.get_legacy_shape()[3] * output.element_size(); // Assuming bfloat16 dataformat
-    uint32_t unpadded_stick_size = output_shape[3] * output.element_size();
+    auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
+    auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
+    auto input_y = input_shape.rank() >= 2 ? input_shape[-2] : 1;
+    auto input_x = input_shape[-1];
+
+    auto output_w = output_shape.rank() >= 4 ? output_shape[-4] : 1;
+    auto output_z = output_shape.rank() >= 3 ? output_shape[-3] : 1;
+    auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
+    auto output_x = output_shape[-1];
+
+    uint32_t num_padded_sticks = input_w * input_z * input_y;
+    uint32_t num_unpadded_sticks = input_w * input_z * output_y;
+    uint32_t padded_stick_size = input_x * output.element_size();  // Assuming bfloat16 dataformat
+    uint32_t unpadded_stick_size = output_x * output.element_size();
 
     constexpr uint32_t alignment = 32;
 
-    uint32_t num_tiles_in_row = a.get_legacy_shape()[3] / TILE_WIDTH;
+    uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
@@ -243,10 +253,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     // Number of blocks that differ between input and output
     const uint32_t num_blocks_w_diff = num_blocks_w_input - num_blocks_w_output - (block_row_leftover_size > 0 ? 1 : 0);
 
-    const uint32_t padded_Y_diff_blocks = (a.get_legacy_shape()[2] - output_shape[2]) / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_Z_diff_blocks = (a.get_legacy_shape()[1] - output_shape[1]) * a.get_legacy_shape()[2] / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_W_diff_blocks = (a.get_legacy_shape()[0] - output_shape[0]) * a.get_legacy_shape()[1] * a.get_legacy_shape()[2] / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t num_leftover_Y = output_shape[2] - output_shape[2] / TILE_HEIGHT * TILE_HEIGHT;
+    const uint32_t padded_Y_diff_blocks = (input_y - output_y) / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t padded_Z_diff_blocks = (input_z - output_z) * input_y / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t padded_W_diff_blocks = (input_w - output_w) * input_z * input_y / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t num_leftover_Y = output_y - output_y / TILE_HEIGHT * TILE_HEIGHT;
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -262,22 +272,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),
-        output_shape[0],
+        output_w,
         padded_W_diff_blocks,
-        output_shape[1],
+        output_z,
         padded_Z_diff_blocks,
-        output_shape[2],
+        output_y,
         padded_Y_diff_blocks,
         num_leftover_Y,
-        output_shape[3],
+        output_x,
         unpadded_stick_size,
         padded_stick_size,
         num_blocks_w_input,
         num_blocks_w_output,
         num_blocks_w_diff,
         block_row_size,
-        block_row_leftover_size
-    };
+        block_row_leftover_size};
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {

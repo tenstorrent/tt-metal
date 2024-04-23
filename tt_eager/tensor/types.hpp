@@ -168,6 +168,15 @@ class Shape {
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
+    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_tile_padding) :
+        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
+        TT_ASSERT(shape.size() == shape_tile_padding.size(), "Shape and shape_tile_padding must have the same size");
+        for (auto index = 0; index < shape.size(); index++) {
+            auto padded_dimension = shape_tile_padding[index];
+            this->dimensions_[index] = padded_dimension;
+            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+        }
+    }
 
     std::size_t rank() const;
 
@@ -659,6 +668,8 @@ struct Shape {
     bool operator==(const std::array<std::uint32_t, Rank> &other) const {
         return Shape{this->value().without_padding()} == Shape{other};
     }
+
+    bool operator!=(const Shape &other) const { return not(*this == other); }
 
     const auto operator[](std::int64_t index) const {
         return std::visit([index](const auto &shape) -> decltype(auto) { return shape[index]; }, this->ranked_shape);

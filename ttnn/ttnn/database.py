@@ -4,7 +4,6 @@
 
 import dataclasses
 import sqlite3
-import shutil
 
 from loguru import logger
 import networkx as nx

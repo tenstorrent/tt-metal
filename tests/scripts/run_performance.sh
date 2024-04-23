@@ -162,6 +162,7 @@ main() {
         exit 1
     fi
 
+    export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": true}';
 
     if [[ "$pipeline_type" == *"device_performance"* ]]; then
         run_device_perf_models "$test_marker"

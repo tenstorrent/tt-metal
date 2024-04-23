@@ -262,14 +262,12 @@ def from_torch(
         if device is None:
             raise RuntimeError("device must be specified when memory_config is specified")
 
-    def impl(tensor, dtype, mesh_mapper):
-        if mesh_mapper:
-            device_id_to_shard_ranges = mesh_mapper.map(tensor)
-            shards = list(device_id_to_shard_ranges.values())
-            return ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
-        return ttl.tensor.Tensor(tensor, dtype)
-
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) from_torch")(tensor, dtype, mesh_mapper)
+    if mesh_mapper:
+        device_id_to_shard_ranges = mesh_mapper.map(tensor)
+        shards = list(device_id_to_shard_ranges.values())
+        tensor = ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
+    else:
+        tensor = ttl.tensor.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout)
@@ -347,37 +345,25 @@ def to_torch(
         tensor = ttnn.from_device(tensor)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
 
-        def impl(tensor, layout):
-            return tensor.to(layout)
+    shape_without_tile_padding = tuple(tensor.shape)
+    tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
 
-        to_layout = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")
-        tensor = to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
+        raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
+    if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
+    tensor = tensor.to_torch()
 
-    def impl(tensor):
-        shape_without_tile_padding = tuple(tensor.shape)
-        tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
+    slices = [slice(None, x) for x in shape_without_tile_padding]
+    tensor = tensor[slices]
 
-        if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
-            raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
-        tensor = tensor.to_torch()
-
-        slices = [slice(None, x) for x in shape_without_tile_padding]
-        tensor = tensor[slices]
-
-        if torch_rank is None:
-            return tensor
-
+    if torch_rank is not None:
         while len(tensor.shape) != torch_rank:
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze()
-        return tensor
-
-    tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_torch")(tensor)
-
     return TorchTensor(tensor)
 
 
@@ -470,18 +456,6 @@ from_device = ttnn.register_operation(
 )(lambda tensor, blocking=True: tensor.cpu(blocking=blocking))
 
 
-def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 doc = """
 deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
 
@@ -499,21 +473,9 @@ Example::
     >>> ttnn.deallocate(tensor)
 """
 
-deallocate = ttnn.register_operation(
-    name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors, doc=doc
-)(lambda tensor, force=True: tensor.deallocate(force=force))
-
-
-def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+deallocate = ttnn.register_operation(name="ttnn.deallocate", is_cpp_function=True, doc=doc)(
+    lambda tensor, force=True: tensor.deallocate(force=force)
+)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -543,34 +505,12 @@ to_memory_config = ttnn.register_operation(
 )(ttnn._ttnn.operations.core.to_memory_config)
 
 
-def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors, golden_function=_golden_function
-)
-def to_layout(
-    tensor,
-    layout: ttnn.Layout,
-    dtype: ttnn.DataType = None,
-    memory_config: ttnn.MemoryConfig = None,
-    use_multicore: bool = False,
-):
-    """
-    to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
+doc = """
+    to_layout(tensor: ttnn.Tensor, layout: Layout, dtype: Optional[DataType] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
 
     Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
     the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
@@ -580,6 +520,8 @@ def to_layout(
     Args:
         * :attr:`tensor`: the ttnn.Tensor
         * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
+        * :attr:`dtype`: the optional output data type.
+        * :attr:`memory_config`: the optional output memory configuration.
 
     Example::
         >>> device_id = 0
@@ -589,174 +531,13 @@ def to_layout(
         >>> print(tensor[0,0,:3])
         Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
     """
-    if tensor.layout == layout and (dtype is None or dtype == tensor.dtype):
-        return tensor
 
-    supported_layout_mapping = {
-        ttnn.ROW_MAJOR_LAYOUT: {ttnn.TILE_LAYOUT},
-        ttnn.TILE_LAYOUT: {ttnn.ROW_MAJOR_LAYOUT},
-    }
-    supported_layouts = supported_layout_mapping[tensor.layout]
-    if layout not in supported_layouts:
-        raise RuntimeError(f"Unsupported layout conversion from {tensor.layout} to {layout}")
-
-    is_on_device = ttnn.is_tensor_storage_on_device(tensor)
-    if is_on_device and tensor.dtype not in {
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.bfloat4_b,
-        ttnn.uint16,
-        ttnn.int32,
-        ttnn.uint32,
-        ttnn.float32,
-    }:
-        raise RuntimeError("ttnn.to_layout: Only bfloat16 and bfloat8_b are supported on device")
-
-    def requires_padding_change(layout, shape):
-        intended_shape = list(shape)[-2:]
-        padded_shape = list(shape.with_tile_padding())[-2:]
-        if layout == ttnn.ROW_MAJOR_LAYOUT and intended_shape != padded_shape:
-            return True
-        elif (
-            layout == ttnn.TILE_LAYOUT
-            and intended_shape == padded_shape
-            and (
-                len(intended_shape) < 2
-                or intended_shape[-1] % ttnn.TILE_SIZE != 0
-                or intended_shape[-2] % ttnn.TILE_SIZE != 0
-            )
-        ):
-            return True
-        else:
-            return False
-
-    if dtype is not None and (not is_on_device or layout is not ttnn.TILE_LAYOUT):
-        raise RuntimeError(f"Unsupported datatype conversion to {dtype}")
-
-    if not requires_padding_change(layout, tensor.shape):
-        if is_on_device:
-            if layout == ttnn.ROW_MAJOR_LAYOUT:
-                ## since the default of untilize is to use single core, set use_multicore if the input is sharded
-                ## additionally, default output is INTERLEAVED, so provide sharded memory config to untilize
-                if ttnn.is_sharded(tensor):
-                    return ttl.tensor.untilize(
-                        tensor, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
-                    )
-                else:
-                    return ttl.tensor.untilize(
-                        tensor,
-                        use_multicore=use_multicore,
-                        output_mem_config=ttnn.get_memory_config(tensor) if memory_config is None else memory_config,
-                    )
-            elif layout == ttnn.TILE_LAYOUT:
-                ## since the default of tilize is to use single core, set use_multicore if the input is sharded
-                if ttnn.is_sharded(tensor):
-                    use_multicore = True
-                    ## check if the shard shape is already tile sized, or needs padding
-                    shard_shape = ttnn.get_memory_config(tensor).shard_spec.shape
-                    if shard_shape[0] % ttnn.TILE_SIZE != 0 or shard_shape[1] % ttnn.TILE_SIZE != 0:
-                        ## use single core tilize after a sharded to interleaved
-                        ## TODO: can we pad each shard to keep it multicore?
-                        use_multicore = False
-                        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
-                return ttl.tensor.tilize(
-                    tensor,
-                    output_mem_config=ttnn.get_memory_config(tensor),
-                    use_multicore=use_multicore,
-                    output_dtype=dtype,
-                )
-            else:
-                raise RuntimeError(f"Unsupported layout: {layout}")
-        else:
-            return tensor.to(layout)
-
-    # def unpad_with_pytorch(ttnn_tensor):
-    #     desired_shape = list(ttnn_tensor.shape)
-    #     ttl_tensor = ttnn_tensor.value
-    #     if ttnn_tensor.layout != ROW_MAJOR_LAYOUT:
-    #         ttl_tensor = ttl_tensor.to(ROW_MAJOR_LAYOUT)
-    #     tensor = ttl_tensor.to_torch()
-    #     slicing = [slice(None, desired_dim) for desired_dim in desired_shape]
-    #     tensor = tensor[slicing]
-    #     return _from_torch(tensor)
-
-    intended_shape = tuple(tensor.shape)
-
-    input_tensor = tensor
-    if layout == ttnn.ROW_MAJOR_LAYOUT:
-        if is_on_device:
-            *_, width = input_tensor.shape
-            if width % 2 == 0:  # Can only unpad to row major tensor of even width
-                input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-                intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
-
-                if input_tensor.is_sharded():
-                    memory_layout_config = input_tensor.memory_config()
-                    output_mem_config = ttl.tensor.MemoryConfig(
-                        memory_layout_config.memory_layout, ttl.tensor.BufferType.L1
-                    )
-                    output_tensor = ttl.tensor.untilize_with_unpadding(
-                        input_tensor,
-                        (0, 0, 0, 0),
-                        intended_4D_shape,
-                        output_mem_config,
-                    )
-                else:
-                    output_tensor = ttl.tensor.untilize_with_unpadding(input_tensor, (0, 0, 0, 0), intended_4D_shape)
-            else:
-                input_tensor = ttnn.from_device(input_tensor)
-                input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-                def impl(input_tensor):
-                    input_tensor = input_tensor.to(layout)
-
-                    output_tensor_end = [dim - 1 for dim in input_tensor.shape]
-                    output_tensor = input_tensor.unpad([0, 0, 0, 0], output_tensor_end)
-                    return output_tensor
-
-                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(
-                    input_tensor
-                )
-        else:
-            input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-            input_tensor = input_tensor.to(layout)
-            output_tensor = input_tensor.unpad_from_tile(list(input_tensor.shape))
-
-        output_tensor = ttnn.reshape(output_tensor, intended_shape)
-        return output_tensor
-    elif layout == ttnn.TILE_LAYOUT:
-        if len(tensor.shape) > 1:
-            *original_batch_sizes, height, width = tensor.shape
-        else:
-            original_batch_sizes = []
-            height = 1
-            (width,) = tensor.shape
-
-        pad_h = (ttnn.TILE_SIZE - height % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
-        pad_w = (ttnn.TILE_SIZE - width % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
-        padded_height = height + pad_h
-        padded_width = width + pad_w
-        tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        *batch_sizes, _, _ = tensor.shape
-
-        if is_on_device:
-            tensor = ttl.tensor.tilize_with_val_padding(
-                tensor, batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0, output_dtype=dtype
-            )
-        else:
-
-            def impl(tensor):
-                return tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
-
-            tensor = ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) to_layout")(tensor)
-
-        tensor = ttnn.reshape(
-            tensor,
-            ttnn.Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
-        )
-        return tensor
-    else:
-        raise RuntimeError(f"Unsupported output layout: {layout}")
+to_layout = ttnn.register_operation(
+    name="ttnn.to_layout",
+    golden_function=_golden_function,
+    is_cpp_function=True,
+    doc=doc,
+)(ttnn._ttnn.operations.core.to_layout)
 
 
 def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -805,28 +586,12 @@ def _golden_function(input_tensor):
     return input_tensor
 
 
-def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 reallocate = ttnn.register_operation(name="ttnn.reallocate", is_cpp_function=True, golden_function=_golden_function)(
     ttnn._ttnn.operations.core.reallocate
 )
 
 
-def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=_load_tensor_validate_input_tensors)
+@ttnn.register_operation(name="ttnn.load_tensor", validate_input_tensors=lambda *args, **kwargs: None)
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
@@ -834,32 +599,13 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
 
-    def impl(file_name):
-        return ttl.tensor.load_tensor(str(file_name), device)
-
-    return ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) load_tensor")(file_name)
+    return ttl.tensor.load_tensor(str(file_name), device)
 
 
-def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        tensor,
-        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
-@ttnn.register_operation(name="ttnn.dump_tensor", validate_input_tensors=_dump_tensor_validate_input_tensors)
+@ttnn.register_operation(name="ttnn.dump_tensor", validate_input_tensors=lambda *args, **kwargs: None)
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
     file_name = pathlib.Path(file_name)
-
-    def impl(file_name, tensor):
-        ttl.tensor.dump_tensor(str(file_name), tensor)
-
-    ttl.tensor.decorate_external_operation(impl, function_name="(ttnn) dump_tensor")(file_name, tensor)
+    ttl.tensor.dump_tensor(str(file_name), tensor)
 
 
 def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):

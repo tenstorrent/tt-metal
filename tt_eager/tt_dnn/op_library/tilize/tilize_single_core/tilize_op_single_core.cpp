@@ -206,21 +206,30 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     auto true_input_shape = a.get_legacy_shape();
     auto true_output_shape = output.get_legacy_shape();
 
-    uint32_t unpadded_row_size_datum = true_input_shape[3];
-    uint32_t padded_row_size_datum = true_output_shape[3];
+    auto input_w = true_input_shape.rank() >= 4 ? true_input_shape[-4] : 1;
+    auto input_z = true_input_shape.rank() >= 3 ? true_input_shape[-3] : 1;
+    auto input_y = true_input_shape.rank() >= 2 ? true_input_shape[-2] : 1;
+    auto input_x = true_input_shape[-1];
 
-    uint32_t num_rows_padded = true_output_shape[2];
-    uint32_t num_cols_padded = true_output_shape[3] - unpadded_row_size_datum;
+    auto output_w = true_output_shape.rank() >= 4 ? true_output_shape[-4] : 1;
+    auto output_z = true_output_shape.rank() >= 3 ? true_output_shape[-3] : 1;
+    auto output_y = true_output_shape.rank() >= 2 ? true_output_shape[-2] : 1;
+    auto output_x = true_output_shape[-1];
 
+    uint32_t unpadded_row_size_datum = input_x;
+    uint32_t padded_row_size_datum = output_x;
 
-    uint32_t num_2d_faces = true_output_shape[0] * true_output_shape[1];
+    uint32_t num_rows_padded = output_y;
+    uint32_t num_cols_padded = output_x - unpadded_row_size_datum;
 
-    uint32_t unpadded_row_size_bytes = unpadded_row_size_datum * a.element_size(); // Assuming bfloat16 dataformat
-    uint32_t padded_row_size_bytes = padded_row_size_datum * a.element_size(); // Assuming bfloat16 dataformat
+    uint32_t num_2d_faces = output_w * output_z;
+
+    uint32_t unpadded_row_size_bytes = unpadded_row_size_datum * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes = padded_row_size_datum * a.element_size();      // Assuming bfloat16 dataformat
 
     constexpr uint32_t alignment = 32;
 
-    uint32_t num_tiles_in_row = true_output_shape[3] / TILE_WIDTH;
+    uint32_t num_tiles_in_row = output_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
@@ -232,7 +241,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     if (num_tiles_in_row <= max_tiles) {
         num_tiles_per_block = num_tiles_in_row;
     } else {
-        for(uint32_t n_t = max_tiles; n_t > 0; n_t--) {
+        for (uint32_t n_t = max_tiles; n_t > 0; n_t--) {
             if (num_tiles_in_row % n_t == 0) {
                 num_tiles_per_block = n_t;
                 break;
@@ -250,11 +259,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     // Number of blocks that differ between input and output
     const uint32_t num_blocks_w_diff = num_blocks_w_output - num_blocks_w_input - (block_row_leftover_size > 0 ? 1 : 0);
 
-    const uint32_t padded_Y_diff_blocks = (true_output_shape[2] - true_input_shape[2]) / TILE_HEIGHT * num_blocks_w_output;
-    const uint32_t padded_Z_diff_blocks = (true_output_shape[1] - true_input_shape[1]) * true_output_shape[2] / TILE_HEIGHT * num_blocks_w_output;
-    const uint32_t padded_W_diff_blocks = (true_output_shape[0] - true_input_shape[0]) * true_output_shape[1] * true_output_shape[2] / TILE_HEIGHT * num_blocks_w_output;
-    const uint32_t num_leftover_Y = true_input_shape[2] - true_input_shape[2] / TILE_HEIGHT * TILE_HEIGHT;
-
+    const uint32_t padded_Y_diff_blocks = (output_y - input_y) / TILE_HEIGHT * num_blocks_w_output;
+    const uint32_t padded_Z_diff_blocks = (output_z - input_z) * output_y / TILE_HEIGHT * num_blocks_w_output;
+    const uint32_t padded_W_diff_blocks =
+        (output_w - input_w) * output_z * output_y / TILE_HEIGHT * num_blocks_w_output;
+    const uint32_t num_leftover_Y = input_y - input_y / TILE_HEIGHT * TILE_HEIGHT;
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -278,14 +287,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     vector<uint32_t> reader_kernel_args = {
         src0_buffer->address(),
-        true_input_shape[0],
+        input_w,
         padded_W_diff_blocks,
-        true_input_shape[1],
+        input_z,
         padded_Z_diff_blocks,
-        true_input_shape[2],
+        input_y,
         padded_Y_diff_blocks,
         num_leftover_Y,
-        true_input_shape[3],
+        input_x,
         unpadded_row_size_bytes,
         padded_row_size_bytes,
         packed_pad_value,
@@ -293,8 +302,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         num_blocks_w_output,
         num_blocks_w_diff,
         block_row_size,
-        block_row_leftover_size
-    };
+        block_row_leftover_size};
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
