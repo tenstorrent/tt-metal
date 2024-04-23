@@ -50,6 +50,7 @@
 | Model                                                         | Gen. Token         |  Batch               | End-to-end throughput [1]   | Device throughput [2]       | Target         |
 |---------------------------------------------------------------|--------------------|----------------------|-----------------------------|-----------------------------|----------------|
 | [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b) (t/s/u) | 129th              |  32                  | 0.8                         |  8.4                        |   11.4         |
+| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b) (t/s/u) | 129th              |  32                  | tbm                         |  7.7                        |   11.4         |
 | [Falcon40B-decode](./models/demos/falcon40b)                  | coming soon        |                      |                             |                             |                |
 | Mixtral7Bx8-decode                                            | coming soon        |                      |                             |                             |                |
 | ResNet50 (data parallel)                                      | coming soon        |                      |                             |                             |                |
