@@ -4,8 +4,8 @@
 
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
-inline uint32_t get_read_tile_id(uint32_t tile_id, uint32_t dim, uint32_t input_tile_offset, uint32_t HtWt) {
-    return (dim == 0 ) ? (tile_id) : (tile_id / HtWt * input_tile_offset) + (tile_id % HtWt);
+inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
+    return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
 }
 
 void kernel_main() {
@@ -13,12 +13,11 @@ void kernel_main() {
     const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto input_tile_offset = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto input_is_dram = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
-    const auto HtWt = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto CHtWt = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto dim = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto reduce_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto inner_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
@@ -40,7 +39,7 @@ void kernel_main() {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
-        auto read_tile_id = get_read_tile_id(i, dim, CHtWt, HtWt);
+        auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             cb_reserve_back(cb_id_in0, onetile);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -51,7 +50,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
-            read_tile_id += input_tile_offset;
+            // read_tile_id += input_tile_offset;
+            read_tile_id += inner_tile_size;
         }
     }
 }
