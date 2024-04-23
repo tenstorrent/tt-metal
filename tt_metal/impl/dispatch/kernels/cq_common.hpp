@@ -16,6 +16,17 @@ uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
     return (v + (pow2_size - 1)) & ~(pow2_size - 1);
 }
 
+template<uint32_t sem_id>
+FORCE_INLINE
+void cb_wait_all_pages(uint32_t n) {
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+    DEBUG_STATUS('T', 'A', 'P', 'W');
+    // TODO: this masks off the upper bit used by mux/dmux for terminate, remove
+    while ((*sem_addr & 0x7FFFFFFF) != n);
+    DEBUG_STATUS('T', 'A', 'P', 'D');
+}
+
 template<uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
 void cb_acquire_pages(uint32_t n) {

@@ -217,6 +217,7 @@ void relay_to_next_cb(uint32_t data_ptr,
     if (preamble_size > 0) {
         uint64_t downstream_noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
         noc_inline_dw_write(downstream_noc_addr, length + preamble_size);
+        block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
         downstream_cb_data_ptr += preamble_size;
     }
 
@@ -739,6 +740,7 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         if (is_d_variant && !is_h_variant) {
             relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd));
         }
+        cmd_ptr += sizeof(CQDispatchCmd);
         done = true;
         break;
 
@@ -774,6 +776,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 
     case CQ_DISPATCH_CMD_TERMINATE:
         DPRINT << "dispatch_h terminate\n";
+        cmd_ptr += sizeof(CQDispatchCmd);
         done = true;
         break;
 
@@ -792,8 +795,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 
 void kernel_main() {
 
-
-    DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": start" << ENDL();
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 
     static_assert(is_d_variant || split_dispatch_page_preamble_size == 0);
 
@@ -865,5 +867,16 @@ void kernel_main() {
     RISC_POST_HEARTBEAT(heartbeat);
 #endif
 
-    DPRINT << "dispatch_" << is_d_variant << is_h_variant << ": out" << ENDL();
+    // Release any held pages from the last block
+    if (rd_block_idx != wr_block_idx) {
+        // We're 1 block behind
+        cb_release_pages<upstream_noc_xy, upstream_dispatch_cb_sem_id>(dispatch_cb_pages_per_block);
+    }
+    uint32_t npages = dispatch_cb_pages_per_block - ((block_next_start_addr[rd_block_idx] - cmd_ptr) >> dispatch_cb_log_page_size);
+    cb_release_pages<upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
+
+    // Confirm expected number of pages, spinning here is a leak
+    cb_wait_all_pages<my_dispatch_cb_sem_id>(0);
+
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }
