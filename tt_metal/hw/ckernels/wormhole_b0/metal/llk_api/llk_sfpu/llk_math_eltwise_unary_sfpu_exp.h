@@ -20,7 +20,6 @@ inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_m
       (ckernel::sfpu::calculate_exponential<APPROXIMATE, false, first_iterations>,
        ckernel::sfpu::calculate_exponential<APPROXIMATE>,
                                 dst_index, vector_mode, param0, param1);
-
 }
 
 template <bool APPROXIMATE>
