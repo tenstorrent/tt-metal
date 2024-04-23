@@ -338,6 +338,8 @@ def test_nlp_create_q_and_kv_heads_separate_test(
 ):
     if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
+    elif is_grayskull() and q_seq_len == 4096 and dtype == ttl.tensor.DataType.BFLOAT16:
+        pytest.skip("Spec runs out of L1 on on Grayskull")
 
     run_create_q_and_kv_heads_test(
         batch, q_seq_len, kv_seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
