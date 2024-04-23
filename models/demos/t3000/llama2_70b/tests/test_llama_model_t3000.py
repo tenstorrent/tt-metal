@@ -5,10 +5,11 @@
 import pytest
 
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
-from models.utility_functions import get_devices_for_t3000
+from models.utility_functions import get_devices_for_t3000, skip_for_grayskull
 from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "pcc, n_layers",
     (
