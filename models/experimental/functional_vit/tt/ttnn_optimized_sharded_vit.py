@@ -161,13 +161,12 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_h = patch_size
     stride_w = 1
 
-    fold_h_padded = (batch_size * img_h * patch_count_all) + 224
-    fold_w_padded = (4 * patch_size * patch_size) + 128
-
     folded_pixel_values = ttnn.experimental.tensor.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
-    x = ttnn.reallocate(folded_pixel_values)
-    folded_pixel_values = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    folded_pixel_values = ttnn.to_memory_config(
+        folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG
+    )  # Convert back to interleaved or otherwise to_layout will fail
+    folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     #### Exp 1 of resharding after Fold and before Matmul
     # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
