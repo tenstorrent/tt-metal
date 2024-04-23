@@ -14,16 +14,23 @@
 
 class DeviceCommand {
    public:
+    DeviceCommand() = default;
+    DeviceCommand(void *cmd_region, uint32_t cmd_sequence_sizeB);
     DeviceCommand(uint32_t cmd_sequence_sizeB);
+
+    DeviceCommand &operator=(const DeviceCommand &other);
+    DeviceCommand &operator=(DeviceCommand &&other);
+    DeviceCommand(const DeviceCommand &other);
+    DeviceCommand(DeviceCommand &&other);
 
     // Constants
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;  // TODO: Move this somewhere else
 
-    uint32_t size_bytes() const { return this->cmd_sequence.size() * sizeof(uint32_t); }
+    uint32_t size_bytes() const { return this->cmd_sequence_sizeB; }
 
-    const void* data() const { return this->cmd_sequence.data(); }
+    void* data() const { return this->cmd_region; }
 
-    vector<uint32_t> cmd_vector() const { return this->cmd_sequence; }
+    vector<uint32_t> cmd_vector() const { return this->cmd_region_vector; }
 
     void add_dispatch_wait(uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0);
 
@@ -33,11 +40,64 @@ class DeviceCommand {
 
     void add_prefetch_relay_paged(uint8_t is_dram, uint8_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, uint16_t length_adjust = 0);
 
-    void add_dispatch_write_linear(bool flush_prefetch, uint8_t num_mcast_dests, uint32_t noc_xy_addr, uint32_t addr, uint32_t data_sizeB, const void *data = nullptr);
+    template <bool inline_data = false>
+    void add_dispatch_write_linear(bool flush_prefetch, uint8_t num_mcast_dests, uint32_t noc_xy_addr, uint32_t addr, uint32_t data_sizeB, const void *data = nullptr) {
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    void add_dispatch_write_paged(bool flush_prefetch, uint8_t is_dram, uint16_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, const void *data = nullptr);
+        CQDispatchCmd *write_cmd = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr);
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+        write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
+        write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
+        write_cmd->write_linear.addr = addr;
+        write_cmd->write_linear.length = data_sizeB;
+
+        if (inline_data) {
+            TT_ASSERT(data != nullptr); // compiled out?
+            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, increment_sizeB);
+        }
+    }
+
+    template <bool inline_data = false>
+    void add_dispatch_write_paged(bool flush_prefetch, uint8_t is_dram, uint16_t start_page, uint32_t base_addr, uint32_t page_size, uint32_t pages, const void *data = nullptr) {
+        uint32_t data_sizeB = page_size * pages;
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        CQDispatchCmd *write_cmd = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
+        write_cmd->write_paged.is_dram = is_dram;
+        write_cmd->write_paged.start_page = start_page;
+        write_cmd->write_paged.base_addr = base_addr;
+        write_cmd->write_paged.page_size = page_size;
+        write_cmd->write_paged.pages = pages;
+
+        if (inline_data) {
+            TT_ASSERT(data != nullptr); // compiled out?
+            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, increment_sizeB);
+        }
+    }
+
+    template <bool inline_data = false>
+    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, const void *data = nullptr) {
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + data_sizeB;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        CQDispatchCmd *write_cmd = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+        write_cmd->write_linear_host.length = payload_sizeB; // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
+
+        if (inline_data) {
+            TT_ASSERT(data != nullptr); // compiled out?
+            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, increment_sizeB);
+        }
+    }
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
@@ -47,9 +107,11 @@ class DeviceCommand {
 
     void add_prefetch_exec_buf_end();
 
-    void update_cmd_sequence(uint32_t cmd_idx, const void *new_data, uint32_t data_sizeB) {
-        memcpy(this->cmd_sequence.data() + cmd_idx, new_data, data_sizeB);
+    void update_cmd_sequence(uint32_t cmd_offsetB, const void *new_data, uint32_t data_sizeB) {
+        memcpy((char*)this->cmd_region + cmd_offsetB, new_data, data_sizeB);
     }
+
+    void add_data(const void *data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB);
 
     template<typename PackedSubCmd>
     void add_dispatch_write_packed(
@@ -68,28 +130,32 @@ class DeviceCommand {
         bool flush_prefetch = true;
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-        CQDispatchCmd write_packed_cmd;
+        CQDispatchCmd *write_packed_cmd = (CQDispatchCmd *)((char *)this->cmd_region + this->cmd_write_offsetB);
         if (!zero_init_disable) DeviceCommand::zero(write_packed_cmd);
 
-        write_packed_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
-        write_packed_cmd.write_packed.is_multicast = multicast;
-        write_packed_cmd.write_packed.count = num_sub_cmds;
-        write_packed_cmd.write_packed.addr = common_addr;
-        write_packed_cmd.write_packed.size = packed_data_sizeB;
+        write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+        write_packed_cmd->write_packed.is_multicast = multicast;
+        write_packed_cmd->write_packed.count = num_sub_cmds;
+        write_packed_cmd->write_packed.addr = common_addr;
+        write_packed_cmd->write_packed.size = packed_data_sizeB;
 
-        this->write_to_cmd_sequence(&write_packed_cmd, sizeof(CQDispatchCmd));
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
 
         static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
         uint32_t sub_cmds_sizeB = sub_cmds.size() * sizeof(PackedSubCmd);
 
-        this->write_to_cmd_sequence(sub_cmds.data(), sub_cmds_sizeB, L1_ALIGNMENT);
+        memcpy((char*)this->cmd_region + this->cmd_write_offsetB, sub_cmds.data(), sub_cmds_sizeB);
+        uint32_t increment_sizeB = align(sub_cmds_sizeB, L1_ALIGNMENT);
+        this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
         for (const void *data : data_collection) {
-            this->write_to_cmd_sequence(data, packed_data_sizeB, L1_ALIGNMENT);
+            memcpy((char*)this->cmd_region + this->cmd_write_offsetB, data, packed_data_sizeB);
+            uint32_t increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+            this->cmd_write_offsetB += increment_sizeB;
         }
 
-        this->cmd_write_idx += (align(this->cmd_write_idx, PCIE_ALIGNMENT / sizeof(uint32_t)) - this->cmd_write_idx);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
    private:
@@ -99,27 +165,33 @@ class DeviceCommand {
     void add_prefetch_relay_inline(bool flush, uint32_t lengthB);
 
     void validate_cmd_write(uint32_t data_sizeB) const {
-        uint32_t data_end_index = this->cmd_write_idx + (data_sizeB / sizeof(uint32_t));
-        TT_ASSERT(data_end_index <= this->cmd_sequence.size(),
-            "Attemping to write {} B at index {} which is out of bounds for command sequence vector of size {}",
-            data_sizeB, data_end_index, this->cmd_sequence.size());
-    }
-
-    void write_to_cmd_sequence(const void *data, uint32_t data_sizeB, std::optional<uint32_t> alignmentB = std::nullopt) {
-        this->validate_cmd_write(data_sizeB);
-        tt::log_debug(tt::LogDispatch, "Command sequence construction: writing {} B at index {}", data_sizeB, this->cmd_write_idx);
-        memcpy(this->cmd_sequence.data() + this->cmd_write_idx, data, data_sizeB);
-        uint32_t increment_sizeB = alignmentB.has_value() ? align(data_sizeB, alignmentB.value()) : data_sizeB;
-        this->cmd_write_idx += (increment_sizeB / sizeof(uint32_t));
+        uint32_t data_endB = this->cmd_write_offsetB + data_sizeB;
+        TT_ASSERT(data_endB <= this->cmd_sequence_sizeB,
+            "Out of bounds command sequence write: attemping to write {} B but only {} B available",
+            data_sizeB, this->cmd_sequence_sizeB - this->cmd_write_offsetB);
     }
 
     template<typename Command>
-    static void zero(Command &cmd) {
+    static void zero(Command *cmd) {
         for (int i = 0; i < sizeof(Command); i++) {
-            ((uint8_t *)&cmd)[i] = 0;
+            ((uint8_t *)cmd)[i] = 0;
         }
     }
 
-    std::vector<uint32_t> cmd_sequence;
-    uint32_t cmd_write_idx;
+    template<typename CommandPtr>
+    CommandPtr reserve_space(uint32_t size_to_writeB) {
+        this->validate_cmd_write(size_to_writeB);
+        CommandPtr cmd = (CommandPtr)((char *)this->cmd_region + this->cmd_write_offsetB);
+        if (!zero_init_disable) DeviceCommand::zero(cmd);
+        this->cmd_write_offsetB += size_to_writeB;
+        return cmd;
+    }
+
+    void deepcopy(const DeviceCommand &other);
+
+    uint32_t cmd_sequence_sizeB = 0;
+    void *cmd_region = nullptr;
+    uint32_t cmd_write_offsetB = 0;
+
+    std::vector<uint32_t> cmd_region_vector;
 };
