@@ -119,7 +119,7 @@ class Logger {
                 level_names[static_cast<std::underlying_type_t<Level>>(level)]);
             std::string type_str = fmt::format(fmt::fg(fmt::color::green), "{:>23}", type_names[type]);
             fmt::print(*fd, "{} | {} | ", type_str, level_str);
-            fmt::print(*fd, fmt, std::forward<Args>(args)...);
+            fmt::print(*fd, ::fmt::runtime(fmt), std::forward<Args>(args)...);
             *fd << std::endl;
         }
     }
