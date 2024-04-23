@@ -7,14 +7,27 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/common/env_lib.hpp"
 
 // A dispatch-agnostic test fixture
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, Program& program) {
+        static std::unordered_set<uint64_t> trace_caputured;
+        uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
+        } else if (this->metal_trace_) {
+            if (trace_caputured.find(program_id) == trace_caputured.end()) {
+                tt::tt_metal::detail::BeginTraceCapture(device);
+                EnqueueProgram(device->command_queue(), program, false);
+                tt::tt_metal::detail::EndTraceCapture(device);
+                trace_caputured.insert(program_id);
+            }
+            log_debug(tt::LogTest, "Executing trace for program {}", program_id);
+            tt::tt_metal::detail::ExecuteLastTrace(device, false);
+            Finish(device->command_queue());
         } else {
             CommandQueue& cq = device->command_queue();
             EnqueueProgram(cq, program, false);
@@ -44,6 +57,7 @@ public:
 protected:
     tt::ARCH arch_;
     vector<Device*> devices_;
+    bool metal_trace_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -51,12 +65,14 @@ protected:
         // Skip for slow dispatch for now
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_debug(tt::LogTest, "Running test using Slow Dispatch");
+            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
             slow_dispatch_ = true;
         } else {
-            tt::log_debug(tt::LogTest, "Running test using Fast Dispatch");
+            metal_trace_ = tt::parse_env("TT_METAL_TRACE_MODE", false);
+            tt::log_info(tt::LogTest, "Running test using Fast Dispatch, Metal Trace = {}", metal_trace_ ? "ON" : "OFF");
             slow_dispatch_ = false;
         }
+
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
