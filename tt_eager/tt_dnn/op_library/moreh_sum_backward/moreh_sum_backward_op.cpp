@@ -14,11 +14,11 @@ namespace primary {
 namespace {
 
 inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
-    TT_ASSERT(
+    TT_FATAL(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
-    TT_ASSERT(
+    TT_FATAL(
         tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
 }
 
@@ -40,18 +40,24 @@ void MorehSumBackward::validate_with_output_tensors(
     const auto &input = input_tensors.at(1);
     auto &input_grad = output_tensors.at(0);
 
+    // validate tensor
     check_tensor(output_grad, "moreh_sum_backward output_grad");
     check_tensor(input, "moreh_sum_backward input");
     check_tensor(input_grad, "moreh_sum_backward input_grad");
 
+    // validate shape
+    // keepdim=true
     const auto& input_shape = input.get_legacy_shape();
+    auto input_shape_wo_padding = input_shape.without_padding();
+    auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    for (int i = 0; i < input_shape.rank(); ++i) {
+        TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i]);
+    }
 
     if (input_grad.has_value()) {
         const auto& input_grad_shape = input_grad.value().get_legacy_shape();
-        TT_ASSERT(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
+        TT_FATAL(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
     }
-
-    // TODO: add more asserts
 }
 
 std::vector<Shape> MorehSumBackward::compute_output_shapes(
