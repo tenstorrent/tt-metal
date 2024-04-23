@@ -2,23 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-
-import tt_lib
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
-from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLP
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
+from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
+from models.demos.falcon7b.tt.model_config import get_model_config
+from models.utility_functions import get_devices_for_t3000, torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -37,12 +28,14 @@ class PytorchFalconMLPModel(torch.nn.Module):
 def run_test_FalconMLP_inference(
     devices,
     model_version,
+    llm_mode,
     batch,
     seq_len,
     pcc,
     model_config,
     tt_cache_path,
     model_location_generator,
+    max_seq_len=2048,
 ):
     num_devices = len(devices)
     model_name = model_location_generator(model_version, model_subdir="Falcon")
@@ -63,13 +56,21 @@ def run_test_FalconMLP_inference(
     pytorch_FalconMLP_model = PytorchFalconMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
 
+    if llm_mode == "prefill":
+        ttFalconMLP = TtFalconMLPPrefill
+    elif llm_mode == "decode":
+        ttFalconMLP = TtFalconMLPDecode
+    else:
+        raise ValueError(f"Unknown llm_mode: {llm_mode}")
+
     # TT hardware execution -------------------------------------------------------------
-    tt_FalconMLP_model = TtFalconMLP(
+    tt_FalconMLP_model = ttFalconMLP(
         devices,
         state_dict,
         base_url,
         layer_num,
         configuration.hidden_size,
+        max_seq_len,
         model_config,
         tt_cache_path,
     )
@@ -98,20 +99,44 @@ def run_test_FalconMLP_inference(
 
 @pytest.mark.parametrize("num_devices", (1, 2, 4))
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc",
+    "model_version, llm_mode, batch, seq_len, pcc",
     (
         (
             "tiiuae/falcon-7b-instruct",
+            "prefill",
+            1,
+            2048,
+            0.98,
+        ),
+        (
+            "tiiuae/falcon-7b-instruct",
+            "prefill",
+            1,
+            1024,
+            0.98,
+        ),
+        (
+            "tiiuae/falcon-7b-instruct",
+            "prefill",
             1,
             128,
             0.98,
         ),
+        (
+            "tiiuae/falcon-7b-instruct",
+            "decode",
+            1,
+            32,
+            0.98,
+        ),
     ),
+    ids=["prefill_seq2048", "prefill_seq1024", "prefill_seq128", "decode_batch32"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconMLP_inference(
     num_devices,
     model_version,
+    llm_mode,
     batch,
     seq_len,
     pcc,
@@ -122,7 +147,7 @@ def test_FalconMLP_inference(
 ):
     devices = get_devices_for_t3000(all_devices, num_devices)
 
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
@@ -130,10 +155,12 @@ def test_FalconMLP_inference(
     run_test_FalconMLP_inference(
         devices,
         model_version,
+        llm_mode,
         batch,
         seq_len,
         pcc,
         model_config,
         tt_cache_path,
         model_location_generator,
+        max_seq_len=2048,
     )

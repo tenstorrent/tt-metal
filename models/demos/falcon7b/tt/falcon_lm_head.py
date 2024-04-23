@@ -18,8 +18,7 @@ def falcon_lm_head_matmul_2d(
     hidden_states: tt_lib.tensor.Tensor,
     weights: List[tt_lib.tensor.Tensor],
     num_slices: int,
-    in0_mem_config: tt_lib.tensor.MemoryConfig,
-    in0_dtype: tt_lib.tensor.DataType,
+    lm_head_padding: tt_lib.tensor.Tensor,
     out_mem_config: tt_lib.tensor.MemoryConfig,
     out_dtype: tt_lib.tensor.DataType,
 ):
@@ -41,14 +40,7 @@ def falcon_lm_head_matmul_2d(
         weights_inner_dim_in_tiles == 144
     ), f"Weights are expected to be padded to the inner dim 144 in tiles, instead they are {weights_inner_dim_in_tiles}"
 
-    # pad activations to inner dim 144
-    padding = torch.zeros([1, 1, seq_len, 64])
-    padding_t = (
-        tt_lib.tensor.Tensor(padding, in0_dtype)
-        .to(tt_lib.tensor.Layout.TILE)
-        .to(hidden_states.device(), in0_mem_config)
-    )
-    hidden_states = tt_lib.tensor.concat([hidden_states, padding_t], -1)
+    hidden_states = tt_lib.tensor.concat([hidden_states, lm_head_padding], -1)
 
     compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
         math_fidelity=tt_lib.tensor.MathFidelity.LoFi,

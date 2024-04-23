@@ -3,32 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
+import os
+import time
 from functools import partial
-import tt_lib
+from pathlib import Path
+
+import pytest
 import torch
 import torch.nn.functional as F
+import tt_lib
 from loguru import logger
-import time
-from pathlib import Path
-from transformers import AutoTokenizer
-from transformers.generation.utils import top_k_top_p_filtering
-import os
-from tqdm import tqdm
-
-from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
+    is_wormhole_b0,
+    nearest_32,
     profiler,
     torch2tt_tensor,
     tt2torch_tensor,
     tt_tensors_to_torch_tensors,
-    nearest_32,
 )
+from tqdm import tqdm
+from transformers import AutoTokenizer
+from transformers.generation.utils import top_k_top_p_filtering
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -103,8 +104,8 @@ def print_output_prompts(generated_ids, tokenizer, batch_size, num_users_to_disp
         logger.info(f"Output for user {user_id}:\n{output_prompt}")
 
 
-def update_model_config(model, model_config_str):
-    model.model_config.update(get_model_config(model_config_str))
+def update_model_config(model, model_config_str, prefill_seq_len=0):
+    model.model_config.update(get_model_config(model_config_str, prefill_seq_len))
 
 
 def top_pk_logits(logits, p=0.9, k=10, temperature=1.0, return_probs=False):
@@ -162,11 +163,6 @@ def run_falcon_demo_kv(
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
-    model_config = get_model_config(model_config_strs_prefill_decode[0])
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
-
     configuration = FalconConfig(**model_config_entries)
 
     profiler.start(f"loading_inputs")
@@ -179,10 +175,24 @@ def run_falcon_demo_kv(
 
     profiler.end(f"loading_inputs")
 
+    logger.info("Tokenizing inputs...")
+    profiler.start(f"tokenizing_inputs")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
+        input_prompts, tokenizer, max_seq_len, perf_mode
+    )
+    profiler.end(f"tokenizing_inputs")
+
+    model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens))
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
+
     # State dict is needed for embeddings
     logger.info("Loading weights...")
     profiler.start(f"loading_weights")
-    if len(os.listdir(tt_cache_path)) < 261:
+    if len(os.listdir(tt_cache_path)) < 337:
         logger.info("Weights not found on machine; downloading weights...")
         model_name = model_location_generator(model_version, model_subdir="Falcon")
         hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
@@ -200,6 +210,7 @@ def run_falcon_demo_kv(
     profiler.start(f"moving_to_device")
 
     base_url = ""
+
     tt_FalconCausalLM_singlelayer = TtFalconCausalLM(
         devices,
         state_dict,
@@ -209,22 +220,13 @@ def run_falcon_demo_kv(
         max_seq_len,
         model_config,
         tt_cache_path,
+        nearest_32(num_input_tokens),
     )  # single layer only used for compile
 
     logger.info("Moved weights to device!")
     profiler.end(f"moving_to_device")
 
     synchronize_devices(devices)
-
-    logger.info("Tokenizing inputs...")
-    profiler.start(f"tokenizing_inputs")
-
-    tokenizer = AutoTokenizer.from_pretrained(model_version)
-    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
-        input_prompts, tokenizer, max_seq_len, perf_mode=perf_mode
-    )
-
-    profiler.end(f"tokenizing_inputs")
 
     logger.info("Initializing KV cache...")
     profiler.start(f"initializing_KV_cache")
@@ -246,7 +248,7 @@ def run_falcon_demo_kv(
             tt_prefill_input_ids,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM_singlelayer.model_preprocessing(
-            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=num_input_tokens
+            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=nearest_32(num_input_tokens)
         )
         assert tt_prefill_attention_mask is not None
 
@@ -264,7 +266,13 @@ def run_falcon_demo_kv(
         for i in range(num_devices):
             tt_prefill_input_ids[i].deallocate()
             if tt_prefill_attention_mask is not None:
-                tt_prefill_attention_mask[i].deallocate()
+                if isinstance(tt_prefill_attention_mask[i], tt_lib.tensor.Tensor):
+                    tt_prefill_attention_mask[i].deallocate()
+                elif isinstance(tt_prefill_attention_mask[i], list):
+                    for tt_attention_mask_element in tt_prefill_attention_mask[i]:
+                        tt_attention_mask_element.deallocate()
+                else:
+                    raise ValueError("Invalid type for tt_attention_mask")
             tt_logits[i].deallocate()
 
         time_prefill_compile += time.time() - time_prefill_compile_start
@@ -327,8 +335,9 @@ def run_falcon_demo_kv(
         num_layers,
         configuration,
         max_seq_len,
-        get_model_config(model_config_strs_prefill_decode[0]),
+        get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens)),
         tt_cache_path,
+        nearest_32(num_input_tokens),
     )
 
     ### Second prefill run without compile ###
@@ -353,7 +362,7 @@ def run_falcon_demo_kv(
             tt_prefill_input_ids,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM.model_preprocessing(
-            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=num_input_tokens
+            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=nearest_32(num_input_tokens)
         )
         assert tt_prefill_attention_mask is not None
 
@@ -367,14 +376,23 @@ def run_falcon_demo_kv(
             use_cache=use_cache,
         )
         synchronize_devices(devices)
+
+        if tt_prefill_attention_mask is not None:
+            for device_id in range(len(tt_prefill_attention_mask)):
+                if isinstance(tt_prefill_attention_mask[device_id], tt_lib.tensor.Tensor):
+                    tt_prefill_attention_mask[device_id].deallocate()
+                elif isinstance(tt_prefill_attention_mask[device_id], list):
+                    for tt_attention_mask_element in tt_prefill_attention_mask[device_id]:
+                        tt_attention_mask_element.deallocate()
+                else:
+                    raise ValueError("Invalid type for tt_attention_mask")
+
         logits = torch.concat(
             [torch_logit.squeeze(1) for torch_logit in tt_tensors_to_torch_tensors(tt_logits)], dim=-2
         )
 
         for j in range(num_devices):
             tt_prefill_input_ids[j].deallocate()
-            if tt_prefill_attention_mask is not None:
-                tt_prefill_attention_mask[j].deallocate()
             tt_logits[j].deallocate()
 
         user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
@@ -427,6 +445,7 @@ def run_falcon_demo_kv(
             use_cache=use_cache,
         )
         synchronize_devices(devices)
+
         logits = torch.concat(
             [torch_logit.squeeze(1) for torch_logit in tt_tensors_to_torch_tensors(tt_logits)], dim=-2
         )

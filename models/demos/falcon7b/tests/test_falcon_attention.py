@@ -6,14 +6,11 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
 from models.demos.falcon7b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from models.demos.falcon7b.tt.falcon_attention import TtFalconAttention
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-)
+from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.falcon7b.tt.model_config import get_model_config
 from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -97,9 +94,15 @@ def run_test_FalconAttention_inference(
         layer_past=layer_past,
         use_cache=use_cache,
     )
+    if llm_mode == "decode":
+        ttFalconAttention = TtFalconAttentionDecode
+    elif llm_mode == "prefill":
+        ttFalconAttention = TtFalconAttentionPrefill
+    else:
+        raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
     # TT hardware execution -------------------------------------------------------------
-    tt_FalconAttention_model = TtFalconAttention(
+    tt_FalconAttention_model = ttFalconAttention(
         devices,
         state_dict,
         # None,
@@ -152,9 +155,11 @@ def run_test_FalconAttention_inference(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
         ("prefill", 1, 128, 0),
+        ("prefill", 1, 1024, 0),
+        ("prefill", 1, 2048, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq128", "decode_batch32"],
+    ids=["prefill_seq128", "prefill_seq1024", "prefill_seq2048", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
@@ -176,7 +181,7 @@ def test_FalconAttention_inference(
 ):
     devices = get_devices_for_t3000(all_devices, num_devices)
 
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
