@@ -138,10 +138,19 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
 
     uint32_t num_dev_pages = buffer.shard_spec().size() *  num_cores;
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(num_dev_pages, buffer.shard_spec().size(), num_cores, buffer.buffer_layout(), buffer.shard_spec().page_shape, buffer.shard_spec().shape(), buffer.shard_spec().tensor2d_shape);
+    bool width_block_shard_with_padding = ((buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) and
+            buffer.num_dev_pages() != buffer.num_pages());
+
 
     buffer_page_mapping.core_host_page_indices_ = std::vector< std::vector<uint32_t>>(num_cores);
-    buffer_page_mapping.dev_page_to_host_page_mapping_.reserve(num_dev_pages);
-    buffer_page_mapping.dev_page_to_core_mapping_.reserve(num_dev_pages);
+    if (width_block_shard_with_padding) {
+        buffer_page_mapping.dev_page_to_host_page_mapping_.reserve(num_dev_pages);
+        buffer_page_mapping.dev_page_to_core_mapping_.reserve(num_dev_pages);
+    }
+    else {
+        buffer_page_mapping.dev_page_to_host_page_mapping_ = std::vector<std::optional<uint32_t>>(buffer.num_pages());
+        buffer_page_mapping.dev_page_to_core_mapping_ = std::vector<uint32_t>(buffer.num_pages());
+    }
     buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(buffer.num_pages());
     buffer_page_mapping.host_page_to_dev_page_mapping_= std::vector<uint32_t>(buffer.num_pages());
     buffer_page_mapping.core_shard_shape_ = shard_shape;
@@ -149,26 +158,40 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
 
     auto shape_in_pages = buffer.shard_spec().shape_in_pages();
     for(uint32_t core_index = 0; core_index < core_host_page_indices.size() ; core_index++){
-
         uint32_t valid_shard_page = 0;
-        for(uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0] ; shard_page_x++){
-            for(uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
-                uint32_t shard_page_id = shard_page_x * shape_in_pages[1] + shard_page_y;
-                buffer_page_mapping.core_host_page_indices_[core_index].reserve(buffer.shard_spec().size());
-                buffer_page_mapping.dev_page_to_core_mapping_.push_back(core_index);
-                std::optional<uint32_t> host_page_opt = std::nullopt;
-                if(shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
-                    auto host_page = core_host_page_indices[core_index][valid_shard_page];
-                    if(host_page < buffer.num_pages()) {
-                        host_page_opt = host_page;
-                        buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
-                        buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
-                        buffer_page_mapping.host_page_to_dev_page_mapping_[host_page] = dev_page_index;
+        if(width_block_shard_with_padding) {
+            for(uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0] ; shard_page_x++){
+                for(uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
+                    uint32_t shard_page_id = shard_page_x * shape_in_pages[1] + shard_page_y;
+                    buffer_page_mapping.core_host_page_indices_[core_index].reserve(buffer.shard_spec().size());
+                    buffer_page_mapping.dev_page_to_core_mapping_.push_back(core_index);
+                    std::optional<uint32_t> host_page_opt = std::nullopt;
+                    if(shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
+                        auto host_page = core_host_page_indices[core_index][valid_shard_page];
+                        if(host_page < buffer.num_pages()) {
+                            host_page_opt = host_page;
+                            buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
+                            buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
+                            buffer_page_mapping.host_page_to_dev_page_mapping_[host_page] = dev_page_index;
+                        }
+                        valid_shard_page++;
                     }
-                    valid_shard_page++;
+                    buffer_page_mapping.dev_page_to_host_page_mapping_.push_back(host_page_opt);
+                    dev_page_index++;
                 }
-                buffer_page_mapping.dev_page_to_host_page_mapping_.push_back(host_page_opt);
-                dev_page_index++;
+            }
+        }
+        else {
+            for(uint32_t shard_page_id = 0; shard_page_id < core_host_page_indices[core_index].size() ; shard_page_id++){
+                auto host_page = core_host_page_indices[core_index][shard_page_id];
+                if(host_page < buffer.num_pages()) {
+                    buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
+                    buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index] = core_index;
+                    buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_index] = host_page;
+                    buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
+                    buffer_page_mapping.host_page_to_dev_page_mapping_[host_page] = dev_page_index;
+                    dev_page_index++;
+                }
             }
         }
     }
