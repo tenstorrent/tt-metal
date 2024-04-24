@@ -129,11 +129,11 @@ DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Devic
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_ASSERT(total_width == shard_shape[1], fmt::format("Shard shape {} does not divide tensor shape {} correctly according to sharding scheme", shard_shape[1], total_width));
         uint32_t num_shards = div_up(total_height, shard_shape[0]);
-        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} cannot exceed number {}", num_shards, num_cores));
+        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
     } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(total_height == shard_shape[0], "Shard shape does not divide tensor shape correctly according to sharding scheme");
         uint32_t num_shards = div_up(total_width, shard_shape[1]);
-        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} cannot exceed number {}", num_shards, num_cores));
+        TT_ASSERT(num_shards <= num_cores, fmt::format("Number of shards {} must match number of cores {}", num_shards, num_cores));
     } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
         uint32_t num_shards_along_height = div_up(total_height, shard_shape[0]);
