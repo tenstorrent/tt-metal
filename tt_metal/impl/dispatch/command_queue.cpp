@@ -73,7 +73,12 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
-        num_pages_in_shards.push_back(this->buffer.shard_spec().size());
+        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            num_pages_in_shards.push_back(buffer_page_mapping.core_host_page_indices_[core_id].size());
+        }
+        else {
+            num_pages_in_shards.push_back(this->buffer.shard_spec().size());
+        }
     }
 
     vector<uint32_t> core_id_x;
@@ -271,7 +276,12 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
-        num_pages_in_shards.push_back(this->buffer.shard_spec().size());
+        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            num_pages_in_shards.push_back(buffer_page_mapping.core_host_page_indices_[core_id].size());
+        }
+        else {
+            num_pages_in_shards.push_back(this->buffer.shard_spec().size());
+        }
     }
 
     vector<uint32_t> core_id_x;
@@ -883,7 +893,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
-    uint32_t total_pages_to_read = buffer.num_dev_pages();
+    uint32_t total_pages_to_read = (buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ? buffer.num_pages() : buffer.num_dev_pages();
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
 
@@ -974,23 +984,15 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     void * final_src = (void *)src;
 
-    if (is_sharded(buffer.buffer_layout())) {
-        if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-            buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            final_src = malloc(buffer.num_dev_pages() * buffer.page_size());
-            convert_interleaved_to_sharded_on_host(final_src, src, buffer);
-        }
-        // HEIGHT SHARDED
-        // No swapping necessary but it adds padding
-        else  if (buffer.num_dev_pages() != buffer.num_pages()){
-            final_src = malloc(buffer.num_dev_pages() * buffer.page_size());
-            memcpy(final_src, src, buffer.num_pages() * buffer.page_size());
-        }
+    if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        final_src = malloc(buffer.num_dev_pages() * buffer.page_size());
+        convert_interleaved_to_sharded_on_host(final_src, src, buffer);
     }
 
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
-    uint32_t total_pages_to_write = buffer.num_dev_pages();
+    uint32_t total_pages_to_write = (buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ? buffer.num_pages() : buffer.num_dev_pages();
 
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
     uint32_t dst_page_index = 0;
@@ -1029,13 +1031,9 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         dst_page_index += pages_to_write;
     }
 
-    if (is_sharded(buffer.buffer_layout())) {
-        if ((buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-            buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) or
-            (buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED
-            and buffer.num_dev_pages() != buffer.num_pages())) {
-            free(final_src);
-        }
+    if ((buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) ) {
+        free(final_src);
     }
 
     if (blocking) {
