@@ -793,19 +793,13 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         "ALL_GATHER_NUM_LINKS": 2 if num_devices == 4 else 1,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon40b/datasets/"),
         "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
-        "COMPUTE_KERNEL_HIFI2_CONFIG_FP16_DEST": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,

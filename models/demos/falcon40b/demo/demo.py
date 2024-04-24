@@ -583,7 +583,7 @@ def test_demo(
 
     # Set it up for prefill initially and change the model_config to decode
     model_config_str_for_decode = "BFLOAT8_B-SHARDED"  # Decode model config
-    model_config = get_model_config("BFLOAT8_B-DRAM", "prefill", [1, 32], num_devices)  # Prefill model config
+    model_config = get_model_config("BFLOAT16-DRAM", "prefill", [1, 32], num_devices)  # Prefill model config
     model_version = model_config_entries["_name_or_path"]
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]

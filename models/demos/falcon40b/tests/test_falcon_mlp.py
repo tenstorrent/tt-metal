@@ -125,8 +125,9 @@ def run_test_FalconMLP_inference(
         ("BFLOAT8_B-SHARDED", 0.9986),
         ("BFLOAT16-SHARDED", 0.9986),
         ("BFLOAT8_B-DRAM", 0.9983),
+        ("BFLOAT16-DRAM", 0.9986),
     ],
-    ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM"),
+    ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"),
 )
 def test_FalconMLP_inference(
     num_devices,
@@ -141,8 +142,8 @@ def test_FalconMLP_inference(
     all_devices,
     # use_program_cache, # TODO: remove workaround when low PCC issue 7159 is fixed
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for BFLOAT8_B-DRAM memory config and 8 chips!")
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
     if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 

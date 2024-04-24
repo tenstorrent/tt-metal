@@ -250,7 +250,13 @@ def run_test_falcon_prefill_end_to_end_determinism(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-DRAM",))
+@pytest.mark.parametrize(
+    "model_config_str",
+    (
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+    ),
+)
 def test_falcon_prefill_end_to_end_determinism(
     generate_weights,
     enable_program_cache,
@@ -267,8 +273,6 @@ def test_falcon_prefill_end_to_end_determinism(
     all_devices,
 ):
     num_devices = 8
-    if model_config_str not in ["BFLOAT8_B-DRAM"]:
-        pytest.skip("Prefill is only supported for BFLOAT8_B-DRAM memory config!")
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, "prefill", input_shape, num_devices)
