@@ -27,6 +27,7 @@
 | [ResNet-50](./models/demos/resnet) (fps)                 | 20                  | 2,070                        | 7,200                       | 10,000                              |
 | [BERT-Large](./models/demos/bert) (sen/s)                | 12                  | 362                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)    | 32                  | 135                          | 135                         | 140                                 |
+| [ViT](./models/demos/grayskull/vit) (fps)                | 8                   | 430                          | 643                         | 1700                                |
 | U-Net                                                    | coming soon         |                              |                             |                                     |
 | T5 small                                                 | coming soon         |                              |                             |                                     |
 | Bloom                                                    | coming soon         |                              |                             |                                     |
