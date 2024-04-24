@@ -197,7 +197,7 @@ def run_test_FalconModel_inference(
     if llm_mode == "prefill":
         tt_outs = []
         model_inputs = torch.split(model_input, 1)
-        tt_embeddings, tt_attention_mask = zip(
+        tt_inputs, tt_attention_mask = zip(
             *[
                 tt_FalconModel.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
@@ -205,7 +205,7 @@ def run_test_FalconModel_inference(
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconModel(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_inputs[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -217,22 +217,11 @@ def run_test_FalconModel_inference(
         tt_out = torch.vstack(tt_outs)
 
     elif llm_mode == "decode":
-        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-        num_max_tokens = nearest_32(kv_cache_len + 1)
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = num_max_tokens
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
-        tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(
+        tt_inputs, tt_attention_mask = tt_FalconModel.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-        tt_embeddings = [
-            tt_embeddings[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]) for i in range(len(devices))
-        ]
-        tt_attention_mask = [tt_attention_mask[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))]
         tt_out, tt_layer_present = tt_FalconModel(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_inputs,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,

@@ -7,8 +7,10 @@ from abc import abstractmethod
 from typing import Optional, Tuple
 
 import tt_lib
+import ttnn
 
 from models.demos.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
 from models.demos.falcon40b.tt.falcon_attention import generate_cos_sin_cache
 from models.utility_functions import (
     torch2tt_tensor,
@@ -46,17 +48,13 @@ class TtFalconModelShared:
         self.hidden_size = config.hidden_size
         self.num_devices = len(devices)
 
-        # So far on CPU until we add embeddings support on device
-        self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
-        word_embeddings_path = tt_cache_path / "embedding.pt"
-        if (word_embeddings_path).exists():
-            self.embeddings.weight = torch.nn.Parameter(
-                torch.load(word_embeddings_path, map_location=torch.device("cpu"))
-            )
-        else:
-            embed_weights = state_dict["transformer.word_embeddings.weight"]
-            torch.save(embed_weights, word_embeddings_path)
-            self.embeddings.weight = torch.nn.Parameter(embed_weights)
+        # Word Embeddings
+        self.embeddings = TtFalconEmbeddings(
+            devices=devices,
+            state_dict=state_dict,
+            cache_path=tt_cache_path,
+            model_config=model_config,
+        )
 
         if use_global_cos_sin_cache:
             global_cos_sin_cache = generate_cos_sin_cache(
@@ -136,6 +134,7 @@ class TtFalconModelShared:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
+        self.embeddings.set_model_config(model_config)
         for layer_num in range(self.num_layers):
             self.layers[layer_num].set_model_config(model_config)
 
@@ -143,24 +142,27 @@ class TtFalconModelShared:
         assert input_ids.dim() == 2
         batch_size, sequence_size = input_ids.shape
 
-        embeddings = self.embeddings(input_ids)
+        if llm_mode == "decode":
+            input_ids = input_ids.reshape(sequence_size, 1, 1, batch_size)
+        else:
+            input_ids = input_ids.reshape(batch_size, 1, 1, sequence_size)
+
+        tt_inputs = [
+            ttnn.from_torch(
+                input_ids.clone(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.devices[device_id],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for device_id in range(self.num_devices)
+        ]
 
         # Generate input and attention_mask ---------------------------------------------
         if llm_mode == "prefill":
             assert batch_size == 1, "For prefill, batch_size must be 1!"
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
-
-            embeddings = torch.chunk(embeddings.unsqueeze(1), len(self.devices), -1)
-            tt_embeddings = [
-                torch2tt_tensor(
-                    embeddings[i],
-                    self.devices[i],
-                    tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-                )
-                for i in range(len(self.devices))
-            ]
 
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
@@ -172,7 +174,7 @@ class TtFalconModelShared:
             )
 
             attention_mask_bool_chunks = torch.chunk(
-                (attention_mask_bool * -100000).expand(-1, attention_mask_heads_dim, -1, -1),
+                (attention_mask_bool * -1e5).expand(-1, attention_mask_heads_dim, -1, -1),
                 len(self.devices),
                 1,
             )
@@ -183,25 +185,19 @@ class TtFalconModelShared:
                 attn_mask_shard_shape[-1] = sequence_size
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-            for i in range(len(self.devices)):
-                tt_attention_mask.append(
-                    torch2tt_tensor(
-                        attention_mask_bool_chunks[i],
-                        self.devices[i],
-                        tt_memory_config=attention_mask_memconfig,
-                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
-                    )
+            tt_attention_mask = [
+                torch2tt_tensor(
+                    attention_mask_bool_chunks[i],
+                    self.devices[i],
+                    tt_memory_config=attention_mask_memconfig,
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
                 )
+                for i in range(len(self.devices))
+            ]
 
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
             assert sequence_size == 1, "For decode, q_len must be 1!"
-
-            embeddings = torch.chunk(embeddings.unsqueeze(1).transpose(0, 2), len(self.devices), -1)
-            tt_embeddings = [
-                torch2tt_tensor(embeddings[i], None, tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"])
-                for i in range(len(self.devices))
-            ]
 
             attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
 
@@ -216,24 +212,36 @@ class TtFalconModelShared:
                 dim=-1,
             )
             attention_mask_bool_padded = torch.chunk(
-                (attention_mask_bool_padded.transpose(0, 2) * -1e3).expand(-1, self.config.num_attention_heads, -1, -1),
+                (attention_mask_bool_padded.transpose(0, 2) * -1e5).expand(-1, self.config.num_attention_heads, -1, -1),
                 len(self.devices),
                 1,
             )
+
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = num_max_tokens
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
             tt_attention_mask = [
-                torch2tt_tensor(attention_mask_bool_padded[i], None, tt_dtype=self.model_config["ATTN_MASK_DTYPE"])
+                torch2tt_tensor(
+                    attention_mask_bool_padded[i],
+                    self.devices[i],
+                    tt_memory_config=attention_mask_memconfig,
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                )
                 for i in range(len(self.devices))
             ]
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
-        return tt_embeddings, tt_attention_mask
+        return tt_inputs, tt_attention_mask
 
     @abstractmethod
     def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -241,6 +249,8 @@ class TtFalconModelShared:
         layer_past_len: int = 0,
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
+        input_embeddings = self.embeddings(input_ids)
+
         if llm_mode == "prefill":
             return self.fwd_prefill(
                 input_embeddings=input_embeddings,
@@ -394,7 +404,7 @@ class TtFalconModel(TtFalconModelShared):
 
     def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -403,7 +413,7 @@ class TtFalconModel(TtFalconModelShared):
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().__call__(
-            input_embeddings=input_embeddings,
+            input_ids=input_ids,
             llm_mode=llm_mode,
             attention_mask=attention_mask,
             user_id=user_id,
