@@ -23,14 +23,15 @@ def run_global_avg_pool2d_tests(
 ):
     torch.manual_seed(data_seed)
 
-    # x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
-    x = torch.randint(0, 20, input_shape).to(torch.float32)
+    # make random tensor with integers
+    x = torch.randint(0, 20, input_shape)
+    x_ref = x.to(torch.float32).detach().clone()
 
     output_size = (1, 1)
 
     try:
         # get ref result
-        ref_value = torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+        ref_value = torch.nn.functional.adaptive_avg_pool2d(x_ref, output_size)
 
         print(f"Pytorch: {ref_value[1:10, 1:10, 0, 0]}")
 
