@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import pprint
+from typing import Optional
 
 from loguru import logger
 
@@ -26,27 +27,66 @@ class Config:
     enable_detailed_tensor_report: bool = False
     enable_comparison_mode: bool = False
     comparison_mode_pcc: float = 0.9999
-    delete_reports_on_start: bool = True
-    reports_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
-    sqlite_db_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "sqlite.db"
-    operation_history_csv_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports" / "operation_history.csv"
+    root_report_path: pathlib.Path = pathlib.Path("generated") / "ttnn" / "reports"
+    report_name: Optional[str] = None
+
+    @property
+    def report_path(self):
+        import zlib
+        import pickle
+
+        if self.report_name is None:
+            return None
+        return self.root_report_path / f"{zlib.adler32(pickle.dumps(self.report_name))}"
+
+    def __setattr__(self, name: str, value) -> None:
+        object.__setattr__(self, name, value)
+        self.validate(name)
+
+    def validate(self, name):
+        if name in {"enable_fast_runtime_mode", "enable_logging"}:
+            if self.enable_fast_runtime_mode:
+                if self.enable_logging:
+                    logger.warning(
+                        "Running in fast runtime mode without logging. Please disable fast runtime mode if you want to enable logging."
+                    )
+
+        if name in {
+            "enable_logging",
+            "enable_graph_report",
+            "enable_detailed_buffer_report",
+            "enable_detailed_tensor_report",
+        }:
+            if not self.enable_logging:
+                if self.enable_graph_report:
+                    logger.warning("Running without logging. Please enable logging to save graph report")
+                if self.enable_detailed_buffer_report:
+                    logger.warning("Running without logging. Please enable logging to save detaile buffer report")
+                if self.enable_detailed_tensor_report:
+                    logger.warning("Running without logging. Please enable logging to save detailed tensor report")
 
 
 CONFIG = Config()
-CONFIG_PATH = pathlib.Path.home() / ".config" / "ttnn" / "config.json"
+CONFIG_PATH = None
 if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
-CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", "{}")
+CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
-def load_config_from_dictionary(config):
+def load_config_from_dictionary(config, from_file=False):
     global CONFIG
     for key, value in config.items():
         if hasattr(CONFIG, key):
-            setattr(CONFIG, key, type(getattr(CONFIG, key))(value))
+            if getattr(CONFIG, key) is not None:
+                value = type(getattr(CONFIG, key))(value)
+            setattr(CONFIG, key, value)
+        elif from_file:
+            logger.warning(
+                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
+            )
         else:
-            logger.error(f"Unknown configuration key: {key}")
+            raise ValueError(f"Unknown configuration key: {key}")
 
 
 def load_config_from_json_file(json_path):
@@ -54,8 +94,8 @@ def load_config_from_json_file(json_path):
     try:
         with open(json_path, "r") as f:
             config = json.load(f)
-        load_config_from_dictionary(config)
-    except:
+        load_config_from_dictionary(config, from_file=True)
+    except Exception as e:
         logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
 
 
@@ -69,15 +109,16 @@ def save_config_to_json_file(json_path):
         json.dump(normalized_config, f, indent=4)
 
 
-if CONFIG_PATH.exists():
-    logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
-    load_config_from_json_file(CONFIG_PATH)
-else:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    save_config_to_json_file(CONFIG_PATH)
+if CONFIG_PATH is not None:
+    if CONFIG_PATH.exists():
+        logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
+        load_config_from_json_file(CONFIG_PATH)
+    else:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        save_config_to_json_file(CONFIG_PATH)
 
 
-if CONFIG_OVERRIDES:
+if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
@@ -86,7 +127,7 @@ logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))
 
 
 @contextlib.contextmanager
-def manage_config_attribute(name, value):
+def manage_config(name, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
@@ -105,6 +146,7 @@ from ttnn.types import (
     TILE_SIZE,
     DataType,
     uint16,
+    int32,
     uint32,
     bfloat8_b,
     bfloat4_b,
@@ -171,8 +213,11 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    dump_memory_config,
+    load_memory_config,
 )
 
+import ttnn.reflection
 from ttnn.validation import validate_input_tensor
 import ttnn.tracer
 import ttnn.database
@@ -185,6 +230,7 @@ from ttnn.decorators import (
 )
 
 import ttnn.experimental
+import ttnn.experimental.golden_functions
 
 from ttnn.operations.core import (
     from_torch,
@@ -218,6 +264,7 @@ from ttnn.operations.others import (
     # reduction operations
     mean,
     upsample,
+    pearson_correlation_coefficient,
 )
 
 from ttnn.operations.creation import (
@@ -280,10 +327,15 @@ from ttnn.operations.unary import (
 from ttnn.operations.binary import (
     pow,
     add,
+    add_,
     sub,
+    sub_,
     subtract,
+    subtract_,
     mul,
+    mul_,
     multiply,
+    multiply_,
     ldexp,
     logical_and,
     logical_or,
@@ -336,6 +388,7 @@ from ttnn.operations.activation import (
     prelu,
     relu6,
     sigmoid,
+    sigmoid_accurate,
     sign,
     softshrink,
     softsign,
@@ -347,6 +400,7 @@ from ttnn.operations.activation import (
     geglu,
     reglu,
     swiglu,
+    celu,
 )
 
 from ttnn.operations.math import (
@@ -391,6 +445,7 @@ from ttnn.operations.normalization import (
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    get_group_norm_cores_accross_channel,
 )
 
 from ttnn.operations.ccl import all_gather

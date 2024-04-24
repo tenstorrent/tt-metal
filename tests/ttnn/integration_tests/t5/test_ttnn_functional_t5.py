@@ -12,8 +12,6 @@ from models.utility_functions import torch_random, skip_for_wormhole_b0
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
@@ -35,7 +33,7 @@ def test_t5_layer_norm(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_layer_norm(config, hidden_states, weight=parameters.weight)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9999
 
 
 @skip_for_wormhole_b0()
@@ -59,7 +57,7 @@ def test_t5_dense_act_dense(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_dense_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9992)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99920
 
 
 @skip_for_wormhole_b0()
@@ -83,7 +81,7 @@ def test_t5_dense_gated_act_dense(device, model_name, batch_size, sequence_size)
     output = functional_t5.t5_dense_gated_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9991)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99916
 
 
 @skip_for_wormhole_b0()
@@ -107,7 +105,7 @@ def test_t5_layer_ff(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_layer_ff(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.99906)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99910
 
 
 @skip_for_wormhole_b0()
@@ -128,10 +126,10 @@ def test_t5_attention(device, model_name, batch_size, sequence_size):
     )
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output = functional_t5.t5_attention(config, hidden_states, parameters=parameters)
+    output, _ = functional_t5.t5_attention(config, hidden_states, is_decoder=False, parameters=parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.998)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99901
 
 
 @skip_for_wormhole_b0()
@@ -152,10 +150,10 @@ def test_t5_layer_self_attention(device, model_name, batch_size, sequence_size):
     )
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output = functional_t5.t5_layer_self_attention(config, hidden_states, parameters=parameters)
+    output, _ = functional_t5.t5_layer_self_attention(config, hidden_states, is_decoder=False, parameters=parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.99828)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9983
 
 
 @skip_for_wormhole_b0()
@@ -180,10 +178,12 @@ def test_t5_layer_cross_attention(device, model_name, batch_size, sequence_size)
     key_value_states = ttnn.from_torch(
         torch_key_value_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    output = functional_t5.t5_layer_cross_attention(config, hidden_states, key_value_states, parameters=parameters)
+    output, _ = functional_t5.t5_layer_cross_attention(
+        config, hidden_states, key_value_states, is_decoder=False, parameters=parameters
+    )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9983)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9999
 
 
 @skip_for_wormhole_b0()
@@ -204,10 +204,10 @@ def test_t5_block_encoder(device, model_name, batch_size, sequence_size):
     )
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output = functional_t5.t5_block(config, hidden_states, parameters=parameters)
+    output, _, _ = functional_t5.t5_block(config, hidden_states, is_decoder=False, parameters=parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9973)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99746
 
 
 @skip_for_wormhole_b0()
@@ -235,15 +235,16 @@ def test_t5_block_decoder(device, model_name, batch_size, sequence_size):
     encoder_hidden_states = ttnn.from_torch(
         torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    output = functional_t5.t5_block(
+    output, _, _ = functional_t5.t5_block(
         config,
         hidden_states,
         encoder_hidden_states=encoder_hidden_states,
+        is_decoder=False,
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9973)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99765
 
 
 @skip_for_wormhole_b0()
@@ -262,7 +263,10 @@ def test_t5_stack_encoder(device, model_name, batch_size, sequence_size):
     torch_output = model(torch_input_ids).last_hidden_state
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model, custom_preprocessor=functional_t5.custom_preprocessor, device=device
+        initialize_model=lambda: model,
+        convert_to_ttnn=functional_t5.convert_to_ttnn,
+        custom_preprocessor=functional_t5.custom_preprocessor,
+        device=device,
     )
     shared_embedding = preprocess_model_parameters(initialize_model=lambda: shared_embedding, device=device)
 
@@ -275,7 +279,7 @@ def test_t5_stack_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.996)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9962
 
 
 @skip_for_wormhole_b0()
@@ -297,7 +301,10 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
     torch_output = model(torch_input_ids, encoder_hidden_states=torch_encoder_hidden_states).last_hidden_state
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model, custom_preprocessor=functional_t5.custom_preprocessor, device=device
+        initialize_model=lambda: model,
+        convert_to_ttnn=functional_t5.convert_to_ttnn,
+        custom_preprocessor=functional_t5.custom_preprocessor,
+        device=device,
     )
     shared_embedding = preprocess_model_parameters(initialize_model=lambda: shared_embedding, device=device)
 
@@ -314,7 +321,7 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9959)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9963
 
 
 @skip_for_wormhole_b0()
@@ -327,13 +334,14 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
     config = transformers.T5Config.from_pretrained(model_name)
     model = transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval()
 
-    torch_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
-    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
+    torch_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
+    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
     torch_output = model(torch_input_ids, decoder_input_ids=torch_decoder_input_ids).logits
 
     parameters = preprocess_model_parameters(
         model_name=f"ttnn_{model_name}",
         initialize_model=lambda: model,
+        convert_to_ttnn=functional_t5.convert_to_ttnn,
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
     )
@@ -348,5 +356,4 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
     )
     output = ttnn.to_torch(output)
 
-    # TODO(arakhmati): debug why pcc is low
-    assert_with_pcc(torch_output, output, pcc=0.9987)
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9943

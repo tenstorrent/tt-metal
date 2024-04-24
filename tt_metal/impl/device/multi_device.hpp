@@ -48,5 +48,6 @@ public:
 namespace tt {
 namespace tt_metal {
     using DeviceMesh = ttnn::multi_device::DeviceMesh;
+    bool validate_worker_modes(const std::vector<Device*>& workers);
 } // namespace tt_metal
 } // namespace tt

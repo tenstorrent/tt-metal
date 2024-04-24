@@ -86,6 +86,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
 
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
+    DEBUG_STATUS('U', 'P', 'T', 'W');
     _llk_unpack_tilize_(
         base_address,
         tile_index,
@@ -95,6 +96,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         num_faces,
         narrow_tile
     );
+    DEBUG_STATUS('U', 'P', 'T', 'D');
 }
 
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
@@ -221,6 +223,7 @@ inline void llk_unpack_tilizeA_B(
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
+    DEBUG_STATUS('U', 'P', 'T', 'W');
     for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
@@ -251,6 +254,7 @@ inline void llk_unpack_tilizeA_B(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
+    DEBUG_STATUS('U', 'P', 'T', 'D');
 }
 
 inline void llk_unpack_tilizeA_B_block(

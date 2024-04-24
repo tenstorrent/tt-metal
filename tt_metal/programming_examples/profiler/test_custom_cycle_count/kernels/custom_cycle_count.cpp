@@ -16,7 +16,7 @@
  *
  * More info on tt-metal issue #515
  *
- * https://github.com/tenstorrent-metal/tt-metal/issues/515#issuecomment-1548434301
+ * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
 */
 
 void kernel_main() {

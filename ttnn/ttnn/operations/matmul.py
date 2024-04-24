@@ -284,7 +284,9 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, golden_function=_golden_function)
+@ttnn.register_operation(
+    name="ttnn.matmul", validate_input_tensors=lambda *args, **kwargs: None, golden_function=_golden_function
+)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -427,10 +429,14 @@ def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=No
     elif activation is not None:
         raise RuntimeError(f"{activation} is not supported as activation function")
 
+    while len(output_tensor.shape) > len(input_tensor_a.shape):
+        output_tensor = output_tensor.squeeze(0)
     return output_tensor
 
 
-@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, golden_function=_golden_function)
+@ttnn.register_operation(
+    name="ttnn.linear", validate_input_tensors=lambda *args, **kwargs: None, golden_function=_golden_function
+)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,

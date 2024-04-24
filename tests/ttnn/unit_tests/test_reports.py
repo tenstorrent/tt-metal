@@ -4,9 +4,12 @@
 
 import pytest
 
+import sqlite3
+
 import torch
 
 import ttnn
+import ttnn.database
 
 
 @pytest.mark.parametrize("height", [1024])
@@ -14,7 +17,7 @@ import ttnn
 def test_enable_logging(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True):
+    with ttnn.manage_config("enable_logging", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -31,7 +34,7 @@ def test_enable_logging(device, height, width):
         ttnn.deallocate(input_tensor_b)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
     cursor.execute("SELECT * FROM operations")
     operations = []
@@ -47,9 +50,7 @@ def test_enable_logging(device, height, width):
 def test_enable_logging_and_enable_graph_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_graph_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_graph_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -71,9 +72,7 @@ def test_enable_logging_and_enable_graph_report(device, height, width):
 def test_enable_logging_and_enable_detailed_buffer_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_detailed_buffer_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_detailed_buffer_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -90,7 +89,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
         ttnn.deallocate(input_tensor_b)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
 
     cursor.execute("SELECT * FROM buffers")
@@ -113,9 +112,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
 def test_enable_logging_and_enable_comparison_mode(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_comparison_mode", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_comparison_mode", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,
@@ -131,7 +128,7 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
         output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.to_torch(output_tensor)
 
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db()
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
     cursor.execute("SELECT * FROM operations")
     operations = []
@@ -147,9 +144,7 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
 def test_enable_logging_and_enable_detailed_tensor_report(device, height, width):
     torch.manual_seed(0)
 
-    with ttnn.manage_config_attribute("enable_logging", True), ttnn.manage_config_attribute(
-        "enable_detailed_tensor_report", True
-    ):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_detailed_tensor_report", True):
         torch_input_tensor = torch.rand(
             (height, width),
             dtype=torch.bfloat16,

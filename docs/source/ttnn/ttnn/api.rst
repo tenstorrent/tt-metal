@@ -82,6 +82,7 @@ Pointwise Unary
    ttnn/atan2
    ttnn/atanh
    ttnn/cbrt
+   ttnn/celu
    ttnn/clip
    ttnn/clone
    ttnn/cos
@@ -129,6 +130,7 @@ Pointwise Unary
    ttnn/relu6
    ttnn/rsqrt
    ttnn/sigmoid
+   ttnn/sigmoid_accurate
    ttnn/sign
    ttnn/silu
    ttnn/sin
@@ -159,8 +161,8 @@ Pointwise Binary
    :maxdepth: 1
 
    ttnn/add
-   ttnn/mul
-   ttnn/sub
+   ttnn/multiply
+   ttnn/subtract
    ttnn/pow
    ttnn/ldexp
    ttnn/logical_and

@@ -65,8 +65,8 @@ std::vector<Tensor> Fold::create_output_tensors(const std::vector<Tensor> &input
             output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config,
-            true)};
+            mem_config
+            )};
     } else {
         return operation::generic_create_output_tensors(
             *this, input_tensors, output_dtype, Layout::ROW_MAJOR, input_tensor.memory_config());

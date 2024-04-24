@@ -410,6 +410,67 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
     );
 }
 
+
+// SSM eltwise mul
+void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 2);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    TT_FATAL((input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE), "Inputs to ssm_eltwise_mul must be tilized");
+
+    // TODO: Uplift to support BFLOAT8_B and mixed precision
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to ssm_eltwise_mul need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to ssm_eltwise_mul need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to ssm_eltwise_mul need to be on the same device!");
+
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for input a!");
+    TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for input b!");
+    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input a!");
+    TT_FATAL(input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input b!");
+
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for output!");
+    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for output!");
+
+    const auto ashape = input_tensor_a.get_legacy_shape();
+    const auto bshape = input_tensor_b.get_legacy_shape();
+    TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Batch not supported for input a!");
+    TT_FATAL((bshape[0] == 1 and bshape[1] == 1), "Batch not supported for input b!");
+    TT_FATAL((ashape[2] == TILE_HEIGHT), "Num of users must be 32 for input a!");
+    TT_FATAL((bshape[2] == TILE_HEIGHT), "Num of users must be 32 for input b!");
+    TT_FATAL((ashape[3] == TILE_WIDTH), "Latent must be 32 for input a!");
+    TT_FATAL((bshape[3] % TILE_WIDTH == 0), "Hidden size must be divisible by 32 for input b!");
+}
+
+std::vector<Shape> SSMEltwiseMul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto shape_a = input_tensor_a.get_legacy_shape();
+    const auto shape_b = input_tensor_b.get_legacy_shape();
+
+    return {Shape{shape_a[0], shape_a[1], shape_a[2], shape_a[3] * shape_b[3]}};
+}
+
+std::vector<Tensor> SSMEltwiseMul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+}
+
+operation::ProgramWithCallbacks SSMEltwiseMul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    auto& output_tensor = output_tensors.at(0);
+
+    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+
+    return multi_core_ssm_eltwise_mul(input_tensor_a, input_tensor_b, output_tensor, device_compute_with_storage_grid_size);
+}
+
+tt::stl::reflection::Attributes SSMEltwiseMul::attributes() const {
+    return {
+        {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
+    };
+}
+
 }  // namespace transformers
 }  // namespace primary
 }  // namespace operations

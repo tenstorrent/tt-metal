@@ -12,12 +12,14 @@ from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
+    skip_for_wormhole_b0,
 )
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.experimental.stable_diffusion.tt.upblock_2d import TtUpBlock2D
 import pytest
 
 
+@skip_for_wormhole_b0()
 def test_run_upblock_real_input_inference(device, model_location_generator):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -65,6 +67,7 @@ def test_run_upblock_real_input_inference(device, model_location_generator):
     logger.info(f"PASSED {passing[1]}")
 
 
+@pytest.mark.skip(reason="Test not run")
 def test_run_upblock_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

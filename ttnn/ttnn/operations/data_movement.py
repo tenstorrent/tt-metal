@@ -11,11 +11,8 @@ import ttnn.decorators
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
-    input_tensor, *args = args
-    if len(args) > 1:
-        padding = args[1]
-    else:
-        padding = kwargs["padding"]
+    input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
+    padding, args, kwargs = ttnn.reflection.pop_argument("padding", args, kwargs)
 
     if len(padding) != len(input_tensor.shape):
         raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
@@ -42,7 +39,7 @@ def _preprocess_golden_function_inputs(args, kwargs):
 
     input_tensor = ttnn.to_torch(input_tensor)
 
-    return (input_tensor, *args), kwargs
+    return (input_tensor, padding, *args), kwargs
 
 
 def _golden_function(input_tensor: ttnn.Tensor, padding, value):
@@ -67,7 +64,7 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -164,7 +161,7 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -204,7 +201,6 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         )
 
     on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-    device = input_tensor.device()
     layout = input_tensor.layout
     rank = len(input_tensor.shape)
 
@@ -228,6 +224,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
 
         if on_device and not ttnn.is_tensor_storage_on_device(output_tensor):
+            device = input_tensor.device()
             output_tensor = ttnn.to_device(output_tensor, device)
         return output_tensor
     else:
@@ -246,7 +243,7 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
             layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -348,7 +345,7 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -386,7 +383,7 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -461,7 +458,7 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
 
 
 def _golden_function(tensor, shape, **_):
-    return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
+    return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
 def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -469,7 +466,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
         layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,

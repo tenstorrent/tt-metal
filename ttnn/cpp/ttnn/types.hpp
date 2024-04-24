@@ -16,6 +16,7 @@ constexpr auto TILE_SIZE = 32;
 
 using tt::tt_metal::DataType;
 static constexpr auto uint16 = DataType::UINT16;
+static constexpr auto int32 = DataType::INT32;
 static constexpr auto uint32 = DataType::UINT32;
 static constexpr auto float32 = DataType::FLOAT32;
 static constexpr auto bfloat16 = DataType::BFLOAT16;
@@ -38,17 +39,7 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
-
-struct TensorSchema {
-    const std::size_t min_rank;
-    const std::size_t max_rank;
-    const std::set<DataType> dtypes;
-    const std::set<Layout> layouts;
-    const bool can_be_on_device;
-    const bool can_be_on_cpu;
-    const bool can_be_a_scalar;
-    const bool is_optional;
-};
+static constexpr auto MULTI_DEVICE_STORAGE_TYPE = StorageType::MULTI_DEVICE;
 
 struct CoreGrid {
     std::size_t x;

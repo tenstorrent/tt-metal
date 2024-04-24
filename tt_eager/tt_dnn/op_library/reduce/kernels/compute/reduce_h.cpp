@@ -28,7 +28,7 @@ void MAIN {
             for(uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(tt::CB::c_in0, onetile);
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+                reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
                 cb_pop_front(tt::CB::c_in0, onetile);
             }
 

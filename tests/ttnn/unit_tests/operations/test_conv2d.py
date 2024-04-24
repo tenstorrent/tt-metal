@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_
 import ttnn
 import tt_lib
 import math
+import os
 
 
 def prepare_conv_input_and_copy_to_device_interleaved(
@@ -31,7 +32,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
 
     if mem_config is not None:
-        # Remove the else block when resolved (https://github.com/tenstorrent-metal/tt-metal/issues/6310):
+        # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
         if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
             tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
         else:
@@ -508,6 +509,7 @@ def test_resnet50_conv_wh(
     )
 
 
+@skip_for_wormhole_b0("WH ND hangs")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -1018,7 +1020,6 @@ def test_unet_conv(
     )
 
 
-@skip_for_wormhole_b0("Issue #6989: AttributeError: 'NoneType' object has no attribute 'enable_program_cache'")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -1070,8 +1071,8 @@ def test_unet_conv(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_unet_conv_wh(
-    use_program_cache,
     device,
+    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -1091,6 +1092,8 @@ def test_unet_conv_wh(
     use_shallow_conv_variant,
     output_layout,
 ):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
@@ -1151,6 +1154,63 @@ def test_halo_reshard_conv(
 ):
     if is_wormhole_b0() and device.core_grid.y > 7:
         pytest.skip("Not tested for N150 yet")
+
+    math_fidelity = ttnn.MathFidelity.HiFi4
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat8_b
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override, xfail",
+    (
+        (1, 128, 128, 17, 17, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 4}, False),
+        (1, 128, 128, 17, 17, 3, 3, 2, 2, 1, 1, {"num_cores_nhw": 2}, False),
+        (2, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 3}, False),
+        (2, 64, 64, 23, 23, 3, 3, 2, 2, 1, 1, {"num_cores_nhw": 3}, False),
+        (1, 64, 64, 23, 23, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 10}, True),
+    ),
+)
+@pytest.mark.parametrize("use_1d_systolic_array", [False, True])
+def test_conv_core_nondivis(
+    device,
+    use_program_cache,
+    use_1d_systolic_array,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    xfail,
+):
+    if xfail:
+        pytest.xfail()
 
     math_fidelity = ttnn.MathFidelity.HiFi4
     activations_dtype = ttnn.bfloat16

@@ -33,6 +33,7 @@ def test_t5_layer_norm(model_name, batch_size, sequence_size):
 
     output = functional_t5.t5_layer_norm(config, torch_hidden_states, weight=parameters.weight)
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -55,7 +56,8 @@ def test_t5_dense_act_dense(model_name, batch_size, sequence_size):
 
     output = functional_t5.t5_dense_act_dense(config, torch_hidden_states, parameters)
 
-    assert_with_pcc(torch_output, output, pcc=0.9989)
+    assert torch.allclose(torch_output, output)
+    assert_with_pcc(torch_output, output)
 
 
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
@@ -77,6 +79,7 @@ def test_t5_dense_gated_act_dense(model_name, batch_size, sequence_size):
 
     output = functional_t5.t5_dense_gated_act_dense(config, torch_hidden_states, parameters)
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -99,6 +102,7 @@ def test_t5_layer_ff(model_name, batch_size, sequence_size):
 
     output = functional_t5.t5_layer_ff(config, torch_hidden_states, parameters)
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -119,8 +123,9 @@ def test_t5_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    output = functional_t5.t5_attention(config, torch_hidden_states, parameters=parameters)
+    output, _ = functional_t5.t5_attention(config, torch_hidden_states, is_decoder=False, parameters=parameters)
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -141,8 +146,11 @@ def test_t5_layer_self_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    output = functional_t5.t5_layer_self_attention(config, torch_hidden_states, parameters=parameters)
+    output, _ = functional_t5.t5_layer_self_attention(
+        config, torch_hidden_states, is_decoder=False, parameters=parameters
+    )
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -164,10 +172,11 @@ def test_t5_layer_cross_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    output = functional_t5.t5_layer_cross_attention(
-        config, torch_hidden_states, torch_key_value_states, parameters=parameters
+    output, _ = functional_t5.t5_layer_cross_attention(
+        config, torch_hidden_states, torch_key_value_states, is_decoder=False, parameters=parameters
     )
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -188,8 +197,9 @@ def test_t5_block_encoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    output = functional_t5.t5_block(config, torch_hidden_states, parameters=parameters)
+    output, _, _ = functional_t5.t5_block(config, torch_hidden_states, is_decoder=False, parameters=parameters)
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -214,10 +224,15 @@ def test_t5_block_decoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    output = functional_t5.t5_block(
-        config, torch_hidden_states, encoder_hidden_states=torch_encoder_hidden_states, parameters=parameters
+    output, _, _ = functional_t5.t5_block(
+        config,
+        torch_hidden_states,
+        encoder_hidden_states=torch_encoder_hidden_states,
+        is_decoder=False,
+        parameters=parameters,
     )
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)
 
 
@@ -247,8 +262,8 @@ def test_t5_stack_encoder(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    # TODO(arakhmati): debug why pcc isn't higher
-    assert_with_pcc(torch_output, output, pcc=0.9998)
+    assert torch.allclose(torch_output, output)
+    assert_with_pcc(torch_output, output)
 
 
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
@@ -281,8 +296,8 @@ def test_t5_stack_decoder(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    # TODO(arakhmati): debug why pcc isn't higher
-    assert_with_pcc(torch_output, output, pcc=0.9996)
+    assert torch.allclose(torch_output, output)
+    assert_with_pcc(torch_output, output)
 
 
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
@@ -292,8 +307,8 @@ def test_t5_for_conditional_generation(model_name, batch_size, sequence_size):
     config = transformers.T5Config.from_pretrained(model_name)
     model = transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval()
 
-    torch_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
-    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
+    torch_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
+    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
     torch_output = model(torch_input_ids, decoder_input_ids=torch_decoder_input_ids).logits
 
     parameters = preprocess_model_parameters(
@@ -309,4 +324,5 @@ def test_t5_for_conditional_generation(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
+    assert torch.allclose(torch_output, output)
     assert_with_pcc(torch_output, output)

@@ -36,6 +36,12 @@ def test_hardtanh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_sigmoid_accurate(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.sigmoid_accurate, torch.sigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_hardswish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.hardswish, F.hardswish)
 
@@ -237,6 +243,13 @@ def run_activation_test_scalarB_key(device, h, w, scalar, ttnn_function, torch_f
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_elu(device, h, w, scalar):
     run_activation_test_scalarB(device, h, w, scalar, ttnn.elu, F.elu)
+
+
+@pytest.mark.parametrize("alpha", [1, 2.5, 5.0])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_scalarB_celu(device, h, w, alpha):
+    run_activation_test_scalarB(device, h, w, alpha, ttnn.celu, F.celu)
 
 
 @pytest.mark.parametrize("scalar", [0.5, 1.0])

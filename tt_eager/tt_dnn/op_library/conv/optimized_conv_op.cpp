@@ -136,7 +136,8 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
+    auto padded_shape_w =
+        parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
     auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);

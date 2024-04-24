@@ -58,7 +58,7 @@ void ActiveDevices::deactivate_device(chip_id_t id) {
     this->active_devices_[id] = ActiveState::INACTIVE;
 }
 
-Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs)
+Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id)
 {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
@@ -918,7 +918,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}", this->id_);
+    log_info(tt::LogMetal, "Initializing device {}. Program cache is NOT enabled", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);

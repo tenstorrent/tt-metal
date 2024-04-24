@@ -13,7 +13,9 @@ void kernel_main() {
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
     const uint32_t input_width_offset_tiles = get_arg_val<uint32_t>(3); // input width in tiles - block width in tiles
     const uint32_t block_num_tiles = get_arg_val<uint32_t>(4); // block_height_tiles * block_width_tiles
-    const uint32_t start_id = get_arg_val<uint32_t>(5);
+    const uint32_t start_id_offset = get_arg_val<uint32_t>(5);
+    const uint32_t start_id_base = get_arg_val<uint32_t>(6);
+    const uint32_t start_id = start_id_base + start_id_offset;
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
@@ -39,6 +41,6 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         curr_tile_id += input_width_offset_tiles;
-    } 
+    }
     cb_push_back(cb_id_in0, block_num_tiles);
 }

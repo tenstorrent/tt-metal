@@ -11,6 +11,12 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import tt_lib as ttl
 
+
+def create_grid(x, y):
+    core_range = ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(x - 1, y - 1))
+    return ttl.tensor.CoreRangeSet({core_range})
+
+
 params = [
     pytest.param([[5, 5, 32, 32]], untilize_with_unpadding_args)
     for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args([[5, 5, 32, 32]])
@@ -34,6 +40,31 @@ params += [
             ),
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 119, 7299],
+        },
+    )
+]
+
+
+params += [
+    pytest.param(
+        [[1, 1, 128, 32]],
+        {
+            "dtype": [ttl.tensor.DataType.BFLOAT16],
+            "layout": [ttl.tensor.Layout.TILE],
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(
+                    ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttl.tensor.BufferType.L1,
+                    ttl.tensor.ShardSpec(create_grid(1, 2), [64, 32], ttl.tensor.ShardOrientation.ROW_MAJOR, False),
+                )
+            ],
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttl.tensor.BufferType.L1,
+                ttl.tensor.ShardSpec(create_grid(1, 2), [64, 16], ttl.tensor.ShardOrientation.ROW_MAJOR, False),
+            ),
+            "output_tensor_start": [0, 0, 0, 0],
+            "output_tensor_end": [0, 0, 127, 15],
         },
     )
 ]

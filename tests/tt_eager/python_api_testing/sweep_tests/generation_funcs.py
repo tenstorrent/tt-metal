@@ -57,6 +57,9 @@ def gen_func_with_cast_tt(gen_func, dtype):
 
             x = ttnn.to_torch(tt_tensor)
 
+        elif dtype == ttl.tensor.DataType.UINT16:
+            x = x.to(torch.int16)
+
         elif dtype == ttl.tensor.DataType.UINT32:
             x = x.to(torch.int32)
 
@@ -1954,6 +1957,8 @@ def gen_softplus_args(
         high,
         dtype,
     ):
+        if input_info["beta"] == 0.0 and input_info["threshold"] > 0.0:
+            continue
         yield input_info
 
 

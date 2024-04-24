@@ -53,6 +53,7 @@ def test_resnet50_first_conv(
     fuse_relu,
     sharded_out,
 ):
+    pytest.skip("This conv path is deprecated and will be removed during conv refactor efforts")
     compute_grid_size = device.compute_with_storage_grid_size()
     is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
     if N == 8 and is_e75_grid_size:

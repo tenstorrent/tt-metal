@@ -199,7 +199,7 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
     TT_FATAL(input_tensor.shard_spec().has_value());
     TT_FATAL(output_mem_config.is_sharded());
 
-    return operation::run(Reshard{.output_mem_config = output_mem_config}, {input_tensor}).at(0);
+    return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

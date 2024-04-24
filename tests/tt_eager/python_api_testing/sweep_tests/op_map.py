@@ -546,6 +546,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_addcmul,
         "pytorch_op": pytorch_ops.addcmul,
     },
+    "eltwise-celu": {
+        "tt_lib_op": tt_lib_ops.eltwise_celu,
+        "pytorch_op": pytorch_ops.celu,
+    },
     "eltwise-addcdiv": {
         "tt_lib_op": tt_lib_ops.eltwise_addcdiv,
         "pytorch_op": pytorch_ops.addcdiv,
@@ -560,6 +564,14 @@ op_map = {
     },
     "ttnn-eltwise-sigmoid": {
         "tt_lib_op": ttnn_ops.eltwise_sigmoid,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
+    "eltwise-sigmoid_accurate": {
+        "tt_lib_op": tt_lib_ops.eltwise_sigmoid_accurate,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
+    "ttnn-eltwise-sigmoid_accurate": {
+        "tt_lib_op": ttnn_ops.eltwise_sigmoid_accurate,
         "pytorch_op": pytorch_ops.sigmoid,
     },
     "eltwise-log_sigmoid": {
@@ -1643,6 +1655,10 @@ op_map = {
     "ttnn-global-avg-pool2d": {
         "tt_lib_op": ttnn_ops.global_avg_pool2d,
         "pytorch_op": pytorch_ops.global_avg_pool2d,
+    },
+    "ttnn-max-pool2d": {
+        "tt_lib_op": ttnn_ops.max_pool2d_tt,
+        "pytorch_op": pytorch_ops.max_pool2d,
     },
     "ttnn-upsample": {
         "tt_lib_op": ttnn_ops.upsample,

@@ -61,40 +61,55 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_c = input_shape[3];
     uint32_t out_c_padded = ceil_multiple_of(out_c, (out_c <= 16) ? 16 : constants::TILE_WIDTH);
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
-    uint32_t out_hw = out_h * out_w;
+    bool multicore = this->out_mem_config_.shard_spec.has_value();
+    if (multicore) {
+        uint32_t out_nhw = in_n_ * out_h * out_w;
+        uint32_t out_nhw_padded =
+            this->out_mem_config_.shard_spec->shape[0] * this->out_mem_config_.shard_spec->num_cores();
 
-    // {N, 1, H * W, C}
-    const auto out_dims = std::vector<uint32_t>({ in_n_, 1, out_hw, out_c });
-    const auto padding =
-        Padding({{0, 0}, {0, 0}, {0, 0}, {0, out_c_padded - out_c}}, Padding::PadValue::NegativeInfinity);
+        // {1, 1, N * H * W, C}
+        const auto out_dims = std::vector<uint32_t>({1, 1, out_nhw_padded, out_c_padded});
+        const auto padding = Padding(
+            {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
+            Padding::PadValue::NegativeInfinity);
+        auto out_shape = Shape{out_dims, padding};
+        return {out_shape};
+    } else {
+        // Single core still uses the old layout w/ batch unfolded
+        uint32_t out_hw = out_h * out_w;
 
-    auto out_shape = Shape{out_dims, padding};
-
-    return {out_shape};
+        // {N, 1, H * W, C}
+        const auto out_dims = std::vector<uint32_t>({in_n_, 1, out_hw, out_c_padded});
+        const auto padding =
+            Padding({{0, 0}, {0, 0}, {0, 0}, {0, out_c_padded - out_c}}, Padding::PadValue::NegativeInfinity);
+        auto out_shape = Shape{out_dims, padding};
+        return {out_shape};
+    }
 }
 
 std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &inputs) const {
     const auto& input = inputs.at(0);
     if (out_mem_config_.is_sharded()) {
         Shape output_shape = compute_output_shapes(inputs).at(0);
-        uint32_t nbatch = in_n_;
-        uint32_t out_hw = out_h_ * out_w_;
-        uint32_t out_nhw = out_hw * nbatch;
-        uint32_t ncores = 1;
-        if (input.shard_spec().has_value() && input.shard_spec().value().halo) {
-            ncores = input.shard_spec().value().num_cores();
-        } else {
-            ncores = max_pool_helpers::get_num_cores(input.device(), out_nhw, nbatch);
-        }
-        // uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
-        // uint32_t ncores = input.shard_spec().value().num_cores();
-        uint32_t out_nhw_per_core = out_nhw / ncores;
-        CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
-        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
-        auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
         auto mem_config = this->out_mem_config_;
-        mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
+        if (mem_config.shard_spec.has_value()) {
+            mem_config.shard_spec->shape[1] = output_shape[3];
+        } else {
+            uint32_t nbatch = output_shape[0];
+            uint32_t out_nhw = output_shape[0] * output_shape[1] * output_shape[2];
+            uint32_t ncores = 1;
+            if (input.shard_spec().has_value() && input.shard_spec().value().halo) {
+                ncores = input.shard_spec().value().num_cores();
+            } else {
+                ncores = max_pool_helpers::get_num_cores(input.device(), out_nhw, nbatch);
+            }
+            uint32_t out_nhw_per_core = out_nhw / ncores;
+            CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
+            std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
+            mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
+        }
+        return {create_sharded_device_tensor(
+            output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), out_mem_config_);
     }

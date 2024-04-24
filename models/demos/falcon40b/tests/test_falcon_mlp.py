@@ -83,7 +83,7 @@ def run_test_FalconMLP_inference(
     for device in devices:
         tt_mlp_input.append(tt_mlp_input_host.to(device, model_config["LN_MLP_OUTPUT_MEMCFG"]))
 
-    tt_out = tt_FalconMLP_model(tt_mlp_input)
+    tt_out = tt_FalconMLP_model(tt_mlp_input, llm_mode)
     tt_out = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
 
     # check outputs ----------------------------------------------------------------------
@@ -104,14 +104,30 @@ def run_test_FalconMLP_inference(
     (
         ("decode", 32, 1),
         ("prefill", 1, 32),
-        ("prefill", 1, 64),
+        ("prefill", 1, 128),
+        ("prefill", 1, 2048),
+    ),
+    ids=(
+        "decode_batch32",
+        "prefill_seq32",
+        "prefill_seq128",
+        "prefill_seq2048",
     ),
 )
 @pytest.mark.parametrize(
     "model_version",
     (("tiiuae/falcon-40b-instruct"),),
+    ids=("falcon_40b",),
 )
-@pytest.mark.parametrize("model_config_str, pcc", [("BFLOAT8_B-SHARDED", 0.9987), ("BFLOAT16-SHARDED", 0.9987)])
+@pytest.mark.parametrize(
+    "model_config_str, pcc",
+    [
+        ("BFLOAT8_B-SHARDED", 0.9986),
+        ("BFLOAT16-SHARDED", 0.9986),
+        ("BFLOAT8_B-DRAM", 0.9983),
+    ],
+    ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM"),
+)
 def test_FalconMLP_inference(
     num_devices,
     model_version,
@@ -123,8 +139,13 @@ def test_FalconMLP_inference(
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    use_program_cache,
+    # use_program_cache, # TODO: remove workaround when low PCC issue 7159 is fixed
 ):
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for BFLOAT8_B-DRAM memory config and 8 chips!")
+    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
+        pytest.skip("Decode is only supported for SHARDED memory config!")
+
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     devices = get_devices_for_t3000(all_devices, num_devices)

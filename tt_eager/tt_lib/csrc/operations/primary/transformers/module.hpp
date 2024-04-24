@@ -47,6 +47,11 @@ void py_module(py::module& m_transformers) {
             B = torch.repeat_interleave(B, q_heads // kv_heads, dim=1)
             torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
     )doc");
+    m_transformers.def("ssm_eltwise_mul", &ssm_eltwise_mul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+        Performs a special eltwise multiply for SSM models. Given tensor A with shape [1, 1, 32, 32] and tensor B with shape [1, 1, 32, W] where W is some multiple of 32, perform the following PyTorch equivalent:
+            A.repeat(1, 1, 1, W) * B.repeat_interleave(32, dim=-1)
+    )doc");
 
     py::class_<SoftmaxProgramConfig>(m_transformers, "SoftmaxProgramConfig").def(py::init<>());
 
@@ -75,6 +80,19 @@ void py_module(py::module& m_transformers) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
         );
+
+    m_transformers.def(
+        "scale_causal_mask_hw_dims_softmax_in_place",
+        &scale_causal_mask_hw_dims_softmax_in_place,
+        py::arg("input_tensor").noconvert(),
+        py::arg("scale").noconvert(),
+        py::arg("mask").noconvert(),
+        py::arg("program_config").noconvert() = SoftmaxShardedMultiCoreProgramConfig{},
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified "
+        "in place. Input must be sharded, and attention mask interleaved and of shape [1, 1, H, W]"
+        );
+
 }
 
 }  // namespace transformers

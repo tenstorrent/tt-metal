@@ -49,7 +49,7 @@ enum class DataFormat : uint8_t {
 inline bool is_integer_format(DataFormat format) {
     return (
         (format == DataFormat::UInt32) || (format == DataFormat::Int8) ||
-        (format == DataFormat::UInt16) || (format == DataFormat::UInt8) ||
+        (format == DataFormat::UInt16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32) ||
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
@@ -70,6 +70,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
+        case DataFormat::Int32: os << "Int32"; break;
         case DataFormat::RawUInt8: os << "RawUInt8"; break;
         case DataFormat::RawUInt16: os << "RawUInt16"; break;
         case DataFormat::RawUInt32: os << "RawUInt32"; break;
@@ -99,6 +100,7 @@ inline constexpr static uint32_t datum_size(const DataFormat &format) {
         case DataFormat::UInt32: return 4;
         case DataFormat::RawUInt8: return 1;
         case DataFormat::RawUInt16: return 2;
+        case DataFormat::Int32: return 4;
         case DataFormat::RawUInt32: return 4;
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
@@ -125,6 +127,7 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
         case DataFormat::UInt32: return (1024 * 4);
         case DataFormat::RawUInt8: return 1024;
         case DataFormat::RawUInt16: return (1024 * 2);
+        case DataFormat::Int32: return (1024 * 4);
         case DataFormat::RawUInt32: return (1024 * 4);
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");

@@ -58,8 +58,7 @@ std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& in
             this->output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config,
-            true
+            mem_config
             )};
     } else {
         return operation::generic_create_output_tensors(
@@ -110,27 +109,20 @@ operation::ProgramWithCallbacks Reshard::create_program(
     auto& output_tensor = output_tensors.at(0);
     //each tensor has its respective shard_spec within its memory_config
     return reshard_multi_core(input_tensor, output_tensor);
-
-
 }
 
 std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto mem_config = this->output_mem_config;
 
-
-
-
     return {create_sharded_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
         input_tensor.device(),
-        mem_config,
-        true
+        mem_config
         )};
 }
-
 
 ShardedOpParallelizationStrategy Reshard::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     return ShardedOpParallelizationStrategy::MULTI_CORE;

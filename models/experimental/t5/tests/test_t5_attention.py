@@ -9,6 +9,7 @@ from transformers import T5Model
 from loguru import logger
 
 import tt_lib
+import pytest
 
 from models.experimental.t5.tt.t5_attention import (
     TtT5Attention,
@@ -22,7 +23,10 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    is_wormhole_b0,
 )
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_test_t5_shape(device):

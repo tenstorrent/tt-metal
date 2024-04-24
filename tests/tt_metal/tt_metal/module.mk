@@ -17,6 +17,8 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_prefetcher \
 		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data \
 		 tests/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional \
+ 		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_bidirectional_bandwidth_no_edm \
+		 tests/tt_metal/perf_microbenchmark/ethernet/test_ethernet_hop_latencies_no_edm \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 \
@@ -36,7 +38,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_compile_args \
 		 tests/tt_metal/test_eltwise_binary \
-		 tests/tt_metal/test_eltwise_unary \
 		 tests/tt_metal/test_matmul_single_tile_bfp8b \
 		 tests/tt_metal/test_matmul_single_tile_output_in_l1 \
 		 tests/tt_metal/test_dram_loopback_single_core \
@@ -54,7 +55,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_interleaved_l1_buffer \
 		 tests/tt_metal/test_bcast \
 		 tests/tt_metal/test_generic_binary_reader_matmul_large_block \
-		 tests/tt_metal/test_3x3conv_as_matmul_large_block \
 		 tests/tt_metal/test_l1_to_l1_multi_core \
 		 tests/tt_metal/test_dram_copy_sticks_multi_core \
 		 tests/tt_metal/test_reduce_h \

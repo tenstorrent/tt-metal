@@ -7,7 +7,7 @@ TTNN_DEFINES =
 TTNN_INCLUDES = $(TT_EAGER_INCLUDES) $(TT_LIB_INCLUDES) -Ittnn/cpp -Ittnn/cpp/ttnn
 TTNN_PYBIND11_INCLUDES = $(TTNN_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
 
-TTNN_LDFLAGS = -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp $(LDFLAGS)
+TTNN_LDFLAGS = -ltt_dnn -ltensor -ltt_metal -lyaml-cpp $(LDFLAGS)
 TTNN_PYBIND11_LDFLAGS = $(TTNN_LDFLAGS) -ltt_lib_csrc -lttnn
 
 TTNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast -fno-var-tracking
@@ -37,7 +37,7 @@ endif
 
 ttnn: $(TTNN_LIBS_TO_BUILD)
 
-$(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB) $(TT_LIB_LIB)
+$(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(TT_METAL_LIB) $(TT_LIB_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $(TTNN_OBJS) $(TTNN_LDFLAGS)
 

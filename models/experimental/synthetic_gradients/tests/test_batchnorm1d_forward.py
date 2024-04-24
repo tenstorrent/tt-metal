@@ -347,7 +347,7 @@ def run_batchnorm_forward(device, bn_size):
     print("\n\n", "atol/rtol:", test_results, "| pcc:", output, "\n\n")
 
     pcc = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    assert float(pcc[1][5:]) > 0.99, f"pcc is lower than 0.99: {float(pcc[1][5:])}"
+    assert float(pcc[1]) > 0.99, f"pcc is lower than 0.99: {float(pcc[1])}"
 
 
 def test_batchnorm_inference(device):

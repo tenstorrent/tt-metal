@@ -18,18 +18,13 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 
 
-
-
 def run_whisper_for_audio_classification(device):
-    feature_extractor = AutoFeatureExtractor.from_pretrained(
-        "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-    )
-    model = WhisperForAudioClassification.from_pretrained(
-        "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-    )
+    feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
+    model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
     model.eval()
     state_dict = model.state_dict()
@@ -59,16 +54,12 @@ def run_whisper_for_audio_classification(device):
 
     logger.debug(f"Torch predicted label: {predicted_label}")
 
-    tt_whisper_model = TtWhisperForAudioClassification(
-        state_dict=state_dict, device=device, config=model.config
-    )
+    tt_whisper_model = TtWhisperForAudioClassification(state_dict=state_dict, device=device, config=model.config)
 
     tt_whisper_model.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(
-            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
         ttm_logits = tt_whisper_model(
             input_features=input_features,
         ).logits
@@ -95,6 +86,7 @@ def run_whisper_for_audio_classification(device):
         assert does_pass
 
 
+@skip_for_wormhole_b0()
 def test_WhipserForAudioClassification_inference(device):
     torch.manual_seed(1234)
     run_whisper_for_audio_classification(device=device)

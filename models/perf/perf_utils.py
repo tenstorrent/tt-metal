@@ -124,7 +124,7 @@ def prep_perf_report(
         "Inference Time (sec)": "{:.4f}".format(inference_time),
         "Expected Inference Time (sec)": "{:.4f}".format(expected_inference_time),
         "Throughput (batch*inf/sec)": device_throughput,
-        "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu),
+        "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu) if inference_time_cpu else "unknown",
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
 

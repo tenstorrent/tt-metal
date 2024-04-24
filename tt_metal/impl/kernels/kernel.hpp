@@ -85,7 +85,7 @@ class Kernel : public JitBuildSettings {
     std::string binary_path_;
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
-    // TODO: break this dependency by https://github.com/tenstorrent-metal/tt-metal/issues/3381
+    // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
     uint16_t binary_size16_;
     std::vector<uint32_t> compile_time_args_;

@@ -21,6 +21,7 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.skip(reason="#7678: Non-det hang")
 @pytest.mark.parametrize(
     "iterations",
     ((1),),

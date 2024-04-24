@@ -8,7 +8,7 @@ from typing import Optional, Union
 import ttnn
 
 import tt_lib as ttl
-from tt_lib.utils import find_closest_largest_divisor, find_closest_largest_divisor_with_num_padding
+from tt_lib.utils import find_closest_largest_divisor
 import math
 
 
@@ -77,68 +77,9 @@ def _layer_norm_validate_input_tensors(
     )
 
 
-@ttnn.register_operation(
-    name="ttnn.layer_norm",
-    validate_input_tensors=_layer_norm_validate_input_tensors,
-    golden_function=_golden_function,
+layer_norm = ttnn.register_operation(name="ttnn.layer_norm", is_cpp_function=True, golden_function=_golden_function)(
+    ttnn._ttnn.operations.normalization.layer_norm
 )
-def layer_norm(
-    input_tensor: ttnn.Tensor,
-    *,
-    epsilon: float = 1e-12,
-    weight: Optional[ttnn.Tensor] = None,
-    bias: Optional[ttnn.Tensor] = None,
-    residual_input_tensor: Optional[ttnn.Tensor] = None,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    program_config: Optional[ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig] = None,
-) -> ttnn.Tensor:
-    r"""
-    layer_norm(input_tensor: ttnn.Tensor, *, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Compute layer_norm over :attr:`input_tensor`.
-
-    """
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    if residual_input_tensor is not None:
-        residual_input_tensor = ttnn.unsqueeze_to_4D(residual_input_tensor)
-    if weight is not None:
-        weight = ttnn.unsqueeze_to_4D(weight)
-    if bias is not None:
-        bias = ttnn.unsqueeze_to_4D(bias)
-
-    if program_config is None:
-        if residual_input_tensor is not None:
-            output_tensor = ttnn.experimental.tensor.add_layernorm(
-                input_tensor, residual_input_tensor, epsilon, weight, bias, output_mem_config=memory_config
-            )
-        else:
-            output_tensor = ttnn.experimental.tensor.layernorm(
-                input_tensor,
-                epsilon,
-                weight,
-                bias,
-                output_mem_config=memory_config,
-            )
-    else:
-        if residual_input_tensor is not None:
-            output_tensor = ttnn.experimental.operations.primary.add_layernorm(
-                input_tensor,
-                residual_input_tensor,
-                epsilon,
-                weight,
-                bias,
-                output_mem_config=memory_config,
-                program_config=program_config,
-            )
-        else:
-            output_tensor = ttnn.experimental.operations.primary.layernorm(
-                input_tensor, epsilon, weight, bias, output_mem_config=memory_config, program_config=program_config
-            )
-
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-    return output_tensor
 
 
 def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
@@ -162,9 +103,34 @@ def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args
     )
 
 
+def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+    import torch
+
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        input_tensor = input_tensor.to(weight.dtype)
+
+    return weight * input_tensor
+
+
+def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+    import torch
+
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        input_tensor = input_tensor.to(weight.dtype)
+
+    return weight * input_tensor
+
+
 @ttnn.register_operation(
     name="ttnn.rms_norm",
     validate_input_tensors=_rms_norm_validate_input_tensors,
+    golden_function=_golden_function,
 )
 def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
     r"""
@@ -173,19 +139,7 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     Compute rms_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise RuntimeError("rms_norm only supports device storage type")
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    weight = ttnn.unsqueeze_to_4D(weight)
-
-    output_tensor = ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
-
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-
-    return output_tensor
+    return ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
 
 
 # group norm helper function
@@ -301,14 +255,43 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
     return input_mask_tensor
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
+def get_group_norm_cores_accross_channel(memory_layout, core_grid):
+    if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
+        num_cores_across_channel = core_grid.y
+    elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_cores_across_channel = 1
+    else:
+        num_cores_across_channel = core_grid.x * core_grid.y
+
+    return num_cores_across_channel
+
+
+def _golden_function(
+    input_tensor: ttnn.Tensor,
+    *,
+    num_groups,
+    epsilon=1e-05,
+    weight=None,
+    bias=None,
+    memory_config=None,
+    core_grid=None,
+    input_mask=None,
+    **kwargs,
+):
     import torch
 
-    if len(weight.shape) == 2:
-        weight = weight[0]
-    if len(bias.shape) == 2:
-        bias = bias[0]
-    return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
+    num_channels = input_tensor.shape[-1]
+    num_cores_across_channel = get_group_norm_cores_accross_channel(memory_config.memory_layout, core_grid)
+    weight = weight.reshape((num_cores_across_channel, -1))
+    weight = weight[:, : num_channels // num_cores_across_channel].flatten()
+    if bias is not None:
+        bias = bias.reshape((num_cores_across_channel, -1))
+        bias = bias[:, : num_channels // num_cores_across_channel].flatten()
+
+    input_tensor = input_tensor.permute(0, 3, 1, 2)
+    output = torch.nn.functional.group_norm(input_tensor.float(), num_groups, weight.float(), bias.float(), eps=epsilon)
+    output = output.permute(0, 2, 3, 1)
+    return output
 
 
 def _postprocess_golden_function_outputs(output, args, kwargs):

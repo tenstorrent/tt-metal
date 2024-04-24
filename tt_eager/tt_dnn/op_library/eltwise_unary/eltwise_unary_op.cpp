@@ -9,6 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -391,7 +392,10 @@ Tensor div_unary(float value,const Tensor& input_tensor, const MemoryConfig& out
 
 //same as div_unary(value,tensor)
 Tensor rdiv(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config) {
-    return div_unary(value,input_tensor,output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
+    Tensor result = div_unary(value, input_tensor, output_mem_config);
+    result = where(eqz(input_tensor, output_mem_config), t_inf, result, output_mem_config);
+    return result;
 }
 
 

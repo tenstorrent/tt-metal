@@ -80,6 +80,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     logger.info(f"vit compile time: {compile_time}")
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
@@ -105,6 +106,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",

@@ -9,30 +9,6 @@ import tt_lib as ttl
 import ttnn
 
 
-def _split_query_key_value_and_split_heads_validate_input_tensors(
-    operation_name, input_tensor, kv_input_tensor=None, *args, **kwargs
-):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(3,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        kv_input_tensor,
-        ranks=(3,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-
-
 def _golden_function(
     input_tensor: ttnn.Tensor,
     kv_input_tensor: Optional[ttnn.Tensor] = None,
@@ -73,21 +49,7 @@ def _golden_function(
     return query, key, value
 
 
-@ttnn.register_operation(
-    name="ttnn.transformer.split_query_key_value_and_split_heads",
-    golden_function=_golden_function,
-    validate_input_tensors=_split_query_key_value_and_split_heads_validate_input_tensors,
-)
-def split_query_key_value_and_split_heads(
-    input_tensor: ttnn.Tensor,
-    kv_input_tensor: Optional[ttnn.Tensor] = None,
-    *,
-    num_heads: int,
-    num_kv_heads: Optional[int] = None,
-    transpose_key: bool = True,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """
+split_doc_string = r"""
     split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, kv_input_tensor: Optional[ttnn.Tensor] = None, *, num_heads: int, num_kv_heads: Optional[int] = None, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
 
     Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
@@ -95,6 +57,8 @@ def split_query_key_value_and_split_heads(
 
     If :attr:`kv_input_tensor` is passed in, then :attr:`input_tensor` of shape ``[batch_size, sequence_size, hidden_size]`` is only used for Query,
     and :attr:`kv_input_tensor` of shape ``[batch_size, sequence_size, 2 * hidden_size]`` is used for Key and Value.
+
+    For the sharded implementation, the input query, key and value are expected to be concatenated such that the heads are interleaved (q1 k1 v1...qn kn vn).
 
     Equivalent pytorch code:
 
@@ -136,159 +100,14 @@ def split_query_key_value_and_split_heads(
         * :attr:`transpose_key`: Whether to transpose the Key tensor on the last two dimensions
         * :attr:`memory_config`: Memory Config of the output tensor
 
-    """
-    if len(input_tensor.shape) != 3:
-        raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
+"""
 
-    if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
-
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise RuntimeError("input_tensor must be on device!")
-
-    if num_kv_heads is not None:
-        if transpose_key is True:
-            raise RuntimeError("transpose_key cannot be True when num_kv_heads is passed in!")
-
-        batch_size, sequence_size, num_heads_plus_num_kv_heads_times_2_times_hidden_size = input_tensor.shape
-        (
-            _,
-            sequence_size_padded,
-            num_heads_plus_num_kv_heads_times_2_times_hidden_size_padded,
-        ) = input_tensor.shape.with_tile_padding()
-        head_size = num_heads_plus_num_kv_heads_times_2_times_hidden_size // (num_heads + num_kv_heads * 2)
-        padded_head_size = num_heads_plus_num_kv_heads_times_2_times_hidden_size_padded // (
-            num_heads + num_kv_heads * 2
-        )
-
-        if head_size % ttnn.TILE_SIZE != 0:
-            raise RuntimeError(
-                f"Head size must be a multiple of {ttnn.TILE_SIZE}! Update the preceding matmul to have the padding in the weights!"
-            )
-
-        if padded_head_size - head_size != 0:
-            raise RuntimeError("Head size cannot have tile padding!")
-
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        query, key, value = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
-            input_tensor,
-            output_mem_config=memory_config,
-        )
-        return query, key, value
-
-    if kv_input_tensor is not None:
-        if num_kv_heads is not None:
-            raise RuntimeError("num_kv_heads cannot be True when kv_input_tensor is passed in!")
-        batch_size, sequence_size, hidden_size = input_tensor.shape
-        _, sequence_size_padded, hidden_size_padded = input_tensor.shape.with_tile_padding()
-        if kv_input_tensor.shape.with_tile_padding() != (batch_size, sequence_size, hidden_size_padded * 2):
-            raise RuntimeError(
-                "kv_input_tensor must be of shape (batch_size, sequence_size, hidden_size * 2) when input_tensor is of shape (batch_size, sequence_size, hidden_size)"
-            )
-    else:
-        if num_kv_heads is not None:
-            raise RuntimeError("num_kv_heads cannot be True!")
-        batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-        _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.with_tile_padding()
-        hidden_size = three_times_hidden_size // 3
-        hidden_size_padded = three_times_hidden_size_padded // 3
-
-    if not transpose_key:
-        raise RuntimeError("transpose_key must be True when num_kv_heads is not passed in!")
-
-    head_size = hidden_size // num_heads
-    padded_head_size = hidden_size_padded // num_heads
-
-    if head_size % ttnn.TILE_SIZE != 0:
-        raise RuntimeError(
-            f"Head size must be a multiple of {ttnn.TILE_SIZE}! Update the preceding matmul to have the padding in the weights!"
-        )
-
-    if padded_head_size - head_size != 0:
-        raise RuntimeError("Head size cannot have tile padding!")
-
-    if ttnn.is_sharded(input_tensor):
-        if kv_input_tensor is not None:
-            raise RuntimeError("kv_input_tensor cannot be passed in when input_tensor is sharded!")
-        input_tensor = ttnn.reshape(
-            input_tensor,
-            ttnn.Shape(
-                [batch_size, 1, sequence_size, three_times_hidden_size],
-                [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
-            ),
-        )
-
-        query, key, value = ttnn.experimental.operations.primary.transformers.split_query_key_value_and_split_heads(
-            input_tensor,
-            input_tensor.device().compute_with_storage_grid_size(),
-            memory_config,
-            num_heads=num_heads,
-        )
-        return query, key, value
-    else:
-        if kv_input_tensor is not None:
-            input_tensor = ttnn.reshape(
-                input_tensor,
-                ttnn.Shape(
-                    [batch_size, 1, sequence_size, hidden_size],
-                    [batch_size, 1, sequence_size_padded, hidden_size_padded],
-                ),
-            )
-
-            _, kv_sequence_size, _ = kv_input_tensor.shape
-            _, kv_sequence_size, _ = kv_input_tensor.shape.with_tile_padding()
-            desired_shape = ttnn.Shape(
-                [batch_size, 1, kv_sequence_size, hidden_size * 2],
-                [batch_size, 1, kv_sequence_size, hidden_size_padded * 2],
-            )
-            kv_input_tensor = ttnn.reshape(kv_input_tensor, desired_shape)
-        else:
-            input_tensor = ttnn.reshape(
-                input_tensor,
-                ttnn.Shape(
-                    [batch_size, 1, sequence_size, three_times_hidden_size],
-                    [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
-                ),
-            )
-
-        query_key_value = ttnn.experimental.tensor.nlp_create_qkv_heads(
-            input_tensor,
-            kv_input_tensor,
-            num_heads=num_heads,
-            output_mem_config=memory_config,
-            transpose_k_heads=transpose_key,
-        )
-        query, key, value = query_key_value
-
-        head_size_padded = query.shape.with_tile_padding()[-1]
-        query = ttnn.reshape(
-            query,
-            ttnn.Shape(
-                [batch_size, num_heads, sequence_size, head_size],
-                [batch_size, num_heads, sequence_size_padded, head_size_padded],
-            ),
-        )
-        key = ttnn.reshape(
-            key,
-            ttnn.Shape(
-                [batch_size, num_heads, head_size, sequence_size],
-                [
-                    batch_size,
-                    num_heads,
-                    head_size_padded,
-                    sequence_size_padded,
-                ],
-            ),
-        )
-        value = ttnn.reshape(
-            value,
-            ttnn.Shape(
-                [batch_size, num_heads, sequence_size, head_size],
-                [batch_size, num_heads, sequence_size_padded, head_size_padded],
-            ),
-        )
-
-        return query, key, value
+split_query_key_value_and_split_heads = ttnn.register_operation(
+    name="ttnn.transformer.split_query_key_value_and_split_heads",
+    golden_function=_golden_function,
+    is_cpp_function=True,
+    doc=split_doc_string,
+)(ttnn._ttnn.operations.transformer.split_query_key_value_and_split_heads)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
@@ -299,10 +118,10 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
     else:
         scaler = 1.0
 
-    input_tensor *= scaler
+    input_tensor = input_tensor * scaler
 
     if attention_mask is not None:
-        input_tensor += attention_mask[..., :1, :]
+        input_tensor += attention_mask
 
     return torch.softmax(input_tensor, -1)
 
@@ -374,63 +193,25 @@ def attention_softmax(
     return output_tensor
 
 
-@ttnn.register_operation(
+doc = r"""
+attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(),  memory_config: Optional[ttnn.MemoryConfig] = input_tensor.memory_config()) -> ttnn.Tensor
+
+In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
+
+Args:
+    * :attr:`tensor`: Input Tensor
+    * :attr:`head_size`: Number of heads
+    * :attr:`attention_mask`: Attention Mask
+    * :attr:`program_config`: Program Config of the output tensor
+    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+
+"""
+attention_softmax_ = ttnn.register_operation(
     name="ttnn.transformer.attention_softmax_",
-    validate_input_tensors=_attention_softmax_validate_input_tensors,
     golden_function=_golden_function,
-)
-def attention_softmax_(
-    tensor: ttnn.Tensor,
-    *,
-    head_size: Optional[int],
-    attention_mask: Optional[ttnn.Tensor],
-    program_config: Optional[
-        ttl.operations.primary.transformers.SoftmaxProgramConfig
-    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
-) -> ttnn.Tensor:
-    """
-    attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
-
-    In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
-
-    Args:
-        * :attr:`tensor`: Input Tensor
-        * :attr:`head_size`: Number of heads
-        * :attr:`attention_mask`: Attention Mask
-        * :attr:`program_config`: Program Config of the output tensor
-
-
-    """
-    if len(tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
-
-    if tensor.layout != ttnn.TILE_LAYOUT:
-        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
-
-    if head_size is not None:
-        scaler = 1 / (head_size**0.5)
-    else:
-        scaler = 1.0
-
-    if attention_mask is not None:
-        input_shape = tensor.shape
-        input_shape_with_tile_padding = tensor.shape.with_tile_padding()
-        tensor = ttnn.reshape(
-            tensor,
-            (
-                input_shape_with_tile_padding[0],
-                1,
-                input_shape_with_tile_padding[1] * input_shape_with_tile_padding[2],
-                input_shape_with_tile_padding[3],
-            ),
-        )
-        tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            tensor, scaler, attention_mask, program_config=program_config
-        )
-        tensor = ttnn.reshape(tensor, input_shape)
-        return tensor
-    else:
-        raise RuntimeError("Cannot apply divide by sqrt(head_size) using in-place version!")
+    is_cpp_function=True,
+    doc=doc,
+)(ttnn._ttnn.operations.transformer.attention_softmax_)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
@@ -445,62 +226,19 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-def _concatenate_heads_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+doc = r"""
+concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
 
+Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
-@ttnn.register_operation(
-    name="ttnn.transformer.concatenate_heads",
-    validate_input_tensors=_concatenate_heads_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def concatenate_heads(
-    input_tensor: ttnn.Tensor,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """
-    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+Args:
+    * :attr:`input_tensor`: Input Tensor
+    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+"""
 
-    Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
-
-    Args:
-        * :attr:`input_tensor`: Input Tensor
-        * :attr:`memory_config`: Memory Config of the output tensor
-
-    """
-    batch_size, num_heads, sequence_size, head_size = input_tensor.shape
-    batch_size, num_heads, padded_sequence_size, padded_head_size = input_tensor.shape.with_tile_padding()
-
-    if head_size % ttnn.TILE_SIZE != 0:
-        raise RuntimeError(
-            f"Head size must be a multiple of {ttnn.TILE_SIZE}! Update matmul that uses the output of this operation to have the padding in the weights!"
-        )
-
-    if padded_head_size - head_size != 0:
-        raise RuntimeError("Head size cannot have tile padding!")
-
-    output_tensor = ttl.tensor.nlp_concat_heads(
-        input_tensor,
-        memory_config,
-    )
-    output_tensor = ttnn.reshape(
-        output_tensor,
-        ttnn.Shape(
-            (batch_size, sequence_size, num_heads * head_size),
-            (batch_size, padded_sequence_size, num_heads * padded_head_size),
-        ),
-    )
-
-    return output_tensor
+concatenate_heads = ttnn.register_operation(
+    name="ttnn.transformer.concatenate_heads", golden_function=_golden_function, is_cpp_function=True, doc=doc
+)(ttnn._ttnn.operations.transformer.concatenate_heads)
 
 
 def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):

@@ -68,7 +68,7 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         TT_ASSERT(false, "Invalid arch");
         break;
     }
-    common_flags += "-std=c++17 -g -flto -ffast-math ";
+    common_flags += "-std=c++17 -flto -ffast-math ";
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-fno-use-cxa-atexit -fno-exceptions "
@@ -480,14 +480,14 @@ void JitBuildState::compile_one(const string& log_file,
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     std::vector<std::shared_future<void>> events;
+    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        events.emplace_back( detail::async ([this, &log_file, &out_dir, settings, i] {
+        launch_build_step(using_multithreaded_compile, [this, &log_file, &out_dir, settings, i] {
             this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
-        } ) );
+        }, events);
     }
 
-    for (auto & f : events)
-        f.get();
+    sync_build_step(using_multithreaded_compile, events);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -539,7 +539,9 @@ void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir)
             outf << "@" << std::setfill('0') << std::setw(8) << std::hex << (ptr >> 2) << "\n";
             for (size_t i = 0; i < data.size(); i += 4) {
                 for (int j = 3; j >= 0; --j) {
-                    outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
+                    if(i+j < data.size()){
+                        outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
+                    }
                 }
                 outf << "\n";
             }
@@ -657,36 +659,34 @@ void jit_build(const JitBuildState& build,
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
     std::vector<std::shared_future<void>> events;
-
+    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
         auto& build = build_set[i];
-        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
+        launch_build_step(using_multithreaded_compile, [build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        } ) );
+        }, events );
     }
-    for (auto & f : events)
-        f.get();
+    sync_build_step(using_multithreaded_compile, events);
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
     std::vector<std::shared_future<void>> events;
-
+    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < build_subset.size; ++i) {
         // Capture the necessary objects by reference
         auto& build = build_subset.build_ptr[i];
-        events.emplace_back( detail::async ([build, settings, &kernel_in_path] {
+        launch_build_step(using_multithreaded_compile, [build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
-        } ) );
+        }, events );
     }
-    for (auto & f : events)
-        f.get();
+    sync_build_step(using_multithreaded_compile, events);
 }
 
 } // namespace tt_metal

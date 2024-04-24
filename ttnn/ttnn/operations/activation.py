@@ -30,7 +30,9 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
             "mish": lambda _x: F.mish(_x.to(torch.float)),
             "relu6": F.relu6,
             "sigmoid": torch.sigmoid,
+            "sigmoid_accurate": torch.sigmoid,
             "sign": torch.sign,
+            "celu": F.celu,
             "softsign": F.softsign,
             "swish": F.hardswish,
             "softplus": F.softplus,
@@ -71,23 +73,25 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(activation_function, ttnn.decorators.Operation):
+        activation_function.__name__ = f"ttnn.{(name)}"
+        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor`.
+            Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor`.
 
-        .. math::
-            {(op_name)}(\\mathrm{{input\\_tensor}}_i)
+            .. math::
+                {(op_name)}(\\mathrm{{input\\_tensor}}_i)
 
-        Args:
-            * :attr:`input_tensor`
+            Args:
+                * :attr:`input_tensor`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor)
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor)
 
-        """
+            """
+
     setattr(THIS_MODULE, name, activation_function)
 
 
@@ -160,24 +164,25 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(activation_function, ttnn.decorators.Operation):
+        activation_function.__name__ = f"ttnn.{(name)}"
+        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
+            Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 
-        .. math::
-            {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+            .. math::
+                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`{param}`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, {param})
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
 
-        """
+            """
     setattr(THIS_MODULE, name, activation_function)
 
 
@@ -227,25 +232,26 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(activation_function, ttnn.decorators.Operation):
+        activation_function.__name__ = f"ttnn.{(name)}"
+        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
+            Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
 
-        .. math::
-            {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param1_name} \\; , \\; {param2_name})
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param1_name} \\; , \\; {param2_name})
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`{param1_name}`
-            * :attr:`{param2_name}`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param1_name}`
+                * :attr:`{param2_name}`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, {param1_name}, {param2_name})
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param1_name}, {param2_name})
 
-        """
+            """
     setattr(THIS_MODULE, name, activation_function)
 
 
@@ -322,24 +328,25 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
         output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(glu_shape))
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{(name)}"
-    activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(activation_function, ttnn.decorators.Operation):
+        activation_function.__name__ = f"ttnn.{(name)}"
+        activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
+            Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
 
-        .. math::
-            {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+            .. math::
+                {(name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`{param}`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, {param})
+                >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
 
-        """
+            """
     setattr(THIS_MODULE, name, activation_function)
 
 
@@ -351,6 +358,7 @@ TTL_ACTIVATION_FUNCTIONS_UNARY = [
     ("mish", ttl.tensor.mish, "mish"),
     ("relu6", ttl.tensor.relu6, "relu6"),
     ("sigmoid", ttl.tensor.sigmoid, "sigmoid"),
+    ("sigmoid_accurate", ttl.tensor.sigmoid_accurate, "sigmoid_accurate"),
     ("sign", ttl.tensor.sign, "sign"),
     ("softsign", ttl.tensor.softsign, "softsign"),
     ("swish", ttl.tensor.swish, "swish"),
@@ -363,6 +371,7 @@ TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
     ("leaky_relu", ttl.tensor.leaky_relu, "leaky relu", "slope"),
     ("prelu", ttl.tensor.prelu, "prelu", "weight"),
     ("elu", ttl.tensor.elu, "elu", "alpha"),
+    ("celu", ttl.tensor.celu, "celu", "alpha"),
     ("softshrink", ttl.tensor.softshrink, "softshrink", "lambda"),
 ]
 

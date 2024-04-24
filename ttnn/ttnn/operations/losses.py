@@ -78,28 +78,29 @@ def register_ttl_loss_function(name, ttl_loss_function):
         output_tensor = ttnn.unsqueeze_to_4D(output_tensor)
         return output_tensor
 
-    loss_function.__name__ = f"ttnn.{name}"
-    loss_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(loss_function, ttnn.decorators.Operation):
+        loss_function.__name__ = f"ttnn.{name}"
+        loss_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, loss_mode: str, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies {name} to :attr:`input_tensor_a` and :attr:`input_tensor_b` with loss_mode :attr:`loss_mode`.
+            Applies {name} to :attr:`input_tensor_a` and :attr:`input_tensor_b` with loss_mode :attr:`loss_mode`.
 
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
 
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-            * :attr:`loss_mode`
+            Args:
+                * :attr:`input_tensor_a`
+                * :attr:`input_tensor_b`
+                * :attr:`loss_mode`
 
-        Example::
+            Example::
 
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{name}(tensor1, tensor2, mode)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor1, tensor2, mode)
 
-        {loss_function.__doc__}
+            {loss_function.__doc__}
 
-        """
+            """
     setattr(THIS_MODULE, name, loss_function)
 
 

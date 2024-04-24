@@ -6,6 +6,7 @@
 
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -158,7 +159,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             tt_metal::ComputeConfig{});
     }
 
-    uint32_t curr_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
@@ -202,7 +204,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                  shard_width,
                  num_units_offset,
                  curr_num_units_per_shard,
-                 curr_idx_h + curr_idx_w});
+                 curr_idx_h + curr_idx_w,
+                 starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w == num_units_per_row) {
                 curr_idx_w = 0;
@@ -269,24 +272,28 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         }
     }
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+                                                   const std::vector<Tensor>& output_tensors
+                                                   ) {
 
+        auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto shard_spec = output_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.grid;
+        bool partial_op = num_slices > 1;
+        uint32_t starting_idx_h = 0;
+        if (partial_op) {
+            uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+            starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
+        }
 
         for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-            }
+            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+            runtime_args[6] = starting_idx_h;
         }
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
@@ -416,7 +423,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
-    uint32_t curr_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t starting_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
@@ -460,7 +468,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
                  shard_width,
                  num_units_offset,
                  num_units_per_shard,
-                 curr_idx_h + curr_idx_w});
+                 curr_idx_h + curr_idx_w,
+                 starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -516,21 +525,27 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
         auto src_buffer = input_tensors.at(0).buffer();
 
         Buffer* dst_buffer = nullptr;
-        if (num_slices > 1) {
+        uint32_t starting_idx_h = 0;
+        bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
+        if (partial_op) {
             // If we have num_slices > 1, it means that our op is S->I partial.
             // And currently we store output tensors there as input[1]
+            // If we have num_slices == 1, and output_tensors.size() == 0,
+            // it also means we are in S->I partial and must read from output from inputs[1]
             dst_buffer = input_tensors.at(1).buffer();
+
+            // Calculate starting_idx_h
+            uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+            starting_idx_h = calculate_starting_idx_h(input_tensors.at(1), num_slices, runtime_slice_index);
         } else {
             dst_buffer = output_tensors.at(0).buffer();
         }
-
-        auto shard_spec = input_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.grid;
 
         for (const auto& core : cores) {
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                runtime_args[8] = starting_idx_h;
             }
         }
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
@@ -541,25 +556,31 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
 
 std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     Buffer* input_buffer, Buffer* output_buffer) {
-    const auto& output_shard_to_host_mapping = output_buffer->get_dev_page_to_host_page_mapping();
-    const auto& input_page_to_local_page_mapping = input_buffer->get_host_page_to_local_shard_page_mapping();
-    const auto& host_page_to_input_page_mapping = input_buffer->get_host_page_to_dev_page_mapping();
 
-    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_pages());
+    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
+
+    const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
+    const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
+    const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
+
+    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_dev_pages());
 
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::unordered_map<CoreCoord, std::vector<std::pair<CoreCoord, uint32_t>>> output_core_to_vector_input_core_page;
 
     for (uint32_t output_page_id = 0; output_page_id < num_pages; output_page_id++) {
-        auto output_core = output_buffer->get_core_from_dev_page_id(output_page_id);
+        auto output_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id]];
         auto host_page = output_shard_to_host_mapping[output_page_id];
-        auto input_page = host_page_to_input_page_mapping[host_page];
-        auto local_input_page = input_page_to_local_page_mapping[host_page];
-        auto input_core = input_buffer->get_core_from_dev_page_id(input_page);
-        if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
-            output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
-        } else {
-            output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
+        if(host_page.has_value()) {
+            auto input_page = host_page_to_input_page_mapping[host_page.value()];
+            auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
+            auto input_core = input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
+            if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
+                output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
+            } else {
+                output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
+            }
         }
     }
 
@@ -568,7 +589,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
     ret_map.reserve(output_cores.size());
 
-    auto output_core_host_page_indices = output_buffer->core_host_page_indices();
+    auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end;
@@ -787,43 +808,20 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
     }
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, page_size, cb_dst0](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, cb_dst0, grid, cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-        auto output_core_to_page_range_pair = get_core_page_ranges(src_buffer, dst_buffer);
-
-        auto input_shard_spec = input_tensors.at(0).shard_spec().value();
-        auto output_shard_spec = output_tensors.at(0).shard_spec().value();
-        auto all_cores = input_shard_spec.grid.merge(output_shard_spec.grid);
-        auto cores = corerange_to_cores(all_cores);
-        auto device = input_tensors.at(0).device();
-
-        for (auto core : cores) {
-            auto page_stride_vector = output_core_to_page_range_pair.at(core);
-            uint32_t num_ranges = page_stride_vector.size();
-            std::vector<uint32_t> runtime_args = {src_buffer->address(), 0, num_ranges};
-            uint32_t num_output_pages = 0;
-            for (const auto& [start_core, start_data, stride_size, stride, num_strides] : page_stride_vector) {
-                auto physical_input_core = device->worker_core_from_logical_core(start_core);
-                runtime_args.push_back(physical_input_core.x);
-                runtime_args.push_back(physical_input_core.y);
-                runtime_args.push_back(stride.core.x);
-                runtime_args.push_back(stride.core.y);
-                runtime_args.push_back(stride.data * page_size);                // start
-                runtime_args.push_back(start_data * page_size);                // start
-                runtime_args.push_back(stride_size * page_size);  // stride
-                runtime_args.push_back(num_strides);  // stride
-                num_output_pages += stride_size * num_strides;
-            }
-            runtime_args[1] = num_output_pages;
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
+        for (auto core: cores) {
+            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[grid.x + grid.y] = input.buffer()->address();
             tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {num_output_pages});
         }
+        UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

@@ -16,13 +16,19 @@ namespace tt {
 
 namespace tt_metal {
 
-void DumpDeviceProfileResults(Device *device, const Program &program) {
-    auto worker_cores_used_in_program =
+void DumpDeviceProfileResults(Device* device, const Program& program) {
+    auto const& worker_cores_in_program =
         device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
+    auto const& eth_cores_in_program =
+        device->ethernet_cores_from_logical_cores(program.logical_cores().at(CoreType::ETH));
 
-    detail::DumpDeviceProfileResults(device, worker_cores_used_in_program);
+    std::vector<CoreCoord> cores_in_program;
+    cores_in_program.reserve(worker_cores_in_program.size() + eth_cores_in_program.size());
+    std::copy(worker_cores_in_program.begin(), worker_cores_in_program.end(), std::back_inserter(cores_in_program));
+    std::copy(eth_cores_in_program.begin(), eth_cores_in_program.end(), std::back_inserter(cores_in_program));
+
+    detail::DumpDeviceProfileResults(device, cores_in_program);
 }
-
 
 namespace detail {
 

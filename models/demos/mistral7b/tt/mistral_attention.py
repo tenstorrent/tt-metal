@@ -36,7 +36,6 @@ class TtMistralAttention(nn.Module):
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
-        self.sliding_window = configuration.sliding_window
         self.start_pos = start_pos
 
         self.n_local_heads = self.n_heads // self.num_devices
@@ -45,6 +44,9 @@ class TtMistralAttention(nn.Module):
         self.dtype = dtype
 
         self.kv_seq_len = configuration.kv_seq_len
+        self.sliding_window = (
+            configuration.kv_seq_len
+        )  # TODO Change sliding window back to configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
         self.model_config = configuration.get_model_config()
@@ -197,6 +199,8 @@ class TtMistralAttention(nn.Module):
         """
         self.start_pos += 1
         padded_layer_past_len = min(nearest_32(self.start_pos), self.sliding_window)
+        layer_slice = min((self.start_pos), self.sliding_window)
+
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
@@ -269,35 +273,13 @@ class TtMistralAttention(nn.Module):
             ttnn.experimental.tensor.update_cache(values, v_heads, current_pos)  # self.current)
             self.layer_past_list[i] = [keys, values]
 
-            keys = ttnn.experimental.tensor.unpad(
-                layer_past[0],
-                [0, 0, 0, 0],
-                [
-                    self.max_batch_size - 1,
-                    self.n_local_kv_heads - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"],
-            )
-            values = ttnn.experimental.tensor.unpad(
-                layer_past[1],
-                [0, 0, 0, 0],
-                [
-                    self.max_batch_size - 1,
-                    self.n_local_kv_heads - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"],
-            )
+            keys = keys[:, :, :padded_layer_past_len, :]
+            keys = ttnn.permute(keys, (0, 1, 3, 2))  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
+            values = values[:, :, :layer_slice, :]
 
             ###
             # Attention
             ###
-
-            keys = ttnn.permute(keys, (0, 1, 3, 2))  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
-
             """
             q_heads = ttnn.to_memory_config(
                 q_heads,
@@ -333,7 +315,6 @@ class TtMistralAttention(nn.Module):
                 output_dtype=ttnn.bfloat16,  # Force bfloat16 for higher accuracy
             )  # seqlen, n_heads, batch, cache_len + seqlen
 
-            layer_slice = min((self.start_pos + 1), self.sliding_window)
             attn = attn[:, :, :, :layer_slice]
             attn = ttnn.softmax(attn, dim=-1)  # (attn * (self.head_dim**-0.5))
             """

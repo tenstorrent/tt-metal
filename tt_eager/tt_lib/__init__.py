@@ -2,4 +2,4 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ._C import tensor, device, dtx, profiler, operations
+from ._C import tensor, device, profiler, operations

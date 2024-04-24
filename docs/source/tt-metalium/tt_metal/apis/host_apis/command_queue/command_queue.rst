@@ -7,6 +7,7 @@ CommandQueue
   EnqueueProgram
   EnqueueRecordEvent
   EnqueueWaitForEvent
+  EventQuery
   EventSynchronize
   BeginTrace
   EndTrace

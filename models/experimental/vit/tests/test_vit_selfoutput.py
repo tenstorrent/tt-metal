@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 import torch
 
 from loguru import logger
@@ -18,14 +20,13 @@ from models.utility_functions import (
 )
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 def test_vit_selfoutput(device, pcc=0.99):
     hidden_state_shape = (1, 1, 197, 768)
     hidden_state = torch.randn(hidden_state_shape)
 
     with torch.no_grad():
-        HF_model = HF_ViTForImageClassication.from_pretrained(
-            "google/vit-base-patch16-224"
-        )
+        HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
 
         state_dict = HF_model.state_dict()
 
@@ -33,9 +34,7 @@ def test_vit_selfoutput(device, pcc=0.99):
         config = HF_model.config
         HF_output = reference(hidden_state, None)
 
-        tt_hidden_state = torch_to_tt_tensor_rm(
-            hidden_state, device, put_on_device=False
-        )
+        tt_hidden_state = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
         tt_layer = TtViTSelfOutput(
             config,
             base_address="vit.encoder.layer.0.attention.output",

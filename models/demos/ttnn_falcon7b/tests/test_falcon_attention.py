@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.demos.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
+from models.demos.ttnn_falcon7b.tt import TtFalconAttention
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.ttnn_falcon7b.tt.common import (
     create_custom_preprocessor,
@@ -95,7 +95,6 @@ def test_falcon_attention(
         ),
     )
     tt_FalconAttention_model = TtFalconAttention(
-        device,
         configuration.hidden_size,
         configuration.num_attention_heads,
         configuration.max_position_embeddings,

@@ -53,7 +53,7 @@ inline void calculate_erfc() {
 // SFPU microcode:
     for (int d = 0; d < 8; d++) {
         vFloat x = dst_reg[0];
-        v_if(x < 0.0f) { x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x)); }
+        v_if(x < 0.0f) { x = -x; x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x)); }
         v_else { x = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x)); }
         v_endif;
         dst_reg[0] = x;

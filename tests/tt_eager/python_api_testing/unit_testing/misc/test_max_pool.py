@@ -171,9 +171,7 @@ def test_run_max_pool(
         )
 
     if (compute_grid_size.x * compute_grid_size.y) == ncores_on_n300:
-        pytest.skip(
-            f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent-metal/tt-metal/issues/5458"
-        )
+        pytest.skip(f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent/tt-metal/issues/5458")
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 

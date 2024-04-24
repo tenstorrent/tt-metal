@@ -14,7 +14,7 @@ from loguru import logger
 
 def get_list_of_runs():
     params = {"per_page": 3}
-    url = "https://api.github.com/repos/tenstorrent-metal/tt-metal/actions/workflows/ttnn-run-sweeps.yaml/runs"
+    url = "https://api.github.com/repos/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml/runs"
     headers = {"Accept": "application/vnd.github.v3+json"}
     response = requests.get(url, headers=headers, params=params)
     if response.status_code == 200:

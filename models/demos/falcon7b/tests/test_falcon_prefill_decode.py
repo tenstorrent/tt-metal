@@ -14,7 +14,6 @@ from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -111,9 +110,6 @@ def run_test_FalconCausalLM_inference(
         use_cache=use_cache,
     )
 
-    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
-    # since we don't yet have embedding support on device
-    # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     logger.info("Setting up Falcon model")
     tt_FalconCausalLM = TtFalconCausalLM(
         [device],
@@ -126,23 +122,22 @@ def run_test_FalconCausalLM_inference(
         tt_cache_path,
     )
 
-    # TODO: Generate embeddings and attention_mask on device
+    # TODO: Generate attention_mask on device
     logger.info("Setting up inputs and attention masks")
     # NOTE: tt_decode_attention_mask is only valid for one decode right after prefill here
-    # TODO: If we loop, we need to decouple generation for embeddings and just generate new attention_mask
     (
-        tt_prefill_embeddings,
+        tt_prefill_input_ids,
         tt_prefill_attention_mask,
     ) = tt_FalconCausalLM.model_preprocessing("prefill", model_prefill_input, 0, num_input_tokens=seq_len)
     (
-        tt_decode_embeddings,
+        tt_decode_input_ids,
         tt_decode_attention_mask,
     ) = tt_FalconCausalLM.model_preprocessing("decode", model_decode_input, kv_cache_len, num_input_tokens=seq_len + 1)
 
     # PREFILL
     logger.info(f"Falcon prefill for seq_len {seq_len} and one user only")
     _, tt_layer_present = tt_FalconCausalLM(
-        input_embeddings=tt_prefill_embeddings,
+        input_ids=tt_prefill_input_ids,
         llm_mode="prefill",
         attention_mask=tt_prefill_attention_mask,
         user_id=0,
@@ -154,7 +149,7 @@ def run_test_FalconCausalLM_inference(
     # DECODE ONCE
     logger.info(f"Falcon decode once for {batch} users")
     tt_out, tt_layer_present = tt_FalconCausalLM(
-        input_embeddings=tt_decode_embeddings,
+        input_ids=tt_decode_input_ids,
         llm_mode="decode",
         attention_mask=tt_decode_attention_mask,
         layer_past=tt_layer_present,
@@ -206,10 +201,13 @@ def test_FalconCausalLM_inference(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     device,
 ):
     model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     batch = 32
     seq_len = 128

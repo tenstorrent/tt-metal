@@ -97,29 +97,30 @@ def register_ttl_ternary_function(name, ttl_ternary_function):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(ternary_function, ttnn.decorators.Operation):
+        ternary_function.__name__ = f"ttnn.{name}"
+        ternary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
+            Returns tensor with the {name} of all of elements of the input tensors input, tensor1, tensor2.
 
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`input_tensor1`
-            * :attr:`input_tensor2`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`input_tensor1`
+                * :attr:`input_tensor2`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{name}(tensor, tensor1, tensor2)
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor, tensor1, tensor2)
 
-        {ternary_function.__doc__}
+            {ternary_function.__doc__}
 
-        """
+            """
     setattr(THIS_MODULE, name, ternary_function)
 
 
@@ -218,28 +219,29 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    ternary_function.__name__ = f"ttnn.{(name)}"
-    ternary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(ternary_function, ttnn.decorators.Operation):
+        ternary_function.__name__ = f"ttnn.{(name)}"
+        ternary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
+            Performs the element-wise {op_name} of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input input.
 
-        .. math::
-            {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+            .. math::
+                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`input_tensor1`
-            * :attr:`input_tensor2`
-            * :attr:`{param}`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`input_tensor1`
+                * :attr:`input_tensor2`
+                * :attr:`{param}`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
 
-        """
+            """
     setattr(THIS_MODULE, name, ternary_function)
 
 
@@ -323,29 +325,30 @@ def register_ttl_ternary_function_where(name, ttl_ternary_function):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    ternary_function.__name__ = f"ttnn.{name}"
-    ternary_function.decorated_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(ternary_function, ttnn.decorators.Operation):
+        ternary_function.__name__ = f"ttnn.{name}"
+        ternary_function.decorated_function.__doc__ = f"""{name}(predicate_tensor: ttnn.Tensor, true_value: [ttnn.Tensor,float], false_value: [ttnn.Tensor,float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Perform an ternary {name} operation on two tensors based on predicate input tensor.
+            Perform an ternary {name} operation on two tensors based on predicate input tensor.
 
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
 
-        Args:
-            * :attr:`predicate_tensor`
-            * :attr:`true_value`
-            * :attr:`false_value`
+            Args:
+                * :attr:`predicate_tensor`
+                * :attr:`true_value`
+                * :attr:`false_value`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{name}(tensor, tensor1, tensor2)
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor, tensor1, tensor2)
 
-        {ternary_function.__doc__}
+            {ternary_function.__doc__}
 
-        """
+            """
     setattr(THIS_MODULE, name, ternary_function)
 
 

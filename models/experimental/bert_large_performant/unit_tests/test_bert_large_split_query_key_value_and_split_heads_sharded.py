@@ -40,7 +40,7 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
     torch.manual_seed(1234)
 
     sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttl.tensor.BufferType.L1,
     )
 

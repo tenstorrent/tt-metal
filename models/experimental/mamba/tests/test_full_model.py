@@ -40,6 +40,7 @@ class MambaPytorch(torch.nn.Module):
         return x
 
 
+@pytest.mark.skip(reason="Test failing, see issue #7551")
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, pcc",

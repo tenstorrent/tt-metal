@@ -15,29 +15,38 @@ namespace ttnn {
 
 namespace core {
 
+inline std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value) {
+    return (value + (ttnn::TILE_SIZE - 1)) / ttnn::TILE_SIZE * ttnn::TILE_SIZE;
+}
+
 inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
     return tensor.storage_type() == storage_type;
 }
 
-inline bool is_tensor_on_device(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::DEVICE;
-}
-
-inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE;
-}
-
-inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
-    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
-}
-
-inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
-    for (const auto& tensor : tensors) {
-        if (is_tensor_on_multi_device(tensor)) {
-            return true;
-        }
+inline const std::optional<MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) {
+    if (not tensor.is_allocated()) {
+        return std::nullopt;
     }
-    return false;
+    return std::visit(
+        [](const auto& storage) -> std::optional<MemoryConfig> {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                try {
+                    return storage.memory_config();
+                } catch (...) {
+                    return std::nullopt;
+                }
+            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                try {
+                    return storage.memory_config();
+                } catch (...) {
+                    return std::nullopt;
+                }
+            } else {
+                return std::nullopt;
+            }
+        },
+        tensor.get_storage());
 }
 
 inline void set_printoptions(const std::string& profile) {
@@ -49,10 +58,12 @@ inline void set_printoptions(const std::string& profile) {
 
 }  // namespace core
 
+using core::get_memory_config;
 using core::has_storage_type_of;
-using core::is_tensor_on_device;
-using core::is_tensor_on_multi_device;
-using core::is_tensor_on_device_or_multidevice;
-using core::any_tensor_on_multi_device;
+using core::pad_to_multiple_of_tile_size;
 using core::set_printoptions;
+using tt::tt_metal::any_tensor_on_multi_device;
+using tt::tt_metal::is_tensor_on_device;
+using tt::tt_metal::is_tensor_on_device_or_multidevice;
+using tt::tt_metal::is_tensor_on_multi_device;
 }  // namespace ttnn

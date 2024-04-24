@@ -19,6 +19,8 @@ template<typename T>
 void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::UINT32);
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        TT_FATAL(tensor.get_dtype() == DataType::INT32);
     } else if constexpr (std::is_same_v<T, float>) {
         TT_FATAL(tensor.get_dtype() == DataType::FLOAT32);
     } else if constexpr (std::is_same_v<T, bfloat16>) {

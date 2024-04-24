@@ -120,7 +120,7 @@ def bert_attention(
         value,
     ) = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         num_heads=num_heads,
     )
     ttnn.deallocate(query_key_value)
@@ -128,7 +128,7 @@ def bert_attention(
     attention_scores = ttnn.matmul(
         query,
         key,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_by_key_matmul_program_config"],
     )
@@ -145,7 +145,7 @@ def bert_attention(
     context_layer = ttnn.matmul(
         attention_probabilities,
         value,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
     )

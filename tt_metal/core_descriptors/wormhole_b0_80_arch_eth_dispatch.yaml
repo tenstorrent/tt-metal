@@ -61,7 +61,7 @@ nebula_x1:
 nebula_x2:
   1:
     l1_bank_size:
-      749568
+      1376256
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
@@ -78,7 +78,7 @@ nebula_x2:
 
   2:
     l1_bank_size:
-      749568
+      1376256
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]

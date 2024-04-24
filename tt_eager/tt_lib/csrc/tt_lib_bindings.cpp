@@ -4,8 +4,6 @@
 
 #include "tt_lib_bindings.hpp"
 
-#include "dtx/dtx.hpp"
-#include "dtx/dtx_passes.hpp"
 #include "operations/module.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -220,34 +218,6 @@ void ProfilerModule(py::module &m_profiler) {
     )doc");
 }
 
-void DTXModule(py::module &m_dtx) {
-    auto pyDataTransformations = py::class_<DataTransformations>(m_dtx, "DataTransformations", "Class describing the data transformations.");
-    m_dtx.def("evaluate", [](vector<float> data, vector<uint32_t> address_map, vector<vector<int>> output_shape){
-        return evaluate(data, address_map, output_shape);
-    }, R"doc(
-        Evaluates data transformation on host cpu.
-        +------------------+----------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                 | Data type            | Valid range | Required |
-        +==================+=============================+======================+=============+==========+
-        | data             | Input data to transform     | vector of floats     |             | Yes      |
-        | address_map      | address mapping from src to dst  |  vector of uint32_t |      | Yes      |
-        | output shape     | shape of the dst tensor |  vector of int |      | Yes      |
-        +------------------+-----------------------------+----------------------+-------------+----------+
-    )doc");
-    m_dtx.def("conv_transform", [](vector<int> activation_shape,
-                                        vector<int> weight_shape,
-                                        vector<int> conv_params,
-                                        uint32_t in0_block_h,
-                                        uint32_t in0_block_w,
-                                        uint32_t in1_block_w,
-                                        uint32_t num_blocks_in0_h,
-                                        uint32_t num_blocks_in1_w,
-                                        uint32_t num_bytes_of_df,
-                                        bool skip_activation_transform){
-        return conv_transform(activation_shape, weight_shape, conv_params, in0_block_h, in0_block_w, in1_block_w, num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df, skip_activation_transform);
-    });
-}
-
 } // end namespace tt_metal
 
 } // end namespace tt
@@ -267,9 +237,6 @@ PYBIND11_MODULE(_C, m) {
     py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
     tt::tt_metal::TensorModule(m_tensor);
 
-    py::module_ m_dtx = m.def_submodule("dtx", "Submodule defining data transformation engine");
-    tt::tt_metal::DTXModule(m_dtx);
-
     py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
     tt::operations::py_module(m_operations);
 
@@ -279,7 +246,6 @@ PYBIND11_MODULE(_C, m) {
 
     tracy_decorator(m_device);
     tracy_decorator(m_tensor);
-    tracy_decorator(m_dtx);
     tracy_decorator(m_operations);
 #endif
 }

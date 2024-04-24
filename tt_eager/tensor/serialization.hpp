@@ -13,8 +13,9 @@ namespace tt {
 namespace tt_metal {
 
 void dump_tensor(const std::string& file_name, const Tensor& tensor);
-Tensor load_tensor(const std::string& file_name);
 
+template <typename T>
+Tensor load_tensor(const std::string& file_name, T device = nullptr);
 
 }  // namespace tt_metalls
 

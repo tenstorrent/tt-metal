@@ -9,8 +9,8 @@ import pytest
 import torch
 from transformers import BloomConfig, BloomForQuestionAnswering, BloomTokenizerFast
 
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom
-from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
+from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom
+from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.utility_functions import (
     skip_for_wormhole_b0,
     enable_persistent_kernel_cache,
@@ -79,11 +79,10 @@ def test_performance_of_bloom_for_question_answering(
     durations = []
     for _ in range(2):
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = functional_bloom.bloom_for_question_answering(
-                config, input_ids, alibi, causal_mask, parameters=parameters
-            )
-            tt_output = ttnn.from_device(tt_output)
+        tt_output = functional_bloom.bloom_for_question_answering(
+            config, input_ids, alibi, causal_mask, parameters=parameters
+        )
+        tt_output = ttnn.from_device(tt_output)
         end = time.time()
 
         durations.append(end - start)

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 from diffusers import StableDiffusionPipeline
 import pytest
@@ -26,6 +27,7 @@ import math
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     post_process_output,
 )
+from ttnn.operations.core import unsqueeze_to_4D
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -51,6 +53,19 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     return t_emb
 
 
+def unsqueeze_all_params_to_4d(params):
+    if isinstance(params, dict):
+        for key in params.keys():
+            params[key] = unsqueeze_all_params_to_4d(params[key])
+    elif isinstance(params, ttnn.ttnn.model_preprocessing.ParameterList):
+        for i in range(len(params)):
+            params[i] = unsqueeze_all_params_to_4d(params[i])
+    elif isinstance(params, ttnn.Tensor):
+        params = unsqueeze_to_4D(params)
+
+    return params
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
@@ -59,6 +74,8 @@ def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
     ],
 )
 def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_height, input_width):
+    pytest.skip("Not targeting 256x256 inputs")
+
     # setup pytorch model
     torch.manual_seed(0)
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -122,6 +139,14 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
     ],
 )
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
+    # setup envvar if testing on N300
+    wh_arch_yaml_org = None
+    if device.core_grid.y == 7:
+        if ("WH_ARCH_YAML" not in os.environ) or (
+            os.environ["WH_ARCH_YAML"] != "wormhole_b0_80_arch_eth_dispatch.yaml"
+        ):
+            pytest.skip("SD unet2d only works for 8x8 grid size")
+
     # setup pytorch model
     torch.manual_seed(0)
     model_name = "CompVis/stable-diffusion-v1-4"
@@ -138,10 +163,12 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")
 
-    ttnn.CONFIG.throw_exception_on_fallback = True
     parameters = preprocess_model_parameters(
         model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
+
+    # unsqueeze weight tensors to 4D for generating perf dump
+    parameters = unsqueeze_all_params_to_4d(parameters)
 
     timestep_shape = [1, 1, 2, 320]
     encoder_hidden_states_shape = [1, 2, 77, 768]
@@ -202,3 +229,5 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)
     assert passing
+
+    print("EXIT UNET-2D TEST")

@@ -1195,17 +1195,6 @@ std::vector<Tensor> hardtanh_bw(const Tensor& grad, const Tensor& input, float m
     return operation::decorate_as_composite(__func__, _hardtanh_bw)(grad, input, min, max, output_mem_config);
 }
 
-std::vector<Tensor> _angle_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _angle_bw)(grad, input, output_mem_config);
-}
-
 // name: sin(Tensor self) -> Tensor
 // self: grad * self.cos()
 std::vector<Tensor> _sin_bw(const Tensor& grad, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
@@ -1784,7 +1773,8 @@ std::vector<Tensor> unary_remainder_bw(const Tensor& grad, const Tensor& input, 
   /* TT_ASSERT( input.shape()[0] == 1, "tensor should have batch size 1"); */ \
   } while(0);
 
-//complex conj
+// complex conj
+// self: grad.conj()
 std::vector<Tensor> _conj_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     CHECK_FOR_COMPLEX(grad);
@@ -1796,6 +1786,29 @@ std::vector<Tensor> _conj_bw(const Tensor& grad, const Tensor& input, const Memo
 std::vector<Tensor> conj_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _conj_bw)(grad, input, output_mem_config);
+}
+
+// complex reciprocal
+// self: -grad * (result * result).conj()
+std::vector<Tensor> _complex_recip_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    Tensor input_r = real(input,output_mem_config);
+    Tensor input_i = imag(input,output_mem_config);
+    Tensor condition_nan = logical_and(eqz(input_r,output_mem_config), eqz(input_i,output_mem_config), std::nullopt, output_mem_config);
+    input_r.deallocate();
+    input_i.deallocate();
+    Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
+    condition_nan.deallocate();
+    Tensor grad_result = where(nan_flag, full_like(input, std::nanf(""), output_mem_config), complex_mul(neg(grad, output_mem_config), conj(complex_mul(complex_recip(input, output_mem_config), complex_recip(input, output_mem_config), output_mem_config), output_mem_config), output_mem_config), output_mem_config) ;
+    nan_flag.deallocate();
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_recip_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_recip_bw)(grad, input, output_mem_config);
 }
 
 // complex imag
@@ -1826,6 +1839,166 @@ std::vector<Tensor> real_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _real_bw)(grad, input, output_mem_config);
 }
 
+// angle at::where(self == 0.0, at::zeros({}, self.options()), grad * self / self.abs().pow(2)
+std::vector<Tensor> _angle_bw(const Tensor& grad, const Tensor& input, bool is_complextensor, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    if(is_complextensor){
+        CHECK_FOR_COMPLEX(input);
+        Tensor inp_r = real(input, output_mem_config);
+        Tensor inp_i = imag(input, output_mem_config);
+        Tensor condition_zero = logical_and(eqz(inp_r,output_mem_config), eqz(inp_i,output_mem_config), std::nullopt, output_mem_config);
+        Tensor abs_squared = recip(add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        Tensor real = where(condition_zero, zeros_like(inp_r, output_mem_config), mul(grad, mul(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        Tensor imag = where(condition_zero, zeros_like(inp_i, output_mem_config), mul(grad, mul(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        condition_zero.deallocate();
+        abs_squared.deallocate();
+        inp_r.deallocate();
+        inp_i.deallocate();
+        Tensor grad_result = mk_complex(real, imag, output_mem_config);
+        real.deallocate();
+        imag.deallocate();
+        grad_tensor.emplace_back(grad_result);
+    }
+    else {
+        Tensor grad_result = zeros_like(grad, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+    }
+    return grad_tensor;
+}
+std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, bool is_complextensor, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _angle_bw)(grad, input, is_complextensor, output_mem_config);
+}
+
+// complex abs
+// self: grad * self.sgn()
+std::vector<Tensor> _complex_abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    std::vector<Tensor> grad_tensor;
+    Tensor result = complex_abs(input, output_mem_config);
+    result = mk_complex(result, result, output_mem_config);
+    Tensor grad_c = mk_complex(grad, grad, output_mem_config);
+    Tensor grad_result = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), mul(grad_c, mul(input, recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_abs_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_abs_bw)(grad, input, output_mem_config);
+}
+// polar
+// grad_abs = torch.real(grad_conj * torch.sgn(result))
+// result_mul_1_j = result * torch.tensor(0.0 + 1.0j)
+// grad_angle = torch.real(grad_conj * result_mul_1_j)
+// polar fwd op uses sin and cos hence input_b range is (0, 2*pi)
+std::vector<Tensor> _polar_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    Tensor result = polar(input_a, input_b, output_mem_config);
+    Tensor abs_result = complex_abs(result, output_mem_config);
+    abs_result = mk_complex(abs_result, abs_result, output_mem_config);
+    Tensor sgn_result = where(eqz(abs_result, output_mem_config), zeros_like(result, output_mem_config), mul(result, recip(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
+    abs_result.deallocate();
+    Tensor grad_abs =  real(complex_mul(conj(grad, output_mem_config), sgn_result, output_mem_config), output_mem_config);
+    sgn_result.deallocate();
+    Tensor flip_tensor = mk_complex(zeros_like(input_a, output_mem_config), full_like(input_b, 1.0, output_mem_config), output_mem_config);
+    Tensor grad_angle = real(complex_mul(conj(grad, output_mem_config), complex_mul(result, flip_tensor, output_mem_config), output_mem_config), output_mem_config);
+    result.deallocate();
+    flip_tensor.deallocate();
+    Tensor grad_result = mk_complex(grad_abs, grad_angle, output_mem_config);
+    grad_abs.deallocate();
+    grad_angle.deallocate();
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> polar_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _polar_bw)(grad, input_a, input_b, output_mem_config);
+}
+
+// complex div
+//  self: grad / other.conj();
+//  other: -grad * ((self / other) / other).conj();
+std::vector<Tensor> _complex_div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    Tensor other_r = real(other,output_mem_config);
+    Tensor other_i = imag(other,output_mem_config);
+    Tensor condition_nan = logical_and(eqz(other_r,output_mem_config), eqz(other_i,output_mem_config), std::nullopt, output_mem_config);
+    other_r.deallocate();
+    other_i.deallocate();
+    Tensor nan_flag = mk_complex(condition_nan, condition_nan, output_mem_config);
+    condition_nan.deallocate();
+    Tensor grad_a = where(nan_flag, full_like(input, std::nanf(""), output_mem_config), complex_div(grad, conj(other,output_mem_config), output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor result = complex_div(input, other, output_mem_config);
+    Tensor grad_b = where(nan_flag, full_like(input, std::nanf(""), output_mem_config), complex_mul(neg(grad,output_mem_config), conj(complex_div(result, other, output_mem_config ),output_mem_config), output_mem_config), output_mem_config);
+    result.deallocate();
+    nan_flag.deallocate();
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_div_bw)(grad, input, other, output_mem_config);
+}
+
+// complex mul
+// grad_input = grad * other.conj()
+// grad_other = grad * input.conj()
+std::vector<Tensor> _complex_mul_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = complex_mul(grad, conj(other,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = complex_mul(grad, conj(input,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_mul_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_mul_bw)(grad, input, other, output_mem_config);
+}
+
+// complex add
+// self: grad, other: grad * alpha
+std::vector<Tensor> _complex_add_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor grad_b = mul_unary(grad, alpha, output_mem_config );
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_add_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_add_bw)(grad, input, other, alpha, output_mem_config);
+}
+
+// complex sub
+// self: grad, other: -grad * alpha
+std::vector<Tensor> _complex_sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    CHECK_FOR_COMPLEX(other);
+    CHECK_FOR_COMPLEX(grad);
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    UnaryWithParam op1 {UnaryOpType::NEG};
+    UnaryWithParam op2 {UnaryOpType::MUL_UNARY_SFPU, alpha};
+    Tensor grad_b = unary_chain( grad, {op1, op2}, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> complex_sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _complex_sub_bw)(grad, input, other, alpha, output_mem_config);
+}
 #undef CHECK_FOR_COMPLEX
 
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -1865,7 +2038,7 @@ std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const Sh
         std::vector<int64_t> dim = {0};
         TT_FATAL( shape[1] == 1 && shape[2] == 1 && shape[3] == 1 &&  "repeat[1], [2], [3] should be 1");
         Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(grad, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), dim, output_mem_config);
+        Tensor result = tt::operations::primary::moreh_sum(grad, dim, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
@@ -1874,7 +2047,7 @@ std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const Sh
         std::vector<int64_t> dim = {1};
         TT_FATAL( shape[0] == 1 && shape[2] == 1 && shape[3] == 1 &&  "repeat[0], [2], [3] should be 1");
         Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(grad, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), dim, output_mem_config);
+        Tensor result = tt::operations::primary::moreh_sum(grad, dim, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }

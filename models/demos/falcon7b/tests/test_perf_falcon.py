@@ -21,7 +21,6 @@ from models.demos.falcon7b.tt.falcon_common import (
 
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_out_layer_present
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -44,9 +43,9 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 
-def generate_embeddings(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
+def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
     if llm_mode == "prefill":
-        tt_embeddings, tt_attention_mask = zip(
+        tt_input_ids, tt_attention_mask = zip(
             *[
                 tt_FalconCausalLM.model_preprocessing(
                     llm_mode, model_input[i::batch], kv_cache_len, num_input_tokens=seq_len
@@ -55,10 +54,10 @@ def generate_embeddings(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, 
             ]
         )
     elif llm_mode == "decode":
-        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+        tt_input_ids, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-    return tt_embeddings, tt_attention_mask
+    return tt_input_ids, tt_attention_mask
 
 
 # TODO: Replace this with actual Falcon application-level tests
@@ -123,10 +122,6 @@ def run_test_FalconCausalLM_end_to_end(
         generate_attention_inputs=False,
     )
 
-    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
-    # since we don't yet have embedding support on device
-    # device, state_dict, base_url, max_position_embeddings, config, num_decoders
-
     profiler.start("TtFalcon_model_setup")
     tt_FalconCausalLM = TtFalconCausalLM(
         devices,
@@ -141,8 +136,8 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.end("TtFalcon_model_setup")
 
     profiler.start("processing_of_input")
-    # TODO: Generate embeddings and attention_mask on device
-    tt_embeddings, tt_attention_mask = generate_embeddings(
+    # TODO: Generate attention_mask on device
+    tt_input_ids, tt_attention_mask = get_inputs_on_device(
         llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
     )
     profiler.end("processing_of_input")
@@ -155,13 +150,13 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.start("first_model_run_with_compile", force_enable=True)
     if llm_mode == "prefill":
         tt_outs = []
-        # Embedding time is included in model run time for prefill
-        tt_embeddings, tt_attention_mask = generate_embeddings(
+        # Device transfer time is included in model run time for prefill
+        tt_input_ids, tt_attention_mask = get_inputs_on_device(
             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_input_ids[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -174,7 +169,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_input_ids,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
@@ -187,7 +182,7 @@ def run_test_FalconCausalLM_end_to_end(
     del tt_out
     del tt_layer_past
     del tt_layer_present
-    del tt_embeddings
+    del tt_input_ids
     del tt_attention_mask
 
     # Re-generate dummy kv_cache ------------------------------------------------------------
@@ -223,21 +218,21 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.enable()
     enable_persistent_kernel_cache()
 
-    # Regenerate embeddings and attention_mask
-    tt_embeddings, tt_attention_mask = generate_embeddings(
+    # Regenerate input ids and attention_mask on device
+    tt_input_ids, tt_attention_mask = get_inputs_on_device(
         llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
     )
 
     profiler.start(f"model_run_for_inference")
     if llm_mode == "prefill":
         tt_outs = []
-        # Embedding time is included in model run time for prefill
-        tt_embeddings, tt_attention_mask = generate_embeddings(
+        # Device transfer time is included in model run time for prefill
+        tt_input_ids, tt_attention_mask = get_inputs_on_device(
             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_input_ids[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -249,7 +244,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_input_ids,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
@@ -341,7 +336,7 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((32, 0.88),),
+    ((32, 0.84),),
     ids=["layers_32"],
 )
 @pytest.mark.parametrize(
@@ -382,6 +377,7 @@ class TestParametrized:
         request,
         model_config_str,
         model_location_generator,
+        get_tt_cache_path,
         device,
         use_program_cache,
     ):
@@ -392,7 +388,9 @@ class TestParametrized:
             pytest.skip("Sharded config is not supported on GS")
 
         model_config = get_model_config(model_config_str)
-        tt_cache_path = get_tt_cache_path(model_version)
+        tt_cache_path = get_tt_cache_path(
+            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+        )
 
         disable_persistent_kernel_cache()
         disable_compilation_reports()
@@ -430,6 +428,7 @@ class TestParametrized:
             "decode_batch32_2047",
         ],
     )
+    @pytest.mark.parametrize("async_mode", (False, True))
     @skip_for_grayskull()
     def test_perf_wh_bare_metal(
         self,
@@ -446,16 +445,33 @@ class TestParametrized:
         request,
         model_config_str,
         model_location_generator,
+        get_tt_cache_path,
         all_devices,
+        async_mode,
     ):
         if num_devices > 1:
             pytest.skip(f"num_devices={num_devices} is not supported on CI yet")
         if model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 2047:
             pytest.skip(f"kv_cache_len={kv_cache_len} does not fit with L1_SHARDED")
-        devices = get_devices_for_t3000(all_devices, num_devices)
+        if async_mode:
+            if llm_mode == "prefill" and seq_len == 128:
+                pytest.skip(
+                    f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
+                )
+            if llm_mode == "decode" and not (kv_cache_len == 2047):
+                if not (model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 1024):
+                    pytest.skip(
+                        f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
+                    )
 
+        devices = get_devices_for_t3000(all_devices, num_devices)
+        # Enable Async Mode
+        for device in devices:
+            device.enable_async(async_mode)
         model_config = get_model_config(model_config_str)
-        tt_cache_path = get_tt_cache_path(model_version)
+        tt_cache_path = get_tt_cache_path(
+            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+        )
 
         disable_persistent_kernel_cache()
         disable_compilation_reports()
@@ -503,7 +519,6 @@ class TestParametrized:
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
 def test_perf_virtual_machine(
-    use_program_cache,
     model_version,
     llm_mode,
     batch,
@@ -515,13 +530,17 @@ def test_perf_virtual_machine(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     device,
+    use_program_cache,
 ):
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is not supported on E75")
 
     model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "tensor/tensor.hpp"
+
 namespace tt {
 namespace tt_metal {
 

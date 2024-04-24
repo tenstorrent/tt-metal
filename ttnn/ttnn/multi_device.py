@@ -79,6 +79,9 @@ class TensorToMesh:
     def map(self, tensor: torch.tensor):
         raise NotImplementedError("Subclasses must implement this method")
 
+    def config(self):
+        raise NotImplementedError("Subclasses must implement this method")
+
 
 class MeshToTensor:
     """
@@ -103,6 +106,12 @@ class ShardTensorToMesh(TensorToMesh):
         self.device_id_to_tensor = {i: input_tensor for i, input_tensor in enumerate(sliced_tensors)}
         return self.device_id_to_tensor
 
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dim}",
+        }
+
 
 class ReplicateTensorToMesh(TensorToMesh):
     def __init__(self, device_mesh: DeviceMesh):
@@ -111,6 +120,11 @@ class ReplicateTensorToMesh(TensorToMesh):
     def map(self, tensor: torch.tensor):
         self.device_id_to_tensor = {i: tensor for i in range(self.device_mesh.get_num_devices())}
         return self.device_id_to_tensor
+
+    def config(self):
+        return {
+            "strategy": "replicate",
+        }
 
 
 class ConcatMeshToTensor(MeshToTensor):

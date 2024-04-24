@@ -25,9 +25,13 @@ def split_linear_params(params):
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
 
+    while len(proj_weight.shape) < 4:
+        proj_weight = proj_weight.unsqueeze(0)
     proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     proj_weight = ttnn.to_device(proj_weight, device, memory_config=memory_config)
 
+    while len(gate_weight.shape) < 4:
+        gate_weight = gate_weight.unsqueeze(0)
     gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     gate_weight = ttnn.to_device(gate_weight, device, memory_config=memory_config)
 
@@ -75,7 +79,7 @@ class geglu:
         )
 
     def __call__(self, config, hidden_states):
-        # TODO: Output sharded once https://github.com/tenstorrent-metal/tt-metal/issues/6775 is fixed
+        # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
         interleaved_output = True
         size = hidden_states.shape[-2]
         grid_size = self.grid_sizes[size]
@@ -98,17 +102,20 @@ class geglu:
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config,
+            output_mem_config=self.l1_interleaved_memory_config
+            if interleaved_output
+            else self.block_sharded_memory_config,
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
-        proj = ttnn.experimental.tensor.interleaved_to_sharded(
-            proj,
-            grid_size,
-            [proj.shape[-2] // grid_size[0], proj.shape[-1] // grid_size[1]],
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
-        )
+        if interleaved_output:
+            proj = ttnn.experimental.tensor.interleaved_to_sharded(
+                proj,
+                grid_size,
+                [proj.shape[-2] // grid_size[0], proj.shape[-1] // grid_size[1]],
+                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            )
         if hidden_states.shape[-2] == 8192:
             proj = ttnn.reallocate(proj)
 
@@ -119,7 +126,7 @@ class geglu:
             out_subblock_w=1,
             per_core_M=M // grid_size[0] // 32,
             per_core_N=per_core_N,
-            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, False],
+            fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
             transpose_mcast=True,
         )
         gate = ttnn.experimental.operations.primary.matmul(
@@ -127,17 +134,20 @@ class geglu:
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config,
+            output_mem_config=self.l1_interleaved_memory_config
+            if interleaved_output
+            else self.block_sharded_memory_config,
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
-        gate = ttnn.experimental.tensor.interleaved_to_sharded(
-            gate,
-            grid_size,
-            [gate.shape[-2] // grid_size[0], gate.shape[-1] // grid_size[1]],
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
-        )
+        if interleaved_output:
+            gate = ttnn.experimental.tensor.interleaved_to_sharded(
+                gate,
+                grid_size,
+                [gate.shape[-2] // grid_size[0], gate.shape[-1] // grid_size[1]],
+                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            )
         if hidden_states.shape[-2] == 8192:
             gate = ttnn.reallocate(gate)
         ret = ttnn.mul(proj, gate, memory_config=gate.memory_config())

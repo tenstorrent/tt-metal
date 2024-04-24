@@ -16,6 +16,7 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
     _nearest_y,
     format_tensor,
 )
+from models.utility_functions import skip_for_grayskull
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
@@ -411,6 +412,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
 }
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("N", (8, 16, 20), ids=["batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",

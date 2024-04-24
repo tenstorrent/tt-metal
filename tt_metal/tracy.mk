@@ -30,3 +30,7 @@ tracy_tools:
 	cp $(TRACY_REPO)/csvexport/build/unix/csvexport-release $(TRACY_BUILD_DIR)
 	cd $(TRACY_REPO)/capture/build/unix && $(MAKE)
 	cp $(TRACY_REPO)/capture/build/unix/capture-release $(TRACY_BUILD_DIR)
+
+tracy_tools_clean:
+	cd $(TRACY_REPO)/csvexport/build/unix && $(MAKE) clean
+	cd $(TRACY_REPO)/capture/build/unix && $(MAKE) clean

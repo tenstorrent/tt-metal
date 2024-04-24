@@ -59,6 +59,19 @@ template <typename DataType, template <typename> typename BufferType>
 std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
+    } else if constexpr (std::is_same_v<DataType, int32_t>) {
+        std::vector<uint32_t> uint32_data;
+        union int32_uint32_convert {
+            uint32_t u;
+            int32_t i;
+            int32_uint32_convert() : u(0) {}
+        };
+        for (auto i = 0; i < data_to_pack.size(); i ++) {
+            int32_uint32_convert a;
+            a.i = data_to_pack[i];
+            uint32_data.push_back(a.u);
+        }
+        return uint32_data;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<uint32_t> output;
         for (auto index = 0; index < data_to_pack.size(); index += 2) {
@@ -91,6 +104,19 @@ template <typename DataType>
 std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return data_to_unpack;
+    } else if constexpr (std::is_same_v<DataType, int32_t>) {
+        union int32_uint32_convert {
+            uint32_t u;
+            int32_t i;
+            int32_uint32_convert() : u(0) {}
+        };
+        std::vector<int32_t> int32_data;
+        for (auto i = 0; i < data_to_unpack.size(); i++) {
+            int32_uint32_convert a;
+            a.u = data_to_unpack[i];
+            int32_data.push_back(a.i);
+        }
+        return int32_data;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<DataType> output;
         for (auto index = 0; index < data_to_unpack.size(); index++) {
@@ -304,8 +330,8 @@ inline DeviceBuffer to_device_buffer(
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (
-                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t> or
-                    std::is_same_v<T, std::uint16_t>) {
+                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t>
+                    or std::is_same_v<T, std::int32_t> or std::is_same_v<T, std::uint16_t>) {
                     auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
                     TT_ASSERT(
                         compute_buffer_size(shape, data_type) == data_to_write.size(),
@@ -363,15 +389,18 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         return to_host_helper<T>(tensor, blocking);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        std::vector<OwnedBuffer> host_buffers;
-
-        for (int i = 0; i < device_storage.buffers.size(); ++i) {
-            auto shard = Tensor{DeviceStorage{device_storage.buffers[i]}, device_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()};
+        auto devices = get_devices(tensor);
+        Tensor host_tensor({}, devices.size());
+        for (const auto& device : devices) {
+            auto shard = get_shard_for_device(tensor, device);
             shard = to_host_helper<T>(shard, blocking);
-            host_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
+            host_tensor.set_shape(tensor.get_shape());
+            host_tensor.set_dtype(tensor.get_dtype());
+            host_tensor.set_layout(tensor.get_layout());
+            insert_buffer_and_shape_for_device(device, shard, host_tensor);
+            host_tensor.set_populated(device);
         }
-        return Tensor(MultiDeviceHostStorage{std::move(host_buffers), device_storage.shapes}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout());
+        return host_tensor;
     } else {
         return tensor;
     }
@@ -415,8 +444,14 @@ inline Tensor to_device(
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if (memory_config.is_sharded()) {
         auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
-        std::array<uint32_t, 2> tensor2d_size = {
-            shape[0] * shape[1] * shape[2] / page_shape[0], shape[3] / page_shape[1]};
+
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
+
+        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
     }
 
@@ -473,7 +508,7 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                     output_buffers.push_back(output_buffer);
                     output_shapes.push_back(storage.shapes[i]);
                 }
-                return MultiDeviceHostStorage{output_buffers, output_shapes};
+                return MultiDeviceHostStorage{storage.strategy, output_buffers, output_shapes};
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
@@ -874,7 +909,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             layout);
     }
 
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (is_tensor_on_device_or_multidevice(tensor)) {
         return to_string<T>(to_host<T>(tensor));
     }
 
@@ -952,7 +987,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (
                     std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
-                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::uint16_t>) {
+                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::int32_t> or std::is_same_v<DataType, std::uint16_t>) {
                     auto buffer = borrowed_buffer::get_as<DataType>(storage.buffer);
                     return buffer.data();
                 } else {

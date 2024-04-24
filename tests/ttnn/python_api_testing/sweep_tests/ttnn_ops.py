@@ -47,6 +47,9 @@ def dtype_to_ttnn(dtype):
     elif dtype == tt_lib.tensor.DataType.UINT16:
         return ttnn.uint16
 
+    elif dtype == tt_lib.tensor.DataType.INT32:
+        return ttnn.int32
+
     else:
         assert False, "Unknown dtype passed"
 
@@ -472,6 +475,23 @@ def eltwise_log_sigmoid(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.log_sigmoid(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_celu(
+    x,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.celu(t0, alpha, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -942,6 +962,8 @@ def eltwise_softmax(
 def eltwise_softplus(
     x,
     *args,
+    beta,
+    threshold,
     device,
     dtype,
     layout,
@@ -950,7 +972,7 @@ def eltwise_softplus(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softplus(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.softplus(t0, beta, threshold, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
 
 
@@ -1261,6 +1283,22 @@ def eltwise_silu(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.silu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_sigmoid_accurate(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sigmoid_accurate(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t1)
 
@@ -2290,7 +2328,7 @@ def global_avg_pool2d(
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    return output_tensor
+    return output_tensor.to(torch.float32)
 
 
 def upsample(
@@ -2930,14 +2968,12 @@ def preprocessing_model_bert_1(
 
     torch_hidden_states = x
 
-    torch_output = model(torch_hidden_states)
-
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, dtype[0], layout=layout[0], device=device)
     output = ttnn_bert.bert_feedforward(
         config,
         hidden_states,
@@ -2974,7 +3010,7 @@ def preprocessing_model_bert_2(
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, dtype[0], layout=layout[0], device=device)
     if torch_attention_mask is not None:
         attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     else:
@@ -3017,8 +3053,8 @@ def preprocessing_model_bert_3(
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
-    attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, dtype[0], layout=layout[0], device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask, dtype[0], layout=layout[0], device=device)
     output = ttnn_bert.bert_attention(
         config,
         hidden_states,
@@ -3113,5 +3149,26 @@ def std(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 def var(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.var(t0, dim)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    batch_size = x.shape[0]
+    input_height = x.shape[2]
+    input_width = x.shape[3]
+
+    m = ttnn.MaxPool2d(
+        kernel_size=3,
+        stride=2,
+        device=device,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        reader_patterns_cache={},
+    )
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = m(t0)
 
     return ttnn_tensor_to_torch(t1)

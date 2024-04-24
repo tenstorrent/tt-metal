@@ -33,7 +33,9 @@ void MorehSoftmaxBackward::validate_with_output_tensors(const std::vector<Tensor
     TT_ASSERT(output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B);
 
     // validate parameters
-    TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
+    auto rank = output_tensor.get_legacy_shape().rank();
+
+    TT_ASSERT(this->dim >= 0 && this->dim < rank, fmt::format("dim {} should be less than output tensor rank {}", this->dim, rank));
 
     if(output_tensors.empty() || !output_tensors.at(0).has_value()){
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
@@ -87,31 +89,25 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
     const std::vector<Tensor>& input_tensors) const {
     auto& output = input_tensors.at(0);
 
+    auto rank = output.get_legacy_shape().rank();
+
     if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {
-        if (this->dim == 0 || this->dim == 1) {
-            return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C;
-        }
-
-        if (is_moreh_softmax_backward_w_small_available(output) && this->dim == 3) {
-            return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W;
-        }
-        if (is_moreh_softmax_backward_h_small_available(output) && this->dim == 2) {
-            return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H;
-        }
-
-        if (this->dim == 3) {
+        if (rank - 1 == this->dim) {
+            if (is_moreh_softmax_backward_w_small_available(output)) {
+                return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W;
+            }
             return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W;
-        } else {
+        }
+        if (rank - 2 == this->dim) {
+            if (is_moreh_softmax_backward_h_small_available(output)) {
+                return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H;
+            }
             return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H;
         }
+        return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C;
     }
 
-    if (this->dim == 0 || this->dim == 1) {
-        TT_ASSERT(
-            this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C,
-            "Invalid parallelization strategy. large c is for dim 0, 1");
-    }
-    if (this->dim == 2) {
+    if (rank - 2 == this->dim) {
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H,
@@ -122,8 +118,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
                 is_moreh_softmax_backward_h_small_available(output),
                 fmt::format("not enough circular buffer memory for {}", this->strategy));
         }
-    }
-    if (this->dim == 3) {
+    } else if (rank - 1 == this->dim) {
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W,
@@ -134,6 +129,10 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
                 is_moreh_softmax_backward_w_small_available(output),
                 fmt::format("not enough circular buffer memory for {}", this->strategy));
         }
+    } else {
+        TT_ASSERT(
+            this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C,
+            "Invalid parallelization strategy. large c is for dim 0, 1");
     }
 
     return this->strategy;

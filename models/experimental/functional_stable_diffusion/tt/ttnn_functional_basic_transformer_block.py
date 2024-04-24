@@ -88,7 +88,6 @@ def basic_transformer_block(
     )
     if use_ada_layer_norm_zero:
         assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-    # ttnn.dump_device_memory_state(device)
     ff_output = feedforward(config=config, hidden_states=norm_hidden_states, parameters=parameters.ff, device=device)
 
     hidden_states = ttnn.add(ff_output, hidden_states)

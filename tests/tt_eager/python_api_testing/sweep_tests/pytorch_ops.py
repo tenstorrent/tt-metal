@@ -879,6 +879,10 @@ def addalpha(x, y, *args, alpha, **kwargs):
     return torch.add(x, y, alpha=alpha)
 
 
+def celu(x, *args, alpha, **kwargs):
+    return torch.celu(x, alpha=alpha)
+
+
 def lamb_optimizer(x, y, z, w, *args, beta1, beta2, step_size, eps, weight_decay, **kwargs):
     exp_avg_out, exp_avg_sq_out, param = lamb_optimizer_kernel.lamb_kernel(
         x, y, z, w, beta1=beta1, beta2=beta2, step_size=step_size, eps=eps, weight_decay=weight_decay
@@ -1823,7 +1827,9 @@ def ttnn_groupnorm(x, y, z, *args, **kwargs):
 
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
-    return torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    x = x.to(torch.float32)
+    output = torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    return output
 
 
 def upsample(x, *args, scale_factor, **kwargs):
@@ -2025,3 +2031,9 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
     )
 
     return torch_output.start_logits
+
+
+def max_pool2d(x, *args, **kwargs):
+    m = nn.MaxPool2d(3, stride=2)
+    output = m(x)
+    return output

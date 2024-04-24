@@ -119,7 +119,8 @@ void TensorModule(py::module &m_tensor) {
             [](std::pair<UnaryOpType, float> arg) {
                 return UnaryWithParam{.op_type=arg.first, .param=arg.second};
             }
-        ));
+        ))
+        .def_readonly("op_type", &UnaryWithParam::op_type);
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
     // Can take in just the op type, or sequence container of op type and param value
     py::implicitly_convertible<UnaryOpType, UnaryWithParam>();
@@ -214,8 +215,7 @@ void TensorModule(py::module &m_tensor) {
             py::init<>(
                 [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
                     return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type, .shard_spec=shard_spec};
-                }
-            ),
+                }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
             py::arg("shard_spec") = std::nullopt,
@@ -229,22 +229,41 @@ void TensorModule(py::module &m_tensor) {
                 .. code-block:: python
 
                     mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
-            )doc"
-        )
-        .def("__repr__", [](const MemoryConfig &memory_config) -> std::string {
-            return fmt::format("{}", memory_config);
-        }
-        )
+            )doc")
+        .def(
+            "__repr__",
+            [](const MemoryConfig& memory_config) -> std::string { return fmt::format("{}", memory_config); })
+        .def(
+            "__hash__",
+            [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
+                return tt::stl::hash::hash_object(memory_config);
+            })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
-        .def_property_readonly("interleaved", [](const MemoryConfig &memory_config) {
-            return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
-        }, "Whether tensor data is interleaved across multiple DRAM channels"
-        )
+        .def_property_readonly(
+            "interleaved",
+            [](const MemoryConfig& memory_config) {
+                return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
+            },
+            "Whether tensor data is interleaved across multiple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
+
+    m_tensor.def(
+        "dump_memory_config",
+        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
+        R"doc(
+            Dump memory config to file
+        )doc");
+
+    m_tensor.def(
+        "load_memory_config",
+        py::overload_cast<const std::string&>(&load_memory_config),
+        R"doc(
+            Load memory config to file
+        )doc");
 
     auto py_owned_buffer_for_uint16_t =
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
@@ -292,6 +311,8 @@ void TensorModule(py::module &m_tensor) {
         .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
+    auto py_owned_buffer_for_int32_t = py::class_<owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<owned_buffer::Buffer<int32_t>, int32_t>(py_owned_buffer_for_int32_t);
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint32_t>, uint32_t>(py_owned_buffer_for_uint32_t);
@@ -306,6 +327,9 @@ void TensorModule(py::module &m_tensor) {
         m_tensor, "borrowed_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint16_t>, std::uint16_t>(
         py_borrowed_buffer_for_uint16_t);
+
+    auto py_borrowed_buffer_for_int32_t = py::class_<borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::int32_t>, std::int32_t>(py_borrowed_buffer_for_int32_t);
 
     auto py_borrowed_buffer_for_uint32_t = py::class_<borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint32_t>, std::uint32_t>(py_borrowed_buffer_for_uint32_t);
@@ -748,13 +772,12 @@ void TensorModule(py::module &m_tensor) {
         )doc"
     );
 
-    m_tensor.def(
-        "load_tensor",
-        &load_tensor,
-        R"doc(
-            Load tensor to file
-        )doc"
-    );
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, Device*)>(&load_tensor<Device*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
+    m_tensor.def("load_tensor",
+          static_cast<Tensor (*)(const std::string&, DeviceMesh*)>(&load_tensor<DeviceMesh*>),
+          py::arg("file_name"), py::arg("device") = nullptr, R"doc(Load tensor to file)doc");
 
     m_tensor.def(
         "num_cores_to_corerange_set",
@@ -784,8 +807,7 @@ void TensorModule(py::module &m_tensor) {
     detail::TensorModulePyTensor ( m_tensor);
     detail::TensorModuleDMOPs ( m_tensor);
     detail::TensorModuleCustomAndBMMOPs( m_tensor );
-    detail::TensorModuleXaryOPs( m_tensor );
-
+    detail::TensorModuleXaryOPs(m_tensor);
 }
 
 }

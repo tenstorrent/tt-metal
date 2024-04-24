@@ -646,8 +646,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     Shape input_shape = input.get_legacy_shape();
     Shape output_shape = output.get_legacy_shape();
 
-    // NOTE: input is assumed to be in {N, 1, H * W, C }
-
     DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
@@ -660,14 +658,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     DataFormat indices_df = DataFormat::RawUInt16; //datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
 
-    uint32_t nbatch = in_n;
-    TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
-
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
     uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t) ceil((float) input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
     uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
@@ -679,21 +673,15 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     }
     uint32_t out_w_loop_count = ceil((float) out_w / nblocks);
 
-    uint32_t in_hw = in_h * in_w;
-    uint32_t in_nhw = in_hw * nbatch;
-    uint32_t out_hw = out_h * out_w;
-    uint32_t out_nhw = out_hw * nbatch;
-
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
-    uint32_t shard_size_per_core = input.shard_spec().value().shape[0];
-    uint32_t in_nhw_per_core = nbatch * in_h * in_w / ncores;
+    uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t in_nhw_per_core_cliff = 0;
-    uint32_t out_nhw_per_core = out_nhw / ncores;
+    uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
     uint32_t ncores_w = grid_size.x;
 
@@ -806,7 +794,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         log_debug(LogOp, "in_addr: {}", src_dram_buffer->address());
         log_debug(LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
         log_debug(LogOp, "out_addr: {}", dst_dram_buffer->address());
-        log_debug(LogOp, "nbatch: {}", nbatch);
         log_debug(LogOp, "kernel_size_h: {}", kernel_size_h);
         log_debug(LogOp, "kernel_size_w: {}", kernel_size_w);
         log_debug(LogOp, "kernel_size_hw: {}", kernel_size_hw);
@@ -818,16 +805,12 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         log_debug(LogOp, "out_h: {}", out_h);
         log_debug(LogOp, "out_w: {}", out_w);
         log_debug(LogOp, "out_w_loop_count: {}", out_w_loop_count);
-        log_debug(LogOp, "out_hw: {}", out_hw);
-        log_debug(LogOp, "out_hw_padded: {}", out_hw);
         log_debug(LogOp, "out_c: {}", output_shape[3]);
         log_debug(LogOp, "out_nbytes_c: {}", out_nbytes_c);
         log_debug(LogOp, "in_h: {}", in_h);
         log_debug(LogOp, "in_w: {}", in_w);
-        log_debug(LogOp, "in_hw_padded: {}", in_hw);
         log_debug(LogOp, "in_c: {}", input_shape[3]);
         log_debug(LogOp, "in_nbytes_c: {}", in_nbytes_c);
-        log_debug(LogOp, "out_ntiles_hw: {}", out_ntiles_hw);
         log_debug(LogOp, "out_ntiles_c: {}", out_ntiles_c);
         log_debug(LogOp, "nblocks: {}", nblocks);
         log_debug(LogOp, "ncores: {}", ncores);
@@ -925,22 +908,23 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
      */
-    std::vector<uint32_t> compute_ct_args = {in_ntiles_hw,
-                                            in_ntiles_c,
-                                            in_ntiles_hw * in_ntiles_c,
-                                            kernel_size_hw,
-                                            out_h,
-                                            out_w,
-                                            (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
-                                            (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
-                                            nblocks,
-                                            out_w_loop_count,
-                                            nbatch,
-                                            out_nhw_per_core,
-                                            split_reader, // enable split reader
-                                            out_nhw_per_core / nblocks,     // loop count with blocks
-                                            input_shape[3],
-                                            };
+    std::vector<uint32_t> compute_ct_args = {
+        in_ntiles_hw,
+        in_ntiles_c,
+        in_ntiles_hw * in_ntiles_c,
+        kernel_size_hw,
+        out_h,
+        out_w,
+        div_up(output_shape[2], constants::TILE_HEIGHT),
+        div_up(output_shape[3], constants::TILE_WIDTH),
+        nblocks,
+        out_w_loop_count,
+        1,
+        out_nhw_per_core,
+        split_reader,                // enable split reader
+        out_nhw_per_core / nblocks,  // loop count with blocks
+        input_shape[3],
+    };
     auto compute_ct_args_cliff = compute_ct_args;
     auto reduce_op = ReduceOpMath::MAX;
     auto reduce_dim = ReduceOpDim::H;

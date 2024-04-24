@@ -75,25 +75,26 @@ def register_ttl_unary_function(name, ttl_unary_function):
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    unary_function.__name__ = f"ttnn.{name}"
-    unary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(unary_function, ttnn.decorators.Operation):
+        unary_function.__name__ = f"ttnn.{name}"
+        unary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies {name} to :attr:`input_tensor` element-wise.
+            Applies {name} to :attr:`input_tensor` element-wise.
 
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+            .. math::
+                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
 
-        Args:
-            * :attr:`input_tensor`
+            Args:
+                * :attr:`input_tensor`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{name}(tensor)
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{name}(tensor)
 
-        {unary_function.__doc__}
+            {unary_function.__doc__}
 
-        """
+            """
     setattr(THIS_MODULE, name, unary_function)
 
 
@@ -144,7 +145,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.uint16),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16),
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -174,24 +175,25 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    unary_function.__name__ = f"ttnn.{(name)}"
-    unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    if isinstance(unary_function, ttnn.decorators.Operation):
+        unary_function.__name__ = f"ttnn.{(name)}"
+        unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
+            Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
 
-        .. math::
-            {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+            .. math::
+                {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
 
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`{param}`
+            Args:
+                * :attr:`input_tensor`
+                * :attr:`{param}`
 
-        Example::
+            Example::
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, {param})
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.{(name)}(tensor, {param})
 
-        """
+            """
     setattr(THIS_MODULE, name, unary_function)
 
 

@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -54,8 +54,61 @@ def test_transformer_attention_softmax(
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # TODO(arakhmati): attention_softmax should be more accurate
     assert_with_pcc(torch_output_tensor, output_tensor, 0.992)
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("sequence_size", [384, 1024])
+@pytest.mark.parametrize("target_sequence_size", [384, 4096])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_transformer_attention_softmax_(
+    batch_size,
+    num_heads,
+    sequence_size,
+    target_sequence_size,
+    input_dtype,
+    input_memory_config,
+    *,
+    device,
+):
+    torch.manual_seed(0)
+
+    input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
+    torch_input_tensor = torch_random(input_shape, 0, 1.0, dtype=torch.bfloat16)
+    torch_attention_mask = torch_random(
+        (batch_size, 1, sequence_size, target_sequence_size), 0, 1.0, dtype=torch.bfloat16
+    )
+
+    torch_output_tensor = ttnn.transformer.attention_softmax_.golden_function(
+        torch_input_tensor,
+        head_size=None,
+        attention_mask=torch_attention_mask,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    attention_mask = ttnn.from_torch(
+        torch_attention_mask,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    output_tensor = ttnn.transformer.attention_softmax_(
+        input_tensor, head_size=None, attention_mask=attention_mask, causal_mask=True
+    )
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -230,23 +283,18 @@ def test_falcon_split_query_key_value_and_split_heads(
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
-@pytest.mark.skip(reason="This test is failing due to the issue in the implementation")
 @pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [224])
+@pytest.mark.parametrize("sequence_size", [197])
 @pytest.mark.parametrize("num_heads", [12])
 @pytest.mark.parametrize("head_size", [64])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
-def test_sharded_split_query_key_value_and_split_heads(
-    batch_size, num_heads, sequence_size, head_size, input_dtype, *, device
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_vit_split_query_key_value_and_split_heads(
+    batch_size, num_heads, sequence_size, head_size, input_dtype, input_memory_config, *, device
 ):
     torch.manual_seed(0)
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
-
-    input_memory_config = ttnn.create_sharded_memory_config(
-        input_shape, core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK
-    )
-
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
     (
         torch_query_tensor,
@@ -263,7 +311,71 @@ def test_sharded_split_query_key_value_and_split_heads(
     )
 
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor, num_heads=num_heads, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        input_tensor, num_heads=num_heads
+    )
+    query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.to_torch(key_tensor)
+    value_tensor = ttnn.to_torch(value_tensor)
+
+    assert list(query_tensor.shape) == [batch_size, num_heads, sequence_size, head_size]
+    assert list(key_tensor.shape) == [batch_size, num_heads, head_size, sequence_size]
+    assert list(value_tensor.shape) == [batch_size, num_heads, sequence_size, head_size]
+
+    assert ttnn.pearson_correlation_coefficient(torch_query_tensor, query_tensor) > 0.999
+    assert ttnn.pearson_correlation_coefficient(torch_key_tensor, key_tensor) > 0.999
+    assert ttnn.pearson_correlation_coefficient(torch_value_tensor, value_tensor) > 0.999
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("sequence_size", [224, 384])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize(
+    "batch_size, num_heads, core_grid",
+    (
+        (8, 12, ttnn.CoreGrid(y=8, x=12)),
+        (8, 16, ttnn.CoreGrid(y=8, x=8)),
+    ),
+)
+def test_sharded_split_query_key_value_and_split_heads(
+    batch_size, num_heads, sequence_size, head_size, input_dtype, core_grid, *, device
+):
+    torch.manual_seed(0)
+
+    input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
+    input_memory_config = ttnn.create_sharded_memory_config(
+        input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.BLOCK
+    )
+
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
+
+    # Sharded inputs requires the groups of heads to be interleaved (ie. {q1, k1, v1}, {q2, k2, v2}, ..., {qn, kn, vn})
+    (torch_q, torch_k, torch_v) = torch.split(
+        torch_input_tensor, [num_heads * head_size, num_heads * head_size, num_heads * head_size], dim=-1
+    )
+    torch_input_tensor_interleaved = torch.concat(
+        [
+            torch_q.reshape(batch_size, sequence_size, num_heads, head_size),
+            torch_k.reshape(batch_size, sequence_size, num_heads, head_size),
+            torch_v.reshape(batch_size, sequence_size, num_heads, head_size),
+        ],
+        dim=-1,
+    ).reshape(input_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor_interleaved,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+        input_tensor, num_heads=num_heads, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
     )
     query_tensor = ttnn.to_torch(query_tensor)
     key_tensor = ttnn.to_torch(key_tensor)

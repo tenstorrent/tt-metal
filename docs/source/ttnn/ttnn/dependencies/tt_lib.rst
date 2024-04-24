@@ -95,8 +95,8 @@ and create_output_tensors with the additional parameter for the output_tensors.
     struct <NewOperation> {
         void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+        std::vector<std::optional<Tensor>> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+        operation::ProgramWithOptionalOutputTensors create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
 
         static constexpr auto attribute_names = std::make_tuple();
         const auto attribute_values() const {
@@ -371,6 +371,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.sigmoid
 
+.. autofunction:: tt_lib.tensor.sigmoid_accurate
+
 .. autofunction:: tt_lib.tensor.hardsigmoid
 
 .. autofunction:: tt_lib.tensor.swish
@@ -424,6 +426,8 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.logical_not_unary
 
 .. autofunction:: tt_lib.tensor.subalpha
+
+.. autofunction:: tt_lib.tensor.celu
 
 .. autofunction:: tt_lib.tensor.addalpha
 
@@ -890,6 +894,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.abs_bw
 
+.. autofunction:: tt_lib.tensor.complex_abs_bw
+
 .. autofunction:: tt_lib.tensor.rsqrt_bw
 
 .. autofunction:: tt_lib.tensor.neg_bw
@@ -1052,9 +1058,21 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_remainder_bw
 
+.. autofunction:: tt_lib.tensor.complex_recip_bw
+
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
+    
+.. autofunction:: tt_lib.tensor.complex_mul_bw
+
+.. autofunction:: tt_lib.tensor.complex_div_bw
+
+.. autofunction:: tt_lib.tensor.polar_bw
+
+.. autofunction:: tt_lib.tensor.complex_add_bw
+
+.. autofunction:: tt_lib.tensor.complex_sub_bw
 
 .. autofunction:: tt_lib.tensor.multigammaln_bw
 

@@ -20,6 +20,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 
 
@@ -31,6 +32,7 @@ from models.utility_functions import (
     "pcc",
     ((0.99,),),
 )
+@skip_for_wormhole_b0()
 def test_nanogpt_mlp(device, pcc, dtype, reset_seeds):
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     config = model_hf.config

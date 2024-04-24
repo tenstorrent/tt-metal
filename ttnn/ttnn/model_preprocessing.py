@@ -203,7 +203,7 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
 
 torch_dtype_to_ttnn_dtype = {
     torch.int16: ttnn.uint16,
-    torch.int32: ttnn.uint32,
+    torch.int32: ttnn.int32,
     torch.int64: ttnn.uint32,
     torch.bfloat16: ttnn.bfloat16,
     torch.float32: ttnn.bfloat16,
@@ -425,7 +425,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.CONFIG.reports_path / "model_graph.svg")
+    visualize(output, file_name=ttnn.CONFIG.root_report_path / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
@@ -700,9 +700,7 @@ def preprocess_model(
         * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
     """
 
-    with ttnn.manage_config_attribute("enable_logging", False), ttnn.manage_config_attribute(
-        "enable_comparison_mode", False
-    ):
+    with ttnn.manage_config("enable_logging", False), ttnn.manage_config("enable_comparison_mode", False):
         return from_torch(
             model_name=model_name,
             version=version,

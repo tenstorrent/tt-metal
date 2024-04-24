@@ -90,7 +90,7 @@ void MAIN {
                         cb_wait_front(cb_intermed0, onetile);
 
                     reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-                    reduce_tile(REDUCE_OP, REDUCE_DIM, (do_mask) ? (cb_intermed0) : (cb_in0), cb_scaler, 0, 0, 0);
+                    reduce_tile((do_mask) ? (cb_intermed0) : (cb_in0), cb_scaler, 0, 0, 0);
                     reduce_revert_delta();
 
                     if (do_mask)

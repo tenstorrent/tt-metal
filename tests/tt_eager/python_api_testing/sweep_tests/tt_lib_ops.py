@@ -486,7 +486,7 @@ def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config
     t1 = ttl.tensor.mean_hw(t0, output_mem_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
-    output = output.max(2, True)[0].max(3, True)[0]
+    output = output[:, :, 0, 0]
 
     return output
 
@@ -579,7 +579,7 @@ def unary_div_bw(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t3 = ttl.tensor.unary_div_bw(t0, t1, scalar, output_mem_config)[0]
+    t3 = ttl.tensor.unary_div_bw(t0, t1, scalar, output_mem_config=output_mem_config)[0]
 
     return tt2torch_tensor(t3)
 
@@ -601,7 +601,7 @@ def div_bw(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttl.tensor.div_bw(t0, t1, t2, output_mem_config)
+    t3 = ttl.tensor.div_bw(t0, t1, t2, output_mem_config=output_mem_config)
 
     return [tt2torch_tensor(t3[0]), tt2torch_tensor(t3[1])]
 
@@ -931,6 +931,24 @@ def eltwise_subalpha(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = ttl.tensor.subalpha(t0, t1, alpha, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
+def eltwise_celu(
+    x,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t2 = ttl.tensor.celu(t0, alpha, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -2171,6 +2189,7 @@ eltwise_expm1 = make_unary_op(ttl.tensor.expm1)
 eltwise_neg = make_unary_op(ttl.tensor.neg)
 eltwise_recip = make_unary_op(ttl.tensor.recip)
 eltwise_sigmoid = make_unary_op(ttl.tensor.sigmoid)
+eltwise_sigmoid_accurate = make_unary_op(ttl.tensor.sigmoid_accurate)
 eltwise_log_sigmoid = make_unary_op(ttl.tensor.log_sigmoid)
 eltwise_log = make_unary_op(ttl.tensor.log)
 eltwise_log2 = make_unary_op(ttl.tensor.log2)

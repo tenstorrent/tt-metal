@@ -12,5 +12,7 @@ def upsample_nearest2d(input, scale_factor=2.0):
     # input is in N, 1, HW, C, upsample expects, [N, H, W, C]
     # set h_scale to 1, w_scale to scale_factor, c_scale to 1
     # scale_factor = (1, scale_factor*2, 1)
+    if input.is_sharded():
+        input = ttnn.to_memory_config(input, ttnn.L1_MEMORY_CONFIG)
     up_output = ttnn.upsample(input, scale_factor)
     return up_output

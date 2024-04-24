@@ -82,7 +82,7 @@ def create_ttnn_input_tensor(tensor: ttnn.Tensor) -> TracedTTNNTensor:
     graph.add_node(
         node,
         operation=TTNNTensor(),
-        shapes=(tuple(tensor.shape),),
+        shapes=(tensor.shape,),
         dtypes=(tensor.dtype,),
         layouts=(tensor.layout,),
         memory_configs=(memory_config,),
@@ -171,16 +171,22 @@ def trace_ttnn_operation(pretty_operation_name, operation):
 
         GRAPH_STACK.pop()
 
-        shapes = tuple(tuple(tensor.shape) for tensor in output_tensors)
+        shapes = tuple(tensor.shape for tensor in output_tensors)
         dtypes = tuple(tensor.dtype for tensor in output_tensors)
         layouts = tuple(tensor.layout for tensor in output_tensors)
-        memory_configs = tuple(ttnn.get_memory_config(tensor) for tensor in output_tensors)
+        memory_configs = tuple(
+            ttnn.get_memory_config(tensor) if isinstance(tensor, ttnn.Tensor) else None for tensor in output_tensors
+        )
 
         unique_id = torchtrail.tracer.get_unique_id()
         node_name = f"{pretty_operation_name}_{unique_id}"
         node = torchtrail.tracer.Node(name=node_name, unique_id=unique_id)
 
         graph = torchtrail.tracer.GRAPH_STACK[-1]
+        for tensor in input_tensors:
+            if tensor.graph is not graph:
+                graph = nx.compose(graph, tensor.graph)
+                torchtrail.tracer.GRAPH_STACK[-1] = graph
 
         try:
             arg_name_value_pairs = get_arg_name_value_pairs(
@@ -527,7 +533,7 @@ def node_to_statement(string_io, graph, node, variable, input_variables, prefix)
     duration = graph.nodes[node].get("duration", None)
 
     if isinstance(operation, ttnn.tracer.TorchParameter):
-        torchtrail_name = operation.parameter.torchtrail_name
+        torchtrail_name = getattr(operation.parameter, "torchtrail_name", "")
         torchtrail_name = torchtrail_name.replace(f"{prefix}.", "", 1)
         string_io.write(f"    {variable} = parameters.{torchtrail_name}")
     elif isinstance(operation, ttnn.tracer.TorchTensor):

@@ -6,7 +6,7 @@ test-list:
         end-shape: [1, 512, 2048, 4096]
         interval: [1, 32, 32, 32]
         num-shapes: 2
-        num-samples: 64
+        num-samples: 128
         method: ttnn-embeddings
       datagen:
         function: gen_rand

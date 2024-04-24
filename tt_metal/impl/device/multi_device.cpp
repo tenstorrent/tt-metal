@@ -67,3 +67,20 @@ int DeviceMesh::num_devices() const
 }  // namespace multi_device
 
 }  // namespace ttnn
+
+namespace tt {
+
+namespace tt_metal {
+
+bool validate_worker_modes(const std::vector<Device*>& workers) {
+    bool worker_modes_match = true;
+    auto first_worker_mode = workers.at(0)->get_worker_mode();
+    for (auto worker : workers) {
+        worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
+    }
+    return worker_modes_match;
+}
+
+}
+
+}

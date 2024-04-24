@@ -103,7 +103,7 @@ def test_groupnorm_sharded_narrow_channel_per_group(
 ):
     torch.manual_seed(1234)
 
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1)
+    out_mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)
     gamma_beta_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
 

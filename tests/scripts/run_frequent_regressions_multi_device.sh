@@ -17,12 +17,20 @@ export PYTHONPATH=$TT_METAL_HOME
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
 
-# Llama2_70b related cached files and tests (the test should parse env variables similar to these)
-export LLAMA_CKPT_DIR=/opt/cache/llama2_70b_cache/llama-data-repacked-2/llama-2-70b/
-export LLAMA_TOKENIZER_PATH=/opt/cache/llama2_70b_cache/llama-data/tokenizer.model
-export LLAMA_CACHE_PATH=/opt/cache/llama2_70b_cache/llama-data-cache/weights-cache-2
+pytest tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py
+pytest tests/tt_metal/microbenchmarks/ethernet/test_ethernet_ring_latency_microbenchmark.py
 
-pytest models/demos/llama2_70b/tests/test_llama_mlp.py::test_LlamaMLP_inference[decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_attention.py::test_LlamaAttention_inference[decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_decoder.py::test_LlamaDecoder_inference[decode-8chip-T3000]
-pytest models/demos/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-1L]
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
+pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_causallm
+
+# Llama2_70b related cached files and tests (the test should parse env variables similar to these)
+export LLAMA_CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/
+export LLAMA_TOKENIZER_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model
+export LLAMA_CACHE_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2
+
+pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py
+pytest models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py
