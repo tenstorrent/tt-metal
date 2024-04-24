@@ -35,6 +35,7 @@ struct TraceDescriptor {
     CompletionReaderQueue traced_completion_q_reads;
     uint32_t num_completion_q_reads;
     uint32_t num_completion_worker_cores;
+    std::vector<uint32_t> data;
 
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
 
@@ -121,9 +122,10 @@ class Trace {
     static bool has_instance(const uint32_t tid);
     static void add_instance(const uint32_t tid, TraceBuffer buf);
     static void remove_instance(const uint32_t tid);
+    static void validate_instance(const uint32_t tid);
     static void release_all();  // note all instances across all devices are released
     static TraceBuffer get_instance(const uint32_t tid);
-    static uint32_t instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, const vector<uint32_t>& cmds);
+    static uint32_t instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc);
 };
 
 }  // namespace tt::tt_metal
