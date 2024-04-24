@@ -46,6 +46,8 @@ test-list:
       function: comp_pcc
       args:
         pcc: 0.99
+    args-gen: gen_dtype_layout_device
+    sanitize-args: True
     args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -66,6 +68,8 @@ test-list:
     - `args-sampling-strategy`: Strategy how arguments to operation will be configured. If set to `all` (which is default) sweep will go through all combinations for all inputs of data-layout, data-type, and memory configs defined in _args_ dictionary. If set to `random` sweep will randomly choose data-layout, data-type, and memory configs for each input to generate `num-samples` test runs.
     - `method`: Defaults to `default`; determines how the shapes are swept across
 - _comparison_: Maps to `python_api_testing/sweep_tests/comparison_funcs.py`.
+- _args-gen_: Maps to `python_api_testing/sweep_tests/generation_funcs.py`. You can choose what function is used to generate arguments for the test (dtype, layout etc). For example, for `glu` you might want to generate a `dim` parameter, so default `args-gen` won't be useful.
+- _sanitize-args_: `True` if `args-gen` is doing arg sanitization, `False` otherwise. If not stated, the default is `True`. When ON, args sanitization won't allow some problematic combinations of args (Eg. `BFLOAT8_B` and `ROW_MAJOR` layout). But args sanitization might be an obstacle when we want to create some more flexible tests.
 - _args_: Defines how arguments to operation can be configured in terms of data-layout, data_type and memory config.
   - `data-layout`: Data layout each input argument can take. Can be TILE or ROW_MAJOR.
   - `data-type`: Data type each input argument can take. Can be BFLOAT16 or BFLOAT8_B.
