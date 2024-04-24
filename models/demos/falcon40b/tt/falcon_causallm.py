@@ -72,7 +72,7 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -82,7 +82,7 @@ class TtFalconCausalLM(TtFalconModelShared):
     ) -> tt_lib.tensor.Tensor:
         if llm_mode == "prefill":
             return self.fwd_prefill_causallm(
-                input_embeddings=input_embeddings,
+                input_ids=input_ids,
                 attention_mask=attention_mask,
                 llm_mode=llm_mode,
                 user_id=user_id,
@@ -92,7 +92,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             )
         elif llm_mode == "decode":
             return self.fwd_decode_causallm(
-                input_embeddings=input_embeddings,
+                input_ids=input_ids,
                 attention_mask=attention_mask,
                 llm_mode=llm_mode,
                 user_id=user_id,
@@ -105,7 +105,7 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def fwd_prefill_causallm(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -114,7 +114,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().__call__(
-            input_embeddings=input_embeddings,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             llm_mode=llm_mode,
             user_id=user_id,
@@ -129,6 +129,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         overwrite_subblock_h = 1
         overwrite_subblock_w = 1 if hidden_states[0].shape[2] < 512 else 4
 
+        # LM Head
         lm_logits = []
         for i in range(len(hidden_states)):
             lm_logits.append(
@@ -153,7 +154,7 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def fwd_decode_causallm(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_ids: tt_lib.tensor.Tensor,
         llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
@@ -162,7 +163,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().__call__(
-            input_embeddings=input_embeddings,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             llm_mode=llm_mode,
             user_id=user_id,
@@ -171,6 +172,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_cache=use_cache,
         )
 
+        # LM Head
         lm_logits = []
         for i in range(len(hidden_states)):
             lm_logits.append(
