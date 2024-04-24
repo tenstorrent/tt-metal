@@ -218,6 +218,9 @@ class ConvConfig:
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
         activation=None,
+        input_channels_alignment=32,
+        deallocate_activation=False,
+        reallocate_halo_output=False,
         # following config values are set by conv op later if user does not set them
         act_block_h=None,
         height_sharding=None,
@@ -233,6 +236,9 @@ class ConvConfig:
         self.act_block_h = act_block_h
         self.height_sharding = height_sharding
         self.core_grid = core_grid
+        self.input_channels_alignment = input_channels_alignment
+        self.deallocate_activation = deallocate_activation
+        self.reallocate_halo_output = reallocate_halo_output
 
 
 # internal. not user facing
@@ -415,8 +421,21 @@ def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_con
     return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
 
-# 4d -> nhwc
-@ttnn.register_operation(name="ttnn.conv2d", is_cpp_function=True)
+def _conv_op_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.conv2d", is_cpp_function=False, validate_input_tensors=_conv_op_validate_input_tensors
+)
 def conv2d(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded
@@ -535,28 +554,57 @@ def conv2d(
             parallel_config = optimal_parallel_config
             needs_reshard = True
     if needs_reshard:
+        input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
         # not sure if reshard op works for all cases
         # copying to l1 interleaved first
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
         if input_tensor.shape[0] != 1 or input_tensor.shape[1] != 1:
             # reshape to [1, 1, N*H*W, C]
             input_tensor = ttnn.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
         input_num_cores_nhw = parallel_config.num_cores_nhw
+        input_tensor_height_snapped_to_tile = roundup(input_tensor.shape[2], input_num_cores_nhw * 32)
+        assert input_tensor_height_snapped_to_tile >= input_tensor.shape[2]
+        input_tensor_width_snapped_to_channels_alignment = roundup(
+            input_tensor.shape[3], conv_config.input_channels_alignment
+        )
+        assert input_tensor_width_snapped_to_channels_alignment >= input_tensor.shape[3]
+        if not ttnn.is_sharded(input_tensor) and (
+            input_tensor_height_snapped_to_tile != input_tensor.shape[2]
+            or input_tensor_width_snapped_to_channels_alignment != input_tensor.shape[3]
+        ):
+            if input_is_on_device:
+                input_tensor = ttnn.pad(
+                    input_tensor,
+                    padding=(
+                        (0, 0),
+                        (0, 0),
+                        (0, input_tensor_height_snapped_to_tile - input_tensor.shape[2]),
+                        (0, input_tensor_width_snapped_to_channels_alignment - input_tensor.shape[3]),
+                    ),
+                    value=0,
+                )
+            else:
+                input_tensor = ttnn.to_torch(input_tensor)
+                input_tensor = torch.nn.functional.pad(
+                    input_tensor,
+                    (
+                        0,
+                        input_tensor_width_snapped_to_channels_alignment - input_tensor.shape[3],
+                        0,
+                        input_tensor_height_snapped_to_tile - input_tensor.shape[2],
+                        0,
+                        0,
+                    ),
+                )
+                input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+
         input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
             input_tensor.shape, parallel_config, tile_size=32
         )
-        input_tensor_height_snapped_to_tile = (
-            input_tensor_sharded_memory_config.shard_spec.shape[0] * input_num_cores_nhw
-        )
-        assert input_tensor_height_snapped_to_tile >= input_tensor.shape[2]
-        if input_tensor_height_snapped_to_tile != input_tensor.shape[2]:
-            input_tensor = ttnn.pad(
-                input_tensor,
-                padding=((0, 0), (0, 0), (0, input_tensor_height_snapped_to_tile - input_tensor.shape[2]), (0, 0)),
-                value=0,
-            )
-        input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
-
+        if input_is_on_device:
+            input_tensor = ttnn.to_memory_config(input_tensor, input_tensor_sharded_memory_config)
+        else:
+            input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
     is_1x1_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
@@ -612,6 +660,9 @@ def conv2d(
             activation=conv_config.activation,
             using_parameters_cache=weight_is_on_device,
             reader_patterns_cache=conv_op_cache["reader_patterns_cache"],
+            deallocate_activation=conv_config.deallocate_activation,
+            padded_input_channels=input_tensor.shape[3],
+            reallocate_halo_output=conv_config.reallocate_halo_output,
         )
         # Cache conv by weight tensor
         conv_op_cache[conv.conv.weight] = conv
