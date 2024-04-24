@@ -382,6 +382,17 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fused_activation=None,
             mcast_in0=True,
         )
+        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     else:
         model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,

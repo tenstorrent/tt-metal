@@ -479,6 +479,7 @@ def test_falcon7b_attention_softmax_sequence(
     device,
     seq_len,
     num_cores,
+    use_program_cache,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()

@@ -17,6 +17,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_overlap.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_sharded.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
+	tt_eager/tt_dnn/op_library/binary/binary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
@@ -163,6 +164,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp \
+	tt_eager/tt_dnn/op_library/operation.cpp \
 	tt_eager/tt_dnn/op_library/run_operation.cpp \
 	tt_eager/tt_dnn/op_library/split/split_tiled.cpp \
 	tt_eager/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
@@ -178,6 +180,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_concat_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
+	tt_eager/tt_dnn/op_library/nlp_tms/multi_core_create_q_and_kv_heads_separate/multi_core_create_q_and_kv_heads.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/rotate_half_op.cpp \
 	tt_eager/tt_dnn/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp \

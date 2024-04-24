@@ -5,7 +5,8 @@
 import json
 import pytest
 import torch
-
+import evaluate
+import numpy as np
 from loguru import logger
 
 from models.utility_functions import (
@@ -13,19 +14,15 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-
-from transformers import BloomTokenizerFast, BloomForCausalLM, BloomConfig
-from models.experimental.functional_bloom.tt.ttnn_optimized_functional_bloom import *
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
-from models.experimental.functional_bloom.dataset_utils import get_data
-
-import evaluate
-
-from ttnn.model_preprocessing import *
 from models import generation_utils
+from ttnn.model_preprocessing import preprocess_model_parameters
+from transformers import BloomTokenizerFast, BloomForCausalLM, BloomConfig
+from models.demos.grayskull.functional_bloom.tt.ttnn_optimized_functional_bloom import *
+from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
+from models.demos.grayskull.functional_bloom.dataset_utils import get_data
 
 
-def generate_next_token(model, input_ids, parameters, num_heads, logits_processor, max_length, **kwargs):
+def generate_next_token(model, config, input_ids, parameters, num_heads, logits_processor, max_length, **kwargs):
     num_tokens = input_ids.shape[-1]
     padded_input_ids, alibi, causal_mask = model.preprocess_inputs(
         input_ids=input_ids,
@@ -34,8 +31,9 @@ def generate_next_token(model, input_ids, parameters, num_heads, logits_processo
         attention_mask=None,
         **kwargs,
     )
-
-    logits = model.bloom_for_causal_lm(padded_input_ids, alibi, causal_mask, parameters, num_heads)
+    logits = model.bloom_for_causal_lm(
+        config=config, input_ids=padded_input_ids, alibi=alibi, causal_mask=causal_mask, parameters=parameters
+    )
     next_token_logits = logits[:, num_tokens - 1, :]  # Get the logits for the last token
     processed_logits = logits_processor(input_ids, next_token_logits)
     next_token = torch.argmax(processed_logits, dim=-1).unsqueeze(-1)
@@ -44,6 +42,7 @@ def generate_next_token(model, input_ids, parameters, num_heads, logits_processo
 
 def generate(
     model,
+    config,
     input_ids,
     parameters,
     tokenizer,
@@ -54,10 +53,10 @@ def generate(
     **kwargs,
 ):
     # Tokenize the input text and get initial input_ids
-
     for _ in range(num_tokens_to_decode):
         next_token = generate_next_token(
             model,
+            config,
             input_ids,
             parameters,
             num_heads,
@@ -104,7 +103,6 @@ def run_bloom_causal_LM_inference(
     num_heads = config.n_head
 
     profiler.start("preprocessing_parameter")
-
     parameters = preprocess_model_parameters(
         model_name=f"ttnn-functional-bloom-for-causal-lm",
         initialize_model=lambda: BloomForCausalLM.from_pretrained(model_version).eval(),
@@ -112,7 +110,6 @@ def run_bloom_causal_LM_inference(
         custom_preprocessor=functional_model.custom_preprocessor,
         convert_to_ttnn=lambda model, name: name != "lm_head",
     )
-
     profiler.end("preprocessing_parameter")
 
     encoded_prompts = [tokenizer.encode(prompt) for prompt in input_text]
@@ -126,22 +123,21 @@ def run_bloom_causal_LM_inference(
     logits_processor = generation_utils.get_logits_processor(input_ids, config)
 
     generated_ids = generate(
-        functional_model,
-        input_ids,
-        parameters,
-        tokenizer,
-        logits_processor,
-        num_heads,
+        model=functional_model,
+        config=config,
+        input_ids=input_ids,
+        parameters=parameters,
+        tokenizer=tokenizer,
+        logits_processor=logits_processor,
+        num_heads=num_heads,
         num_tokens_to_decode=10,
         device=device,
     )
 
     profiler.start("post_processing_output_to_string")
-
     generated_text = []
     for i in range(len(generated_ids)):
         generated_text.append(tokenizer.decode(generated_ids[i], skip_special_tokens=True))
-
     profiler.end("post_processing_output_to_string")
 
     for i in range(len(input_ids)):
@@ -190,14 +186,14 @@ def run_bloom_causal_LM_inference_hellaswag(
         input_ids = tokenizer.encode(val_inputs[i].input_sentence, return_tensors="pt")
         input_ids = input_ids.expand((batch_size, input_ids.shape[-1]))
         logits_processor = generation_utils.get_logits_processor(input_ids, config)
-
         generated_ids = generate(
-            functional_model,
-            input_ids,
-            parameters,
-            tokenizer,
-            logits_processor,
-            num_heads,
+            model=functional_model,
+            config=config,
+            input_ids=input_ids,
+            parameters=parameters,
+            tokenizer=tokenizer,
+            logits_processor=logits_processor,
+            num_heads=num_heads,
             num_tokens_to_decode=10,
             device=device,
         )

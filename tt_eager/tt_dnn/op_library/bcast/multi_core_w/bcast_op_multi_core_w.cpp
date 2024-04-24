@@ -24,8 +24,14 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
-    uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-    uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+        uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
+        uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
+        uint32_t H = ashape[-2];
+        uint32_t W = ashape[-1];
+        uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+        uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
+        uint32_t bH = bshape[-2];
+        uint32_t bW = bshape[-1];
     uint32_t NC = N*C;
     uint32_t HW = H*W;
 
@@ -197,88 +203,94 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
 		const auto ashape = input_tensors.at(0).get_legacy_shape();
 		const auto bshape = input_tensors.at(1).get_legacy_shape();
-		uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-		uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
-		uint32_t NC = N*C;
-		uint32_t HW = H*W;
+        uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
+        uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
+        uint32_t H = ashape[-2];
+        uint32_t W = ashape[-1];
+        uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+        uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
+        uint32_t bH = bshape[-2];
+        uint32_t bW = bshape[-1];
+        uint32_t NC = N * C;
+        uint32_t HW = H * W;
 
-		uint32_t Wt = W/TILE_WIDTH;
-		uint32_t Ht = H/TILE_HEIGHT;
+        uint32_t Wt = W / TILE_WIDTH;
+        uint32_t Ht = H / TILE_HEIGHT;
 
-		uint32_t num_tensor_tiles = NC*Ht*Wt;
-		uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
+        uint32_t num_tensor_tiles = NC * Ht * Wt;
+        uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
 
-		uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
+        uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
-    	auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, Wt);
+        auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
+            split_work_to_cores(compute_with_storage_grid_size, Wt);
 
-		for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
-			CoreCoord core = {i / num_cores_y, i % num_cores_y};
-			uint32_t Wt_per_core;
-			if (core_group_1.core_coord_in_core_ranges(core)) {
-				Wt_per_core = Wt_per_core_group_1;
-			} else if (core_group_2.core_coord_in_core_ranges(core)) {
-				Wt_per_core = Wt_per_core_group_2;
-			} else {
-				tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(16, 0));
-				tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
-				tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(9, 0));
-				continue;
-			}
-			uint32_t num_tensor_tiles_per_core = NC*Ht*Wt_per_core;
-			uint32_t Wt_skip = Wt - Wt_per_core;
+        for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t Wt_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                Wt_per_core = Wt_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                Wt_per_core = Wt_per_core_group_2;
+            } else {
+                tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(16, 0));
+                tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
+                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(9, 0));
+                continue;
+            }
+            uint32_t num_tensor_tiles_per_core = NC * Ht * Wt_per_core;
+            uint32_t Wt_skip = Wt - Wt_per_core;
 
-			tt_metal::SetRuntimeArgs(
-				program,
-				binary_reader_kernel_id,
-				core,
-				{
-					src_dram_buffer_a->address(), // 0
-					0, // 1
-					0, // 2
-					num_tensor_tiles_per_core, // 3
-					src_dram_buffer_b->address(), // 4
-					0, // 5
-					0, // 6
-					num_btensor_tiles, // 7
-					num_tensor_tiles_per_core, // 8
-					NC, // 9
-					Ht, // 10
-					Wt_per_core, // 11
-					bnc1, // 12
-					num_Wtiles_read, // 13
-					Ht*Wt, // 14
-					Wt_skip, // 15
-				}
-			);
+            tt_metal::SetRuntimeArgs(
+                program,
+                binary_reader_kernel_id,
+                core,
+                {
+                    src_dram_buffer_a->address(),  // 0
+                    0,                             // 1
+                    0,                             // 2
+                    num_tensor_tiles_per_core,     // 3
+                    src_dram_buffer_b->address(),  // 4
+                    0,                             // 5
+                    0,                             // 6
+                    num_btensor_tiles,             // 7
+                    num_tensor_tiles_per_core,     // 8
+                    NC,                            // 9
+                    Ht,                            // 10
+                    Wt_per_core,                   // 11
+                    bnc1,                          // 12
+                    num_Wtiles_read,               // 13
+                    Ht * Wt,                       // 14
+                    Wt_skip,                       // 15
+                });
 
-			tt_metal::SetRuntimeArgs(
-				program,
-				bcast_kernel_id,
-				core,
-				{
-					NC, // B
-					Ht, // Ht
-					Wt_per_core  // Wt
-				}
-			);
+            tt_metal::SetRuntimeArgs(
+                program,
+                bcast_kernel_id,
+                core,
+                {
+                    NC,          // B
+                    Ht,          // Ht
+                    Wt_per_core  // Wt
+                });
 
-			tt_metal::SetRuntimeArgs(
-				program, unary_writer_kernel_id, core,
-				{
-					dst_dram_buffer->address(),
-					0,
-					0,
-					Ht,
-					Wt_per_core,
-					num_Wtiles_read,
-					Wt_skip,
-					NC,
-					Ht*Wt,
-				}
-			);
-			num_Wtiles_read+=Wt_per_core;
-		}
+            tt_metal::SetRuntimeArgs(
+                program,
+                unary_writer_kernel_id,
+                core,
+                {
+                    dst_dram_buffer->address(),
+                    0,
+                    0,
+                    Ht,
+                    Wt_per_core,
+                    num_Wtiles_read,
+                    Wt_skip,
+                    NC,
+                    Ht * Wt,
+                });
+            num_Wtiles_read += Wt_per_core;
+        }
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

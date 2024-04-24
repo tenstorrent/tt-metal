@@ -9,6 +9,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include <numeric>
+
 namespace tt {
 using namespace constants;
 namespace operations {
@@ -18,40 +20,80 @@ namespace primary {
 //                         MorehSum
 ////////////////////////////////////////////////////////////////////////////
 namespace {
+    // TODO: move these check functions to a common header.
+    inline void check_tensor(
+        const Tensor& tensor,
+        const std::string& op_name,
+        DataType data_type = DataType::BFLOAT16,
+        Layout layout = Layout::TILE) {
+        TT_FATAL(tensor.get_layout() == layout, fmt::format("{} only supports tiled layout.", op_name));
+        TT_FATAL(tensor.get_dtype() == data_type, fmt::format("{} only supports data type {}.", op_name, data_type));
+        TT_FATAL(
+            tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
+        TT_FATAL(
+            tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
+    }
 
-Tensor _moreh_sum(
-    const Tensor& input,
-    const int64_t& dim,
-    const std::optional<const Tensor>& output,
-    const MemoryConfig& output_mem_config) {
-    return operation::run(MorehSum{.dim = dim, .output_mem_config = output_mem_config}, {input}, {}, {output}).at(0);
-}
+    inline void check_tensor(
+        std::optional<Tensor> tensor,
+        const std::string& op_name,
+        tt_metal::DataType data_type = DataType::BFLOAT16,
+        Layout layout = Layout::TILE) {
+        if (!tensor.has_value()) {
+            return;
+        }
+        check_tensor(tensor.value(), op_name, data_type, layout);
+    }
+
+    Tensor _moreh_sum(
+        const Tensor& input,
+        const int64_t& dim,
+        const std::optional<const Tensor>& output,
+        const MemoryConfig& output_mem_config) {
+        return operation::run(MorehSum{ .dim = dim, .output_mem_config = output_mem_config }, { input }, {}, { output }).at(0);
+    }
 }  // namespace
 
 void MorehSum::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_ASSERT((dim >= 0 && dim <= 3), "dim should be 0 - 3");
+
     const auto& input = input_tensors.at(0);
     auto& output = output_tensors.at(0);
 
+    // validate tensor
+    check_tensor(input, "input");
+    check_tensor(output, "output");
+
+    // validate input dim
     auto input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    const auto input_rank = input_shape.rank();
+    log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
+    TT_FATAL((this->dim >= 0 && this->dim <= tt::tt_metal::MAX_NUM_DIMENSIONS), "dim must be between 0 and {}.", tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL((this->dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 
+    // validate shape
+    // keepdim=true
     if (output.has_value()) {
         const auto& output_shape = output.value().get_legacy_shape();
         const auto& output_shape_wo_padding = output.value().get_legacy_shape().without_padding();
 
-        if (dim == 0 || dim == 1) {
-            input_shape[dim] = 1;
-            input_shape_wo_padding[dim] = 1;
+        // last 2-dim
+        if (this->dim == input_rank - 1 || this->dim == input_rank - 2) {
+            input_shape[this->dim] = TILE_HEIGHT;
+            input_shape_wo_padding[this->dim] = 1;
         } else {
-            input_shape[dim] = TILE_HEIGHT;
-            input_shape_wo_padding[dim] = 1;
+            input_shape[this->dim] = 1;
+            input_shape_wo_padding[this->dim] = 1;
         }
 
+        log_debug(LogOp, "{}:{} input_shape {}", __func__, __LINE__, input_shape);
+        log_debug(LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
+        log_debug(LogOp, "{}:{} input_shape_wo_padding {}", __func__, __LINE__, input_shape_wo_padding);
+        log_debug(LogOp, "{}:{} output_shape_wo_padding {}", __func__, __LINE__, output_shape_wo_padding);
         for (int i = 0; i < input_shape.rank(); ++i) {
-            TT_ASSERT(input_shape[i] == output_shape[i]);
-            TT_ASSERT(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
+            TT_FATAL(input_shape[i] == output_shape[i]);
+            TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
         }
     }
 }
@@ -59,20 +101,18 @@ void MorehSum::validate_with_output_tensors(
 std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
+    const auto input_rank = input_shape.rank();
 
+    // keepdim=true
     auto output_shape = input_shape;
     auto padding = output_shape.padding();
-    switch (dim) {
-        case 0:
-        case 1: output_shape[dim] = 1; break;
-        case 2:
-            output_shape[dim] = TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
-            break;
-        case 3:
-            output_shape[dim] = TILE_WIDTH;
-            padding[dim] = Padding::PadDimension{0, 31};
-            break;
+
+    // last 2-dim
+    if (this->dim == input_rank - 1 || this->dim == input_rank - 2) {
+        output_shape[this->dim] = TILE_HEIGHT;
+        padding[this->dim] = Padding::PadDimension{ 0, 31 };
+    } else {
+        output_shape[this->dim] = 1;
     }
 
     output_shape = Shape(output_shape, padding);
@@ -95,16 +135,16 @@ std::vector<Tensor> MorehSum::create_output_tensors(
 
 operation::ProgramWithCallbacks MorehSum::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    TT_ASSERT((dim >= 0 && dim <= 3), "dim should be 0 - 3");
     auto& input = inputs.at(0);
     auto& output = outputs.at(0);
 
-    if (dim == 0 || dim == 1) {
-        return moreh_sum_nc_impl(input, output, dim);
-    } else if (dim == 2) {
+    const auto input_rank = input.get_legacy_shape().rank();
+    if (this->dim == input_rank - 1) {
+        return moreh_sum_w_impl(input, output);
+    } else if(this->dim == input_rank - 2) {
         return moreh_sum_h_impl(input, output);
     } else {
-        return moreh_sum_w_impl(input, output);
+        return moreh_sum_nc_impl(input, output, dim);
     }
 }
 
@@ -115,7 +155,9 @@ Tensor moreh_sum(
     const MemoryConfig& output_mem_config) {
     // reduce for all dims
     if (dims.empty()) {
-        dims = {0, 1, 2, 3};
+        const auto input_rank = input.get_legacy_shape().rank();
+        dims.resize(input_rank);
+        std::iota(dims.begin(), dims.end(), 0);
     }
 
     std::vector<int64_t> sorted_dims = dims;

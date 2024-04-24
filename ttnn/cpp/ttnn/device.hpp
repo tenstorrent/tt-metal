@@ -7,7 +7,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_pool.hpp"
-
 namespace ttnn {
 
 namespace device {
@@ -22,9 +21,3 @@ void disable_and_clear_program_cache(Device &device);
 using namespace device;
 
 }  // namespace ttnn
-
-namespace tt {
-namespace tt_metal {
-    using DeviceMesh = ttnn::multi_device::DeviceMesh;
-} // namespace tt_metal
-} // namespace tt

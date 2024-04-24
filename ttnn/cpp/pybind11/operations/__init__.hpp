@@ -11,6 +11,7 @@
 #include "core.hpp"
 #include "matmul.hpp"
 #include "transformer.hpp"
+#include "normalization.hpp"
 
 namespace py = pybind11;
 
@@ -30,6 +31,9 @@ void py_module(py::module& module) {
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
+
+    auto m_normalization = module.def_submodule("normalization", "normalization operations");
+    normalization::py_module(m_normalization);
 }
 
 }  // namespace operations

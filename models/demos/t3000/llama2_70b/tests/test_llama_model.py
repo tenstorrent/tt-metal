@@ -85,6 +85,7 @@ def run_test_LlamaModel_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
@@ -177,9 +178,9 @@ def run_test_LlamaModel_inference(
         logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Model output Passed!")
+            logger.info(f"[start_pos={start_pos}] {model_name} Model output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Model output Failed! PCC value is lower than {pcc}")
+            logger.warning(f"[start_pos={start_pos}] {model_name} Model output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -222,9 +223,9 @@ def run_test_LlamaModel_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama2 Model output Passed!")
+        logger.info(f"{model_name} output Passed!")
     else:
-        logger.warning("Llama2 Model output Failed!")
+        logger.warning(f"{model_name} output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 

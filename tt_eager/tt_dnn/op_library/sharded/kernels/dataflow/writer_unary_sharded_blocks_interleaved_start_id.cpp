@@ -12,7 +12,9 @@ void kernel_main() {
     const uint32_t unpadded_block_width_tiles = get_arg_val<uint32_t>(4);
     const uint32_t output_width_tiles = get_arg_val<uint32_t>(5); // input width in tiles - block width in tiles
     const uint32_t block_num_tiles = get_arg_val<uint32_t>(6); // block_height_tiles * block_width_tiles
-    const uint32_t start_id = get_arg_val<uint32_t>(7);
+    const uint32_t start_id_offset = get_arg_val<uint32_t>(7);
+    const uint32_t start_id_base = get_arg_val<uint32_t>(8);
+    const uint32_t start_id = start_id_base + start_id_offset;
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;

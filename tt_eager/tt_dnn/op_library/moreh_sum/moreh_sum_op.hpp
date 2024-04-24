@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <tuple>
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
@@ -19,6 +20,22 @@ namespace operations {
 namespace primary {
 
 using namespace tt_metal;
+
+inline
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape) {
+    const auto rank = shape.rank();
+
+    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
+    uint32_t W = shape[-1];
+    uint32_t H = shape[-2];
+
+    uint32_t other_dims_product = 1;
+    for (auto i = 0; i < rank - 2; ++i) {
+        other_dims_product *= shape[i];
+    }
+
+    return { W, H, other_dims_product};
+}
 
 struct MorehSum {
     int64_t dim;

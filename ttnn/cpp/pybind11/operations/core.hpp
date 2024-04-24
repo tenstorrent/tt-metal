@@ -7,6 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ttnn/operations/core.hpp"
+
 namespace py = pybind11;
 
 namespace ttnn {
@@ -32,7 +34,9 @@ void py_module(py::module& module) {
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor { return ttnn::reshape(tensor, shape); },
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape);
+        },
         py::arg("tensor"),
         py::arg("shape"));
 
@@ -56,6 +60,28 @@ void py_module(py::module& module) {
         "unsqueeze_to_4D",
         [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttnn::unsqueeze_to_4D(tensor); },
         py::arg("tensor"));
+
+    module.def(
+        "to_memory_config",
+        &ttnn::operations::core::to_memory_config,
+        py::arg("tensor"),
+        py::arg("memory_config"),
+        py::arg("dtype") = std::nullopt);
+
+    module.def(
+        "reallocate",
+        [](ttnn::Tensor& input_tensor,
+           const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) -> ttnn::Tensor {
+            return reallocate(input_tensor, memory_config);
+        },
+        py::arg("tensor"),
+        py::arg("memory_config") = std::nullopt,
+        R"doc(
+Deallocates device tensor and returns a reallocated tensor
+
+Args:
+    * :attr:`input_tensor`: Input Tensor
+    )doc");
 }
 
 }  // namespace core

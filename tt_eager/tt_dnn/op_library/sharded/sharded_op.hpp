@@ -135,9 +135,7 @@ struct CorePageStride {
 
 // TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
-    const MemoryConfig input_mem_config;
     const MemoryConfig output_mem_config;
-    const Shape input_shape;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -146,9 +144,8 @@ struct Reshard {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("input_mem_config", "output_mem_config", "input_shape");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->input_mem_config), std::cref(this->output_mem_config), std::cref(this->input_shape)); }
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
 inline Tensor interleaved_to_sharded(
@@ -202,7 +199,7 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
     TT_FATAL(input_tensor.shard_spec().has_value());
     TT_FATAL(output_mem_config.is_sharded());
 
-    return operation::run(Reshard{.input_mem_config = input_tensor.memory_config(), .output_mem_config = output_mem_config, .input_shape=input_tensor.get_legacy_shape()}, {input_tensor}).at(0);
+    return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

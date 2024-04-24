@@ -68,7 +68,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
         in1_t,
         grid_size,
         [fuse_head * 384, 768],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
@@ -173,7 +173,7 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
         in1_t,
         grid_size,
         [fuse_head * 384, 384],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
@@ -280,7 +280,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
         in1_t,
         grid_size,
         [fuse_head * 384, 384],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
@@ -359,7 +359,7 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         attention_mask_t,
         grid_size,
         [M, K],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         shard_orient,
     )
 
@@ -369,7 +369,7 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         in1_t,
         grid_size,
         [M, K],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         shard_orient,
     )
 

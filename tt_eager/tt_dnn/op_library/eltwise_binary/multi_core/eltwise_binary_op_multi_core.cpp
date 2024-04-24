@@ -299,7 +299,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
                                             unpadded_block_width,
                                             output_width,
                                             block_size,
-                                            block_start_height_offset * output_width + block_start_width_offset };
+                                            block_start_height_offset * output_width + block_start_width_offset,
+                                            0 };
             } else {
                 unary_writer_args[i] = { dst_buffer->address(), num_tiles_per_core, num_tiles_read };
             }

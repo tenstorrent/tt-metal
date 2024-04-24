@@ -6,6 +6,8 @@
 #include "tests/ttnn/unit_tests/ttnn_test_fixtures.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/binary.hpp"
+#include "ttnn/operations/core.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace ttnn {
 namespace operations {

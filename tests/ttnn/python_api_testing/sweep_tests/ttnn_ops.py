@@ -47,6 +47,9 @@ def dtype_to_ttnn(dtype):
     elif dtype == tt_lib.tensor.DataType.UINT16:
         return ttnn.uint16
 
+    elif dtype == tt_lib.tensor.DataType.INT32:
+        return ttnn.int32
+
     else:
         assert False, "Unknown dtype passed"
 
@@ -3146,5 +3149,26 @@ def std(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 def var(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.var(t0, dim)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    batch_size = x.shape[0]
+    input_height = x.shape[2]
+    input_width = x.shape[3]
+
+    m = ttnn.MaxPool2d(
+        kernel_size=3,
+        stride=2,
+        device=device,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        reader_patterns_cache={},
+    )
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = m(t0)
 
     return ttnn_tensor_to_torch(t1)

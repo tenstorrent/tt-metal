@@ -458,7 +458,7 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
 
 
 def _golden_function(tensor, shape, **_):
-    return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
+    return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
 def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):

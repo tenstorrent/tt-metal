@@ -283,6 +283,49 @@ def test_falcon_split_query_key_value_and_split_heads(
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("sequence_size", [197])
+@pytest.mark.parametrize("num_heads", [12])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_vit_split_query_key_value_and_split_heads(
+    batch_size, num_heads, sequence_size, head_size, input_dtype, input_memory_config, *, device
+):
+    torch.manual_seed(0)
+
+    input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+        input_tensor, num_heads=num_heads
+    )
+    query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.to_torch(key_tensor)
+    value_tensor = ttnn.to_torch(value_tensor)
+
+    assert list(query_tensor.shape) == [batch_size, num_heads, sequence_size, head_size]
+    assert list(key_tensor.shape) == [batch_size, num_heads, head_size, sequence_size]
+    assert list(value_tensor.shape) == [batch_size, num_heads, sequence_size, head_size]
+
+    assert ttnn.pearson_correlation_coefficient(torch_query_tensor, query_tensor) > 0.999
+    assert ttnn.pearson_correlation_coefficient(torch_key_tensor, key_tensor) > 0.999
+    assert ttnn.pearson_correlation_coefficient(torch_value_tensor, value_tensor) > 0.999
+
+
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("sequence_size", [224, 384])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])

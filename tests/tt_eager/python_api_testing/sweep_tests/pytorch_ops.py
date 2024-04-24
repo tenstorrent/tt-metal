@@ -2031,3 +2031,9 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
     )
 
     return torch_output.start_logits
+
+
+def max_pool2d(x, *args, **kwargs):
+    m = nn.MaxPool2d(3, stride=2)
+    output = m(x)
+    return output

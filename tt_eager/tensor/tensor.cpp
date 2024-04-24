@@ -458,10 +458,23 @@ Tensor Tensor::extract_shard(const uint32_t & core_id) const{
 
 }
 
-Tensor Tensor::to(Layout target_layout) const {
+Tensor Tensor::to(Layout target_layout, Device* worker) const {
     ZoneScoped;
-    TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
-    return tensor_impl::to_layout_wrapper(*this, target_layout);
+    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
+    if (worker) {
+        Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, *this);
+        Tensor tensor_modified_layout = Tensor({}, 1);
+        worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout] () mutable {
+            TT_ASSERT(async_safe_tensor.storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
+            auto local_tensor = tensor_impl::to_layout_wrapper(async_safe_tensor, target_layout);
+            // Populate modified layout tensor
+            tensor_modified_layout.populate_buffers_and_metadata(local_tensor);
+        });
+        return tensor_modified_layout;
+    } else {
+        TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
+        return tensor_impl::to_layout_wrapper(*this, target_layout);
+    }
 }
 
 const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
@@ -593,7 +606,9 @@ std::vector<uint32_t> Tensor::host_page_ordering(){
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id]);
+        if(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].has_value()) {
+            ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].value());
+        }
     }
     return ret_vec;
 }
@@ -650,6 +665,8 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
+
+
 
 Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;

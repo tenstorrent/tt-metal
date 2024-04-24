@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import datetime
 import json
 import dataclasses
@@ -25,6 +26,7 @@ def pytest_make_parametrize_id(config, val, argname):
 
 @pytest.fixture(autouse=True)
 def pre_and_post(request):
+    original_config = copy.copy(ttnn.CONFIG)
     if ttnn.CONFIG_PATH is not None:
         ttnn.load_config_from_json_file(ttnn.CONFIG_PATH)
     if ttnn.CONFIG_OVERRIDES is not None:
@@ -45,3 +47,4 @@ def pre_and_post(request):
         ttnn.database.SQLITE_CONNECTION = None
 
     ttnn.tracer.disable_tracing()
+    ttnn.CONFIG = original_config

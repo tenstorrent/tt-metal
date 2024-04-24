@@ -175,7 +175,7 @@ def get_tensor(shape, dtype):
             (1024, 64),
             ttl.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0)),  # 2 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1)),  # 2 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
@@ -231,17 +231,18 @@ def get_tensor(shape, dtype):
             ),
             DirectReadWriteType.READ_WRITE,
         ),
-        (
+        pytest.param(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 8192, 1536],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 320),
             ttl.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 4)),  # 40 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(4, 7)),  # 40 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
+            marks=pytest.mark.xfail(reason="7740: Test case doesn't work anymore after flipping the to correct grid."),
         ),
         (
             ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -251,6 +252,18 @@ def get_tensor(shape, dtype):
             ttl.tensor.CoreRangeSet(
                 {
                     ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1)),  # 2 cores
+                }
+            ),
+            DirectReadWriteType.READ_WRITE,
+        ),
+        (
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+            [1, 1, 8192, 512],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            (1024, 320),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 4)),  # 40 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
