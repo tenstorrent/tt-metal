@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_concat_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -40,6 +41,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_concat_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT8_B"]
@@ -63,6 +65,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_concat_args
+      sanitize-args: False
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

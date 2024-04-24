@@ -19,6 +19,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_ttnn_repeat_interleave_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B", "UINT32", "INT32", "UINT16"]

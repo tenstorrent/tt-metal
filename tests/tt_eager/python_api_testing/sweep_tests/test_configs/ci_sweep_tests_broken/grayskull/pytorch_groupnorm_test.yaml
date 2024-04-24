@@ -16,7 +16,8 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_groupnorm_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: groupnorm_sweep.csv
       args:
         data-layout: ["TILE"]
@@ -39,7 +40,8 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_groupnorm_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: groupnorm_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]

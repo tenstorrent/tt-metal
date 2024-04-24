@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc_list
       args-gen: gen_split_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]

@@ -19,6 +19,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_activation_args
+      sanitize-args: False
       output-file: eltwise_add_and_apply_activation_sweep.csv
       args:
         data-layout: ["TILE"]

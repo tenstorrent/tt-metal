@@ -8,7 +8,7 @@ test-list:
         num-dims: [2, 3, 4]
         num-shapes: 3
         num-samples: 128
-        args-sampling-strategy: "all"
+        args-sampling-strategy: "random"
       datagen:
         function: gen_bin
         args:
@@ -16,6 +16,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_scalar_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]

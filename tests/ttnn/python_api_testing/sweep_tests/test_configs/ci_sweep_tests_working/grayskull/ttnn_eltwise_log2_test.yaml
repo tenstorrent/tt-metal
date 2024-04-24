@@ -16,7 +16,8 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device_dont_sanitize
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_log2_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
