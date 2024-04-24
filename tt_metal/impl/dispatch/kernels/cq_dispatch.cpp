@@ -847,11 +847,6 @@ void kernel_main() {
                                                             wr_block_idx);
     }
 
-    cb_block_release_pages<upstream_noc_xy,
-                           upstream_dispatch_cb_sem_id,
-                           dispatch_cb_blocks,
-                           dispatch_cb_pages_per_block>(block_noc_writes_to_clear,
-                                                        wr_block_idx);
     noc_async_write_barrier();
 
     if (is_h_variant && !is_d_variant) {
