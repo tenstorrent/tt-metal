@@ -293,7 +293,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         for (const auto& core : cores) {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            runtime_args[6] = starting_idx_h;
+            if (partial_op) {
+                runtime_args[6] = starting_idx_h;
+            }
         }
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
@@ -545,7 +547,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                runtime_args[8] = starting_idx_h;
+                if (partial_op) {
+                    runtime_args[8] = starting_idx_h;
+                }
             }
         }
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
