@@ -42,7 +42,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: eltwise_atan_sweep.csv
+      output-file: eltwise_atanh_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
