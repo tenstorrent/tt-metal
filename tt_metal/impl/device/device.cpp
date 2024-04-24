@@ -931,17 +931,21 @@ void Device::end_trace() {
     this->release_last_trace();
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id]->record_end();
-        uint32_t tid = Trace::instantiate(
-            this->command_queue(cq_id), trace_contexts_.at(cq_id), std::move(this->sysmem_manager().get_bypass_data()));
+        trace_contexts_.at(cq_id)->data = std::move(this->sysmem_manager().get_bypass_data());
+        uint32_t tid = Trace::instantiate(this->command_queue(cq_id), trace_contexts_.at(cq_id));
         trace_insts_.push_back(tid);
     }
 }
 
 void Device::execute_last_trace(bool blocking) {
+    constexpr bool check = false;
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         if (this->trace_insts_.at(cq_id).has_value()) {
             uint32_t tid = this->trace_insts_.at(cq_id).value();
             TT_FATAL(Trace::has_instance(tid), "Trace instance " + std::to_string(tid) + " must exist on device");
+            if constexpr (check) {
+                Trace::validate_instance(tid);
+            }
             this->command_queue(cq_id).run_command(CommandInterface{
                 .type = EnqueueCommandType::ENQUEUE_TRACE,
                 .blocking = blocking,
