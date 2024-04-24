@@ -568,7 +568,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
     const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
 
-    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_dev_pages());
+    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_pages());
 
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::unordered_map<CoreCoord, std::vector<std::pair<CoreCoord, uint32_t>>> output_core_to_vector_input_core_page;
@@ -576,15 +576,13 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     for (uint32_t output_page_id = 0; output_page_id < num_pages; output_page_id++) {
         auto output_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id]];
         auto host_page = output_shard_to_host_mapping[output_page_id];
-        if(host_page.has_value()) {
-            auto input_page = host_page_to_input_page_mapping[host_page.value()];
-            auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
-            auto input_core = input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
-            if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
-                output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
-            } else {
-                output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
-            }
+        auto input_page = host_page_to_input_page_mapping[host_page];
+        auto local_input_page = input_page_to_local_page_mapping[host_page];
+        auto input_core = input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
+        if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
+            output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
+        } else {
+            output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
         }
     }
 
