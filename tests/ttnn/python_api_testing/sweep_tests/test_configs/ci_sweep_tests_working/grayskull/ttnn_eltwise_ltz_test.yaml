@@ -19,6 +19,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_ltz_sweep.csv
       args:
         data-layout: ["TILE"]
@@ -44,6 +45,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_ltz_sweep.csv
       args:
         data-layout: ["TILE"]

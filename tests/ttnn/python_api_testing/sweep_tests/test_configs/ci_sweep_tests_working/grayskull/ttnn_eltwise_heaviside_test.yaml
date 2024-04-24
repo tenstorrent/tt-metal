@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
+      sanitize-args: False
       output-file: eltwise_heaviside_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"

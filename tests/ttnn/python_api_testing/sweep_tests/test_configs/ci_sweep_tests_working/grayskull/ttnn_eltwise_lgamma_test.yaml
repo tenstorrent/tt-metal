@@ -17,7 +17,8 @@ test-list:
           high: 1000
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device_dont_sanitize
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_lgamma_sweep.csv
       args:
         data-layout: ["TILE"]

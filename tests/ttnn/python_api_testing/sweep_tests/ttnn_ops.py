@@ -75,6 +75,10 @@ def memory_config_to_ttnn(mem_config):
 
 
 def setup_ttnn_tensor(x, device, layout, input_mem_config, dtype):
+    # Check if input is scalar -> Then return scalar
+    if len(x.shape) == 1 and x.shape[0] == 1:
+        return x.item()
+
     input_tensor = ttnn.from_torch(
         x,
         dtype=dtype_to_ttnn(dtype),
