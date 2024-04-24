@@ -8,6 +8,7 @@
 
 #include "dispatch/device_command.hpp"
 #include "logger.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
@@ -98,23 +99,24 @@ uint32_t Trace::instantiate(CommandQueue& cq) {
     auto desc = std::make_shared<detail::TraceDescriptor>();
 
     // Record the captured Host API as commands via trace_commands,
-    vector<uint32_t> data = cq.hw_command_queue().record_commands(desc, [&]() {
+    desc->data = cq.hw_command_queue().record_commands(desc, [&]() {
         for (auto cmd : this->queue().worker_queue) {
             cq.run_command(cmd);
         }
         cq.wait_until_empty();
     });
 
-    uint32_t tid = Trace::instantiate(cq, desc, data);
+    uint32_t tid = Trace::instantiate(cq, desc);
     this->state = TraceState::READY;
     return tid;
 }
 
-uint32_t Trace::instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, const vector<uint32_t>& cmds) {
+uint32_t Trace::instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc) {
     uint32_t tid = Trace::next_id();
     TT_FATAL(Trace::has_instance(tid) == false, "Trace ID " + std::to_string(tid) + " already exists");
 
-    vector<uint32_t> data = cmds;
+    vector<uint32_t>& data = desc->data;
+
     // Add command to terminate the trace buffer
     DeviceCommand command_sequence(CQ_PREFETCH_CMD_BARE_MIN_SIZE);
     command_sequence.add_prefetch_exec_buf_end();
@@ -122,6 +124,7 @@ uint32_t Trace::instantiate(CommandQueue& cq, shared_ptr<detail::TraceDescriptor
         data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
 
+    // Pad the trace buffer to the next fully banked page
     uint64_t unpadded_size = data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(
         unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
@@ -170,6 +173,19 @@ void Trace::release_all() {
     _safe_pool([&] {
         Trace::buffer_pool.clear();
     });
+}
+
+// there is a cost to validation, please use it judiciously
+void Trace::validate_instance(const uint32_t tid) {
+    vector<uint32_t> backdoor_data;
+    auto trace_inst = Trace::get_instance(tid);
+    detail::ReadFromBuffer(trace_inst.buffer, backdoor_data);
+    if (backdoor_data != trace_inst.desc->data) {
+        log_info(LogMetalTrace, "Trace buffer expected: {}", trace_inst.desc->data);
+        log_info(LogMetalTrace, "Trace buffer observed: {}", backdoor_data);
+        TT_THROW("Trace buffer data mismatch for instance {}", tid);
+    }
+    // add more checks
 }
 
 TraceBuffer Trace::get_instance(const uint32_t tid) {
