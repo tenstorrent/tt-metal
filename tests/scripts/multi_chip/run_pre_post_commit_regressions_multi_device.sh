@@ -33,10 +33,8 @@ pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausal
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-decode_batch32-8chips-enable_program_cache]
 pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-8chips-enable_program_cache]
 
-# Falcon40B 8 chip prefill tests; we need 8x8 grid size for prefill tests on wormhole_b0
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips-disable_program_cache]
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq128-8chips-disable_program_cache]
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips-disable_program_cache]
+# Falcon40B 8 chip prefill tests; we need 8x8 grid size
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/ci/test_falcon_end_to_end_t3000_prefill.py
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest tests/ttnn/unit_tests/test_multi_device_async.py
