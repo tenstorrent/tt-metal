@@ -39,8 +39,8 @@
 
 | Model                                                       | Gen. Token [3]     |  Batch               | End-to-end throughput [1]   | Device throughput [2]       | Target         |
 |-------------------------------------------------------------|--------------------|----------------------|-----------------------------|-----------------------------|----------------|
-| [Falcon7B-decode](./models/demos/wormhole/falcon7b) (t/s/u) | 129th              | 32                   | 9.9                         | 13.5                        | 14             |
-| [Mistral-7B-decode](./models/demos/mistral7b) (t/s/u)       |  33rd              | 32                   | 7.9                         | 10.9                        | 14             |
+| [Falcon7B-decode](./models/demos/wormhole/falcon7b) (t/s/u) | 129th              | 32                   | 9.9                         | 13.5                        | 21             |
+| [Mistral-7B-decode](./models/demos/mistral7b) (t/s/u)       |  33rd              | 32                   | 7.9                         | 10.9                        | 21             |
 | [Mamba-2.8B-decode](./models/demos/mamba) (t/s/u)           |  any               | 32                   | 1.7                         | 2.0                         | 17             |
 | Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                             |                             |                |
 
@@ -50,8 +50,8 @@
 
 | Model                                                         | Gen. Token [3]     |  Batch               | End-to-end throughput [1]   | Device throughput [2]       | Target         |
 |---------------------------------------------------------------|--------------------|----------------------|-----------------------------|-----------------------------|----------------|
-| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b) (t/s/u) | 129th              |  32                  | 0.95                        |  8.4                        |   11.4         |
-| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b) (t/s/u) | 129th              |  32                  | 0.95                        |  7.7                        |   11.4         |
+| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b) (t/s/u) | 129th              |  32                  | 0.95                        |  8.4                        |   20           |
+| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b) (t/s/u) | 129th              |  32                  | 0.95                        |  7.7                        |   20           |
 | [Falcon40B-decode](./models/demos/falcon40b)                  | coming soon        |                      |                             |                             |                |
 | Mixtral7Bx8-decode                                            | coming soon        |                      |                             |                             |                |
 | ResNet50 (data parallel)                                      | coming soon        |                      |                             |                             |                |
