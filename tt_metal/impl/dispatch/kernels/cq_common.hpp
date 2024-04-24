@@ -16,6 +16,16 @@ uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
     return (v + (pow2_size - 1)) & ~(pow2_size - 1);
 }
 
+FORCE_INLINE
+uint32_t wrap_ge(uint32_t a, uint32_t b) {
+
+    // Careful below: have to take the signed diff for 2s complement to handle the wrap
+    // Below relies on taking the diff first then the compare to move the wrap
+    // to 2^31 away
+    int32_t diff = a - b;
+    return diff >= 0;
+}
+
 template<uint32_t sem_id>
 FORCE_INLINE
 void cb_wait_all_pages(uint32_t n) {
@@ -94,7 +104,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
     uint32_t sem_addr = get_semaphore(sem_id);
 
     uint32_t noc_progress = NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    if (noc_progress >= block_noc_writes_to_clear[wr_block_idx]) { // XXXXX ugh, 32 bit wrap?
+    if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
         wr_block_idx++;
         wr_block_idx &= (cb_blocks - 1);
@@ -102,7 +112,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
         // if >cb_pages_per_block are in flight away from this core
         // then we can fall behind by a block and never catch up
         // checking twice ensures we "gain" on the front if possible
-        if (noc_progress >= block_noc_writes_to_clear[wr_block_idx]) {
+        if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
             noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
             wr_block_idx++;
             wr_block_idx &= (cb_blocks - 1);
