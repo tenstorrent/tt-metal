@@ -28,6 +28,3 @@
 [submodule "tt_metal/third_party/tt_llk_blackhole"]
 	path = tt_metal/third_party/tt_llk_blackhole
 	url = https://github.com/tenstorrent/tt-llk-bh.git
-[submodule "models/experimental/llama2_70b/reference/llama"]
-	path = models/experimental/llama2_70b/reference/llama
-	url = https://github.com/tenstorrent-metal/llama.git
