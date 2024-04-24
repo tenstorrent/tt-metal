@@ -362,7 +362,7 @@ def gen_unpad_from_tile_args(input_shapes, supported_dtypes=None, supported_layo
     return [test_args]
 
 
-def gen_default_dtype_layout_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
+def gen_default_dtype_layout_device(input_shapes, dtypes=None, layouts=None, mem_configs=None, do_sanitize_args=False):
     dtype = []
     layout = []
     input_mem_config = []
@@ -390,7 +390,9 @@ def gen_default_dtype_layout_device(input_shapes, dtypes=None, layouts=None, mem
     ]
 
 
-def gen_default_dtype_layout_rm_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
+def gen_default_dtype_layout_rm_device(
+    input_shapes, dtypes=None, layouts=None, mem_configs=None, do_sanitize_args=False
+):
     return [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16] * len(input_shapes),
@@ -479,15 +481,6 @@ def gen_dtype_layout_device(
                 )
 
     return result
-
-
-def gen_dtype_layout_device_dont_sanitize(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def sanitize_args_layernorm(
@@ -611,20 +604,12 @@ def gen_add_layernorm_args(
     )
 
 
-def gen_bert_qkv_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
 def gen_permute_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
 ):
     dim_to_permute = []
 
@@ -637,17 +622,20 @@ def gen_permute_args(
             dtypes,
             layouts,
             mem_configs,
+            do_sanitize_args=do_sanitize_args,
         ):
             if input_info is not None:
                 input_info.update({"permute_dims": permute_dims})
                 yield input_info
 
 
-def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -658,11 +646,19 @@ def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_fill_ones_rm_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_fill_ones_rm_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    do_sanitize_args=True,
+):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -710,6 +706,7 @@ def gen_reshape_args(
     layouts=[[ttl.tensor.Layout.TILE]],
     mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
     max_out_shapes=2,
+    do_sanitize_args=True,
 ):
     vol = 1
 
@@ -732,6 +729,7 @@ def gen_reshape_args(
             dtypes,
             layouts,
             mem_configs,
+            do_sanitize_args=do_sanitize_args,
         ):
             if input_info is not None:
                 input_info.update(reshape_dims)
@@ -744,12 +742,9 @@ def gen_reshape_args(
             break
 
 
-def gen_split_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_split_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             maxdim = len(input_shapes[0]) - 1
@@ -769,11 +764,14 @@ def gen_tilize_with_val_padding_args(
     dtypes=[supported_tt_dtypes],
     layouts=[[ttl.tensor.Layout.ROW_MAJOR]],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             pad_sizes = (10, 10, 64, 64)
             output_tensor_shape = [
@@ -806,13 +804,16 @@ def gen_untilize_with_unpadding_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     assert input_shapes[0][-2] % 32 == 0
     assert input_shapes[0][-1] % 32 == 0
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             output_tensor_start = [0, 0, 0, 0]
             output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
@@ -832,11 +833,14 @@ def gen_pad_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
                 pad_sizes = (10, 10, 64, 64)
@@ -890,11 +894,14 @@ def gen_unpad_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
                 output_tensor_start = [0, 0, 0, 0]
@@ -926,9 +933,11 @@ def gen_lamb_optimized_args(
     dtypes,
     layouts,
     mem_configs,
-    dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             beta1 = random.uniform(0.8, 0.99)  # (0.8, 0.99) (0.9, 0.9)
             beta2 = random.uniform(0.99, 0.9999)  # (0.99, 0.9999) (0.999, 0.999)
@@ -953,8 +962,11 @@ def gen_scalar_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if dtype.is_floating_point:
                 scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
@@ -969,14 +981,10 @@ def gen_conv2d_args(
     dtypes,
     layouts,
     mem_configs,
+    do_sanitize_args=True,
 ):
     for input_info in gen_conv_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "conv_params",
-        torch.int,
+        input_shapes, dtypes, layouts, mem_configs, "conv_params", torch.int, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -988,8 +996,11 @@ def gen_conv_scalar_args(
     mem_configs,
     arg0_name="conv_params",
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, supported_dtypes, supported_layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, supported_dtypes, supported_layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         lowStride = 1
         highStride = 4
         padH = 0
@@ -1021,16 +1032,10 @@ def gen_scalar_symmetric_args(
     low=0.01,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        arg_name,
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, arg_name, low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             sign = (torch.tensor(1, dtype=torch.int).random_(0, 2) * 2 - 1).item()
@@ -1046,16 +1051,10 @@ def gen_power_args(
     low=0,
     high=10,
     dtype=torch.int,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "exponent",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "exponent", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1068,16 +1067,10 @@ def gen_relu_min_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "lower_limit",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "lower_limit", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1090,24 +1083,27 @@ def gen_relu_max_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "upper_limit",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "upper_limit", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
 def gen_scale_mask_softmax_in_place_args(
-    input_shapes, dtypes, layouts, mem_configs, low=1, high=100, dtype=torch.bfloat16
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=1,
+    high=100,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         yield input_info
 
 
@@ -1119,8 +1115,11 @@ def gen_lerp_binary_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         yield input_info
 
 
@@ -1132,6 +1131,7 @@ def gen_subalpha_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1142,6 +1142,7 @@ def gen_subalpha_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1154,6 +1155,7 @@ def gen_addalpha_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1164,6 +1166,7 @@ def gen_addalpha_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1176,6 +1179,7 @@ def gen_logit_args(
     low=-10,
     high=0.99,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1186,6 +1190,7 @@ def gen_logit_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1198,8 +1203,9 @@ def gen_shrink_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in (
+    for input_info in gen_scalar_args(
         input_shapes,
         supported_dtypes,
         supported_layouts,
@@ -1208,6 +1214,7 @@ def gen_shrink_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1220,6 +1227,7 @@ def gen_bias_gelu_unary_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1230,6 +1238,7 @@ def gen_bias_gelu_unary_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1242,16 +1251,10 @@ def gen_logical_immediate_args(
     low=0,
     high=100,
     dtype=torch.int32,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "immediate",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "immediate", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1264,16 +1267,10 @@ def gen_shrink_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "_lambda",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "_lambda", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1286,6 +1283,7 @@ def gen_leaky_relu_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1296,6 +1294,7 @@ def gen_leaky_relu_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1308,27 +1307,16 @@ def gen_elu_args(
     low=-10,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "alpha",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "alpha", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
-def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     test_args_combinations = []
 
@@ -1346,13 +1334,14 @@ def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
     return test_args_combinations
 
 
-def gen_activation_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_activation_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    do_sanitize_args=True,
+):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     test_args_combinations = []
 
@@ -1379,12 +1368,10 @@ def gen_two_scalar_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             if dtype.is_floating_point:
@@ -1405,17 +1392,10 @@ def gen_clip_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "low",
-        "high",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         if input_info["low"] > input_info["high"]:
             input_info["low"], input_info["high"] = (
@@ -1433,6 +1413,7 @@ def gen_threshold_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_two_scalar_args(
         input_shapes,
@@ -1444,12 +1425,24 @@ def gen_threshold_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
 
-def gen_hardtanh_args(input_shapes, dtypes, layouts, mem_configs, low=-10, high=10, dtype=torch.bfloat16):
-    for input_info in gen_two_scalar_args(input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype):
+def gen_hardtanh_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-10,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         if input_info["low"] > input_info["high"]:
             input_info["low"], input_info["high"] = (
                 input_info["high"],
@@ -1467,12 +1460,10 @@ def gen_polyval_args(
     max_num_coeffs=10,
     low=-100,
     high=100,
+    do_sanitize_args=True,
 ):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             num_coeffs = torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
@@ -1481,7 +1472,7 @@ def gen_polyval_args(
             yield input_info
 
 
-def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100):
+def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True):
     for input_info in gen_two_scalar_args(
         input_shapes,
         dtypes,
@@ -1492,6 +1483,7 @@ def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=1
         low,
         high,
         torch.int,
+        do_sanitize_args=do_sanitize_args,
     ):
         if input_info["start"] > input_info["end"]:
             input_info["start"], input_info["end"] = (
@@ -1515,26 +1507,17 @@ def gen_logical_immediate_args(
     low=0,
     high=100,
     dtype=torch.int32,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        buffer_types,
-        "immediate",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, buffer_types, "immediate", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
-def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_concat_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             dim = -1
@@ -1551,25 +1534,17 @@ def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             input_info.update({"dim": -1})
             yield input_info
 
 
-def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     new_input_info = []
 
@@ -1586,71 +1561,6 @@ def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
             yield info
 
 
-def sanitize_args_bert(input_shapes, input_setup):
-    for i in range(len(input_shapes)):
-        shape = input_shapes[i]
-
-        if (
-            input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
-            and input_setup[i]["input_mem_config"] != None
-            and shape[3] % 2 != 0
-        ) or (  # Shape cannot be placed as row major on device
-            input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-            and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
-        ):  # BFLOAT8_B must be tile layout
-            return None
-    return input_setup
-
-
-def gen_dtype_layout_device_bert(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],  # mem_configs[-1] is outpu_mem_config
-):
-    # last buffer_types option is for output buffer
-    dtype_mem_config_layouts = []
-
-    for i in range(len(input_shapes)):
-        dtype_mem_config_layout = []
-
-        for dtype, layout, input_mem_config in product(
-            dtypes[i],
-            layouts[i],
-            mem_configs[i],
-        ):
-            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
-
-        dtype_mem_config_layouts.append(dtype_mem_config_layout)
-
-    result = []
-
-    for out_mem_config in mem_configs[-1]:
-        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
-            out = sanitize_args_bert(input_shapes, dtype_mem_config_layout_combination)
-
-            if out is not None:
-                dtype = []
-                layout = []
-                input_mem_config = []
-
-                for x in dtype_mem_config_layout_combination:
-                    dtype.append(x["dtype"])
-                    layout.append(x["layout"])
-                    input_mem_config.append(x["input_mem_config"])
-
-                result.append(
-                    {
-                        "dtype": dtype,
-                        "layout": layout,
-                        "input_mem_config": input_mem_config,
-                        "output_mem_config": out_mem_config,
-                    }
-                )
-
-    return result
-
-
 def gen_polygamma_args(
     input_shapes,
     supported_dtypes,
@@ -1659,6 +1569,7 @@ def gen_polygamma_args(
     low=-1,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1669,6 +1580,7 @@ def gen_polygamma_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         # the n(int) order of the polygamma function is b/w 1 to 10
         k_order = np.random.randint(1, 10)
@@ -1684,6 +1596,7 @@ def gen_rop_args(
     low=-1,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1694,20 +1607,12 @@ def gen_rop_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         # the n(int) order of the polygamma function is b/w 1 to 10
         factor = random.uniform(0.1, 10.0)
         input_info.update({"factor": factor})
         yield input_info
-
-
-def gen_embeddings_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_repeat_interleave_args(
@@ -1718,17 +1623,10 @@ def gen_repeat_interleave_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "repeat",
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "repeat", "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         repeats = np.random.randint(1, 5)
         dims = np.random.choice([0, 2])
@@ -1736,12 +1634,9 @@ def gen_repeat_interleave_args(
         yield input_info
 
 
-def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_glu_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             # max_dim = len(input_shapes[0]) - 1
@@ -1751,12 +1646,9 @@ def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_dim_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_dim_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             max_dim = len(input_shapes[0]) - 1
@@ -1781,15 +1673,6 @@ def gen_rmsnorm_args(
     )
 
 
-def gen_groupnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
 def gen_power_fp_args(
     input_shapes,
     dtypes,
@@ -1798,16 +1681,10 @@ def gen_power_fp_args(
     low=0,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "exponent",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "exponent", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1822,8 +1699,11 @@ def gen_isclose_args(
     atol_low=1e-9,
     atol_high=1e-7,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if dtype.is_floating_point:
                 rtol = torch.tensor(1, dtype=dtype).uniform_(rtol_low, rtol_low).item()
@@ -1837,24 +1717,6 @@ def gen_isclose_args(
 
             input_info.update({"rtol": rtol, "atol": atol, "equal_nan": False})
             yield input_info
-
-
-def gen_ttnn_layernorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
-def gen_ttnn_rmsnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
@@ -1887,32 +1749,16 @@ def gen_ttnn_repeat_interleave_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "repeat",
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "repeat", "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         shapes_size = len(input_shapes)
         repeats = np.random.randint(1, 5)
         dims = np.random.choice([0, shapes_size - 1])
         input_info.update({"repeat": repeats, "dim": dims})
         yield input_info
-
-
-def gen_ttnn_groupnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_upsample_args(
@@ -1923,16 +1769,10 @@ def gen_upsample_args(
     low=2,
     high=10,
     dtype=torch.int32,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        buffer_types,
-        "scale_factor",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, buffer_types, "scale_factor", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1945,6 +1785,7 @@ def gen_softplus_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_two_scalar_args(
         input_shapes,
@@ -1956,6 +1797,7 @@ def gen_softplus_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         if input_info["beta"] == 0.0 and input_info["threshold"] > 0.0:
             continue
@@ -1970,16 +1812,10 @@ def gen_min_max_dim_args(
     low=0,
     high=4,
     dtype=torch.int,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         rank = len(input_shapes[0])
         choices = [(rank - 1,), (rank - 2,)]
@@ -1998,16 +1834,10 @@ def gen_dim_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         rank = len(input_shapes[0])
 

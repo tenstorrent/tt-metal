@@ -16,7 +16,8 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc_list
-      args-gen: gen_embeddings_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         inputs:
           - input-1:
@@ -51,7 +52,8 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_embeddings_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         inputs:
           - input-1:

@@ -15,6 +15,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_logit_args
+      sanitize-args: False
       output-file: eltwise_logit_sweep.csv
       args:
         data-layout: ["TILE"]

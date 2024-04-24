@@ -18,7 +18,8 @@ test-list:
           high: 100
       comparison:
         function: comp_equal
-      args-gen: gen_dtype_layout_device_dont_sanitize
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_isposinf_sweep.csv
       args:
         data-layout: ["TILE"]

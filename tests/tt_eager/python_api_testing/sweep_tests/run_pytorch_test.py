@@ -123,10 +123,13 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                 comparison_dict = test_config["comparison"]
                 comparison_args = comparison_dict.get("args", {})
                 comparison_func = partial(getattr(comparison_funcs, comparison_dict["function"]), **comparison_args)
+
                 test_args_gen = getattr(
                     generation_funcs,
                     test_config.get("args-gen", "gen_default_dtype_layout_device"),
                 )
+                sanitize_args = test_config.get("sanitize-args", True)
+
                 # Optional test args for dtype, etc...
                 test_args = test_config.get("args", {})
 
@@ -197,7 +200,13 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
                 ################# RUN TEST SWEEP #################
                 for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
-                    shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
+                    shape_dict,
+                    datagen_dict,
+                    test_args_gen,
+                    test_tt_dtypes,
+                    test_tt_layouts,
+                    test_mem_configs,
+                    sanitize_args=sanitize_args,
                 ):
                     data_seed = random.randint(0, 20000000)
                     # input_shapes = input_shapes.copy()

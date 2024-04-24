@@ -20,6 +20,7 @@ test-list:
         function: comp_pcc
       args-gen: gen_activation_args
       output-file: eltwise_add_and_apply_activation_sweep.csv
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
