@@ -8,10 +8,17 @@ import pytest
 
 import tt_lib as ttl
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, skip_for_wormhole_b0
+from models.utility_functions import (
+    comp_pcc,
+    tt2torch_tensor,
+    torch2tt_tensor,
+    skip_for_wormhole_b0,
+    skip_for_grayskull,
+)
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [4096, 1024])
 @pytest.mark.parametrize("num_slices", [16])
 @pytest.mark.parametrize("num_cores", [64])
@@ -194,6 +201,7 @@ def test_time_sharded_attnention(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("kv_len", [96])
 @pytest.mark.parametrize("num_heads", [16])
@@ -385,6 +393,7 @@ def test_cross_attnention(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
+@skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [1024, 256, 64])
 @pytest.mark.parametrize("num_heads", [16])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
@@ -579,6 +588,7 @@ def test_attnention(
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT16])
 @pytest.mark.parametrize("interleaved_output", [True, False])
@@ -708,6 +718,7 @@ sizes = {4096: [1, 8192, 320, 512], 1024: [1, 2048, 640, 768], 256: [1, 512, 128
 grid_sizes = {4096: (8, 5), 1024: (8, 5), 256: (8, 8), 64: (4, 8)}
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("is_kv", [True, False])
 @pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT16])
