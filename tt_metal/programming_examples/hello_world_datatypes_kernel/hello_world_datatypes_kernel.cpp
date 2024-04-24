@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
 
     // Define and Create Buffer with Float Data Type
 
-    constexpr uint32_t buffer_size = sizeof(float);
+    constexpr uint32_t buffer_size = 2 * 1024;
     tt_metal::BufferConfig buffer_config = {
         .device = device,
         .size = buffer_size,
@@ -28,11 +28,6 @@ int main(int argc, char **argv) {
     };
     std::shared_ptr<tt::tt_metal::Buffer> dram_buffer = CreateBuffer(buffer_config);
 
-    // Initialize Float Data for the DRAM Buffer
-
-    float init_data = 1.23f;
-    EnqueueWriteBuffer(cq, dram_buffer, &init_data, false);
-
     // Configure and Create Data Movement Kernels
 
     KernelHandle data_reader_kernel_id = CreateKernel(
@@ -40,6 +35,11 @@ int main(int argc, char **argv) {
         "tt_metal/programming_examples/hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Initialize Float Data for the DRAM Buffer
+
+    float init_data = 1.23;
+    EnqueueWriteBuffer(cq, dram_buffer, &init_data, false);
 
     // Configure Program and Start Program Execution on Device
 

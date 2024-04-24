@@ -18,6 +18,7 @@ void kernel_main() {
         uint32_t l1_addr= get_write_ptr(cb_id);
         cb_reserve_back(cb_id, 0);
         noc_async_read(noc_addr, l1_addr, size);
+        noc_async_read_barrier();
 
         float* data = (float*) l1_addr;
         DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. It is: " << F32(*data) << ENDL();
