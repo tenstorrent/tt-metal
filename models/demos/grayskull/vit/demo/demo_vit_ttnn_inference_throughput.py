@@ -10,6 +10,10 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 from loguru import logger
 import time
+import os
+
+# Temp flag needed to yield higher throughput
+os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -31,11 +35,6 @@ def get_expected_times(functional_vit):
     return {
         ttnn_optimized_sharded_vit: (11, 0.02),
     }[functional_vit]
-
-
-import os
-
-os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 
 @skip_for_wormhole_b0()
