@@ -634,7 +634,7 @@ static void process_wait() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (*sem_addr < count) { // XXXXX use a wrapping compare
+    while (!wrap_ge(*sem_addr, count)) {
 #if defined(COMPILE_FOR_IDLE_ERISC)
         RISC_POST_HEARTBEAT(heartbeat);
 #endif
