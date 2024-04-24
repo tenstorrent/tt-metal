@@ -70,16 +70,11 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
     uint32_t num_cores = this->buffer.num_cores();
 
     auto buffer_page_mapping = generate_buffer_page_mapping(this->buffer);
+    auto core_host_page_indices = buffer_page_mapping.core_host_page_indices_;
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
-        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            num_pages_in_shards.push_back(buffer_page_mapping.core_host_page_indices_[core_id].size());
-        }
-        else {
-            // WIDTH OR BLOCK SHARDED
-            num_pages_in_shards.push_back(this->buffer.shard_spec().size());
-        }
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
     }
 
     vector<uint32_t> core_id_x;
@@ -274,17 +269,11 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
 
     uint32_t num_cores = this->buffer.num_cores();
     auto buffer_page_mapping = generate_buffer_page_mapping(this->buffer);
+    auto core_host_page_indices = buffer_page_mapping.core_host_page_indices_;
     vector<uint32_t> num_pages_in_shards;
     num_pages_in_shards.reserve(num_cores);
-
     for(size_t core_id = 0; core_id < num_cores; core_id++) {
-        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            num_pages_in_shards.push_back(buffer_page_mapping.core_host_page_indices_[core_id].size());
-        }
-        else {
-            // WIDTH OR BLOCK SHARDED
-            num_pages_in_shards.push_back(this->buffer.shard_spec().size());
-        }
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
     }
 
     vector<uint32_t> core_id_x;
@@ -867,9 +856,13 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
 
 // TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
 //  Look into modifying command to do read/write of a page at a time to avoid doing copy
-void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, const Buffer& buffer) {
+void * convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buffer) {
     const uint32_t num_pages = buffer.num_pages();
     const uint32_t page_size = buffer.page_size();
+
+    const uint32_t size_in_bytes = num_pages * page_size;
+
+    void* swapped = malloc(size_in_bytes);
 
     std::set<uint32_t> pages_seen;
     auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
@@ -881,6 +874,7 @@ void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, co
         TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
         memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
     }
+    return swapped;
 }
 
 void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking) {
@@ -896,7 +890,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
-    uint32_t total_pages_to_read = (buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ? buffer.num_pages() : buffer.num_dev_pages();
+    uint32_t total_pages_to_read = buffer.num_pages();
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
 
@@ -989,14 +983,11 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
         buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        final_src = malloc(buffer.num_dev_pages() * buffer.page_size());
-        convert_interleaved_to_sharded_on_host(final_src, src, buffer);
+        final_src = convert_interleaved_to_sharded_on_host(src, buffer);
     }
 
-
     uint32_t padded_page_size = align(buffer.page_size(), 32);
-    uint32_t total_pages_to_write = (buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ? buffer.num_pages() : buffer.num_dev_pages();
-
+    uint32_t total_pages_to_write = buffer.num_pages();
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
     uint32_t dst_page_index = 0;
     while (total_pages_to_write > 0) {
@@ -1036,7 +1027,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
         buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        free(final_src);
+            free(final_src);
     }
 
     if (blocking) {
@@ -1127,11 +1118,12 @@ void HWCommandQueue::enqueue_trace() {
 }
 
 void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
-    const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id] =
+    const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_host_page_id] =
         this->issued_reads.at(event);
 
     uint32_t padded_num_bytes = num_pages_read * padded_page_size;
-    if (!dev_page_to_host_page_mapping.has_value()) {
+    if (buffer_layout == TensorMemoryLayout::INTERLEAVED or
+        buffer_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         void* contiguous_dst = (void*)(uint64_t(dst) + dst_offset);
         if ((page_size % 32) == 0) {
             tt::Cluster::instance().read_sysmem(
@@ -1149,17 +1141,17 @@ void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chi
                 dst_offset += page_size;
             }
         }
-    } else  {
-        uint32_t dev_page_id = cur_dev_page_id;
+    } else if (
+        buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or
+        buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        uint32_t host_page_id = cur_host_page_id;
         uint32_t read_src = read_ptr + align(EVENT_PADDED_SIZE, 32);
         for (uint32_t offset = 0; offset < padded_page_size * num_pages_read; offset += padded_page_size) {
-            auto host_page_id = dev_page_to_host_page_mapping.value()[dev_page_id];
-            if(host_page_id.has_value()) {
-                void* page_dst = (void*)(uint64_t(dst) + host_page_id.value() * page_size);
-                tt::Cluster::instance().read_sysmem(
-                    page_dst, page_size, read_src + offset, mmio_device_id, channel);
-            }
-            dev_page_id++;
+            uint32_t device_page_id = dev_page_to_host_page_mapping[host_page_id];
+            void* page_dst = (void*)(uint64_t(dst) + device_page_id * page_size);
+            tt::Cluster::instance().read_sysmem(
+                page_dst, page_size, read_src + offset, mmio_device_id, channel);
+            host_page_id++;
         }
     }
     this->manager.completion_queue_pop_front(padded_num_bytes, this->id);

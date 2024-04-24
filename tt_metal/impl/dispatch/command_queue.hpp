@@ -369,7 +369,7 @@ struct IssuedReadData {
     TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
-    std::optional< vector<std::optional<uint32_t> > > dev_page_to_host_page_mapping;
+    vector<uint32_t> dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
@@ -379,8 +379,7 @@ struct IssuedReadData {
         this->buffer_layout = buffer.buffer_layout();
         this->page_size = buffer.page_size();
         this->padded_page_size = padded_page_size;
-        if (this->buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or
-            this->buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (this->buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or this->buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
             this->dev_page_to_host_page_mapping = buffer_page_mapping.dev_page_to_host_page_mapping_;
         }

@@ -356,7 +356,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
 
         int output_page_index = 0;
-        auto total_pages = buffer.num_dev_pages();
+        auto total_pages = buffer.num_pages();
         uint32_t page_size = buffer.page_size();
         uint32_t bytes_per_page_entry = sizeof(uint32_t);
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
@@ -368,29 +368,27 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
             auto bank_id = device->bank_ids_from_logical_core(core)[0];
             auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
-            if(host_page_id.has_value()) {
-                if(!shard_order){
-                    read_pages_to_host_helper(
-                        device,
-                        buffer,
-                        host_buffer,
-                        page_size,
-                        host_page_id.value(),
-                        dev_page_id,
-                        bank_id
-                    );
-                }
-                else{
-                    read_pages_to_host_helper(
-                        device,
-                        buffer,
-                        host_buffer,
-                        page_size,
-                        dev_page_id,
-                        dev_page_id,
-                        bank_id
-                    );
-                }
+            if(!shard_order){
+                read_pages_to_host_helper(
+                    device,
+                    buffer,
+                    host_buffer,
+                    page_size,
+                    host_page_id,
+                    dev_page_id,
+                    bank_id
+                );
+            }
+            else{
+                read_pages_to_host_helper(
+                    device,
+                    buffer,
+                    host_buffer,
+                    page_size,
+                    dev_page_id,
+                    dev_page_id,
+                    bank_id
+                );
             }
         }
 
