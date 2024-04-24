@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-acosh:
+  - ttnn-cosh:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -14,18 +14,18 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -100
-          high: 100
+          low: -9
+          high: 9
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_acosh_sweep.csv
-  - ttnn-acosh:
+      output-file: eltwise_cosh_sweep.csv
+  - ttnn-cosh:
       shape:
         start-shape: [1, 1, 1, 2]
         end-shape: [6, 12, 256, 256]
@@ -37,12 +37,12 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -100
-          high: 100
+          low: -9
+          high: 9
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: eltwise_acosh_sweep.csv
+      output-file: eltwise_cosh_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
