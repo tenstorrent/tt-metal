@@ -111,5 +111,5 @@ if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
 
     # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
+    TT_METAL_THREADCOUNT=64 ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
 fi
