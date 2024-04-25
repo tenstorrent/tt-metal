@@ -151,6 +151,7 @@ class resnet50Bottleneck:
         conv_op_cache,
         reshard_if_not_optimal=False,
         height_sharding=None,
+        eltwise_binary_out_in_place=True,
     ):
         # logger.info("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
@@ -272,9 +273,14 @@ class resnet50Bottleneck:
             conv_op_cache=conv_op_cache,
             reshard_if_not_optimal=reshard_if_not_optimal,
         )
-
-        # underscore version is in_place = True
-        out = ttnn.add_and_apply_activation_(out, ds_out, activation="relu", memory_config=ttnn.get_memory_config(out))
+        assert ttnn.get_memory_config(out) == ttnn.get_memory_config(ds_out)
+        if eltwise_binary_out_in_place:
+            # underscore version is in_place = True
+            out = ttnn.add_and_apply_activation_(
+                out, ds_out, activation="relu", memory_config=ttnn.get_memory_config(out)
+            )
+        else:
+            out = ttnn.add_and_apply_activation(out, ds_out, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(ds_out)
 
@@ -442,7 +448,7 @@ class resnet50:
         for block_num in range(1, blocks):
             layers.append(
                 resnet50Bottleneck(
-                    parameters=parameters[0],
+                    parameters=parameters[block_num],
                     downsample=False,
                     stride=1,
                     model_config=model_config,
@@ -534,6 +540,7 @@ class resnet50:
         # todo: return maxpool output shape from maxpool op
         x_height = 56
         x_width = 56
+
         x, x_height, x_width = self.layer1_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer1_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer1_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
@@ -543,7 +550,9 @@ class resnet50:
         x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer2_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer2_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
-        x, x_height, x_width = self.layer2_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
+        x, x_height, x_width = self.layer2_module4(
+            x, device, batch_size, x_height, x_width, conv_op_cache, eltwise_binary_out_in_place=False
+        )
 
         # do reshard before layer3
         # x = ttnn.to_memory_config(x, self.layer3_module1.conv1.conv.input_sharded_memory_config)
@@ -563,7 +572,15 @@ class resnet50:
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
         x, x_height, x_width = self.layer3_module6(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
+            x,
+            device,
+            batch_size,
+            x_height,
+            x_width,
+            conv_op_cache,
+            reshard_if_not_optimal=True,
+            height_sharding=False,
+            eltwise_binary_out_in_place=False,
         )
 
         # do reshard before layer4

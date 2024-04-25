@@ -257,6 +257,23 @@ class ParallelConfig:
         self.shard_scheme = shard_scheme
         self.shard_orientation = shard_orientation
 
+    def __eq__(self, other):
+        if not isinstance(other, ParallelConfig):
+            return NotImplemented
+
+        return (
+            self.grid_size.y == other.grid_size.y
+            and self.grid_size.x == other.grid_size.x
+            and self.num_cores_nhw == other.num_cores_nhw
+            and self.shard_scheme == other.shard_scheme
+            and self.shard_orientation == other.shard_orientation
+        )
+
+    def __ne__(self, other):
+        if not isinstance(other, ParallelConfig):
+            return NotImplemented
+        return not (self == other)
+
 
 # internal helper function. not exposed to user.
 def get_shard_grid_from_core_grid(core_grid):
@@ -553,6 +570,8 @@ def conv2d(
         if parallel_config != optimal_parallel_config:
             parallel_config = optimal_parallel_config
             needs_reshard = True
+    # if reshard_if_not_optimal and needs_reshard:
+    #     breakpoint()
     if needs_reshard:
         input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
         # not sure if reshard op works for all cases
@@ -568,7 +587,7 @@ def conv2d(
             input_tensor.shape[3], conv_config.input_channels_alignment
         )
         assert input_tensor_width_snapped_to_channels_alignment >= input_tensor.shape[3]
-        if not ttnn.is_sharded(input_tensor) and (
+        if not input_is_on_device and (
             input_tensor_height_snapped_to_tile != input_tensor.shape[2]
             or input_tensor_width_snapped_to_channels_alignment != input_tensor.shape[3]
         ):
@@ -607,7 +626,7 @@ def conv2d(
             input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
     is_1x1_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=conv_config.dtype)
     input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
     assert input_is_on_device
     if weight_tensor in conv_op_cache:
