@@ -86,209 +86,374 @@ for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
     register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
 
 
+def _is_scalar(value):
+    return isinstance(value, (int, float, complex))
+
+
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return input_tensor_a + input_tensor_b
 
 
-doc = r"""add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+@ttnn.register_operation(name="ttnn.add", golden_function=_golden_function, is_cpp_function=True)
+def add(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: Union[ttnn.Tensor, int, float],
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+) -> ttnn.Tensor:
+    r"""
+    add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
 
-Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
 
-Supports broadcasting.
+    Supports broadcasting.
 
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+    Keyword args:
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
 
-Example::
+    Example::
 
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.add(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 3], dtype=bfloat16)
-"""
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.add(tensor1, tensor2)
+        >>> print(output)
+        ttnn.Tensor([ 1, 3], dtype=bfloat16 )
+
+    """
+    if not isinstance(input_tensor_a, ttnn.Tensor):
+        raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+
+    if _is_scalar(input_tensor_b):
+        input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
+        output_tensor = ttnn.experimental.tensor.add_unary(
+            input_tensor_a,
+            input_tensor_b,
+            output_mem_config=memory_config,
+        )
+        return ttnn.reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, ttnn.Tensor):
+        import math
+
+        if math.prod(list(input_tensor_a.shape)) < math.prod(list(input_tensor_b.shape)):
+            input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
+
+        original_shape = input_tensor_a.shape
+        input_shape_b = input_tensor_b.shape
+
+        if len(input_shape_b) == 1:
+            height_b = 1
+            (width_b,) = input_shape_b
+        else:
+            *_, height_b, width_b = input_shape_b
+
+        input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
+        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    if height_b == 1 and width_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.HW,
+            output_dtype=dtype,
+            output_mem_config=memory_config,
+        )
+    elif height_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
+            output_mem_config=memory_config,
+        )
+    elif width_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.W,
+            output_mem_config=memory_config,
+        )
+    else:
+        output_tensor = ttnn.experimental.tensor.add(
+            input_tensor_a,
+            input_tensor_b,
+            output_dtype=dtype,
+            output_mem_config=memory_config,
+        )
+
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
+    return output_tensor
 
 
-add = ttnn.register_operation(name="ttnn.add", golden_function=_golden_function, is_cpp_function=True, doc=doc)(
-    ttnn._ttnn.operations.binary.add
-)
-
-
-doc = r"""add_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.add_(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 3], dtype=bfloat16)
-"""
-
-
-add_ = ttnn.register_operation(name="ttnn.add_", golden_function=_golden_function, is_cpp_function=True, doc=doc)(
-    ttnn._ttnn.operations.binary.add_
-)
+def _subtract_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        can_be_a_scalar=True,
+    )
 
 
 def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
-doc = r"""subtract(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+@ttnn.register_operation(
+    name="ttnn.subtract", validate_input_tensors=_subtract_validate_input_tensors, golden_function=_golden_function
+)
+def subtract(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: Union[ttnn.Tensor, int, float],
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    subtract(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a`.
+    Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a`.
 
-.. math::
-    \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i - \mathrm{{alpha}} \times \mathrm{{input\_tensor\_b}}_i
 
-Supports broadcasting.
+    Supports broadcasting.
 
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
 
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+    Keyword args:
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
 
-Example::
+    Example::
 
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.subtract(tensor1, tensor2, alpha=2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 0], dtype=bfloat16 )
-"""
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.subtract(tensor1, tensor2)
+        >>> print(output)
+        ttnn.Tensor([ 1, 0], dtype=bfloat16 )
+    """
+    if not isinstance(input_tensor_a, ttnn.Tensor):
+        raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-subtract = ttnn.register_operation(
-    name="ttnn.subtract", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.subtract)
+    original_shape = input_tensor_a.shape
+    input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
+
+    if _is_scalar(input_tensor_b):
+        output_tensor = ttnn.experimental.tensor.sub_unary(
+            input_tensor_a,
+            input_tensor_b,
+            output_mem_config=memory_config,
+        )
+        return ttnn.reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, ttnn.Tensor):
+        input_shape_b = input_tensor_b.shape
+
+        if len(input_shape_b) == 1:
+            height_b = 1
+            (width_b,) = input_shape_b
+        else:
+            *_, height_b, width_b = input_shape_b
+
+        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    if height_b == 1 and width_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.HW,
+            output_mem_config=memory_config,
+        )
+    elif height_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.H,
+            output_mem_config=memory_config,
+        )
+    elif width_b == 1:
+        output_tensor = ttnn.experimental.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.W,
+            output_mem_config=memory_config,
+        )
+    else:
+        output_tensor = ttnn.experimental.tensor.sub(
+            input_tensor_a,
+            input_tensor_b,
+            output_mem_config=memory_config,
+        )
+
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
+    return output_tensor
 
 
-doc = r"""subtract_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-subtract_s :attr:`input_tensor_b` from :attr:`input_tensor_a`.
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.subtract_(tensor1, tensor2, alpha=2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 0], dtype=bfloat16 )
-"""
-
-subtract_ = ttnn.register_operation(
-    name="ttnn.subtract_", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.subtract_)
+def _multiply_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        can_be_a_scalar=True,
+    )
 
 
 def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
-doc = r"""multiply(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float, int], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+@ttnn.register_operation(
+    name="ttnn.multiply", validate_input_tensors=_multiply_validate_input_tensors, golden_function=_golden_function
+)
+def multiply(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    multiply(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
+    Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
 
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
 
-Supports broadcasting.
+    Supports broadcasting.
 
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
 
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+    Keyword args:
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
 
-Example::
+    Example::
 
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.multiply(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 0, 2], dtype=bfloat16 )
-"""
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.multiply(tensor1, tensor2)
+        >>> print(output)
+        ttnn.Tensor([ 0, 2], dtype=bfloat16 )
 
-multiply = ttnn.register_operation(
-    name="ttnn.multiply", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.multiply)
+    """
 
+    original_shape = input_tensor_a.shape
+    input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
 
-doc = r"""multiply_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float, int], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+    if not isinstance(input_tensor_a, ttnn.Tensor):
+        raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
+    if not ttnn.is_tensor_storage_on_device(input_tensor_a):
+        raise RuntimeError("input_tensor_a must be on device!")
 
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
+    if _is_scalar(input_tensor_b):
+        return ttnn.reshape(
+            ttnn.experimental.tensor.mul_unary(
+                input_tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            ),
+            original_shape,
+        )
+    elif not isinstance(input_tensor_b, ttnn.Tensor):
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
-Supports broadcasting.
+    input_shape_b = input_tensor_b.shape
 
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
+    if len(input_shape_b) == 1:
+        height_b = 1
+        (width_b,) = input_shape_b
+    else:
+        *_, height_b, width_b = input_shape_b
 
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+    input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
 
-Example::
+    if height_b == 1 and width_b == 1:
+        return ttnn.reshape(
+            ttnn.experimental.tensor.bcast(
+                input_tensor_a,
+                input_tensor_b,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.HW,
+                output_mem_config=memory_config,
+            ),
+            original_shape,
+        )
+    elif height_b == 1:
+        return ttnn.reshape(
+            ttnn.experimental.tensor.bcast(
+                input_tensor_a,
+                input_tensor_b,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.H,
+                output_mem_config=memory_config,
+            ),
+            original_shape,
+        )
+    elif width_b == 1:
+        return ttnn.reshape(
+            ttnn.experimental.tensor.bcast(
+                input_tensor_a,
+                input_tensor_b,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.W,
+                output_mem_config=memory_config,
+            ),
+            original_shape,
+        )
 
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.multiply_(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 0, 2], dtype=bfloat16 )
-"""
+    return ttnn.reshape(
+        ttnn.experimental.tensor.mul(input_tensor_a, input_tensor_b, output_mem_config=memory_config),
+        original_shape,
+    )
 
-multiply_ = ttnn.register_operation(
-    name="ttnn.multiply_", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.multiply_)
 
 sub = subtract
 mul = multiply
-sub_ = subtract_
-mul_ = multiply_
 
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
