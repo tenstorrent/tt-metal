@@ -32,11 +32,7 @@ struct dispatch_constants {
 
     typedef uint32_t prefetch_q_entry_type;
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
-    static constexpr uint32_t PREFETCH_Q_ENTRIES = 128;
-    static constexpr uint32_t PREFETCH_Q_SIZE = PREFETCH_Q_ENTRIES * sizeof(prefetch_q_entry_type);
     static constexpr uint32_t PREFETCH_Q_BASE = DISPATCH_L1_UNRESERVED_BASE;
-
-    static constexpr uint32_t CMDDAT_Q_BASE = PREFETCH_Q_BASE + ((PREFETCH_Q_SIZE + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
 
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
     static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
@@ -55,7 +51,13 @@ struct dispatch_constants {
     // BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is incremented by PCIe alignment until page size can be evenly split
     static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
 
+    uint32_t prefetch_q_entries() const { return prefetch_q_entries_; }
+
+    uint32_t prefetch_q_size() const { return prefetch_q_size_; }
+
     uint32_t max_prefetch_command_size() const { return max_prefetch_command_size_; }
+
+    uint32_t cmddat_q_base() const { return cmddat_q_base_; }
 
     uint32_t cmddat_q_size() const { return cmddat_q_size_; }
 
@@ -73,11 +75,13 @@ struct dispatch_constants {
         // make this 2^N as required by the packetized stages
         uint32_t dispatch_buffer_block_size;
         if (core_type == CoreType::WORKER) {
-            max_prefetch_command_size_ = 64 * 1024;
-            cmddat_q_size_ = 128 * 1024;
+            prefetch_q_entries_ = 4 * 1024;
+            max_prefetch_command_size_ = 128 * 1024;
+            cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
             dispatch_buffer_block_size = 512 * 1024;
         } else {
+            prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 32 * 1024;
             cmddat_q_size_ = 64 * 1024;
             scratch_db_size_ = 64 * 1024;
@@ -86,8 +90,11 @@ struct dispatch_constants {
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
-        scratch_db_base_ = CMDDAT_Q_BASE + ((cmddat_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
-        uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+
+        prefetch_q_size_ = prefetch_q_entries_ * sizeof(prefetch_q_entry_type);
+        cmddat_q_base_ = PREFETCH_Q_BASE + ((prefetch_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
+        scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
+        const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
         dispatch_buffer_block_size_pages_ = dispatch_buffer_block_size / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
         dispatch_buffer_pages_ = dispatch_buffer_block_size_pages_ * DISPATCH_BUFFER_SIZE_BLOCKS;
@@ -95,7 +102,10 @@ struct dispatch_constants {
         TT_ASSERT(dispatch_cb_end < l1_size);
     }
 
+    uint32_t prefetch_q_entries_;
+    uint32_t prefetch_q_size_;
     uint32_t max_prefetch_command_size_;
+    uint32_t cmddat_q_base_;
     uint32_t cmddat_q_size_;
     uint32_t scratch_db_base_;
     uint32_t scratch_db_size_;
@@ -256,7 +266,7 @@ class SystemMemoryManager {
             this->cq_to_event.push_back(0);
             this->cq_to_last_completed_event.push_back(0);
             this->prefetch_q_dev_ptrs[cq_id] = dispatch_constants::PREFETCH_Q_BASE;
-            this->prefetch_q_dev_fences[cq_id] = dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::PREFETCH_Q_ENTRIES * sizeof(dispatch_constants::prefetch_q_entry_type);
+            this->prefetch_q_dev_fences[cq_id] = dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(core_type).prefetch_q_entries() * sizeof(dispatch_constants::prefetch_q_entry_type);
         }
         vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
@@ -486,8 +496,9 @@ class SystemMemoryManager {
         }
 
         // Wrap FetchQ if possible
+        CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
         uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::PREFETCH_Q_ENTRIES * sizeof(dispatch_constants::prefetch_q_entry_type);
+        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type).prefetch_q_entries() * sizeof(dispatch_constants::prefetch_q_entry_type);
         if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
 
