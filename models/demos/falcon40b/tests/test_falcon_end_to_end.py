@@ -406,8 +406,8 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
-    ((1, 0.99, 0.99, 0.99), (60, 0.92, 0.99, 0.85)),
-    ids=["layers_1", "layers_60"],
+    ((1, 0.99, 0.99, 0.99), (12, 0.99, 0.99, 0.99), (60, 0.92, 0.99, 0.85)),
+    ids=["layers_1", "layers_12", "layers_60"],
 )
 @pytest.mark.parametrize(
     "model_version",
@@ -450,6 +450,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
             else:
                 out_pcc = 0.92
                 cache_pcc = 0.94
+        elif num_layers == 12:
+            out_pcc = 0.99
+            cache_pcc = 0.98
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
