@@ -167,14 +167,8 @@ class TtFalconModelShared:
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
 
-            attention_mask_heads_dim = (
-                self.config.num_attention_heads
-                if self.model_config["ATTN_MASK_MEMCFG"].is_sharded()
-                else len(self.devices)
-            )
-
             attention_mask_bool_chunks = torch.chunk(
-                (attention_mask_bool * -1e5).expand(-1, attention_mask_heads_dim, -1, -1),
+                (attention_mask_bool * -1e5).expand(-1, len(self.devices), -1, -1),
                 len(self.devices),
                 1,
             )
@@ -235,6 +229,9 @@ class TtFalconModelShared:
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
+
+        for layer in self.layers:
+            layer.preprocessing(llm_mode, batch_size, sequence_size)
 
         return tt_inputs, tt_attention_mask
 
