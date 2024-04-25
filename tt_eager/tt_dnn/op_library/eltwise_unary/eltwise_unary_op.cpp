@@ -122,7 +122,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init({1});", fmt::format("gelu_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init({1});",  fmt::format("rsqrt_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init({1});", fmt::format("exp_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::EXP: op_init_and_name = {fmt::format("exp_tile_init({}u);", std::to_string((uint32_t)param0)), fmt::format("exp_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init({1});", fmt::format("erf_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init({1});", fmt::format("erfc_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;
@@ -132,6 +132,8 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::MUL_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::DIV_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f/param0))}; break;
         case UnaryOpType::UNARY_NE: op_init_and_name = {"unary_ne_tile_init();", fmt::format("unary_ne_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::UNARY_GT: op_init_and_name = {"unary_gt_tile_init();", fmt::format("unary_gt_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::UNARY_LT: op_init_and_name = {"unary_lt_tile_init();", fmt::format("unary_lt_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };

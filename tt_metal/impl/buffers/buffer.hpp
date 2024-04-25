@@ -44,11 +44,6 @@ enum class ShardOrientation {
 };
 
 
-uint32_t get_num_cores_from_shape(const TensorMemoryLayout & layout, const uint32_t total_height, const uint32_t total_width, const std::array<uint32_t, 2> & shard_shape);
-
-
-
-
 struct ShardSpec {
     CoreRangeSet grid;
     std::array<uint32_t, 2> shape;

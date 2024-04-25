@@ -207,14 +207,14 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.start("processing_of_input")
     if llm_mode == "prefill":
         model_inputs = torch.split(model_input, 1)
-        tt_embeddings, tt_attention_mask = zip(
+        tt_inputs, tt_attention_mask = zip(
             *[
                 tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
     elif llm_mode == "decode":
-        tt_embeddings_host, tt_attention_mask_host = tt_FalconCausalLM.model_preprocessing(
+        tt_inputs, tt_attention_mask_host = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
         attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
@@ -235,7 +235,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_inputs[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -248,15 +248,11 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = tt_outs
 
     elif llm_mode == "decode":
-        tt_embeddings = [
-            tt_embeddings_host[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            for i in range(len(devices))
-        ]
         tt_attention_mask = [
             tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
         ]
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_inputs,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
@@ -270,23 +266,19 @@ def run_test_FalconCausalLM_end_to_end(
 
     del tt_out
     del tt_layer_present
-    del tt_embeddings
+    del tt_inputs
     del tt_attention_mask
 
     # Prepare inputs
     if llm_mode == "prefill":
         model_inputs = torch.split(model_input, 1)
-        tt_embeddings, tt_attention_mask = zip(
+        tt_inputs, tt_attention_mask = zip(
             *[
                 tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
     elif llm_mode == "decode":
-        tt_embeddings = [
-            tt_embeddings_host[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            for i in range(len(devices))
-        ]
         tt_attention_mask = [
             tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
         ]
@@ -300,7 +292,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_outs = []
             for user_id in range(batch):
                 tt_out, tt_layer_present = tt_FalconCausalLM(
-                    input_embeddings=tt_embeddings[user_id],
+                    input_ids=tt_inputs[user_id],
                     llm_mode=llm_mode,
                     attention_mask=tt_attention_mask[user_id],
                     user_id=user_id,
@@ -310,7 +302,7 @@ def run_test_FalconCausalLM_end_to_end(
                 )
                 tt_outs.append(tt_out)
             model_inputs = torch.split(model_input, 1)
-            tt_embeddings, tt_attention_mask = zip(
+            tt_inputs, tt_attention_mask = zip(
                 *[
                     tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                     for m_i in model_inputs
@@ -320,17 +312,13 @@ def run_test_FalconCausalLM_end_to_end(
 
         elif llm_mode == "decode":
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings,
+                input_ids=tt_inputs,
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask,
                 layer_past=tt_layer_past,
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_embeddings = [
-                tt_embeddings_host[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-                for i in range(len(devices))
-            ]
             tt_attention_mask = [
                 tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
             ]
@@ -350,7 +338,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_embeddings=tt_embeddings[user_id],
+                input_ids=tt_inputs[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
@@ -363,7 +351,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
-            input_embeddings=tt_embeddings,
+            input_ids=tt_inputs,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,

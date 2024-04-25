@@ -13,7 +13,7 @@ TTNN_PYBIND11_LDFLAGS = $(TTNN_LDFLAGS) -ltt_lib_csrc -lttnn
 TTNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast -fno-var-tracking
 
 TTNN_SRC_DIR = ttnn/cpp/ttnn
-TTNN_SRCS = $(wildcard $(TTNN_SRC_DIR)/*.cpp) $(wildcard $(TTNN_SRC_DIR)/*/*.cpp)
+TTNN_SRCS = $(wildcard $(TTNN_SRC_DIR)/*.cpp) $(wildcard $(TTNN_SRC_DIR)/*/*.cpp) $(wildcard $(TTNN_SRC_DIR)/*/*/*.cpp)
 
 TTNN_PYBIND11_SRCS = \
     ttnn/cpp/pybind11/__init__.cpp
