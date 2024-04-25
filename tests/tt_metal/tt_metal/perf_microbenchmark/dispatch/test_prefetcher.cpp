@@ -1938,20 +1938,16 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Iterations: {}", iterations_g);
 
         // Cache stuff
+        gen_terminate_cmds(terminate_cmds, terminate_sizes);
+        gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
-            std::thread t1 ([&]() {
-                write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, false);
-                write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, true);
-            });
-            tt_metal::detail::LaunchProgram(device, program);
-            t1.join();
+            run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
             initialize_device_g = true;
         }
 
         log_info(tt::LogTest, "Generating cmds and running {} iterations (readback_every_iter: {}) now...", iterations_g, readback_every_iteration_g);
         if (readback_every_iteration_g) {
-            gen_terminate_cmds(terminate_cmds, terminate_sizes);
             for (int i = 0; i < iterations_g; i++) {
                 log_info(LogTest, "Iteration: {}", std::to_string(i));
                 initialize_device_g = true;
@@ -1972,15 +1968,13 @@ int main(int argc, char **argv) {
                 }
             }
         } else {
-            gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
-            gen_terminate_cmds(terminate_cmds, terminate_sizes);
             auto elapsed_seconds = run_test(iterations_g, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
 
             log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
             log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
             log_warning(LogTest, "Performance mode, not validating results");
             if (test_type_g == 2 || test_type_g == 3) {
-                float bw = bytes_of_data_g * iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
+                float bw = (long int)bytes_of_data_g * iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
                 std::stringstream ss;
                 ss << std::fixed << std::setprecision(3) << bw;
                 log_info(LogTest, "BW: {} GB/s", ss.str());
