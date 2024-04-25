@@ -335,6 +335,7 @@ def run_test_FalconDecoder_inference(
         assert does_pass
 
 
+@pytest.mark.parametrize("#7842: Possible hangs in t3k")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("enable_program_cache", (True, False), ids=["enable_program_cache", "disable_program_cache"])
 @pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
