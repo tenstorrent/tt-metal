@@ -141,18 +141,21 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (zero_srcA ? 0b010001 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
     static constexpr uint unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);     // Needed for dot product
+    static constexpr uint unpack_srca_dat_valid = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
+    static constexpr uint unpack_srcb_dat_valid = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
 
-    constexpr uint32_t innerloop = 1;
+    const uint32_t innerloop = zero_srcA ? (num_faces-1) : 1;
     const uint32_t outerloop = zero_srcA ? 1 : (num_faces>2) ? num_faces/2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
     if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
     } else if constexpr (zero_srcA) {
         tmp.set_start_op(unpack_zero_srca);
+        tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
     }
     tmp.program(instrn_buffer);
 }
@@ -170,8 +173,8 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
 
     // Set face dim
     if constexpr (zero_srcA) {
-        TT_SETADCXX(p_setadc::UNP_A, num_faces*unpA_face_r_dim*FACE_C_DIM-1, 0x0);
-        TT_SETADCXX(p_setadc::UNP_B, num_faces*unpB_face_r_dim*FACE_C_DIM-1, 0x0);
+        TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
+        TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
     } else {
         TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
         TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
@@ -192,6 +195,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB,zero_srcA>(narrow_tile, num_faces);
 }
 
+template <bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -223,7 +227,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1);
+    std::uint32_t num_loops = zero_srcA ? 1 : (narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1));
 
     // Clear z/w start counters for SrcB
     TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
@@ -265,6 +269,7 @@ inline void llk_unpack_tilizeA_B(
     DEBUG_STATUS('U', 'P', 'T', 'D');
 }
 
+template <bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -272,6 +277,6 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t tile_idx_b,
     std::uint32_t num_faces = 4) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
+        llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }
