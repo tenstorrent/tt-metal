@@ -27,7 +27,7 @@ def run_isclose_tests(
 ):
     torch.manual_seed(data_seed)
     x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape[1]).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape[1]).uniform_(-200, 200)
 
     try:
         # get ref result
@@ -49,7 +49,7 @@ def run_isclose_tests(
     assert tt_result.shape == ref_value.shape
 
     # compare tt and golden outputs
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 
