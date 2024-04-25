@@ -140,6 +140,7 @@ std::vector<std::optional<Tensor>> moreh_sgd(
         {param_out, momentum_buffer_out});
 
     std::vector<std::optional<Tensor>> result;
+    result.reserve(2);
     result.push_back(output_tensors.at(0));
     if (output_tensors.size() == 2) {
         result.push_back(output_tensors.at(1));
