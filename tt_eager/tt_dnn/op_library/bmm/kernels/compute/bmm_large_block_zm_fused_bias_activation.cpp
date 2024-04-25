@@ -88,6 +88,7 @@ void MAIN {
 
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
+    constexpr uint32_t in1_inplace_cb_id = tt::CB::c_in6;
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
     constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
 
@@ -135,6 +136,9 @@ void MAIN {
 
             cb_wait_front(in0_cb_id, in0_block_num_tiles);
             cb_wait_front(in1_cb_id, in1_block_num_tiles);
+            #ifdef USE_SAME_NOC
+            cb_wait_front(in1_inplace_cb_id, in1_block_num_tiles);
+            #endif
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
@@ -248,6 +252,9 @@ void MAIN {
 
             cb_pop_front(in0_cb_id, in0_block_num_tiles);
             cb_pop_front(in1_cb_id, in1_block_num_tiles);
+            #ifdef USE_SAME_NOC
+            cb_pop_front(in1_inplace_cb_id, in1_block_num_tiles);
+            #endif
 
         }
 
