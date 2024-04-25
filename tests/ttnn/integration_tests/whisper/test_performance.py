@@ -22,7 +22,6 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
@@ -75,6 +74,8 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,
+            device=device,
+            batch_size=1,
         )
         tt_output = ttnn.to_torch(tt_output)
         end = time.time()

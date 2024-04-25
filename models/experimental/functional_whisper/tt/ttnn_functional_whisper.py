@@ -198,8 +198,14 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, inputs_embeds, *, parameters):
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
+def encoder(config, inputs_embeds, *, parameters, device, batch_size):
+    # issue #7872
+    # broadcast add is not happening for batched inputs
+    # hidden_states = inputs_embeds + parameters.embed_positions.weight
+    weights = ttnn.to_torch(parameters.embed_positions.weight)
+    embeds = ttnn.to_torch(inputs_embeds)
+    hidden_states = torch.add(weights, embeds)
+    hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT)
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -399,8 +405,19 @@ def preprocess_inputs(
     return input_embeds, decoder_hidden_states, attention_mask
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
+def whisper(
+    config,
+    encoder_hidden_states,
+    decoder_hidden_states,
+    decoder_attention_mask,
+    *,
+    parameters,
+    device=None,
+    batch_size=1,
+):
+    encoder_hidden_states = encoder(
+        config, encoder_hidden_states, parameters=parameters.encoder, device=device, batch_size=batch_size
+    )
     last_hidden_state = decoder(
         config,
         decoder_hidden_states,
@@ -409,6 +426,26 @@ def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attent
         parameters=parameters.decoder,
     )
     return last_hidden_state
+
+
+def whisper_for_audio_classification(config, inputs_embeds, *, parameters, device, batch_size):
+    encoder_outputs = encoder(
+        config=config,
+        inputs_embeds=inputs_embeds,
+        parameters=parameters.encoder,
+        device=device,
+        batch_size=batch_size,
+    )
+
+    hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
+    hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
+
+    pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
+
+    logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
+    logits = ttnn.add(logits, parameters.classifier.bias)
+
+    return logits
 
 
 def custom_preprocessor(torch_model, name):
