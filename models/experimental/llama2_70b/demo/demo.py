@@ -8,7 +8,6 @@ import torch
 import torch.nn.functional as F
 
 from time import time
-from time import sleep
 import pytest
 from loguru import logger
 
@@ -42,8 +41,7 @@ def main(args):
                 "models/demos/t3000/llama2_70b/demo/data/demo_user_output.txt", "w"
             ) as f:  # Open a file for writing
                 for i, text in enumerate(all_text):
-                    logger.info(f"user {i}: {text}")  # Log to wherever logger is configured to write
-                    f.write(f"user {i}: {text}\n")  # Write to the file with a newline
+                    f.write(f"User {i}: {text}\n")
 
 
 def build_generator(args):
@@ -93,7 +91,7 @@ def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
         tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu").clone().detach()
     eos_reached = torch.tensor([False] * bsz, device="cpu")
     input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
-    return tokens, input_text_mask
+    return tokens, input_text_mask, eos_reached
 
 
 def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
@@ -119,16 +117,15 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     model_args = model.params
     max_gen_len = args.num_tokens
     args.greedy = args.top_k == 1  # greedy decoding is top-k with k=1
-    max_prompt_len = max(len(t) for t in prompt_tokens)
+
     min_prompt_len = min(len(t) for t in prompt_tokens) if not args.decode_only else 1
+    max_prompt_len = max(len(t) for t in prompt_tokens)
     assert max_prompt_len <= model_args.max_seq_len
-    assert (
-        max_gen_len >= max_prompt_len
-    ), f"max_gen_len {max_gen_len} must be greater than max_prompt_len {max_prompt_len} so that at least prompt is prefilled"
-    total_len = min(model_args.max_seq_len, max_gen_len + 1)
+    total_len = min(model_args.max_seq_len, max_gen_len + max_prompt_len)
+    assert total_len <= model_args.max_seq_len
 
     # prepare inputs
-    tokens, input_text_mask = intialize_inputs(tokenizer, prompt_tokens, bsz, total_len)
+    tokens, input_text_mask, eos_reached = intialize_inputs(tokenizer, prompt_tokens, bsz, total_len)
     prev_pos = 0
 
     # some profiling and logging
@@ -155,23 +152,20 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
         if all(eos_reached):
             break
 
+        # profiling
+        latencies.append(time() - start)
+
         # Decode the entire sequence generated so far and log it
         for user_id in range(bsz):
             text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
-        # text = tokenizer.decode(tokens[0, prev_pos].tolist())
-
-        # profiling
-        latencies.append(time() - start)
-
-        # logging
         if return_full_logits:
             full_logits.append(logits.clone().detach())
 
-    latency_printout(latencies, args, total_len - 1)
+    latency_printout(latencies, args, total_len - min_prompt_len)
+    output = get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len)
 
-    output = get_all_text(args, tokenizer, tokens, prompt_tokens, max_gen_len)
     if return_logits:
         output = (output, logits)
     elif return_full_logits:
@@ -181,8 +175,11 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
 
 
 def latency_printout(latencies, args, generated_len):
+    latencies = [
+        latency for token_pos, latency in enumerate(latencies) if token_pos % 32 != 0
+    ]  # We recompute program_cache for multiples of 32
     overall_time = sum(latencies)
-    overall_tokens = args.max_batch_size * generated_len
+    overall_tokens = args.max_batch_size * len(latencies)
     warmup_batch = 2
     # skip initial warmup batch
     if len(latencies) > warmup_batch:
@@ -190,13 +187,18 @@ def latency_printout(latencies, args, generated_len):
         overall_tokens -= warmup_batch * args.max_batch_size
         latencies = latencies[warmup_batch:]
     mean_latency = sum(latencies) / len(latencies)
-    logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {1/mean_latency:.1f} tokens/s")
+    tokens_per_second = 1 / mean_latency if mean_latency != 0 else 0
+    overall_tokens_per_second = overall_tokens / overall_time if overall_time != 0 else 0
+    tokens_per_second_per_user = overall_tokens_per_second / args.max_batch_size
+
     logger.info(
-        f"Overall throughput: {1000 * overall_time / overall_tokens:.1f} ms @ {overall_tokens / overall_time:.1f} tokens/s"
+        f"Overall throughput: {1000 * overall_time / overall_tokens:.1f} ms @ {overall_tokens_per_second:.1f} tokens/s"
     )
+    logger.info(f"Tokens per second per user: {tokens_per_second_per_user:.1f} tokens/s/u")
+    logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {tokens_per_second:.1f} tokens/s")
 
 
-def get_all_text(args, tokenizer, tokens, prompt_tokens, max_gen_len):
+def get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len):
     out_tokens = []
     for i, toks in enumerate(tokens.tolist()):
         # cut to max gen len
@@ -209,16 +211,6 @@ def get_all_text(args, tokenizer, tokens, prompt_tokens, max_gen_len):
         out_tokens.append(toks)
     all_text = [tokenizer.decode(toks) for toks in out_tokens]
     return all_text
-
-
-def top_pk_logits(logits, p=0.9, k=10, temperature=1.0, return_probs=False):
-    next_token_logscores = top_k_top_p_filtering(logits, top_k=k, top_p=p)
-    probs = F.softmax(next_token_logscores / temperature, dim=-1)
-    token = torch.multinomial(probs, num_samples=1).squeeze(-1)
-    if return_probs:
-        return token, probs
-    else:
-        return token
 
 
 def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=False):
@@ -246,7 +238,7 @@ class Args:
         num_layers=None,
         max_seq_len=4096,
         # Generation args
-        num_tokens=100,
+        num_tokens=128,
         prompts_file="models/demos/t3000/llama2_70b/demo/data/multi_prompt.json",
         output_at_end=True,
         top_p=1,
@@ -335,6 +327,7 @@ def test_LlamaModel_demo(
     n_devices,
     emulated,
     decode_only,
+    use_program_cache,
 ):
     ## Get model config
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
