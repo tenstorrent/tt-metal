@@ -151,7 +151,7 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("tilize", &tilize,
             py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            py::arg("use_multicore").noconvert() = false, R"doc(
+            py::arg("use_multicore").noconvert() = true, R"doc(
             Changes data layout of input tensor to TILE.
 
             Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
@@ -197,7 +197,7 @@ namespace tt::tt_metal::detail{
         m_tensor.def("untilize", &untilize,
             py::arg("input").noconvert(),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("use_multicore").noconvert() = false,
+            py::arg("use_multicore").noconvert() = true,
             py::arg("use_pack_untilize").noconvert() = true,
             R"doc(
             Changes data layout of input tensor to ROW_MAJOR.
