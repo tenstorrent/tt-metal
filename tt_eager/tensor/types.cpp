@@ -62,9 +62,7 @@ Padding::PadDimension& Padding::operator[](const std::int64_t index) {
     return this->pad_dimensions_[index];
 }
 
-const Padding::PadDimension& Padding::operator[](const std::int64_t index) const  {
-    return this->pad_dimensions_[index];
-}
+const Padding::PadDimension Padding::operator[](const std::int64_t index) const { return this->pad_dimensions_[index]; }
 
 Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
 
@@ -117,7 +115,7 @@ uint32_t& Shape::operator[](const std::int64_t index) {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
-const uint32_t& Shape::operator[](const std::int64_t index) const {
+const uint32_t Shape::operator[](const std::int64_t index) const {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
