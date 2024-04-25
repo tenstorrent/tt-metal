@@ -148,7 +148,7 @@ main() {
     elif [[ "$pipeline_type" == *"device_performance_bare_metal"* ]]; then
         test_marker="models_device_performance_bare_metal"
     elif [[ "$pipeline_type" == *"_bare_metal_multi_device"* ]]; then
-        test_marker="models_device_performance_bare_metal_multi_device"
+        test_marker="models_performance_bare_metal_multi_device"
     elif [[ "$pipeline_type" == *"_bare_metal"* ]]; then
         test_marker="models_performance_bare_metal"
     else
