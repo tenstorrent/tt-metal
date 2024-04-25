@@ -92,7 +92,6 @@ namespace detail{
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
-    runtime_args_dirty = true;
     std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
     for (const auto& core_type : supported_core_types) {
         kernels_.insert({core_type, {}});
@@ -571,23 +570,6 @@ void Program::invalidate_compile() {
 }
 
 
-template <typename CoreRangeContainer>
-vector<pair<uint32_t, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
-    // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-    vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
-    for (const CoreRange& core_range : ranges) {
-        CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
-        CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
-
-        uint32_t dst_noc_multicast_encoding =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-
-        uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
-    }
-    return dst_noc_multicast_info;
-}
-
 void Program::populate_dispatch_data(Device* device) {
     static const map<RISCV, uint32_t> processor_to_local_mem_addr = {
         {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
@@ -807,115 +789,6 @@ void Program::populate_dispatch_data(Device* device) {
     this->program_transfer_info.num_active_cores = num_active_cores;
 
     return;
-}
-
-void Program::update_runtime_args_transfer_info(Device* device) {
-    // TODO: commonize
-    auto extract_dst_noc_unicast_info =
-        [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
-        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info;
-        for (const CoreRange& core_range : ranges) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                    CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    uint32_t dst_noc_unicast_encoding =
-                        NOC_XY_ENCODING(NOC_X(physical_coord.x), NOC_Y(physical_coord.y));
-                    dst_noc_unicast_info.push_back(std::make_pair(dst_noc_unicast_encoding, /*num_mcast_dests=*/0));
-                }
-            }
-        }
-        return dst_noc_unicast_info;
-    };
-
-    if (this->runtime_args_dirty) {
-        this->runtime_args_dirty = false;
-
-        this->program_transfer_info.unicast_runtime_args.clear();
-        this->program_transfer_info.multicast_runtime_args.clear();
-
-        // Unique Runtime Args (Unicast)
-        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-            auto kernel = detail::GetKernel(*this, kernel_id);
-            auto dst = detail::GetL1ArgBaseAddr(kernel);
-
-            for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-                // can make a vector of unicast encodings here
-                CoreCoord physical_core =
-                    device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-                const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
-                    detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
-
-                transfer_info_2 transfer_info = {
-                    .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = runtime_args_data};
-                this->program_transfer_info.unicast_runtime_args[dst].push_back(transfer_info);
-            }
-
-            // Common Runtime Args (Multicast, fallback to Unicast for ETH)
-            const auto &common_rt_args = kernel->common_runtime_args();
-
-            if (common_rt_args.size() > 0) {
-                uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
-                if (kernel->get_kernel_core_type() == CoreType::WORKER) {
-                    vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-                        extract_dst_noc_multicast_info<std::vector<CoreRange>>(device, kernel->logical_coreranges(),kernel->get_kernel_core_type());
-                    transfer_info_2 transfer_info = {
-                        .dst_base_addr = common_args_addr, .dst_noc_info = dst_noc_multicast_info, .linked = false, .data = common_rt_args};
-                    this->program_transfer_info.multicast_runtime_args[common_args_addr].push_back(transfer_info);
-                    // For later !dirty perf opt, currently only ever updates index 0, so assert that size never exceeds 1 here
-                    // which seems common but not guaranteed to be true (2 kernels using same processor but different rtargs)
-                    TT_ASSERT(this->program_transfer_info.multicast_runtime_args[common_args_addr].size() == 1);
-                } else if (kernel->get_kernel_core_type() == CoreType::ETH) {
-                    for (auto &core_coord : kernel->logical_cores()) {
-                        // can make a vector of unicast encodings here
-                        CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-                        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(
-                            detail::GetCoreRangeSet(core_coord).ranges(), kernel->get_kernel_core_type());
-
-                        transfer_info_2 transfer_info = {
-                            .dst_base_addr = dst, .dst_noc_info = dst_noc_unicast_info, .linked = false, .data = common_rt_args};
-                        this->program_transfer_info.unicast_runtime_args[common_args_addr].push_back(transfer_info);
-                    }
-                } else {
-                    TT_ASSERT(false, "Unsupported Runtime Args core type {} for kernel {}", kernel->get_kernel_core_type(), kernel->name());
-                }
-            }
-        }
-    } else {
-        map<uint32_t, uint32_t> unicast_index = {
-            {BRISC_L1_ARG_BASE, 0},
-            {NCRISC_L1_ARG_BASE, 0},
-            {TRISC_L1_ARG_BASE, 0},
-            {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, 0},
-        };
-        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-            auto kernel = detail::GetKernel(*this, kernel_id);
-            uint32_t dst = detail::GetL1ArgBaseAddr(kernel);
-
-            for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-                const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                this->program_transfer_info.unicast_runtime_args[dst][unicast_index[dst]].data = runtime_args_data;
-                unicast_index[dst]++;
-            }
-
-            // Common Runtime Args (Multicast, fallback to Unicast for ETH)
-            const auto &common_rt_args = kernel->common_runtime_args();
-            if (common_rt_args.size() > 0) {
-                uint32_t common_args_addr = dst + kernel->get_common_runtime_args_offset();
-                // Note: Currently hardcoded idx 0 for updating, asserts checks that size never exceeded 1.
-                if (kernel->get_kernel_core_type() == CoreType::WORKER) {
-                    this->program_transfer_info.multicast_runtime_args[common_args_addr][0].data = common_rt_args;
-                } else if (kernel->get_kernel_core_type() == CoreType::ETH) {
-                    for (auto &core_coord : kernel->logical_cores()) {
-                        this->program_transfer_info.unicast_runtime_args[common_args_addr][0].data = common_rt_args;
-                    }
-                } else {
-                    TT_ASSERT(false, "Unsupported Runtime Args core type {} for kernel {}", kernel->get_kernel_core_type(), kernel->name());
-                }
-            }
-        }
-    }
 }
 
 void Program::compile( Device * device )
