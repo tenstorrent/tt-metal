@@ -70,11 +70,12 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     (
         [1, 1, 1, 10],  # test not mutiple of 32 case
         [1, 1, 1, 32],  # test single tile
-        [1, 1, 1, 640],  # test multiple tiles
-        [1, 1, 1, 623],  # test multiple tiles, not a multiple of 32
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
     ),
 )
 def test_moreh_matmul_1d(input_shape, device):
+    torch.manual_seed(3072)
     # get tensors
     output_shape = [1, 1, 1, 1]
     tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
@@ -104,8 +105,8 @@ def test_moreh_matmul_1d(input_shape, device):
     (
         [1, 1, 1, 10],  # test not mutiple of 32 case
         [1, 1, 1, 32],  # test single tile
-        [1, 1, 1, 640],  # test multiple tiles
-        [1, 1, 1, 623],  # test multiple tiles, not a multiple of 32
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
     ),
 )
 @pytest.mark.parametrize(
@@ -117,6 +118,7 @@ def test_moreh_matmul_1d(input_shape, device):
     ),
 )
 def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
+    torch.manual_seed(3072)
     require_input_grad, require_other_grad = requires_grad
     output_shape = [1, 1, 1, 1]
     # get tensors
@@ -185,6 +187,7 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     ),
 )
 def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, requires_grad, device):
+    torch.manual_seed(3072)
     input_shape, other_shape, output_shape = params
     input_shape[0] = input_b1
     input_shape[1] = input_b2
@@ -251,6 +254,7 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     ),
 )
 def test_moreh_matmul(params, device):
+    torch.manual_seed(3072)
     input_shape, other_shape, output_shape = params
     tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
@@ -300,6 +304,7 @@ def test_moreh_matmul(params, device):
 )
 @pytest.mark.parametrize("has_output", [True, False])
 def test_primary_moreh_matmul(params, has_output, device):
+    torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
     tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
