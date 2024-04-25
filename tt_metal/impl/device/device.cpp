@@ -493,7 +493,7 @@ void Device::compile_command_queue_programs() {
             }
         }
     } else {
-        TT_THROW("FD2.0 does not support R chip yet");
+    //    TT_THROW("FD2.0 does not support R chip yet");
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
@@ -676,6 +676,7 @@ bool Device::close() {
 
     this->active_devices_.deactivate_device(this->id_);
     this->disable_and_clear_program_cache();
+    this->command_queue_programs.clear();
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
 

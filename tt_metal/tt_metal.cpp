@@ -141,25 +141,9 @@ namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
     std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    // TODO: revisit this and cleanup, ttnn can probably directly use DevicePool
     ZoneScoped;
-    std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
-    for (const auto &device_id : device_ids) {
-        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        if (active_devices.find(mmio_device_id) == active_devices.end()) {
-            for (const auto &mmio_controlled_device_id :
-                 tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (mmio_controlled_device_id != mmio_device_id) {
-                    continue;
-                }
-                Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
-                active_devices.insert({mmio_controlled_device_id, dev});
-                detail::InitDeviceProfiler(dev);
-            }
-        }
-    }
-    // TODO: need to only enable routing for used mmio chips
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    return active_devices;
+    return tt::DevicePool::instance(device_ids, num_hw_cqs, l1_bank_remap).get_all_active_devices();
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
@@ -730,16 +714,13 @@ size_t GetNumPCIeDevices() {
 
 Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    detail::InitDeviceProfiler(dev);
+    Device *dev = tt::DevicePool::instance({device_id}, num_hw_cqs, l1_bank_remap).get_active_device(device_id);
     return dev;
 }
 
 bool CloseDevice(Device *device) {
     ZoneScoped;
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    return device->close();
+    return tt::DevicePool::instance({device->id()}).close_device(device->id());
 }
 
 Program CreateProgram(){
