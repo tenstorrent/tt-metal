@@ -91,12 +91,8 @@ def run_test_FalconAttention_inference(
         for device in devices:
             tt_attention_input.append(tt_attention_input_host.to(device, model_config["ATTN_INPUT_MEMCFG"]))
 
-        attention_mask_heads_dim = (
-            configuration.num_attention_heads if model_config["ATTN_MASK_MEMCFG"].is_sharded() else len(devices)
-        )
-
         attention_mask_bool_chunks = torch.chunk(
-            (attention_mask_bool * -100000).expand(-1, attention_mask_heads_dim, -1, -1),
+            (attention_mask_bool * -100000).expand(-1, len(devices), -1, -1),
             len(devices),
             1,
         )

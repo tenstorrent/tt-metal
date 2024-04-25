@@ -225,6 +225,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
     batch, seq_len = input_shape
     assert batch == 32
     row_height = batch
+    model_config["row_height"] = row_height
 
     if model_config_str in ("BFLOAT16-L1",):
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = L1_MEMCFG
@@ -772,6 +773,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     )
     BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    BFP4_DTYPE = ttl.tensor.DataType.BFLOAT4_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ACCEPTABLE_PREFILL_MODEL_CONFIG_STRS:
@@ -796,6 +798,18 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "COMPUTE_KERNEL_HIFI4_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        "COMPUTE_KERNEL_HIFI4_CONFIG_FP16_DEST": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -804,6 +818,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         ),
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "L1_MEMCFG": L1_MEMCFG,
+        "BFP4_DTYPE": BFP4_DTYPE,
+        "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
@@ -821,10 +837,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
-    # # TODO: use BFLOAT16 for the attention mask!
-    # # model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
-    # model_config["ATTN_MASK_DTYPE"] = BFLOAT16_DTYPE
-
     head_dim = 64
     hidden_size = model_config_entries["hidden_size"]
     vocab_size = model_config_entries["vocab_size"]
@@ -832,12 +844,51 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     num_kv_heads = model_config_entries["num_kv_heads"]
 
     row_height = input_shape[1]
+    model_config["row_height"] = row_height
 
     # Layernorm is an exception that are sharded also here, because the interleaved OP does not fit in L1 for 40b hidden size
     layernorm_num_cores_x = 8
     layernorm_max_num_cores_y = 8
 
     layernorm_slice_size = 512
+    attention_max_slice_size = 256
+    attention_slice_size = min(attention_max_slice_size, row_height)
+    assert row_height % attention_slice_size == 0
+
+    attention_num_slices = row_height // attention_slice_size
+    attention_num_cores = min(attention_slice_size * 16 // 32, 64)
+    assert attention_num_cores in (16, 32, 64)
+
+    if attention_num_cores == 16:
+        attention_mm_grid_size = (8, 2)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 1),
+                ),
+            }
+        )
+    elif attention_num_cores == 32:
+        attention_mm_grid_size = (8, 4)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 3),
+                ),
+            }
+        )
+    else:
+        attention_mm_grid_size = (8, 8)
+        attn_shard_spec = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 7),
+                ),
+            }
+        )
 
     (
         layernorm_block_sharded_mem_config,
@@ -859,76 +910,79 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     model_config["layernorm_params"] = layernorm_params
 
+    model_config["attention_params"] = {
+        "attention_slice_size": attention_slice_size,
+        "attention_max_slice_size": attention_max_slice_size,
+        "attention_num_slices": attention_num_slices,
+    }
+
     # Specify program configs
+    attetnion_mm_M = (
+        attention_slice_size * 16 // attention_num_cores // 32
+    )  # attetnion_slice_size * 16 qheads // attention_num_cores // TILE_SIZE
 
-    # QKV Projection
-    model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=16,  # TODO: Can this be larger # 256 tiles in K
-        out_subblock_h=4,  # TODO: Can this be larger
+    # Attention
+    model_config["ATTENTION_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=attention_mm_grid_size,
+        in0_block_w=head_dim // 32,
+        out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=row_height // 32 // 8,  # S2048: 8
-        per_core_N=1152 // 32 // 4,  # 9
+        per_core_M=attetnion_mm_M,
+        per_core_N=row_height // 32,
+        fuse_batch=True,
         fused_activation=None,
-        transpose_mcast=True,
+        mcast_in0=False,
     )
-
-    # Softmax
     model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(8, 2),
+        compute_with_storage_grid_size=attention_mm_grid_size,
         subblock_w=1,
-        block_h=row_height // 32,
-        block_w=1,  # Dynamic
+        block_h=attetnion_mm_M,
+        block_w=row_height // 32,
     )
-
-    # Dense Out
-    # input: [S, 8k], weight: [8k, 1k]
-    model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=16,  # 256 tiles in K
-        out_subblock_h=4,
+    model_config["ATTENTION_MM_2_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=attention_mm_grid_size,
+        in0_block_w=row_height // 32,
+        out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=row_height // 32 // 4,  # S2048: 16
-        per_core_N=1024 // 32 // 8,  # 4
+        per_core_M=attetnion_mm_M,
+        per_core_N=head_dim // 32,
+        fuse_batch=True,
         fused_activation=None,
-        transpose_mcast=False,
+        mcast_in0=False,
+    )
+    model_config["ATTENTION_DTYPE"] = dtype
+
+    model_config["QUERY_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * attention_slice_size // attention_num_cores, head_dim],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
-    # MLP FF1
-    model_config["DENSE_H_TO_4H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=8,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 4,  # S2048: 16 M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=[ttl.tensor.FusibleActivation.GELU, True],
+    model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * attention_slice_size // attention_num_cores, row_height],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
-    # MLP FF2
-    model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=8,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 4,  # S2048: 16 # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=4,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=None,
-    )
-
-    # LM Head
-    # input: [S, 8k], weight: [8k, 8k]
-    model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=1,  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=row_height // 32 // 8,  # S2048: 8 M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=8192 // 32 // 8,  # 64,  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=None,
+    model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            attn_shard_spec,
+            [16 * attention_slice_size // attention_num_cores, head_dim],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
     )
 
     # uncomment if need to see all the configs
