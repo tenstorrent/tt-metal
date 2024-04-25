@@ -237,8 +237,8 @@ inline void _init_exponential_()
 
         // Backdoor load of Macro Instruction 2
         // ROUND instruction to convert FP32 result into an integer value (int16)
-        //                Stochastic = 1,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to install in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as fp32, output as unsigned int16, use imm as descale
-        TTI_SFP_STOCH_RND(1,               0,             0,              0,                  14,                                                                     14);  //Round to unsigned Int16
+        //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to install in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as fp32, output as unsigned int16, use imm as descale
+        TTI_SFP_STOCH_RND(0,               0,             0,              0,                  14,                                                                     14);  //Round to unsigned Int16
 
         // Backdoor load of Macro Instruction 3
         // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent; 
