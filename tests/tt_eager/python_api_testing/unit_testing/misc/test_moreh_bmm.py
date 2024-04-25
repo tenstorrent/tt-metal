@@ -27,7 +27,7 @@ def test_moreh_bmm(shape, device):
     output_shape = [1, shape[0], shape[1], shape[3]]
 
     # get tensors
-    tt_input, tt_mat2, _, _, _, torch_input, torch_mat2, _ = get_tensors(
+    tt_input, tt_mat2, _, _, _, _, torch_input, torch_mat2, _ = get_tensors(
         input_shape, mat2_shape, output_shape, False, False, False, device
     )
 
@@ -82,6 +82,7 @@ def test_moreh_bmm_backward(shape, requires_grad, device):
     (
         tt_input,
         tt_mat2,
+        _,
         tt_output_grad,
         tt_input_grad,
         tt_mat2_grad,

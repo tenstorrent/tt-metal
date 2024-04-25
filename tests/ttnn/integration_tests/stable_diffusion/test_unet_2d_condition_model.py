@@ -7,11 +7,14 @@ import torch
 from diffusers import StableDiffusionPipeline
 import pytest
 from tqdm.auto import tqdm
+import time
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import comp_pcc
 from models.utility_functions import (
     skip_for_grayskull,
+    comp_pcc,
+    enable_persistent_kernel_cache,
+    profiler,
 )
 from diffusers import LMSDiscreteScheduler
 import ttnn
@@ -188,12 +191,12 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     torch_output = model(input, timestep=timestep, encoder_hidden_states=encoder_hidden_states.squeeze(0)).sample
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     ttnn_timestep = ttnn_timestep.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_timestep = ttnn.from_torch(ttnn_timestep, ttnn.bfloat16)
-    ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT)
     ttnn_timestep = ttnn.to_device(ttnn_timestep, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
     encoder_hidden_states = ttnn.from_torch(
@@ -203,6 +206,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     reader_patterns_cache = {}
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
 
+    first_iter = time.time()
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -213,8 +217,11 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
-
+    first_iter = time.time() - first_iter
+    print(f"First iteration took {first_iter} seconds")
+    # times = []
     # for i in range(50):
+    #     start = time.time()
     #     ttnn_output = model(
     #         input,
     #         timestep=ttnn_timestep,
@@ -225,6 +232,15 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #         return_dict=return_dict,
     #         config=config,
     #     )
+    #     end = time.time()
+    #     times.append(end - start)
+    #     print(f"Current iteration took {end - start} seconds")
+    # total_time = 0
+    # for iter in times:
+    #     total_time += iter
+    #     print(iter)
+    # print(f"Time taken for 50 iterations: {total_time}")
+    # print(f"Samples per second: {50 / total_time}")
     ttnn_output = ttnn_to_torch(ttnn_output)
     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)

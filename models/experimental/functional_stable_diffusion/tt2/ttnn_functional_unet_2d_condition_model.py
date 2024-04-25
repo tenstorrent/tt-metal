@@ -411,7 +411,7 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
-        # TODO: Move to L1
+        # # TODO: Move to L1
         sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
         sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
@@ -594,7 +594,9 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        # print(sample.shape)
+        # print(sample.memory_config())
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
             # sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
@@ -639,7 +641,6 @@ class UNet2DConditionModel:
                 memory_config=self.gn_expected_input_sharded_memory_config,
                 core_grid=self.group_norm_core_grid,
             )
-        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.reshape(
             sample,
             (
@@ -649,22 +650,23 @@ class UNet2DConditionModel:
                 self.conv_out.in_channels,
             ),
         )
-        sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
+            sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
+        sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
         sample = self.conv_out(sample)
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+        sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         sample = ttnn.reshape(
             sample,
             (
                 self.conv_out.batch_size,
                 self.conv_out.input_height,
                 self.conv_out.input_width,
-                self.conv_out.out_channels,
+                32,  # Padded to tile dim
             ),
         )
         sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
+        sample = sample[:, :4, :, :]
 
         return sample

@@ -4,6 +4,7 @@
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
+import math
 
 import torch
 from typing import Optional, Dict
@@ -172,3 +173,65 @@ def dealloc_input(fn, *args, **kwargs):
             if a.is_allocated():
                 ttnn.deallocate(a)
     return out
+
+
+def find_max_subblock(out_block_h, out_block_w):
+    max_product = 0
+    best_h = 1
+    best_w = 1
+
+    for h in range(1, out_block_h + 1):
+        if out_block_h % h == 0:  # h is a divisor of out_block_h
+            for w in range(1, out_block_w + 1):
+                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                    if h * w > max_product:
+                        max_product = h * w
+                        best_h = h
+                        best_w = w
+    if out_block_w > best_w:
+        best_h = 1
+    return best_h, best_w, max_product
+
+
+def determine_largest_subblock_size(block_height, block_width, fp32_accum=False):
+    subblocks = [
+        (2, 4),
+        (4, 2),
+        (1, 8),
+        (8, 1),
+        (1, 7),
+        (7, 1),
+        (2, 3),
+        (3, 2),
+        (1, 6),
+        (6, 1),
+        (1, 5),
+        (5, 1),
+        (2, 2),
+        (1, 4),
+        (4, 1),
+        (1, 3),
+        (3, 1),
+        (1, 2),
+        (2, 1),
+        (1, 1),
+    ]
+    for subblock_height, subblock_width in subblocks:
+        if fp32_accum and subblock_height * subblock_width > 4:
+            continue
+        if block_height % subblock_height == 0 and block_width % subblock_width == 0:
+            if subblock_width != block_width and subblock_height != 1:
+                continue
+            break
+    return subblock_height, subblock_width
+
+
+def determine_blocking(M, K, N, grid_size, transpose_mcast=False):
+    logical_grid_size = grid_size if transpose_mcast == False else (grid_size[1], grid_size[0])
+
+    in0_block_h = M // logical_grid_size[1] // 32
+    in0_block_w = K // logical_grid_size[0] // 32
+    out_block_h = math.ceil(M / logical_grid_size[1] / 32)
+    out_block_w = math.ceil(N / logical_grid_size[0] / 32)
+    out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
+    return in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w
