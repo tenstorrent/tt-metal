@@ -41,7 +41,7 @@ inline void _llk_pack_untilize_configure_addrmod_() {
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
-    const uint PACKCNT = ((face_r_dim < FACE_R_DIM) && !diagonal) ? 1 : num_faces;
+    const uint PACKCNT = diagonal ? (num_faces>2 ? num_faces/2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr uint MOP_INNER_LOOP = diagonal ? FACE_R_DIM-1 : 1;
