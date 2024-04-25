@@ -97,7 +97,7 @@ struct Padding {
     }
 
     PadDimension &operator[](const std::int64_t index);
-    const PadDimension &operator[](const std::int64_t index) const;
+    const PadDimension operator[](const std::int64_t index) const;
 
     PadValue pad_value() const;
 
@@ -172,7 +172,7 @@ class Shape {
     std::size_t rank() const;
 
     uint32_t &operator[](const std::int64_t index);
-    const uint32_t &operator[](const std::int64_t index) const;
+    const uint32_t operator[](const std::int64_t index) const;
 
     const uint32_t *begin() const;
     const uint32_t *end() const;
@@ -562,7 +562,7 @@ struct RankedShape {
         return false;
     }
 
-    const auto &operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+    const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
     static constexpr auto attribute_names = std::make_tuple("rank", "value");
     const auto attribute_values() const { return std::make_tuple(std::cref(this->rank), std::cref(this->value)); }
@@ -658,7 +658,7 @@ struct Shape {
         return Shape{this->value().without_padding()} == Shape{other};
     }
 
-    const auto &operator[](std::int64_t index) const {
+    const auto operator[](std::int64_t index) const {
         return std::visit([index](const auto &shape) -> decltype(auto) { return shape[index]; }, this->ranked_shape);
     }
 
