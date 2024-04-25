@@ -550,27 +550,17 @@ class resnet50:
         x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer2_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer2_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
-        x, x_height, x_width = self.layer2_module4(
-            x, device, batch_size, x_height, x_width, conv_op_cache, eltwise_binary_out_in_place=False
-        )
+        x, x_height, x_width = self.layer2_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         # do reshard before layer3
         # x = ttnn.to_memory_config(x, self.layer3_module1.conv1.conv.input_sharded_memory_config)
         x, x_height, x_width = self.layer3_module1(
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
-        x, x_height, x_width = self.layer3_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
-        x, x_height, x_width = self.layer3_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
-        x, x_height, x_width = self.layer3_module4(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
-        x, x_height, x_width = self.layer3_module5(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
+        x, x_height, x_width = self.layer3_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        x, x_height, x_width = self.layer3_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
+        x, x_height, x_width = self.layer3_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
+        x, x_height, x_width = self.layer3_module5(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer3_module6(
             x,
             device,
@@ -588,12 +578,8 @@ class resnet50:
         x, x_height, x_width = self.layer4_module1(
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
-        x, x_height, x_width = self.layer4_module2(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
-        x, x_height, x_width = self.layer4_module3(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
-        )
+        x, x_height, x_width = self.layer4_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         unpadded_shape = x.shape_without_padding()
         x = ttnn.experimental.tensor.untilize_with_unpadding(
