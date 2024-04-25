@@ -33,8 +33,8 @@ jobs:
           {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 5 --group 3 },
           {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 5 --group 4 },
           {name: eager unit tests 5, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 5 --group 5 },
-          {name: eager trace tests, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/trace_testing/ -vvv},
-          {name: sweep, cmd: TT_METAL_DPRINT_CORES=all pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -vvv},
+          {name: eager trace tests, cmd: TT_METAL_DPRINT_CORES=all pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/trace_testing/ -vvv},
+          {name: sweep, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -vvv},
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
