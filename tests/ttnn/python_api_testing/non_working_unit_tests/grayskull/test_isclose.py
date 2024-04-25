@@ -10,7 +10,7 @@ import ttnn
 import traceback
 
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
 def run_isclose_tests(
@@ -38,7 +38,7 @@ def run_isclose_tests(
 
         t2 = ttnn.isclose(t0, t1, rtol, atol, memory_config=output_mem_config)
 
-        tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
+        tt_result = ttnn_ops.ttnn_tensor_to_torch(t2, output_mem_config)
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
@@ -49,7 +49,7 @@ def run_isclose_tests(
     assert tt_result.shape == ref_value.shape
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_equal(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 
@@ -59,7 +59,7 @@ def run_isclose_tests(
 test_sweep_args = [
     (
         [(224, 128), (224, 128)],
-        [ttnn.bfloat16, ttnn.bfloat8_b],
+        [ttnn.bfloat16, ttnn.bfloat16],
         [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
