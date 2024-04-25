@@ -92,6 +92,7 @@ inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const
     if (runtime_args.size() != 0) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                // TODO: maybe directly update command queue
                 SetRuntimeArgs(program, kernel_id, CoreCoord(x,y), runtime_args);
             }
         }

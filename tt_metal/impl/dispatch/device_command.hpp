@@ -120,7 +120,8 @@ class DeviceCommand {
         uint16_t packed_data_sizeB,
         uint32_t payload_sizeB,
         const std::vector<PackedSubCmd> &sub_cmds,
-        const std::vector<const void *> &data_collection) {
+        const std::vector<std::pair<const void *, uint32_t>> &data_collection,
+        const uint32_t offset_idx = 0) {
         static_assert(std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
         bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
@@ -142,16 +143,16 @@ class DeviceCommand {
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
 
         static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
-        uint32_t sub_cmds_sizeB = sub_cmds.size() * sizeof(PackedSubCmd);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(PackedSubCmd);
 
-        memcpy((char*)this->cmd_region + this->cmd_write_offsetB, sub_cmds.data(), sub_cmds_sizeB);
+        memcpy((char*)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
         uint32_t increment_sizeB = align(sub_cmds_sizeB, L1_ALIGNMENT);
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
-        for (const void *data : data_collection) {
-            memcpy((char*)this->cmd_region + this->cmd_write_offsetB, data, packed_data_sizeB);
-            uint32_t increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        for (uint32_t i = offset_idx; i < offset_idx + num_sub_cmds; ++i) {
+            memcpy((char*)this->cmd_region + this->cmd_write_offsetB, data_collection[i].first, data_collection[i].second);
             this->cmd_write_offsetB += increment_sizeB;
         }
 

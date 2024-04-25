@@ -37,7 +37,10 @@ std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
 
-uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
+std::unordered_map<uint64_t, std::vector<DeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
+
+uint32_t get_noc_unicast_encoding(const CoreCoord &coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
+uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end) { return NOC_MULTICAST_ENCODING(start.x, start.y, end.x, end.y); }
 
 void align_commands_vector(vector<uint32_t> &commands, uint32_t byte_alignment) {
     commands.resize(align(commands.size(), byte_alignment / sizeof(uint32_t)), 0);
@@ -268,109 +271,287 @@ void EnqueueProgramCommand::assemble_preamble_commands() {
     }
 }
 
-// Generate command sequence for unique (unicast) and common (multicast) runtime args
-void EnqueueProgramCommand::assemble_runtime_args_commands() {
-    program.update_runtime_args_transfer_info(this->device);
+template <typename PackedSubCmd>
+void generate_dispatch_write_packed(
+    std::vector<DeviceCommand>& runtime_args_command_sequences,
+    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>>& cmd_mapping,
+    const uint32_t& l1_arg_base_addr,
+    const std::vector<PackedSubCmd>& sub_cmds,
+    const std::vector<std::pair<const void*, uint32_t>>& rt_data_and_sizes,
+    const uint32_t& max_runtime_args_len,
+    const uint32_t max_prefetch_command_size,
+    const uint32_t id) {
+    static_assert(
+        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
+        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
 
-    CoreType dispatch_core_type = dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
-    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
-
-    auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast){
-        uint32_t sub_cmd_sizeB = is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-        uint32_t dispatch_cmd_sizeB = align(sizeof(CQDispatchCmd) + num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
-        uint32_t aligned_runtime_data_sizeB = num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+    static auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+        uint32_t sub_cmd_sizeB =
+            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+        uint32_t aligned_runtime_data_sizeB =
+            num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
         return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
     };
+    static auto get_max_num_packed_cmds = [](uint32_t runtime_args_len, uint32_t max_size, bool is_unicast) {
+        uint32_t sub_cmd_sizeB =
+            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        // Approximate calculation due to alignment
+        max_size = max_size - sizeof(CQPrefetchCmd) - PCIE_ALIGNMENT - sizeof(CQDispatchCmd) - L1_ALIGNMENT;
+        uint32_t max_num_packed_cmds =
+            max_size / (align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
+        return max_num_packed_cmds;
+    };
+    static auto get_runtime_args_data_offset =
+        [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+            uint32_t sub_cmd_sizeB =
+                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+            return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
+        };
 
-    // Unicast unique runtime args per core.
-    for (const auto& [dst, transfer_info] : program.program_transfer_info.unicast_runtime_args) {
-        uint32_t num_packed_cmds = transfer_info.size();
-        uint32_t packed_cmd_idx = 0;
-        while (packed_cmd_idx < num_packed_cmds) {
-            uint32_t runtime_args_len = transfer_info[packed_cmd_idx].data.size();
+    constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
 
-            uint32_t num_packed_cmds_in_seq = 0;
-
-            for (int i = packed_cmd_idx; i < num_packed_cmds; i++) {
-                TT_ASSERT(transfer_info[i].dst_noc_info.size() == 1, "Not supporting CoreRangeSet for runtime args");
-                uint32_t max_runtime_args_len = std::max(runtime_args_len, (uint32_t)transfer_info[i].data.size());
-                uint32_t next_cmd_sequence_sizeB = align(
-                    sizeof(CQPrefetchCmd) + get_runtime_payload_sizeB(num_packed_cmds_in_seq + 1, max_runtime_args_len, true), PCIE_ALIGNMENT);
-
-
-                if (next_cmd_sequence_sizeB > max_prefetch_command_size) {
-                    // If we hit this, then we send multiple write packed commands for each RT dst.
-                    // TODO: Revisit RT arg command sequence construction to be more performant
-                    break;
-                }
-                runtime_args_len = max_runtime_args_len;
-                num_packed_cmds_in_seq++;
-            }
-
-            uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds_in_seq, runtime_args_len, true);
-            uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
-            DeviceCommand command_sequence(cmd_sequence_sizeB);
-
-            std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-            std::vector<const void *> rt_data_and_sizes;
-
-            for (int i = packed_cmd_idx; i < (packed_cmd_idx + num_packed_cmds_in_seq); i++) {
-                unicast_sub_cmds.emplace_back(
-                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = transfer_info[i].dst_noc_info[0].first});
-                rt_data_and_sizes.emplace_back(transfer_info[i].data.data());
-            }
-
-            command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                num_packed_cmds_in_seq,
-                dst,
-                runtime_args_len * sizeof(uint32_t),
-                rt_payload_sizeB,
-                unicast_sub_cmds,
-                rt_data_and_sizes);
-            runtime_args_command_sequences.emplace_back(command_sequence);
-
-            packed_cmd_idx += num_packed_cmds_in_seq;
-        }
-    }
-
-    // Muticast common runtime args (shared by all cores)
-    for (const auto& [dst, transfer_info_vec] : program.program_transfer_info.multicast_runtime_args) {
-        uint32_t num_packed_cmds = 0;
-        uint32_t runtime_args_len = transfer_info_vec[0].data.size();
-
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                TT_ASSERT(transfer_info.data.size() == runtime_args_len, "Not all data vectors in write packed common rtargs cmd equal in len");
-                num_packed_cmds += 1;
-            }
-        }
-
-        uint32_t mcast_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, runtime_args_len, false);
-        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
-
+    uint32_t num_packed_cmds_in_seq = sub_cmds.size();
+    uint32_t max_packed_cmds = get_max_num_packed_cmds(max_runtime_args_len, max_prefetch_command_size, unicast);
+    uint32_t offset_idx = 0;
+    while (num_packed_cmds_in_seq != 0) {
+        uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
+        uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast);
+        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
         DeviceCommand command_sequence(cmd_sequence_sizeB);
+        command_sequence.add_dispatch_write_packed<PackedSubCmd>(
+            num_packed_cmds,
+            l1_arg_base_addr,
+            max_runtime_args_len * sizeof(uint32_t),
+            rt_payload_sizeB,
+            sub_cmds,
+            rt_data_and_sizes,
+            offset_idx);
+        runtime_args_command_sequences.emplace_back(command_sequence);
+        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
+        const uint32_t data_inc = align(max_runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+        for (uint32_t i = offset_idx; i < offset_idx + num_packed_cmds; ++i) {
+            cmd_mapping[(uint64_t)id << 32 | sub_cmds[i].noc_xy_addr] = {
+                runtime_args_command_sequences.size() - 1, data_offset};
+            data_offset += data_inc;
+        }
+        num_packed_cmds_in_seq -= num_packed_cmds;
+        offset_idx += num_packed_cmds;
+    }
+}
 
-        std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
-        std::vector<const void *> rtarg_data;
+// Generate command sequence for unique (unicast) and common (multicast) runtime args
+void EnqueueProgramCommand::assemble_runtime_args_commands() {
+    // Maps to enum class RISCV, tt_backend_api_types.h
+    static const std::vector<uint32_t> unique_processor_to_l1_arg_base_addr = {
+        BRISC_L1_ARG_BASE,
+        NCRISC_L1_ARG_BASE,
+        0,
+        0,
+        0,
+        eth_l1_mem::address_map::ERISC_L1_ARG_BASE,
+        TRISC_L1_ARG_BASE,
+    };
+    if (this->runtime_args_command_sequences.count(program.id) == 0) {
+        CoreType dispatch_core_type =
+            dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+        const uint32_t max_prefetch_command_size =
+            dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
-        for (const auto& transfer_info: transfer_info_vec) {
-            for (const auto& dst_noc_info: transfer_info.dst_noc_info) {
-                multicast_sub_cmds.emplace_back(
-                    CQDispatchWritePackedMulticastSubCmd{.noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second}
-                );
-                rtarg_data.emplace_back(transfer_info.data.data());
+        auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+            uint32_t sub_cmd_sizeB =
+                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+            uint32_t aligned_runtime_data_sizeB =
+                num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+            return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+        };
+        auto get_max_num_packed_cmds = [](uint32_t runtime_args_len, uint32_t max_size, bool is_unicast) {
+            uint32_t sub_cmd_sizeB =
+                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+            // Approximate calculation due to alignment
+            max_size = max_size - sizeof(CQPrefetchCmd) - PCIE_ALIGNMENT - sizeof(CQDispatchCmd) - L1_ALIGNMENT;
+            uint32_t max_num_packed_cmds =
+                max_size / (align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
+            return max_num_packed_cmds;
+        };
+        auto get_runtime_args_data_offset = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+            uint32_t sub_cmd_sizeB =
+                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+            return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
+        };
+
+        uint32_t num_dsts = unique_processor_to_l1_arg_base_addr.size();
+        std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unique_sub_cmds(num_dsts);
+        std::vector<std::vector<std::pair<const void*, uint32_t>>> unique_rt_data_and_sizes(num_dsts);
+        std::vector<uint32_t> unique_max_runtime_args_len(num_dsts, 0);
+
+        std::vector<std::variant<
+            std::vector<CQDispatchWritePackedMulticastSubCmd>,
+            std::vector<CQDispatchWritePackedUnicastSubCmd>>>
+            common_sub_cmds(program.num_kernels());
+        std::vector<std::vector<std::pair<const void*, uint32_t>>> common_rt_data_and_sizes(program.num_kernels());
+        std::vector<uint32_t> common_max_runtime_args_len(program.num_kernels(), 0);
+        std::vector<uint32_t> common_processor_to_l1_arg_base_addr(program.num_kernels());
+
+        std::set<uint32_t> unique_processors;
+        std::set<uint32_t> common_kernels;
+
+        // Unique Runtime Args (Unicast)
+        // TODO: If we need to break apart cmds if they exceed the max prefetch cmd size
+        // would potentially be more optimal to sort the data by size and have a max rt arg size
+        // to pad to per split. Currently we take the max of all rt args before splitting
+        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(program, kernel_id);
+
+            uint32_t processor_idx = static_cast<typename std::underlying_type<tt::RISCV>::type>(kernel->processor());
+
+            if (!kernel->cores_with_runtime_args().empty()) {
+                unique_processors.insert(processor_idx);
+                unique_sub_cmds[processor_idx].reserve(kernel->cores_with_runtime_args().size());
+                unique_rt_data_and_sizes[processor_idx].reserve(kernel->cores_with_runtime_args().size());
+                for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+                    // can make a vector of unicast encodings here
+                    CoreCoord physical_core =
+                        device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
+                    uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
+                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                    // 2, 17, could be differnet len here
+
+                    unique_sub_cmds[processor_idx].emplace_back(
+                        CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
+                    unique_rt_data_and_sizes[processor_idx].emplace_back(
+                        runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
+                    unique_max_runtime_args_len[processor_idx] =
+                        std::max(unique_max_runtime_args_len[processor_idx], (uint32_t)runtime_args_data.size());
+                }
+            }
+            // Common Runtime Args (Multicast)
+            const auto& common_rt_args = kernel->common_runtime_args();
+
+            if (common_rt_args.size() > 0) {
+                common_kernels.insert(kernel_id);
+                uint32_t common_args_addr =
+                    unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_offset();
+                common_processor_to_l1_arg_base_addr[kernel_id] = common_args_addr;
+                if (kernel->get_kernel_core_type() == CoreType::ETH) {
+                    common_sub_cmds[kernel_id].emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
+                        std::vector<CQDispatchWritePackedUnicastSubCmd>());
+                    auto& unicast_sub_cmd =
+                        std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds[kernel_id]);
+                    unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                    for (auto& core_coord : kernel->logical_cores()) {
+                        // can make a vector of unicast encodings here
+                        CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
+                        uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
+                        unicast_sub_cmd.emplace_back(
+                            CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
+                        common_rt_data_and_sizes[kernel_id].emplace_back(
+                            common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                    }
+                } else {
+                    vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+                        extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                            device, kernel->logical_coreranges(), kernel->get_kernel_core_type());
+                    common_sub_cmds[kernel_id].emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
+                        std::vector<CQDispatchWritePackedMulticastSubCmd>());
+                    auto& multicast_sub_cmd =
+                        std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds[kernel_id]);
+                    multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                    for (const auto& mcast_dests : dst_noc_multicast_info) {
+                        multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                            .noc_xy_addr = mcast_dests.first, .num_mcast_dests = mcast_dests.second});
+                        common_rt_data_and_sizes[kernel_id].emplace_back(
+                            common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                    }
+                }
+                common_max_runtime_args_len[kernel_id] =
+                    std::max(common_max_runtime_args_len[kernel_id], (uint32_t)common_rt_args.size());
             }
         }
+        // Reserve 2x as we pontentially split the cmds due to not fitting in one prefetch cmd
+        this->runtime_args_command_sequences[program.id] = {};
+        this->runtime_args_command_sequences[program.id].reserve(
+            2 * (unique_processors.size() + common_kernels.size()));
+        std::vector<std::pair<uint32_t, uint32_t>> runtime_args_data_index;
+        runtime_args_data_index.reserve(2 * (unique_processors.size() + common_kernels.size()));
+        // Array of cmd idx, # sub cmds, rt arg offset, rt arg len
+        // Currently we only really need the base cmd idx since they are sequential, and the rt arg len is currently the
+        // same for all splits
+        for (const uint32_t& processor_idx : unique_processors) {
+            generate_dispatch_write_packed(
+                this->runtime_args_command_sequences[program.id],
+                program.command_indices.processor_to_cmd_mapping,
+                unique_processor_to_l1_arg_base_addr[processor_idx],
+                unique_sub_cmds[processor_idx],
+                unique_rt_data_and_sizes[processor_idx],
+                unique_max_runtime_args_len[processor_idx],
+                max_prefetch_command_size,
+                processor_idx);
+        }
+        for (const uint32_t& kernel_id : common_kernels) {
+            std::visit(
+                [&](auto&& sub_cmds) {
+                    generate_dispatch_write_packed(
+                        this->runtime_args_command_sequences[program.id],
+                        program.command_indices.kernel_to_cmd_mapping,
+                        common_processor_to_l1_arg_base_addr[kernel_id],
+                        sub_cmds,
+                        common_rt_data_and_sizes[kernel_id],
+                        common_max_runtime_args_len[kernel_id],
+                        max_prefetch_command_size,
+                        kernel_id);
+                },
+                common_sub_cmds[kernel_id]);
+        }
+    } else {
+        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(program, kernel_id);
 
-        command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
-            num_packed_cmds,
-            dst,
-            runtime_args_len * sizeof(uint32_t),
-            mcast_payload_sizeB,
-            multicast_sub_cmds,
-            rtarg_data
-        );
-        this->runtime_args_command_sequences.emplace_back(command_sequence);
+            if (!kernel->cores_with_runtime_args().empty()) {
+                uint32_t processor_idx =
+                    static_cast<typename std::underlying_type<tt::RISCV>::type>(kernel->processor());
+                for (const auto& core_coord : kernel->cores_with_runtime_args()) {
+                    uint32_t noc_xy_encoding = get_noc_unicast_encoding(
+                        this->device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type()));
+                    const auto& data_loc =
+                        program.command_indices
+                            .processor_to_cmd_mapping[(uint64_t)processor_idx << 32 | noc_xy_encoding];
+                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                    this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
+                        data_loc.second, runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
+                }
+            }
+
+            const auto& common_rt_args = kernel->common_runtime_args();
+            if (common_rt_args.size() > 0) {
+                if (kernel->get_kernel_core_type() == CoreType::ETH) {
+                    for (const auto& core_coord : kernel->logical_cores()) {
+                        uint32_t noc_xy_encoding =
+                            get_noc_unicast_encoding(this->device->ethernet_core_from_logical_core(core_coord));
+                        const auto& data_loc =
+                            program.command_indices.kernel_to_cmd_mapping[(uint64_t)kernel_id << 32 | noc_xy_encoding];
+                        const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                        this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
+                            data_loc.second, runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
+                    }
+                } else {
+                    for (const auto& core_range : kernel->logical_coreranges()) {
+                        CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
+                        CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+
+                        uint32_t noc_multicast_encoding = get_noc_multcast_encoding(physical_start, physical_end);
+                        const auto& data_loc =
+                            program.command_indices
+                                .kernel_to_cmd_mapping[(uint64_t)kernel_id << 32 | noc_multicast_encoding];
+                        this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
+                            data_loc.second, common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -461,14 +642,14 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t write_packed_len = transfer_info_vec[0].data.size();
 
             std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_sub_cmds;
-            std::vector<const void*> sem_data;
+            std::vector<std::pair<const void*, uint32_t>> sem_data;
 
             for (const auto& transfer_info : transfer_info_vec) {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     num_packed_cmds += 1;
                     multicast_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                         .noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second});
-                    sem_data.emplace_back(transfer_info.data.data());
+                    sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
 
@@ -489,14 +670,14 @@ void EnqueueProgramCommand::assemble_device_commands() {
             uint32_t write_packed_len = transfer_info_vec[0].data.size();
 
             std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds;
-            std::vector<const void*> sem_data;
+            std::vector<std::pair<const void*, uint32_t>> sem_data;
 
             for (const auto& transfer_info : transfer_info_vec) {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     num_packed_cmds += 1;
                     unicast_sub_cmds.emplace_back(
                         CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_info.first});
-                    sem_data.emplace_back(transfer_info.data.data());
+                    sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
 
@@ -650,7 +831,7 @@ void EnqueueProgramCommand::process() {
     // Runtime Args Command Sequence
     this->assemble_runtime_args_commands();
     uint32_t runtime_args_fetch_size_bytes = 0;
-    for (const auto& cmds : this->runtime_args_command_sequences) {
+    for (const auto& cmds : this->runtime_args_command_sequences[this->program.id]) {
         // BRISC, NCRISC, TRISC...
         runtime_args_fetch_size_bytes += cmds.size_bytes();
     }
@@ -672,7 +853,7 @@ void EnqueueProgramCommand::process() {
         this->manager.cq_write(this->preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
         this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
 
-        for (const auto& cmds : this->runtime_args_command_sequences) {
+        for (const auto& cmds : this->runtime_args_command_sequences[this->program.id]) {
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
             this->manager.issue_queue_push_back(cmds.size_bytes(), this->command_queue_id);
@@ -693,7 +874,7 @@ void EnqueueProgramCommand::process() {
         // One fetch queue entry for just the wait and stall, very inefficient
         this->manager.fetch_queue_write(preamble_fetch_size_bytes, this->command_queue_id);
 
-        for (const auto& cmds : this->runtime_args_command_sequences) {
+        for (const auto& cmds : this->runtime_args_command_sequences[this->program.id]) {
             uint32_t fetch_size_bytes = cmds.size_bytes();
             this->manager.issue_queue_reserve(fetch_size_bytes, this->command_queue_id);
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -751,7 +932,7 @@ void EnqueueRecordEventCommand::process() {
     CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_hw_cqs);
-    std::vector<const void *> event_payloads(num_hw_cqs);
+    std::vector<std::pair<const void *, uint32_t>> event_payloads(num_hw_cqs);
 
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         tt_cxy_pair dispatch_location;
@@ -763,7 +944,7 @@ void EnqueueRecordEventCommand::process() {
 
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = get_noc_unicast_encoding(dispatch_physical_core)};
-        event_payloads[cq_id] = event_payload.data();
+        event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
     uint32_t address = this->command_queue_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
