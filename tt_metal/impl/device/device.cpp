@@ -408,9 +408,9 @@ void Device::compile_command_queue_programs() {
                 issue_queue_start_addr,
                 issue_queue_size,
                 dispatch_constants::PREFETCH_Q_BASE,
-                dispatch_constants::PREFETCH_Q_SIZE,
+                dispatch_constants::get(dispatch_core_type).prefetch_q_size(),
                 CQ_PREFETCH_Q_RD_PTR,
-                dispatch_constants::CMDDAT_Q_BASE,
+                dispatch_constants::get(dispatch_core_type).cmddat_q_base(),
                 dispatch_constants::get(dispatch_core_type).cmddat_q_size(),
                 dispatch_constants::get(dispatch_core_type).scratch_db_base(),
                 dispatch_constants::get(dispatch_core_type).scratch_db_size(),
@@ -591,9 +591,9 @@ void Device::compile_command_queue_programs() {
             issue_queue_start_addr,
             issue_queue_size,
             dispatch_constants::PREFETCH_Q_BASE,
-            dispatch_constants::PREFETCH_Q_SIZE,
+            dispatch_constants::get(dispatch_core_type).prefetch_q_size(),
             CQ_PREFETCH_Q_RD_PTR,
-            dispatch_constants::CMDDAT_Q_BASE,
+            dispatch_constants::get(dispatch_core_type).cmddat_q_base(),
             dispatch_constants::get(dispatch_core_type).cmddat_q_size(),
             dispatch_constants::get(dispatch_core_type).scratch_db_base(), // unused for prefetch_h
             dispatch_constants::get(dispatch_core_type).scratch_db_size(), // unused for prefetch_h
@@ -1103,7 +1103,7 @@ void Device::compile_command_queue_programs() {
             0, //issue_queue_start_addr,
             0, //issue_queue_size,
             0, //prefetch_q_base,
-            dispatch_constants::PREFETCH_Q_SIZE,
+            dispatch_constants::get(dispatch_core_type).prefetch_q_size(),
             CQ_PREFETCH_Q_RD_PTR,
             prefetch_d_buffer_base, // overridden for split below
             dispatch_constants::PREFETCH_D_BUFFER_PAGES * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE), // overridden for split below
@@ -1321,9 +1321,9 @@ void Device::configure_command_queue_programs() {
             "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", prefetch_location.chip, completion_q_writer_location.chip, mmio_device_id);
 
         // Initialize the FetchQ
-        std::vector<uint32_t> prefetch_q(dispatch_constants::dispatch_constants::PREFETCH_Q_ENTRIES, 0);
+        std::vector<uint32_t> prefetch_q(dispatch_constants::get(dispatch_core_type).prefetch_q_entries(), 0);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
-            (uint32_t)(dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::PREFETCH_Q_SIZE)
+            (uint32_t)(dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(dispatch_core_type).prefetch_q_size())
         };
         detail::WriteToDeviceL1(mmio_device, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, dispatch_constants::PREFETCH_Q_BASE, prefetch_q, dispatch_core_type);
