@@ -12,16 +12,28 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
+        test-group: [
           # N300 2x4
-          {name: "n300-2x4", arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"]},
+          {
+            name: "T3000 unit tests",
+            arch: wormhole_b0,
+            runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device --dispatch-mode ""'
+          },
+          {
+            name: "T3000 unstable tests",
+            arch: wormhole_b0,
+            runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device_unstable --dispatch-mode ""'
+          },
         ]
+    name: ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
       CONFIG: ci
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dyanmic env vars for build
@@ -35,4 +47,5 @@ jobs:
         timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit_multi_device --dispatch-mode ""
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}

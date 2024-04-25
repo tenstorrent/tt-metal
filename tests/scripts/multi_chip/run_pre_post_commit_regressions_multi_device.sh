@@ -12,9 +12,6 @@ if [[ -z "$ARCH_NAME" ]]; then
   exit 1
 fi
 
-cd $TT_METAL_HOME
-export PYTHONPATH=$TT_METAL_HOME
-
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsDirectSendAllConnectedChips"
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsSendInterleavedBufferAllConnectedChips"
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsDirectRingGatherAllChips"
@@ -27,9 +24,6 @@ pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k
 
 # ttnn multi-chip apis unit tests
 pytest tests/ttnn/unit_tests/test_multi_device.py
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
 
 # Falcon40B 4 chip decode tests
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-falcon_40b-layer_0-decode_batch32-4chips-enable_program_cache]
@@ -40,11 +34,9 @@ pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_i
 pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-8chips-enable_program_cache]
 
 # Falcon40B 8 chip prefill tests; we need 8x8 grid size for prefill tests on wormhole_b0
-if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips-disable_program_cache]
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq128-8chips-disable_program_cache]
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips-disable_program_cache]
-fi
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips-disable_program_cache]
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq128-8chips-disable_program_cache]
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips-disable_program_cache]
 
 pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest tests/ttnn/unit_tests/test_multi_device_async.py
