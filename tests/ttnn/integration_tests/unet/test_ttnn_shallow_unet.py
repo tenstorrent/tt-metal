@@ -11,7 +11,7 @@ import torch.nn as nn
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull, is_x2_harvested
 
 from models.experimental.functional_unet.tt import ttnn_shallow_unet
 
@@ -510,13 +510,15 @@ class UNet(nn.Module):
         return output
 
 
-@pytest.mark.skip(reason="Test failing, see issue #7556")
 @skip_for_grayskull()
 @pytest.mark.parametrize("loop", [0])
 @pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1)])  # , (True, 2)])
 def test_unet(device, loop, perf_mode, groups):
     if perf_mode and device.arch() == ttl.device.Arch.GRAYSKULL:
         pytest.skip("Perf mode is not supported on Grayskull")
+
+    if is_x2_harvested(device):
+        pytest.skip("x2 harvested chip is not supported")
 
     with torch.no_grad():
         torch.manual_seed(0)
