@@ -1195,6 +1195,7 @@ void HWCommandQueue::enqueue_program(
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
         this->trace_ctx->owned_buffer_pool.insert(this->trace_ctx->owned_buffer_pool.end(), program.kg_buffers.begin(), program.kg_buffers.end());
+        this->trace_ctx->owned_buffer_pool.insert(this->trace_ctx->owned_buffer_pool.end(), program.owned_buffer_pool.begin(), program.owned_buffer_pool.end());
     } else {
         this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
     }
@@ -1615,12 +1616,11 @@ void EnqueueUpdateRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> ke
             .kernel = kernel,
             .update_idx = update_idx,
     };
-    EnqueueUpdateRuntimeArgsImpl(runtime_args_md);
-    // cq.run_command( CommandInterface {
-    //     .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
-    //     .blocking = blocking,
-    //     .runtime_args_md = runtime_args_md,
-    // });
+    cq.run_command(CommandInterface {
+        .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
+        .blocking = blocking,
+        .runtime_args_md = runtime_args_md,
+    });
 }
 
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
@@ -1646,12 +1646,11 @@ void EnqueueSetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kerne
             .runtime_args_ptr = runtime_args_ptr,
             .kernel = kernel,
     };
-    EnqueueSetRuntimeArgsImpl(runtime_args_md);
-    // cq.run_command( CommandInterface {
-    //     .type = EnqueueCommandType::SET_RUNTIME_ARGS,
-    //     .blocking = blocking,
-    //     .runtime_args_md = runtime_args_md,
-    // });
+    cq.run_command(CommandInterface {
+        .type = EnqueueCommandType::SET_RUNTIME_ARGS,
+        .blocking = blocking,
+        .runtime_args_md = runtime_args_md,
+    });
 }
 
 void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer) {
@@ -1659,13 +1658,12 @@ void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer) {
 }
 
 void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
-    EnqueueGetBufferAddrImpl(dst_buf_addr, buffer);
-    // cq.run_command( CommandInterface {
-    //     .type = EnqueueCommandType::GET_BUF_ADDR,
-    //     .blocking = blocking,
-    //     .shadow_buffer = buffer,
-    //     .dst = dst_buf_addr
-    // });
+    cq.run_command(CommandInterface {
+        .type = EnqueueCommandType::GET_BUF_ADDR,
+        .blocking = blocking,
+        .shadow_buffer = buffer,
+        .dst = dst_buf_addr
+    });
 }
 
 void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
@@ -1686,12 +1684,11 @@ void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, boo
         .allocator = *(buffer->device()->allocator_),
         .bottom_up = bottom_up,
     };
-    EnqueueAllocateBufferImpl(alloc_md);
-    // cq.run_command(CommandInterface {
-    //     .type = EnqueueCommandType::ALLOCATE_BUFFER,
-    //     .blocking = blocking,
-    //     .alloc_md = alloc_md,
-    // });
+    cq.run_command(CommandInterface {
+        .type = EnqueueCommandType::ALLOCATE_BUFFER,
+        .blocking = blocking,
+        .alloc_md = alloc_md,
+    });
 }
 
 void EnqueueDeallocateBufferImpl(AllocBufferMetadata alloc_md) {
@@ -1705,12 +1702,11 @@ void EnqueueDeallocateBuffer(CommandQueue& cq, Allocator& allocator, uint32_t de
         .buffer_type = buffer_type,
         .device_address = device_address,
     };
-    EnqueueDeallocateBufferImpl(alloc_md);
-    // cq.run_command(CommandInterface{
-    //     .type = EnqueueCommandType::DEALLOCATE_BUFFER,
-    //     .blocking = blocking,
-    //     .alloc_md = alloc_md,
-    // });
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::DEALLOCATE_BUFFER,
+        .blocking = blocking,
+        .alloc_md = alloc_md,
+    });
 }
 
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking){
