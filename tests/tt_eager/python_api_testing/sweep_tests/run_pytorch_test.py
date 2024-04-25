@@ -34,6 +34,8 @@ DTYPES_TT_DICT = {
     "UINT32": tt_lib.tensor.DataType.UINT32,
     "UINT16": tt_lib.tensor.DataType.UINT16,
     "INT32": tt_lib.tensor.DataType.INT32,
+    "BFLOAT4_B": tt_lib.tensor.DataType.BFLOAT4_B,
+    "FLOAT32": tt_lib.tensor.DataType.FLOAT32,
 }
 
 LAYOUTS_TT_DICT = {

@@ -50,6 +50,12 @@ def dtype_to_ttnn(dtype):
     elif dtype == tt_lib.tensor.DataType.INT32:
         return ttnn.int32
 
+    elif dtype == tt_lib.tensor.DataType.FLOAT32:
+        return ttnn.float32
+
+    elif dtype == tt_lib.tensor.DataType.BFLOAT4_B:
+        return ttnn.bfloat4_b
+
     else:
         assert False, "Unknown dtype passed"
 
