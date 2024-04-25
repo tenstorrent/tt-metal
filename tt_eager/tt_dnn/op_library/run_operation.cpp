@@ -403,16 +403,8 @@ OutputTensors run(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    // Async Mode: Asserts to ensure that tensors are populated before running op
-    // for (const Tensor& tensor : input_tensors) {
-    //     TT_ASSERT(tensor.metadata_populated(), "Input tensors must be populated before running op.");
-    // }
-    // for (auto& tensor : optional_input_tensors) {
-    //     if (tensor.has_value()) {
-    //         TT_ASSERT(tensor.value().metadata_populated(), "Input tensors must be populated before running op.");
-    //     }
-    // }
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id) {
 #ifdef DEBUG
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
 #endif
@@ -423,7 +415,7 @@ OutputTensors run(
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     detail::validate_op_launch(device);
     return detail::decorate_device_operation(detail::run_device_operation<OutputTensors>)(
-        detail::USE_FAST_DISPATCH ? std::make_optional(std::ref(device->command_queue())) : std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);
+        detail::USE_FAST_DISPATCH ? std::make_optional(std::ref(device->command_queue(cq_id))) : std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 template Tensors run(
@@ -471,13 +463,15 @@ OutputTensors run_without_autoformat(
 template Tensors run_without_autoformat<Tensors>(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors
+    const OptionalConstTensors& optional_input_tensors,
+    uint8_t cq_id
 );
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     const DeviceOperation<OptionalTensors>& operation,
     const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors
+    const OptionalConstTensors& optional_input_tensors,
+    uint8_t cq_id
 );
 
 template<class OutputTensors=Tensors>
@@ -485,7 +479,8 @@ OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id
 ) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -508,21 +503,23 @@ OutputTensors run_without_autoformat(
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
     }
-    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors);
+    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors, cq_id);
 }
 
 template Tensors run_without_autoformat<Tensors>(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id
 );
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     const DeviceOperation<OptionalTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id
 );
 
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
@@ -531,7 +528,8 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const float pad_value,
-    const bool pad_c
+    const bool pad_c,
+    uint8_t cq_id
 ) {
     ZoneScoped;
     if (detail::any_tensor_on_multi_device(input_tensors)) {
@@ -570,7 +568,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
 
@@ -589,7 +587,8 @@ Tensors run_with_autoformat(
     const std::vector<FormatParams>& input_formatting,
     const std::vector<Layout>& output_layouts,
     const OptionalConstTensors& optional_input_tensors,
-    const std::vector<std::optional<FormatParams>>& optional_input_formatting
+    const std::vector<std::optional<FormatParams>>& optional_input_formatting,
+    uint8_t cq_id
 ) {
     ZoneScoped;
     if (detail::any_tensor_on_multi_device(input_tensors)) {
@@ -621,7 +620,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());
