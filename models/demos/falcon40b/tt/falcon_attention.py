@@ -485,7 +485,7 @@ class TtFalconAttention:
                 tt_lib.operations.primary.matmul(
                     q_slices[i],
                     key_layer_transposed[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_HIFI2_CONFIG_FP16_DEST"],
                     output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                     program_config=self.model_config["ATTENTION_MM_PROGCFG"],
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
@@ -508,7 +508,7 @@ class TtFalconAttention:
                 tt_lib.operations.primary.matmul(
                     attn_weights[i],
                     value_layer[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_HIFI4_CONFIG_FP16_DEST"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_HIFI2_CONFIG_FP16_DEST"],
                     output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                     program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
                     output_dtype=self.model_config["ATTENTION_DTYPE"],
