@@ -7,8 +7,8 @@ from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
 
 
-@pytest.mark.parametrize("perf_mode", (True,))  # Option to measure perf using max seq length (with invalid outputs)
-@pytest.mark.parametrize("async_mode", (False,))  # Option to run Falcon in Async mode
+@pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
+@pytest.mark.parametrize("async_mode", (True,))  # Option to run Falcon in Async mode
 @pytest.mark.parametrize("num_devices", (1, 2, 3, 4, 5, 6, 7, 8))
 def test_demo_multichip(
     perf_mode,
