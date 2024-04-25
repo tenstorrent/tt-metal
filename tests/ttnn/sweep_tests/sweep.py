@@ -7,6 +7,7 @@ import pathlib
 
 from loguru import logger
 import pandas as pd
+from tqdm import tqdm
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -114,7 +115,7 @@ def run_sweep(sweep_file_name, *, device):
     column_names = ["status", "exception"] + parameter_names
 
     rows = []
-    for permutation in permutations(sweep_module.parameters):
+    for permutation in tqdm(list(permutations(sweep_module.parameters))):
         status, message = _run_single_test(
             sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
         )
