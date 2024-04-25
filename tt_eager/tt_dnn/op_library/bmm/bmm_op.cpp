@@ -64,6 +64,54 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     return 0;
 }
 
+bool _get_use_same_noc(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto& in_a_shape = input_tensor_a.get_legacy_shape();
+    const auto& in_b_shape = input_tensor_b.get_legacy_shape();
+
+    uint32_t M = in_a_shape[0] * in_a_shape[2];
+    uint32_t K = in_a_shape[3];
+    uint32_t N = in_b_shape[3];
+
+    auto in_a_dtype = input_tensor_a.get_dtype();
+    auto in_b_dtype = input_tensor_b.get_dtype();
+
+    bool use_same_noc = false;
+    MathFidelity math_fidelity;
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            math_fidelity = compute_kernel_config.math_fidelity;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+    }, compute_kernel_config);
+
+    std::vector<std::vector<int> > bfp8_bfp8_lofi_threshold = { {512, 8192, 1024} };
+    std::vector<std::vector<int> > fp16_fp16_hifi2_threshold = { {256, 8192, 1024}, {512, 256, 4096}, {512, 512, 2048}, {512, 2048, 1024}, {512, 4096, 2048}, {512, 8192, 1024}};
+    std::vector<std::vector<int> > fp16_bfp8_lofi_threshold = { {512, 8192, 2048} };
+
+    auto check_thresholds = [&](const std::vector<std::vector<int>>& thresholds) {
+        return std::any_of(thresholds.begin(), thresholds.end(), [&](const std::vector<int>& threshold) {
+            auto [m_thresh, k_thresh, n_thresh] = std::tie(threshold[0], threshold[1], threshold[2]);
+            return M <= m_thresh && K <= k_thresh && N >= n_thresh;
+        });
+    };
+
+    if (in_a_dtype == DataType::BFLOAT8_B && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
+        use_same_noc = check_thresholds(bfp8_bfp8_lofi_threshold);
+    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT16 && math_fidelity == MathFidelity::HiFi2) {
+        use_same_noc = check_thresholds(fp16_fp16_hifi2_threshold);
+    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
+        use_same_noc = check_thresholds(fp16_bfp8_lofi_threshold);
+    }
+
+    tt::log_debug("M: {}, K: {}, N: {}, a_df: {}, b_df: {}, mf: {}, Use same noc: {}", M, K, N, in_a_dtype, in_b_dtype, math_fidelity, use_same_noc);
+
+    return use_same_noc;
+}
+
 namespace {
 using namespace tt;
 using namespace tt::tt_metal;
@@ -1128,7 +1176,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->compute_kernel_config,
                             2, 4, 2,
                             16, 16, false, false, std::nullopt,
-                            this->untilize_out
+                            this->untilize_out,
+                            false, false
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
 			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
@@ -1172,6 +1221,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                bool mcast_use_same_noc = _get_use_same_noc(input_tensor_a, input_tensor_b, this->compute_kernel_config);
+
                 return matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a, input_tensor_b, bias, output_tensor,
                     broadcast_batch,
@@ -1179,7 +1230,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation,
-                    this->untilize_out
+                    this->untilize_out,
+                    mcast_use_same_noc, program_config.use_noc_vc
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
