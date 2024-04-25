@@ -129,13 +129,16 @@ def run_sweep(sweep_file_name, *, device):
     logger.info(f"Saved sweep results to {file_name}")
 
 
-def run_all_tests(*, device):
+def run_all_tests(*, device, include):
     logger.info(f"Deleting old sweep results in {SWEEP_RESULTS_DIR}")
     if SWEEP_RESULTS_DIR.exists():
         for file_name in SWEEP_RESULTS_DIR.glob("*.csv"):
             file_name.unlink()
 
     for file_name in sorted(SWEEP_SOURCES_DIR.glob("*.py")):
+        name = file_name.stem
+        if include and name not in include:
+            continue
         logger.info(f"Running {file_name}")
         run_sweep(file_name, device=device)
 
@@ -178,7 +181,7 @@ def run_failed_and_crashed_tests(*, device, stepwise, include, exclude):
         df.to_csv(file_name)
 
 
-def print_summary():
+def print_summary(*, include):
     stats_df = pd.DataFrame(columns=["name", "passed", "failed", "crashed", "skipped", "is_expected_to_fail"])
 
     def add_row(df, name):
@@ -188,6 +191,9 @@ def print_summary():
         return df
 
     for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
+        name = file_name.stem
+        if include and name not in include:
+            continue
         df = pd.read_csv(file_name)
         stats_df = add_row(stats_df, file_name.stem)
         for status in stats_df.columns[1:]:
@@ -199,9 +205,11 @@ def print_summary():
     print(stats_df)
 
 
-def print_detailed_report():
+def print_detailed_report(*, include):
     for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
         name = file_name.stem
+        if include and name not in include:
+            continue
         df = pd.read_csv(file_name)
         for index, row in enumerate(df.itertuples()):
             if row.status in {"failed", "crashed"}:
@@ -214,8 +222,8 @@ def print_detailed_report():
         print()
 
 
-def print_report(*, detailed=False):
+def print_report(*, include=None, detailed=False):
     if detailed:
-        print_detailed_report()
+        print_detailed_report(include=include)
     else:
-        print_summary()
+        print_summary(include=include)

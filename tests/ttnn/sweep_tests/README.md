@@ -2,12 +2,27 @@
 
 ## Running all sweeps
 ```
-python tests/ttnn/sweep_tests/run_all_tests.py
+python tests/ttnn/sweep_tests/run_sweeps.py
+```
+
+## Running a single sweep
+```
+python tests/ttnn/sweep_tests/run_sweeps.py --include add,matmul
+```
+
+## Running a single test
+```
+python tests/ttnn/sweep_tests/run_single_test.py --test-name add --index 0
 ```
 
 ## Printing report of all sweeps
 ```
 python tests/ttnn/sweep_tests/print_report.py [--detailed]
+```
+
+## Debugging sweeps
+```
+python tests/ttnn/sweep_tests/run_failed_and_crashed_tests.py [--exclude add,linear] [--stepwise]
 ```
 
 ## Using Pytest to run sweeps all the sweeps for one operation file
@@ -20,16 +35,6 @@ Example for matmul: pytest tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_
 ```
 pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]
 Example for matmul: pytest tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]
-```
-
-## Debugging sweeps
-```
-python tests/ttnn/sweep_tests/run_failed_and_crashed_tests.py [--exclude add,linear] [--stepwise]
-```
-
-## Running a single test without pytest
-```
-python tests/ttnn/sweep_tests/run_single_test.py --test-name add --index 0
 ```
 
 ## Adding a new sweep test
