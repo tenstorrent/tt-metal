@@ -302,7 +302,10 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());
         auto output_core_range = *(out_mem_config_.shard_spec->grid.ranges().begin());
-        auto input_core_w = input_core_range.end.y - input_core_range.start.y + 1;
+        // auto input_core_w = input_core_range.end.y - input_core_range.start.y + 1;
+        // auto output_core_w = output_core_range.end.y - output_core_range.start.y + 1;
+        // TT_FATAL(input_core_w == output_core_w);
+        auto input_core_w = input_core_range.end.x - input_core_range.start.x + 1;
         auto output_core_w = output_core_range.end.y - output_core_range.start.y + 1;
         TT_FATAL(input_core_w == output_core_w);
     }

@@ -142,7 +142,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             def gen_per_core_gather_data_uint16_tensor(config: list):
                 assert type(config) is list
                 if block_sharding:
-                    assert len(config) == num_cores_w, f"{len(config)} {num_cores_w}"
+                    assert len(config) == num_cores_h, f"{len(config)} {num_cores_h}"
                 else:
                     assert len(config) == num_cores_nhw, f"{len(config)} {num_cores_nhw}"
                 assert type(config[0]) is list
@@ -152,7 +152,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 shard_shape = [1, torch_tensor.shape[-1]]
 
                 if block_sharding:
-                    torch_tensor = torch_tensor.repeat(1, num_cores_h)
+                    torch_tensor = torch_tensor.repeat(1, num_cores_w)
 
                 torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
 

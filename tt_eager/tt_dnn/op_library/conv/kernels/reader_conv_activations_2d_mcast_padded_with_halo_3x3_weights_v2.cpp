@@ -24,10 +24,7 @@ void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr,
 void kernel_main() {
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     // need to have these as compile-time since we unroll loops based on them
     constexpr uint32_t window_outer = get_compile_time_arg_val(6);
@@ -45,7 +42,6 @@ void kernel_main() {
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
 
     uint32_t i = 0;
-    i+=18;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
 
     if(noop) {
@@ -56,7 +52,6 @@ void kernel_main() {
     uint32_t act_mcast_dest_noc_start_y                  = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_dest_noc_end_x                    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_dest_noc_end_y                    = get_arg_val<uint32_t>(i); i+=1;
-    i+=5; //skip 5 rt args
     uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
 

@@ -31,6 +31,7 @@ from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 import tt_lib as ttl
+import ttnn
 import torch
 import math
 import warnings
@@ -117,7 +118,7 @@ def determine_parallel_config(
         num_cores_nhw = (
             find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
             if is_1d_systolic
-            else find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0])
+            else find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[1])
         )
         if override is not None and num_cores_nhw != override:
             warnings.warn(f"Overriding config: num_cores_nhw from {num_cores_nhw} to user provided config={override}")
@@ -135,13 +136,13 @@ def determine_parallel_config(
             ), "Error: For 1d systolic conv, num_cores_nhw must be <= grid size"
         else:
             grid_size = [
-                num_cores_nhw,
                 find_closest_common_largest_divisor(
-                    conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[1]
+                    conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[0]
                 ),
+                num_cores_nhw,
             ]
             assert (
-                num_cores_nhw == grid_size[0]
+                num_cores_nhw == grid_size[1]
             ), "Error: For 2d systolic conv, num_cores_nhw must be == # of cols in grid size"
 
         if override is not None and grid_size != override:
@@ -177,8 +178,9 @@ def determine_parallel_config(
 
     num_cores_nhw = calculate_num_cores_nhw(config_override.get("num_cores_nhw", None))
     grid_size = calculate_grid_size(num_cores_nhw, config_override.get("grid_size", None))
-    logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[0]
-    logical_grid_y = 1 if is_1d_systolic else grid_size[1]
+    breakpoint()
+    logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[1]
+    logical_grid_y = 1 if is_1d_systolic else grid_size[0]
     per_core_out_matrix_height_ntiles = calculate_per_core_out_matrix_height_ntiles(
         logical_grid_x, config_override.get("per_core_out_matrix_height", None)
     )
@@ -232,7 +234,7 @@ def determine_per_core_block_config(
     if is_1d_systolic:
         act_c_num_blocks = 1
     else:
-        act_c_num_blocks = grid_size.y
+        act_c_num_blocks = grid_size.x
         assert (
             padded_input_channels % act_c_num_blocks == 0
         ), "Cannot parallelize conv as a 2d systolic array. Input channels must be divisible by act_c_num_blocks."
@@ -837,6 +839,7 @@ class TTPyCompositeConv(TTPyOp):
         if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
+        ttnn.synchronize_device(self.device)
         if self.enable_auto_formatting and activation.is_sharded():
             activation = self.conv_output_sharded_to_interleaved(activation)
         return activation
@@ -920,17 +923,18 @@ class TTPyCompositeConv(TTPyOp):
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
         else:
-            grid_size_y = self.opt_conv_parall_conf_auto.grid_size.y
-            assert padded_input_channels % grid_size_y == 0
+            grid_size_x = self.opt_conv_parall_conf_auto.grid_size.x
+            assert padded_input_channels % grid_size_x == 0
             assert (
                 not self.use_shallow_conv_variant
             ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
             conv_input_on_device = ttl.tensor.interleaved_to_sharded(
                 conv_input_on_device,
-                grid_size,
+                # grid_size,
+                (grid_size[1], grid_size[0]),
                 [
                     untilize_with_halo_input_shard_height,
-                    (int)(padded_input_channels / grid_size_y),
+                    (int)(padded_input_channels / grid_size_x),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttl.tensor.ShardOrientation.ROW_MAJOR,

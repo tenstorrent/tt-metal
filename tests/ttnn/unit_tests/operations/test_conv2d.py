@@ -395,7 +395,6 @@ def test_resnet50_conv_gs(
     )
 
 
-@skip_for_wormhole_b0()
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",

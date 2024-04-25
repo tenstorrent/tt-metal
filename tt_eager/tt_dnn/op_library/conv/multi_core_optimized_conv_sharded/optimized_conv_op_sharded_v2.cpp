@@ -282,13 +282,18 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
     uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
 
+    log_debug(LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
+    log_debug(LogOp, "weight_matrix_height_ntiles: {}", weight_matrix_height_ntiles);
+    log_debug(LogOp, "per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
+    log_debug(LogOp, "per_core_out_matrix_width_ntiles: {}", per_core_out_matrix_width_ntiles);
+
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     uint32_t input_channels_padded = 0;
     if(weight_width_sliced) {
-        TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_blocks to be equal to height of grid");
-        input_channels_padded = shard_shape[1] * num_cores_y;
+        TT_FATAL(conv_act_c_blocks == num_cores_x, "Expected conv_act_c_blocks {} to be equal to height of grid {}", conv_act_c_blocks, num_cores_x);
+        input_channels_padded = shard_shape[1] * num_cores_x;
     } else {
         input_channels_padded = shard_shape[1];
     }
@@ -525,13 +530,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
     }
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    assert(num_cores_y % num_weight_slices_width == 0);
-    uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-    uint32_t total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+    uint32_t total_num_cores_per_weight_slice = 0;
     if (weight_width_sliced) {
+        assert(num_cores_x % num_weight_slices_width == 0);
+        uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
+        total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
         assert(total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles);
     }
     else {
+        assert(num_cores_y % num_weight_slices_width == 0);
+        uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
+        total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
         assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
     }
     assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
@@ -965,15 +974,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             }
         }
         // per core specific args
-        uint32_t act_slice_i = core_i % (num_cores_y_per_weight_slice_width * num_cores_x);
-        uint32_t weight_slice_i = core_i / (num_cores_y_per_weight_slice_width * num_cores_x);
-        uint32_t total_h_start = act_slice_i * per_core_out_matrix_height_ntiles * TILE_HEIGHT;
-        uint32_t n_start = total_h_start / (conv_output_size_h * conv_output_size_w);
-        uint32_t matrix_h_start = total_h_start % (conv_output_size_h * conv_output_size_w);
-        uint32_t out_h_start = matrix_h_start / conv_output_size_w;
-        uint32_t out_w_start = matrix_h_start % conv_output_size_w;
-        uint32_t in_h_start = (n_start * conv_act_size_h) + out_h_start * stride_h;
-        uint32_t last_start_in_h_curr_image = 222 + (n_start * conv_act_size_h);
+        uint32_t act_slice_i = core_i % total_num_cores_per_weight_slice;
+        uint32_t weight_slice_i = core_i / total_num_cores_per_weight_slice;
         uint32_t out_start_tile_id = (act_slice_i * per_core_out_matrix_height_ntiles * weight_matrix_width_ntiles) + (weight_slice_i * per_core_out_matrix_width_ntiles);
         uint32_t out_start_tile_id_h = act_slice_i * per_core_out_matrix_height_ntiles;
         uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
@@ -981,18 +983,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         if (has_bias) {
             assert(bias_tile_offset < bias_ntiles);
         }
-
-        /* Logic to compute:
-         * NOTE: This logic is wrong if stride !=1
-         * first_partial_right_aligned_row_width
-         * skip_after_partial_right_aligned_row
-         * first_partial_image_num_rows
-         * skip_after_first_partial_image_row
-         * num_full_images
-         * skip_after_full_image
-         * last_partial_image_num_rows
-         * last_partial_left_aligned_row_width
-         */
 
         // If 2D, same image specs across a row
         uint32_t start_stick = weight_width_sliced ? core_x_i * out_block_h_datums : core_i * out_block_h_datums;
@@ -1020,45 +1010,33 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             uint32_t act_mcast_dest_noc_end_x = bottom_core_physical.x;
             uint32_t act_mcast_dest_noc_end_y = reader_is_noc_0 ? bottom_core_physical.y : top_left_core_physical.y;
             reader_rt_args = {
-                conv_act_size_w,
-                conv_act_size_h,
-                weight_size_h,
-                weight_size_w,
-                num_blocks_act_h_per_core,
-                act_block_h_datums,
-                in0_block_num_tiles,
-                conv_act_c_blocks,
-
-                // Specs for reader indices
-                first_partial_right_aligned_row_width,
-                skip_after_partial_right_aligned_row,
-                first_partial_image_num_rows,
-                skip_after_first_partial_image_row,
-                num_full_images,
-                skip_after_full_image,
-                last_partial_image_num_rows,
-                last_partial_left_aligned_row_width,
-
-                // Specs for reader offsets
-                window_outer, // window_outer
-                window_inner, // window_inner = 9 / 3, ie. read 3 width coalesced
-
                 (uint32_t) noop_core,
+
+                // // mcast args
+                // act_mcast_dest_noc_start_x,
+                // act_mcast_dest_noc_start_y,
+                // act_mcast_dest_noc_end_x,
+                // act_mcast_dest_noc_end_y,
+                // num_cores_y - 1,
+                // num_cores_y - 1,
+                // act_mcast_sender_semaphore,
+                // act_mcast_receiver_semaphore,
+                // in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
+                // core_y_i, // act_mcast_sender_id (goes down the column)
+                // (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
 
                 // mcast args
                 act_mcast_dest_noc_start_x,
                 act_mcast_dest_noc_start_y,
                 act_mcast_dest_noc_end_x,
                 act_mcast_dest_noc_end_y,
-                num_cores_y - 1,
-                num_cores_y - 1,
-                act_mcast_sender_semaphore,
-                act_mcast_receiver_semaphore,
-                in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
+                // weight_width_sliced ? act_mcast_dest_noc_start_y : act_mcast_dest_noc_start_x,
+                // weight_width_sliced ? act_mcast_dest_noc_start_x : act_mcast_dest_noc_start_y,
+                // weight_width_sliced ? act_mcast_dest_noc_end_y : act_mcast_dest_noc_end_x,
+                // weight_width_sliced ? act_mcast_dest_noc_end_x : act_mcast_dest_noc_end_y,
                 core_y_i, // act_mcast_sender_id (goes down the column)
                 (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
             };
-            reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end()); // act_mcast_sender_noc_y
         } else {
             reader_rt_args = {
                 conv_act_size_w,
