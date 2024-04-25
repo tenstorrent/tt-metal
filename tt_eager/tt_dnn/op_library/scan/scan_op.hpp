@@ -71,6 +71,17 @@ struct ScanOnly : ScanBase {
     const auto attribute_values() const { return std::make_tuple(direction); }
 };
 
+struct ScanCommunicate : ScanBase {
+    ScanOpDirection direction = ScanOpDirection::COLS;
+
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple("direction");
+
+    const auto attribute_values() const { return std::make_tuple(direction); }
+};
+
 Tensor scan(Tensor &a);
 
 Tensor retile_to_row_major(Tensor &a);
@@ -78,5 +89,7 @@ Tensor retile_to_row_major(Tensor &a);
 Tensor undo_retile_to_row_major(Tensor &a);
 
 Tensor scan_only(Tensor &a);
+
+Tensor scan_communicate(Tensor &a);
 
 }  // namespace tt::tt_metal
