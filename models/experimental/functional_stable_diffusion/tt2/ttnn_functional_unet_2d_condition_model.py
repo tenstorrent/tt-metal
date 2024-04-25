@@ -412,9 +412,9 @@ class UNet2DConditionModel:
             emb = emb + class_emb
 
         # # TODO: Move to L1
-        # sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
-        # sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
-        # sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
+        sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
+        sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
+        sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
         # sample in l1 interelaved and tiled and nhwc
 
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
@@ -656,17 +656,17 @@ class UNet2DConditionModel:
         sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
         sample = self.conv_out(sample)
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        # sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
-        # sample = ttnn.reshape(
-        #     sample,
-        #     (
-        #         self.conv_out.batch_size,
-        #         self.conv_out.input_height,
-        #         self.conv_out.input_width,
-        #         self.conv_out.out_channels,
-        #     ),
-        # )
-        # sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
-        # sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT, use_multicore=True)
+        sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        sample = ttnn.reshape(
+            sample,
+            (
+                self.conv_out.batch_size,
+                self.conv_out.input_height,
+                self.conv_out.input_width,
+                32,  # Padded to tile dim
+            ),
+        )
+        sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
+        sample = sample[:, :4, :, :]
 
         return sample
