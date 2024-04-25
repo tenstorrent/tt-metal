@@ -18,42 +18,66 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-void MorehSGD::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 3, "Must have 1 input tensors");
+void MorehSGD::validate_with_output_tensors(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>> &output_tensors) const {
+    TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
     TT_ASSERT(
-        optional_input_tensors.size() == 0 || optional_input_tensors.size() == 2, "Must have 0 or 2 optional tensors");
+        optional_input_tensors.size() == 0 || optional_input_tensors.size() == 1, "Must have 0 or 1 optional tensors");
 
     auto& param_in = input_tensors.at(0);
     auto& grad = input_tensors.at(1);
-    auto& param_out = input_tensors.at(2);
+    auto& param_out = output_tensors.at(0);
 
     TT_ASSERT(param_in.storage_type() == StorageType::DEVICE, "param_in to SGD need to be on device!");
-    TT_ASSERT(grad.storage_type() == StorageType::DEVICE, "grad to SGD need to be on device!");
-    TT_ASSERT(param_out.storage_type() == StorageType::DEVICE, "param_out to SGD need to be on device!");
-
     TT_ASSERT(param_in.buffer() != nullptr, "param_in to SGD need to be allocated in buffers on device!");
-    TT_ASSERT(grad.buffer() != nullptr, "grad to SGD need to be allocated in buffers on device!");
-    TT_ASSERT(param_out.buffer() != nullptr, "param_out to SGD need to be allocated in buffers on device!");
-
     TT_ASSERT((param_in.get_layout() == Layout::TILE), "param_in to SGD must be tilized");
-    TT_ASSERT((grad.get_layout() == Layout::TILE), "grad to SGD must be tilized");
-    TT_ASSERT((param_out.get_layout() == Layout::TILE), "param_out to SGD must be tilized");
-
     TT_ASSERT(param_in.get_dtype() == DataType::BFLOAT16 || param_in.get_dtype() == DataType::BFLOAT8_B);
+
+    TT_ASSERT(grad.storage_type() == StorageType::DEVICE, "grad to SGD need to be on device!");
+    TT_ASSERT(grad.buffer() != nullptr, "grad to SGD need to be allocated in buffers on device!");
+    TT_ASSERT((grad.get_layout() == Layout::TILE), "grad to SGD must be tilized");
     TT_ASSERT(grad.get_dtype() == DataType::BFLOAT16 || grad.get_dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(param_out.get_dtype() == DataType::BFLOAT16 || param_out.get_dtype() == DataType::BFLOAT8_B);
+
+    if (param_out.has_value()) {
+        TT_ASSERT(param_out.value().storage_type() == StorageType::DEVICE, "param_out to SGD need to be on device!");
+        TT_ASSERT(param_out.value().buffer() != nullptr, "param_out to SGD need to be allocated in buffers on device!");
+        TT_ASSERT((param_out.value().get_layout() == Layout::TILE), "param_out to SGD must be tilized");
+        TT_ASSERT(param_out.value().get_dtype() == DataType::BFLOAT16 || param_out.value().get_dtype() == DataType::BFLOAT8_B);
+    }
 }
 
 std::vector<Shape> MorehSGD::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
+    auto output_shape = input_tensors.at(0).get_legacy_shape();
+    return {output_shape, output_shape};
 }
 
-std::vector<Tensor> MorehSGD::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
+std::vector<Tensor> MorehSGD::create_output_tensors(
+    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    const auto &output_shapes = this->compute_output_shapes(input_tensors);
+    auto dtype = input_tensors.at(0).get_dtype();
+    Layout layout{Layout::TILE};
+    auto device = input_tensors.at(0).device();
+
+    std::vector<Tensor> result;
+    result.reserve(2);
+
+    if (output_tensors.at(0).has_value()) {
+        result.push_back(output_tensors.at(0).value());
+    } else {
+        result.push_back(create_device_tensor(
+                  output_shapes.at(0), dtype, layout, device, this->param_out_mem_config));
+    }
+
+    if (output_tensors.at(1).has_value()) {
+        result.push_back(output_tensors.at(1).value());
+    } else if (this->momentum != 0.0f) {
+        result.push_back(create_device_tensor(
+                  output_shapes.at(1), dtype, layout, device, this->momentum_buffer_out_mem_config));
+    }
+
+    return std::move(result);
 }
 
 operation::ProgramWithCallbacks MorehSGD::create_program(
@@ -63,8 +87,9 @@ operation::ProgramWithCallbacks MorehSGD::create_program(
     auto& param_in = input_tensors.at(0);
     auto& grad = input_tensors.at(1);
     auto& momentum_buffer_in = optional_input_tensors.at(0);
-    auto& param_out = input_tensors.at(2);
-    auto& momentum_buffer_out = optional_input_tensors.at(1);
+    auto& param_out = output_tensors.at(0);
+    std::optional<Tensor> momentum_buffer_out =
+        (output_tensors.size() == 2) ? (std::make_optional<Tensor>(output_tensors.at(1))) : (std::nullopt);
 
     return {moreh_sgd_(
         param_in,
@@ -81,23 +106,25 @@ operation::ProgramWithCallbacks MorehSGD::create_program(
         this->core_range)};
 }
 
-void moreh_sgd(
+std::vector<std::optional<Tensor>> moreh_sgd(
     const Tensor& param_in,
     const Tensor& grad,
     std::optional<const Tensor> momentum_buffer_in,
-    const Tensor& param_out,
+    std::optional<const Tensor> param_out,
     std::optional<const Tensor> momentum_buffer_out,
     float lr,
     float momentum,
     float dampening,
     float weight_decay,
     bool nesterov,
-    bool momentum_initialized) {
+    bool momentum_initialized,
+    const MemoryConfig &param_out_mem_config,
+    const MemoryConfig &momentum_buffer_out_mem_config) {
     auto device = param_in.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    operation::run(
+    auto output_tensors = operation::run(
         MorehSGD{
             .lr = lr,
             .momentum = momentum,
@@ -105,9 +132,23 @@ void moreh_sgd(
             .weight_decay = weight_decay,
             .nesterov = nesterov,
             .momentum_initialized = momentum_initialized,
-            .core_range = all_cores},
-        {param_in, grad, param_out},
-        {momentum_buffer_in, momentum_buffer_out});
+            .core_range = all_cores,
+            .param_out_mem_config = param_out_mem_config,
+            .momentum_buffer_out_mem_config = momentum_buffer_out_mem_config},
+        {param_in, grad},
+        {momentum_buffer_in},
+        {param_out, momentum_buffer_out});
+
+    std::vector<std::optional<Tensor>> result;
+    result.reserve(2);
+    result.push_back(output_tensors.at(0));
+    if (output_tensors.size() == 2) {
+        result.push_back(output_tensors.at(1));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
 }
 
 }  // namespace primary

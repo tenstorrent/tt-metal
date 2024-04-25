@@ -21,7 +21,7 @@ inline void calculate_expm1()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
-        v = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
+        v = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
         dst_reg[0] = v - 1.0f;
         dst_reg++;
     }

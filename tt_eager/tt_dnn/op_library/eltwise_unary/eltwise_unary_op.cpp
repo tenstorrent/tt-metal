@@ -122,7 +122,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init({1});", fmt::format("gelu_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init({1});",  fmt::format("rsqrt_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init({1});", fmt::format("exp_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::EXP: op_init_and_name = {fmt::format("exp_tile_init({}u);", std::to_string((uint32_t)param0)), fmt::format("exp_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init({1});", fmt::format("erf_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init({1});", fmt::format("erfc_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;

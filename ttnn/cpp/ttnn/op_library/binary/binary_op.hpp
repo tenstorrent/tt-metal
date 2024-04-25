@@ -136,19 +136,20 @@ struct MakeBinary {
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> dtype = std::nullopt,
         std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) const {
-        auto buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
-        buffer[0] = scalar;
-        Tensor scalar_tensor =
-            Tensor(
-                OwnedStorage{buffer},
-                ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
-                DataType::BFLOAT16,
-                Layout::TILE)
-                .to(input_tensor_a.device());
-
+        std::vector<Tensor> output_tensors = {
+            Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+        // Cast Float Scalar to a device tensor
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host = Tensor(
+                                    OwnedStorage{host_buffer},
+                                    ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
+                                    DataType::BFLOAT16,
+                                    Layout::TILE);
+        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return this->operator()(
-            input_tensor_a, scalar_tensor, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
+            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
     }
 };
 }  // namespace detail

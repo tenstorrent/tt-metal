@@ -187,6 +187,11 @@ struct Tensor {
     Tensor to(
         CommandQueue &queue,
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+
+    Tensor to(
+        const std::vector<Device*>& workers,
+        const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+
     Tensor to(Layout target_layout, Device* worker = nullptr) const;
 
     Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;

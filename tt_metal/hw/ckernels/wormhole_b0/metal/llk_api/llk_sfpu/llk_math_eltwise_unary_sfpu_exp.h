@@ -5,23 +5,21 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
+#include "llk_math_eltwise_unary_sfpu_2_param.h"
 #include "ckernel_sfpu_exp.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = 0) {
+template <bool APPROXIMATE, int ITERATIONS=8>
+inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = ITERATIONS, int param1 = 0) {
 
-	constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>
-      (ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative, false, first_iterations>,
-       ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative>,
-                                dst_index, vector_mode, param0);
-
+    llk_math_eltwise_unary_sfpu_2_param<APPROXIMATE>
+      (ckernel::sfpu::calculate_exponential<APPROXIMATE, false, first_iterations>,
+       ckernel::sfpu::calculate_exponential<APPROXIMATE>,
+                                dst_index, vector_mode, param0, param1);
 }
 
 template <bool APPROXIMATE>
