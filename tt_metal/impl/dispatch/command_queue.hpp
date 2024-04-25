@@ -56,7 +56,8 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_X(x) x
 #define NOC_Y(y) y
 
-uint32_t get_noc_unicast_encoding(CoreCoord coord);
+uint32_t get_noc_unicast_encoding(const CoreCoord &coord);
+uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end);
 
 class Trace;
 class CommandQueue;
@@ -272,7 +273,7 @@ class EnqueueProgramCommand : public Command {
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
     DeviceCommand preamble_command_sequence;
-    std::vector<DeviceCommand> runtime_args_command_sequences;
+    static std::unordered_map<uint64_t, std::vector<DeviceCommand>> runtime_args_command_sequences;
     DeviceCommand program_command_sequence;
 
    public:
