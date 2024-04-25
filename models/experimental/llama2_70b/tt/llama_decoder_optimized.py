@@ -97,7 +97,6 @@ class TtLlamaDecoder_optimized:
         self.attn_norm_list = []
         self.ffn_norm_list = []
 
-        # TODO: Weight caching!
         test_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, self.num_devices - 1, self.num_devices)
         if test_cache_path.exists():
             for i in range(self.num_devices):
@@ -158,7 +157,7 @@ class TtLlamaDecoder_optimized:
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
             x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            assert x_fractured[0].size() == (batch, 1, seq_len, self.hidden_size // self.num_devices)
+            assert x_fractured[0].shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
             xs = []
             for device_id in range(self.num_devices):
@@ -210,34 +209,51 @@ class TtLlamaDecoder_optimized:
                     attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
                 )
 
-            if self.emulated:
-                # save l1 space by sharing the same input across "devices"
-                for i in range(1, self.num_devices):
-                    rot_mats[0][i].deallocate(True)
-                    rot_mats[1][i].deallocate(True)
-                    attn_masks[i].deallocate(True)
-                    rot_mats[0][i], rot_mats[1][i] = rot_mats[0][0], rot_mats[1][0]
-                    attn_masks[i] = attn_masks[0]
-
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
+            assert x_fractured[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
+
+            xs = [
+                as_tensor(x_fractured[device_id], ttnn.bfloat16, ttnn.TILE_LAYOUT, None, device_id)
+                for device_id in range(self.num_devices)
+            ]
+            for device_id in range(self.num_devices):
+                xs[device_id] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[device_id], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+                )
 
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             # Use batch=1 because we assume all users use same rot_mat
             rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
+            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+            rot_mats = []
+            for device_id in range(self.num_devices):
+                rot_mats.append(
+                    as_tensor(
+                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
+                    )
+                )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
+            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+            attn_masks = []
+            for device_id in range(self.num_devices):
+                # BFLOAT16_DTYPE currently pushes faster
+                attn_masks.append(
+                    as_tensor(
+                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_decode_{start_pos}", device_id
+                    )
+                )
 
-            assert x.size() == (seq_len, 1, batch, self.hidden_size)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-            assert attn_mask.size() == attn_mask_shape
-
-            x_fractured = torch.chunk(x, self.num_devices, dim=-1)
-            xs, rot_mats, attn_masks = [], [], []
+            repeat_shape = (batch, 1, 1, 1)
+            for i in range(self.num_devices):
+                attn_masks[i] = tt_lib.tensor.repeat(
+                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+                )
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
             if attention_mask_memconfig.is_sharded():
@@ -245,44 +261,9 @@ class TtLlamaDecoder_optimized:
                 attn_mask_shard_shape[-1] = padded_layer_past_len
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
             for i in range(self.num_devices):
-                device = self.devices[i]
-                xs.append(
-                    torch2tt_tensor(
-                        x_fractured[i],
-                        device,
-                        tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-                    )
-                )
-                rot_mats.append(
-                    torch2tt_tensor(
-                        rot_mat.clone(),
-                        device,
-                        tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
-                        tt_dtype=self.model_config["ROT_MAT_DTYPE"],
-                    )
-                )
-                attn_masks.append(
-                    torch2tt_tensor(
-                        attn_mask.clone(),
-                        device,
-                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
-                    )
-                )
-            for i in range(self.num_devices):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-                )
                 attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
                     attn_masks[i], sharded_mem_config=attention_mask_memconfig
                 )
-
-            if self.emulated:
-                # save l1 space by sharing the same input across "devices"
-                for i in range(1, self.num_devices):
-                    rot_mats[i].deallocate(True)
-                    attn_masks[i].deallocate(True)
-                    rot_mats[i] = rot_mats[0]
-                    attn_masks[i] = attn_masks[0]
 
         return (
             xs,

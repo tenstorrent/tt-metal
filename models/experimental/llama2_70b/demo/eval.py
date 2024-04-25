@@ -34,8 +34,8 @@ def main(args):
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
-    # set num_tokens back to args.sample_len, because this is the number of tokens to decode for each sample (call to decode v0)
-    args.num_tokens = args.sample_len
+    # set num_tokens to 1, because this the number of tokens to generate
+    args.num_tokens = 1
 
     # Dataset preparation
     dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
@@ -177,7 +177,7 @@ class Args:
         num_layers=None,
         max_seq_len=4096,
         # Generation args
-        num_tokens=100,
+        num_tokens=1,
         prompts_file="models/demos/t3000/llama2_70b/demo/data/multi_prompt.json",
         output_at_end=True,
         top_p=1,
@@ -284,6 +284,7 @@ def test_LlamaModel_demo(
     all_devices,
     n_devices,
     emulated,
+    use_program_cache,
     # Dataset args
     dataset,
     split,

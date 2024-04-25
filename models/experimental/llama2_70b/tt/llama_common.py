@@ -17,7 +17,7 @@ MAX_SEQ_LEN = 4096
 BASE_URL = "layers"
 UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
-UNIT_TEST_START_POS = 1  # 0 is low for test_decoder: 0.9986
+UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
 
 
@@ -58,6 +58,12 @@ def extract_pcc_from_log(log):
 
 def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices, cache_id=None):
     return base_cache_path / f"{tensor_str}{'' if cache_id is None else cache_id}_{device_idx}_{num_devices}.bin"
+
+
+def get_weight_cache_path_ttnn(
+    base_cache_path, tensor_str, device_idx, num_devices, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+):
+    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}_dtype_{dtype.name}_layout_{layout.name}.bin"
 
 
 def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_devices, x, y):
@@ -107,8 +113,8 @@ def tt_all_gather_torch(tensors, dim=-1):
     return res
 
 
-def generate_rot_emb(dhead, end):
-    cos, sin = precompute_freqs(dhead, end)
+def generate_rot_emb(dhead, end, theta: float = 10000.0):
+    cos, sin = precompute_freqs(dhead, end, theta)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 

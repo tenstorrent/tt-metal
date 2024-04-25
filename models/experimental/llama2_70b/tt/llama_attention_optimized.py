@@ -214,7 +214,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)
-            assert x.size() == (batch, 1, seq_len, self.hidden_size)
+            assert x.shape == (batch, 1, seq_len, self.hidden_size)
             xs = []
             for device_id in range(self.num_devices):
                 xs.append(as_tensor(x.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, device_id))
@@ -265,18 +265,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
                 )
 
-            if self.emulated:
-                # save l1 space by sharing the same input across "devices"
-                for i in range(1, self.num_devices):
-                    rot_mats[0][i].deallocate(True)
-                    rot_mats[1][i].deallocate(True)
-                    attn_masks[i].deallocate(True)
-                    rot_mats[0][i], rot_mats[1][i] = rot_mats[0][0], rot_mats[1][0]
-                    attn_masks[i] = attn_masks[0]
-
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Only supporting decode mode"
-
             x = x.transpose(0, 1).unsqueeze(1)
             assert x.shape == (seq_len, 1, batch, self.hidden_size)
             xs = [
@@ -284,16 +274,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 for device_id in range(self.num_devices)
             ]
 
-            for i in range(self.num_devices):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
+            for device_id in range(self.num_devices):
+                xs[device_id] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[device_id], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
                 )
 
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             # Use batch=1 because we assume all users use same rot_mat
             rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
             assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-
             rot_mats = []
             for device_id in range(self.num_devices):
                 rot_mats.append(
@@ -306,7 +295,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-
             attn_masks = []
             for device_id in range(self.num_devices):
                 # BFLOAT16_DTYPE currently pushes faster
@@ -331,14 +319,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
                     attn_masks[i], sharded_mem_config=attention_mask_memconfig
                 )
-
-            if self.emulated:
-                # save l1 space by sharing the same input across "devices"
-                for i in range(1, self.num_devices):
-                    rot_mats[i].deallocate(True)
-                    attn_masks[i].deallocate(True)
-                    rot_mats[i] = rot_mats[0]
-                    attn_masks[i] = attn_masks[0]
 
         return (
             xs,

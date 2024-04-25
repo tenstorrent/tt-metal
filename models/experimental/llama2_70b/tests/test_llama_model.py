@@ -85,6 +85,7 @@ def run_test_LlamaModel_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
@@ -133,6 +134,7 @@ def run_test_LlamaModel_inference(
             start_pos,
             attn_mask,
         )
+        del tt_inp_emb, rot_mat, attn_mask
 
         logger.info(f"Syncronizing devices for token idx {start_pos}")
 
@@ -177,9 +179,9 @@ def run_test_LlamaModel_inference(
         logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Model output Passed!")
+            logger.info(f"[start_pos={start_pos}] {model_name} Model output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Model output Failed! PCC value is lower than {pcc}")
+            logger.warning(f"[start_pos={start_pos}] {model_name} Model output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -222,12 +224,13 @@ def run_test_LlamaModel_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama2 Model output Passed!")
+        logger.info(f"{model_name} output Passed!")
     else:
-        logger.warning("Llama2 Model output Failed!")
+        logger.warning(f"{model_name} output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
+@pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "pcc, n_layers",
@@ -269,6 +272,7 @@ def test_LlamaModel_inference(
     n_devices,
     all_devices,
     emulated,
+    use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)

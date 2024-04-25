@@ -14,7 +14,7 @@ from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDec
 from models.experimental.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.experimental.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    generate_rot_emb,
+    freqs_to_rotation_matrix,
     get_weight_cache_path,
     get_rotation_mat,
     precompute_freqs,
@@ -52,6 +52,8 @@ class TtLlamaModel_optimized(nn.Module):
         self.max_seq_len = configuration.max_seq_len
         self.vocab_size = configuration.vocab_size
         self.norm_eps = configuration.norm_eps
+        self.llama3 = self.vocab_size == 128256
+        self.rope_theta = configuration.rope_theta if self.llama3 else 10000.0
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
@@ -77,8 +79,8 @@ class TtLlamaModel_optimized(nn.Module):
         logger.info("Done creating layers")
 
         # Rotary Embedding
-        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
-        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
+        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for prefill
+        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
             devices,
@@ -117,7 +119,10 @@ class TtLlamaModel_optimized(nn.Module):
                 )
         else:
             H = 8 * 1024
-            PADDED_VOCAB = 32 * 1024
+            if self.llama3:
+                PADDED_VOCAB = 128 * 1024
+            else:
+                PADDED_VOCAB = 32 * 1024
             padded_lm_head = torch.zeros(H, PADDED_VOCAB)
             padded_lm_head[:, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
             padded_lm_head_chunks = torch.chunk(padded_lm_head, self.num_devices, -1)
@@ -261,9 +266,9 @@ class TtLlamaModel_optimized(nn.Module):
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
-            for i in range(self.num_devices):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            for device_id in range(self.num_devices):
+                xs[device_id] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[device_id], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
 
             try:
@@ -284,21 +289,13 @@ class TtLlamaModel_optimized(nn.Module):
                     )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
             try:
-                attn_mask_tt = ttnn.load_tensor(
-                    cache_file_name(f"attn_mask_decode_full_{start_pos}", "BFLOAT16", "TILE")
-                )
+                attn_mask_tt = ttnn.load_tensor(cache_file_name(f"attn_mask_decode_{start_pos}", "BFLOAT16", "TILE"))
                 attn_masks = [
-                    ttnn.to_device(attn_mask_tt, self.devices[device_id], memory_config=attention_mask_memconfig)
-                    for device_id in range(self.num_devices)
+                    ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
                 ]
             except (FileNotFoundError, RuntimeError):
-                attn_mask_shape = (batch, seq_len, self.padded_local_heads, padded_layer_past_len)
+                attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
                 attn_mask = torch.zeros(*attn_mask_shape)
                 attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
                 attn_masks = []
@@ -309,10 +306,26 @@ class TtLlamaModel_optimized(nn.Module):
                             attn_mask.clone(),
                             ttnn.bfloat16,
                             ttnn.TILE_LAYOUT,
-                            f"attn_mask_decode_full_{start_pos}",
+                            f"attn_mask_decode_{start_pos}",
                             device_id,
                         )
                     )
+
+            repeat_shape = (batch, 1, 1, 1)
+            for i in range(self.num_devices):
+                attn_masks[i] = tt_lib.tensor.repeat(
+                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+                )
+            # Put attn_mask on the device with the sharded config
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            for i in range(self.num_devices):
+                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
+                )
 
         return (
             xs,
@@ -389,7 +402,9 @@ class TtLlamaModel_optimized(nn.Module):
                 tt_lib.operations.primary.matmul_1d(
                     norm_out_replicated[i],
                     self.lm_head_list[i],
-                    program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
+                    program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
+                    if self.llama3
+                    else self.model_config["LM_HEAD_MM_PROGCFG"],
                     output_mem_config=self.model_config["DRAM_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],

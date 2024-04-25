@@ -125,6 +125,7 @@ def run_test_LlamaAttention_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
     head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
@@ -217,9 +218,11 @@ def run_test_LlamaAttention_inference(
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Attention output Passed!")
+            logger.info(f"[start_pos={start_pos}] {model_name} Attention output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Attention output Failed! PCC value is lower than {pcc}")
+            logger.warning(
+                f"[start_pos={start_pos}] {model_name} Attention output Failed! PCC value is lower than {pcc}"
+            )
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -278,9 +281,9 @@ def run_test_LlamaAttention_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama2 Attention output Passed!")
+        logger.info(f"{model_name} Attention output Passed!")
     else:
-        logger.warning("Llama2 Attention output Failed!")
+        logger.warning(f"{model_name} Attention output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
