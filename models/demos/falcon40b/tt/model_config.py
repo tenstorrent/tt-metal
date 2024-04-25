@@ -798,14 +798,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
-        "COMPUTE_KERNEL_HIFI4_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        ),
-        "COMPUTE_KERNEL_HIFI4_CONFIG_FP16_DEST": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        "COMPUTE_KERNEL_HIFI2_CONFIG_FP16_DEST": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -837,6 +831,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
+    model_config["ATTN_MASK_DTYPE"] = BFP4_DTYPE
+
     head_dim = 64
     hidden_size = model_config_entries["hidden_size"]
     vocab_size = model_config_entries["vocab_size"]
@@ -851,7 +847,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     layernorm_max_num_cores_y = 8
 
     layernorm_slice_size = 512
-    attention_max_slice_size = 256
+    attention_max_slice_size = 1024
     attention_slice_size = min(attention_max_slice_size, row_height)
     assert row_height % attention_slice_size == 0
 
@@ -926,7 +922,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         compute_with_storage_grid_size=attention_mm_grid_size,
         in0_block_w=head_dim // 32,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=1,  # use 8 for S=2k when hang is fixed
         per_core_M=attetnion_mm_M,
         per_core_N=row_height // 32,
         fuse_batch=True,
@@ -942,8 +938,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["ATTENTION_MM_2_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=attention_mm_grid_size,
         in0_block_w=row_height // 32,
-        out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_h=1,  # use 4 for S=2k when hang is fixed
+        out_subblock_w=1,  # use 2 for S=2k when hang is fixed
         per_core_M=attetnion_mm_M,
         per_core_N=head_dim // 32,
         fuse_batch=True,
