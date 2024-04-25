@@ -53,11 +53,15 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
         return torch_function(input_tensor)
 
     def _math_op_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+        if operation_name in ["ttnn.erfinv", "ttnn.log2", "ttnn.log10", "ttnn.log1p"]:
+            supported_dtypes = (ttnn.bfloat16,)
+        else:
+            supported_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b)
         ttnn.validate_input_tensor(
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            dtypes=supported_dtypes,
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -101,6 +105,8 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = ttnn.{(name)}(tensor)
+
+            {math_op_function.__doc__}
 
             """
     setattr(THIS_MODULE, name, math_op_function)
