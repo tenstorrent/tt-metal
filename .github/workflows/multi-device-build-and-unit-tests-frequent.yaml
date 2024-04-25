@@ -35,4 +35,5 @@ jobs:
         timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
+          export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type frequent_multi_device --dispatch-mode ""
