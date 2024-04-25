@@ -118,7 +118,8 @@ Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfi
     Tensor exp_x = exp(x_beta, output_mem_config);
     Tensor result_log1p = log1p(exp_x, output_mem_config);
     Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
-    sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x, sp_result, output_mem_config);
+    sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x,
+                where(eqz(full_like(x, beta, output_mem_config), output_mem_config), std::numeric_limits<float>::infinity(), sp_result), output_mem_config);
     return sp_result;
 }
 Tensor softplus(const Tensor& a, float beta, float threshold, const MemoryConfig& output_mem_config) {
