@@ -62,7 +62,7 @@ followed the instructions for [installing and building the software](https://git
         * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]`
 * What if my device hangs?
     * Be sure that you have a clean build with the latest code update.  Updating code without rebuilding is often the source of the issue.
-    * If you have a clean build, you can reset the board on the command line using the tt-smi command and the device id with: `tt-smi -tr 0` where 0 represents the device id.
+    * If you have a clean build, you can reset the board on the command line using the tt-smi command and the device id with: `tt-smi -r 0` where 0 represents the device id.
 * What types are supported on device?
     * We currently support ttnn.bfloat16, ttnn.bfloat8 and ttnn.uint32.
 * What shapes are supported on device?

@@ -30,13 +30,13 @@ void EventSynchronize(std::shared_ptr<Event>);
 bool EventQuery(std::shared_ptr<Event>);
 void QueueSynchronize(CommandQueue&);
 
-template<class OutputTensors=tt_metal::operation::Tensors>
+template<class OutputTensors=tt_metal::Tensors>
 OutputTensors EnqueueOperation(
     CommandQueue&,
     operation::DeviceOperation<OutputTensors>&,
-    const tt_metal::operation::Tensors& input_tensors,
-    const tt_metal::operation::OptionalConstTensors& optional_input_tensors = {},
-    const tt_metal::operation::Tensors& optional_output_tensors = {});
+    const tt_metal::Tensors& input_tensors,
+    const tt_metal::OptionalConstTensors& optional_input_tensors = {},
+    const tt_metal::Tensors& optional_output_tensors = {});
 }
 
 // Future APIs to be added later

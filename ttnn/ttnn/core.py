@@ -43,6 +43,13 @@ def has_tile_padding(tensor):
     return False
 
 
+def dump_stack_trace_on_segfault():
+    """
+    Registers a handler to allow a stack trace to be logged to the console should the program fail because of a segfault.
+    """
+    ttnn._ttnn.core.dump_stack_trace_on_segfault()
+
+
 def create_sharded_memory_config(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],

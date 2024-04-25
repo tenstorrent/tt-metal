@@ -10,6 +10,7 @@
 #include "tt_eager/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
 #include "tt_eager/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include <csignal>
 
 namespace ttnn {
 using tt::tt_metal::any_tensor_on_multi_device;
@@ -42,6 +43,18 @@ inline void set_printoptions(const std::string& profile) {
         magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
             return std::tolower(lhs) == std::tolower(rhs);
         }).value();
+}
+
+inline void segfault_handler(int sig) {
+    std::cerr << tt::assert::backtrace_to_string() << std::endl;
+    exit(EXIT_FAILURE);
+}
+
+inline void dump_stack_trace_on_segfault() {
+    if (std::signal(SIGSEGV, segfault_handler) == SIG_ERR) {
+        std::cerr << "Error: cannot handle SIGSEGV" << std::endl;
+        exit(EXIT_FAILURE);
+    }
 }
 
 }  // namespace core

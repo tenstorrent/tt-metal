@@ -16,6 +16,11 @@
 namespace tt {
 
 namespace tt_metal {
+
+using Tensors = std::vector<Tensor>;
+using OptionalTensors = std::vector<std::optional<Tensor>>;
+using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+
 namespace operation {
 
 using Hash = tt::stl::hash::hash_t;
@@ -29,9 +34,6 @@ static Hash hash_operation(const Types&... objects) {
 using OverrideAddressesCallback =
     std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
 
-using Tensors = std::vector<Tensor>;
-using OptionalTensors = std::vector<std::optional<Tensor>>;
-using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 
 template<typename OutputTensors = Tensors>
 using OverrideRuntimeArgumentsCallback = std::function<void(
@@ -74,7 +76,7 @@ struct function_traits;
 // * means pointer
 // fn<TReturn, TArgs...> represents the function member type
 // conceptually it is TReturn (T::*)(TArgs...) but fn<TReturn, TArgs...>
-// allows us to then get to TReturn
+// allows us to then get to TReturn and last_arg_t
 template <class T, class TReturn, class... TArgs>
 struct function_traits<fn<TReturn, TArgs...> T::*> {
   using return_t = TReturn;
@@ -376,6 +378,14 @@ constexpr bool is_device_operation() {
 template <class T>
 constexpr bool is_host_operation() {
     return not is_device_operation<T>();
+}
+
+template <class T, class... Args>
+using has_create_async_operation_t = decltype(T::create_async_operation(std::declval<Args>()...));
+
+template <class T>
+constexpr bool implements_create_async_operation() {
+    return std::experimental::is_detected_v<has_create_async_operation_t, T, OptionalTensors&>;
 }
 
 template <class T, class... Args>

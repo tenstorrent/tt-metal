@@ -30,6 +30,18 @@ struct Sharded {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
 
+    Sharded(const CoreCoord& grid_size,
+            const ShardSpec& shard_spec,
+            ShardedOpType sharded_op_type,
+            const MemoryConfig& output_mem_config,
+            DataType output_dtype)
+        : grid_size(grid_size),
+          shard_spec(shard_spec),
+          sharded_op_type(sharded_op_type),
+          output_mem_config(output_mem_config),
+          output_dtype(output_dtype)
+    {}
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -92,11 +104,11 @@ inline Tensor interleaved_to_sharded(
             MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
             return operation::run(
                     Sharded{
-                        .grid_size = grid_size,
-                        .shard_spec = shard_spec,
-                        .sharded_op_type = ShardedOpType::InterleavedToSharded,
-                        .output_mem_config = sharded_mem_config,
-                        .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
+                         grid_size,
+                         shard_spec,
+                         ShardedOpType::InterleavedToSharded,
+                         sharded_mem_config,
+                         output_dtype.value_or(input_tensor.get_dtype())},
                     {input_tensor});
         },
     {input_tensor}, output_tensors);
@@ -137,6 +149,24 @@ struct CorePageStride {
 struct Reshard {
     const MemoryConfig output_mem_config;
 
+    static void validate_api_arguments(
+        const std::vector<std::optional<Tensor>> &input_tensors, const MemoryConfig output_mem_config) {
+        TT_ASSERT(input_tensors.size() == 1);
+        TT_FATAL(input_tensors.at(0).value().shard_spec().has_value());
+        TT_FATAL(output_mem_config.is_sharded());
+    }
+
+    static std::vector<std::optional<Tensor>> create_async_output_tensors(
+        const std::vector<std::optional<Tensor>> &input_tensors, const MemoryConfig output_mem_config) {
+        const auto input_tensor = input_tensors.at(0).value();
+        return {{Tensor(operation::get_workers_for_op_output({input_tensor}))}};
+    }
+
+    static Reshard create_async_operation(
+        const tt::tt_metal::OptionalTensors &input_tensors, const MemoryConfig output_mem_config) {
+        return Reshard{.output_mem_config = output_mem_config};
+    }
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -148,63 +178,102 @@ struct Reshard {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
+class InterleavedToSharded : public Sharded {
+   private:
+    static CoreCoord computeGridSize(const MemoryConfig &sharded_mem_config) {
+        auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
+        return CoreCoord(bbox.end.x + 1, bbox.end.y + 1);
+    }
+
+   public:
+    InterleavedToSharded(
+        const CoreCoord &grid_size,
+        const ShardSpec &shard_spec,
+        const MemoryConfig &output_mem_config,
+        DataType output_dtype) :
+        Sharded(grid_size, shard_spec, ShardedOpType::InterleavedToSharded, output_mem_config, output_dtype) {}
+
+    static void validate_api_arguments(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig memory_config,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        TT_FATAL(input_tensors.size() == 1);
+        TT_FATAL(memory_config.is_sharded());
+    }
+
+    static tt::tt_metal::OptionalTensors create_async_output_tensors(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig memory_config,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        const auto input_tensor = input_tensors.at(0).value();
+        return {{Tensor(operation::get_workers_for_op_output({input_tensor}))}};
+    }
+
+    static InterleavedToSharded create_async_operation(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig &sharded_mem_config,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        return InterleavedToSharded(
+            computeGridSize(sharded_mem_config),
+            sharded_mem_config.shard_spec.value(),
+            sharded_mem_config,
+            output_dtype.value_or(input_tensors.at(0).value().get_dtype()));
+    }
+};
+
 inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
     const MemoryConfig &sharded_mem_config,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [sharded_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            TT_FATAL(sharded_mem_config.is_sharded());
-            auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
-            CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
-            return operation::run(
-                    Sharded{
-                        .grid_size = grid_size,
-                        .shard_spec = sharded_mem_config.shard_spec.value(),
-                        .sharded_op_type = ShardedOpType::InterleavedToSharded,
-                        .output_mem_config = sharded_mem_config,
-                        .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
-                    {input_tensor});
-        },
-    {input_tensor}, output_tensors);
-    return output_tensors.at(0);
+    return TensorMonad({input_tensor}).bind<InterleavedToSharded>(sharded_mem_config, output_dtype).get_tensors().at(0).value();
 }
+
+class ShardedToInterleaved : public Sharded {
+   public:
+    ShardedToInterleaved(
+        const CoreCoord &grid_size,
+        const ShardSpec &shard_spec,
+        const MemoryConfig &output_mem_config,
+        DataType output_dtype) :
+        Sharded(grid_size, shard_spec, ShardedOpType::ShardedToInterleaved, output_mem_config, output_dtype) {}
+
+    static void validate_api_arguments(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig memory_config,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        TT_FATAL(input_tensors.size() == 1);
+        TT_FATAL(input_tensors.at(0).value().shard_spec().has_value());
+    }
+
+    static tt::tt_metal::OptionalTensors create_async_output_tensors(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig output_mem_config,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        const auto input_tensor = input_tensors.at(0).value();
+        return {{Tensor(operation::get_workers_for_op_output({input_tensor}))}};
+    }
+
+    static ShardedToInterleaved create_async_operation(
+        const tt::tt_metal::OptionalTensors &input_tensors,
+        const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        std::optional<const DataType> output_dtype = std::nullopt) {
+        return ShardedToInterleaved(
+            input_tensors.at(0).value().device()->compute_with_storage_grid_size(),
+            input_tensors.at(0).value().shard_spec().value(),
+            output_mem_config,
+            output_dtype.value_or(input_tensors.at(0).value().get_dtype()));
+    }
+};
 
 inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            TT_FATAL(input_tensor.shard_spec().has_value());
-            auto shard_spec = input_tensor.shard_spec().value();
-            return operation::run(
-                    Sharded{
-                        .grid_size = input_tensor.device()->compute_with_storage_grid_size(),
-                        .shard_spec = shard_spec,
-                        .sharded_op_type = ShardedOpType::ShardedToInterleaved,
-                        .output_mem_config = output_mem_config,
-                        .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
-                    {input_tensor});
-        },
-    {input_tensor}, output_tensors);
-    return output_tensors.at(0);
+    return TensorMonad({input_tensor}).bind<ShardedToInterleaved>(output_mem_config, output_dtype).get_tensors().at(0).value();
 }
 
 inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            TT_FATAL(input_tensor.shard_spec().has_value());
-            TT_FATAL(output_mem_config.is_sharded());
-            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor});
-        }, {input_tensor}, output_tensors);
-    return output_tensors.at(0);
+    return TensorMonad({input_tensor}).bind<Reshard>(output_mem_config).get_tensors().at(0).value();
 }
 
 }  // namespace tt_metal

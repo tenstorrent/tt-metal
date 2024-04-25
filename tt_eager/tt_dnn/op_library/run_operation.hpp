@@ -12,6 +12,7 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_history.hpp"
 #include "tt_stl/concepts.hpp"
+#include "tensor/tensor_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -400,5 +401,257 @@ void launch_with_autoformat(
 std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs = {});
 
 } //namespace operation
+
+bool validate_worker_modes(const std::vector<Device*>& workers);
+
+class TensorMonad {
+
+    static void launch_async(
+        std::function<TensorMonad(const TensorMonad&)>&& op_func,
+        const TensorMonad& input_monad,
+        TensorMonad& output_monad) {
+        const OptionalTensors& input_tensors = input_monad.get_tensors();
+        OptionalTensors& output_tensors = output_monad.get_tensors();
+
+        // Send host side op compile and run to the worker queue
+        // Assert to ensure that worker threads are specified.
+        ZoneScopedN("LaunchTensorMonad");
+        auto& workers = output_tensors.at(0).value().workers;
+        bool run_on_device_threads = true;
+        for (const auto& output_tensor : output_tensors) {
+            if (output_tensor.has_value()) {
+                if (output_tensor.value().workers.size() == 0 || output_tensor.value().workers != workers) {
+                    // default to running on the calling thread
+                    run_on_device_threads = false;
+                    break;
+                }
+            }
+        }
+        if (run_on_device_threads) {
+            tt::tt_metal::validate_worker_modes(workers);
+        }
+        // Record ref counts for all tensors before pushing to worker queue.
+        std::vector<uint32_t> input_tensor_ref_count = {};
+        input_tensor_ref_count.resize(input_tensors.size());
+        std::vector<uint32_t> output_tensor_ref_count = {};
+        output_tensor_ref_count.resize(output_tensors.size());
+
+        OptionalTensors async_safe_input_tensors = {};
+        async_safe_input_tensors.resize(input_tensors.size());
+        // When running on a single device, input tensors can be using borrowed storage. If so, when running in async
+        // mode, copy borrowed tensors to owned storage.
+        for (int i = 0; i < input_tensors.size(); i++) {
+            if (input_tensors[i].has_value()) {
+                async_safe_input_tensors[i].emplace(tt::tt_metal::copy_borrowed_tensor_in_async_mode(workers.at(0), input_tensors[i].value()));
+                input_tensor_ref_count[i] = async_safe_input_tensors[i].value().tensor_attributes->record_main_thread_ref_count();
+            }
+        }
+        for (int i = 0; i < output_tensors.size(); i++) {
+            if (output_tensors[i].has_value()) {
+                output_tensor_ref_count[i] = output_tensors[i].value().tensor_attributes->record_main_thread_ref_count();
+            }
+        }
+        {
+            ZoneScopedN("PushTensorMonadToWorkersOrMainThread");
+
+            if (run_on_device_threads) {
+                for (auto target_device : workers) {
+                    target_device->push_work([target_device,
+                                              workers,
+                                              op_func,
+                                              inputs = async_safe_input_tensors,
+                                              outputs = output_tensors]() mutable {
+                        OptionalTensors input_shards = {};
+                        input_shards.resize(inputs.size());
+
+                        for (int i=0; i < inputs.size(); i++) {
+                            if (inputs[i].has_value()) {
+                                input_shards[i] = get_shard_for_device(inputs[i].value(), target_device);
+                            }
+                        }
+                        auto local_monad = op_func(TensorMonad(input_shards));
+                        auto local_tensors = local_monad.get_tensors();
+                        for (int i = 0; i < local_tensors.size(); i++) {
+                            if (local_tensors.at(i).has_value()) {
+                                if (local_tensors.at(i).value().storage_type() == StorageType::OWNED) {
+                                    TT_ASSERT(
+                                        outputs.at(i).value().tensor_attributes->dynamic_storage,
+                                        "launch_with_autoformat must be used if output tensor for op can be placed on "
+                                        "host.");
+                                    TT_ASSERT(
+                                        std::holds_alternative<DeviceStorage>(
+                                            outputs.at(i).value().tensor_attributes->storage),
+                                        "All inputs and outputs to an op must be on device for multi-device tensors.");
+                                    // Make this a host side tensor - Set storage = Owned and clear workers
+                                    outputs.at(i).value().tensor_attributes->storage = OwnedStorage();
+                                    outputs.at(i).value().workers = {};
+                                } else {
+                                    outputs.at(i).value().tensor_attributes->dynamic_storage = false;
+                                }
+                                tt::tt_metal::insert_buffer_and_shape_for_device(
+                                    target_device, local_tensors.at(i).value(), outputs.at(i).value());
+                                if (not target_device->id() or workers.size() == 1) {
+                                    outputs.at(i).value().set_shape(local_tensors.at(i).value().get_shape());
+                                    outputs.at(i).value().set_dtype(local_tensors.at(i).value().get_dtype());
+                                    outputs.at(i).value().set_layout(local_tensors.at(i).value().get_layout());
+                                }
+                                if (workers.size() == 1) {
+                                    outputs.at(i).value().set_populated();
+                                } else {
+                                    outputs.at(i).value().set_populated(target_device);
+                                }
+                            }
+                        }
+                    });
+                }
+            } else {
+                // running on host thread
+                auto local_monad = op_func(TensorMonad(async_safe_input_tensors));
+                auto local_tensors = local_monad.get_tensors();
+                for (int i = 0; i < local_tensors.size(); i++) {
+                    if (local_tensors.at(i).has_value()) {
+                        if (local_tensors.at(i).value().storage_type() == StorageType::OWNED) {
+                            TT_ASSERT(
+                                output_tensors.at(i).value().tensor_attributes->dynamic_storage,
+                                "launch_with_autoformat must be used if output tensor for op can be placed on "
+                                "host.");
+                            TT_ASSERT(
+                                std::holds_alternative<DeviceStorage>(
+                                    output_tensors.at(i).value().tensor_attributes->storage),
+                                "All inputs and output_tensors to an op must be on device for multi-device tensors.");
+                            // Make this a host side tensor - Set storage = Owned and clear workers
+                            output_tensors.at(i).value().tensor_attributes->storage = OwnedStorage();
+                            output_tensors.at(i).value().workers = {};
+                        } else {
+                            output_tensors.at(i).value().tensor_attributes->dynamic_storage = false;
+                        }
+                        output_tensors.at(i).value().set_shape(local_tensors.at(i).value().get_shape());
+                        output_tensors.at(i).value().set_dtype(local_tensors.at(i).value().get_dtype());
+                        output_tensors.at(i).value().set_layout(local_tensors.at(i).value().get_layout());
+                        output_tensors.at(i).value().set_populated();
+                    }
+                }
+            }
+        }
+
+        // Update ref counts of all tensors after push was performed (done only in main thread).
+        for (int i = 0; i < async_safe_input_tensors.size(); i++) {
+            if (async_safe_input_tensors[i].has_value()) {
+                async_safe_input_tensors[i].value().tensor_attributes->update_main_thread_ref_count(
+                    workers.at(0), input_tensor_ref_count[i]);
+            }
+        }
+        for (int i = 0; i < output_tensors.size(); i++) {
+            if (output_tensors[i].has_value()) {
+                output_tensors[i].value().tensor_attributes->update_main_thread_ref_count(
+                    workers.at(0), output_tensor_ref_count[i]);
+            }
+        }
+    }
+
+    template <class ConcreteOperation>
+    static operation::ProgramOutputTensors<ConcreteOperation> convert_before_run(const OptionalTensors& tensors) {
+        if constexpr (std::is_same_v<OptionalTensors, operation::ProgramOutputTensors<ConcreteOperation>>) {
+            return tensors;
+        } else {
+            operation::ProgramOutputTensors<ConcreteOperation> output_tensors;
+            for (const auto& tensor : tensors) {
+                if (tensor.has_value()) {
+                    output_tensors.push_back(tensor.value());
+                }
+            }
+            return output_tensors;
+        }
+    }
+
+    template <class ConcreteOperation>
+    static operation::ProgramOutputTensors<ConcreteOperation> convert_before_run(const Tensors& tensors) {
+        if constexpr (std::is_same_v<Tensors, operation::ProgramOutputTensors<ConcreteOperation>>) {
+            return tensors;
+        } else {
+            operation::ProgramOutputTensors<ConcreteOperation> output_tensors;
+            for (const auto& tensor : tensors) {
+                output_tensors.push_back(tensor);
+            }
+            return output_tensors;
+        }
+    }
+
+    template <class ConcreteOperation>
+    static OptionalTensors convert_after_run(const operation::ProgramOutputTensors<ConcreteOperation>& tensors) {
+        if constexpr (std::is_same_v<OptionalTensors, operation::ProgramOutputTensors<ConcreteOperation>>) {
+            return tensors;
+        } else {
+            OptionalTensors output_tensors;
+            for (const auto& tensor : tensors) {
+                output_tensors.push_back(tensor);
+            }
+            return output_tensors;
+        }
+    }
+
+   OptionalTensors tensors;
+
+   public:
+    TensorMonad(const OptionalTensors tensors = {}) : tensors(std::move(tensors)) {}
+
+    TensorMonad(const TensorMonad& other) = default;
+    TensorMonad(TensorMonad&& other) noexcept : tensors(std::move(other.tensors)) {}
+
+    TensorMonad& operator=(const TensorMonad& other) = delete;
+    TensorMonad& operator=(TensorMonad&& other) = delete;
+
+    template <class ConcreteOperation, class... Args>
+    TensorMonad bind(Args&&... args) const {
+        auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
+
+        auto output_tensors =
+            ConcreteOperation::create_async_output_tensors(this->get_tensors(), std::forward<decltype(args)>(args)...);
+
+        auto output_monad = TensorMonad(std::move(output_tensors));
+
+        // TODO: conditionally turn this off for performance
+        std::apply(
+            [this](auto&&... packed_args) {
+                return ConcreteOperation::validate_api_arguments(
+                    get_tensors(), std::forward<decltype(packed_args)>(packed_args)...);
+            },
+            args_tuple);
+
+        if constexpr (tt::tt_metal::operation::detail::is_device_operation<ConcreteOperation>()) {
+            launch_async(
+                [args_tuple = std::move(args_tuple)](const TensorMonad& input_monad) mutable -> TensorMonad {
+                    return std::apply(
+                        [&input_monad](auto&&... packed_args) {
+                            return TensorMonad(convert_after_run<ConcreteOperation>(tt::tt_metal::operation::run(
+                                ConcreteOperation::create_async_operation(
+                                    input_monad.get_tensors(), std::forward<decltype(packed_args)>(packed_args)...),
+                                convert_before_run<ConcreteOperation>(input_monad.get_tensors()))));
+                        },
+                        std::move(args_tuple));
+                },
+                *this,
+                output_monad);
+
+        } else {  // either we are running a host operation or we are chaining device operations
+            launch_async(
+                [args_tuple = std::move(args_tuple)](const TensorMonad& input_monad) mutable -> TensorMonad {
+                    return std::apply(
+                        [&input_monad](auto&&... packed_args) {
+                            return ConcreteOperation::create_async_operation(
+                                input_monad.get_tensors(),
+                                std::forward<decltype(packed_args)>(packed_args)...)(input_monad);
+                        },
+                        std::move(args_tuple));
+                },
+                *this,
+                output_monad);
+        }
+        return output_monad;
+    }
+
+    const OptionalTensors& get_tensors() const { return tensors; }
+    OptionalTensors& get_tensors() { return tensors; }
+};
 
 } //namespace tt::tt_metal

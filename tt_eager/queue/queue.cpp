@@ -22,13 +22,13 @@ void EnqueueDeviceToHostTransfer(
 
 void QueueSynchronize(CommandQueue& q) { Finish(q); }
 
-template<class OutputTensors=tt_metal::operation::Tensors>
+template<class OutputTensors=tt_metal::Tensors>
 OutputTensors EnqueueOperation(
     CommandQueue& queue,
     operation::DeviceOperation<OutputTensors>& devop,
-    const tt_metal::operation::Tensors& input_tensors,
-    const tt_metal::operation::OptionalConstTensors& optional_input_tensors,
-    const tt_metal::operation::OptionalTensors& optional_output_tensors) {
+    const tt_metal::Tensors& input_tensors,
+    const tt_metal::OptionalConstTensors& optional_input_tensors,
+    const tt_metal::OptionalTensors& optional_output_tensors) {
     return operation::run(queue, devop, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 }

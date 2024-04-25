@@ -24,6 +24,8 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
+using namespace tt::tt_metal::operation;
+
 static inline const std::array<ttnn::TensorSchema, 1> reshape_input_schemas{
     ttnn::TensorSchema{
         1,
@@ -152,55 +154,100 @@ inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) 
     }
 }
 
+template <class ConcreteOperation, class... Args>
+constexpr auto is_an_invocable_monad = []() -> bool {
+    return is_invocable_v<ConcreteOperation, TensorMonad&, Args...>;
+    // TODO: and std::is_same_v<std::invoke_result_t<ConcreteOperation>, TensorMonad>;
+};
+
+template <typename T>
+constexpr void check_const() {
+    static_assert(std::is_const_v<std::remove_reference_t<T>>, "Argument must be const");
+}
+
+template <typename... Args>
+constexpr void enforce_const_args(Args&&... args) {
+    (..., (check_const<Args>(), void()));
+}
+
+struct ToMemoryConfig {
+    const ttnn::MemoryConfig memory_config;
+    const std::optional<ttnn::DataType> dtype = std::nullopt;
+
+    static void validate_api_arguments(
+        const OptionalTensors& input_tensors,
+        MemoryConfig memory_config,
+        std::optional<ttnn::DataType> dtype = std::nullopt) {
+        TT_FATAL(input_tensors.size() == 1);
+    }
+
+    static OptionalTensors create_async_output_tensors(
+        const OptionalTensors& input_tensors,
+        MemoryConfig output_mem_config,
+        std::optional<ttnn::DataType> dtype = std::nullopt) {
+        const auto input_tensor = input_tensors.at(0).value();
+        return {{Tensor(operation::get_workers_for_op_output({input_tensor}))}};
+    }
+
+    static ToMemoryConfig create_async_operation(
+        const OptionalTensors& input_tensors,
+        MemoryConfig memory_config,
+        std::optional<ttnn::DataType> dtype = std::nullopt) {
+        return ToMemoryConfig{.memory_config = memory_config, .dtype = dtype};
+    }
+
+    TensorMonad operator()(const TensorMonad& monad) {
+        const auto& tensor = monad.get_tensors()[0].value();
+        const auto original_memory_config = get_memory_config(tensor);
+
+        if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
+            return TensorMonad({tensor});
+        }
+
+        if (memory_config.is_sharded()) {
+            // to_sharded path
+            if (tensor.is_sharded()) {
+                // reshard
+                const auto input_memory_config = ttnn::get_memory_config(tensor);
+                const auto input_shard_spec = input_memory_config.value().shard_spec.value();
+                const auto output_shard_spec = memory_config.shard_spec.value();
+                if (tensor.get_layout() == ttnn::TILE_LAYOUT ||
+                    input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
+                    if (dtype.has_value()) {
+                        throw runtime_error(
+                            "dtype cannot be specified when converting sharded tensor to sharded tensor");
+                    }
+                    return monad.bind<Reshard>(memory_config);
+                } else {
+                    return monad.bind<ShardedToInterleaved>(ttnn::DRAM_MEMORY_CONFIG, dtype)
+                        .bind<InterleavedToSharded>(memory_config, dtype);
+                    // TODO : return mondad | op<ShardedToInterleaved>(ttnn::DRAM_MEMORY_CONFIG, dtype) |
+                    // op<InterleavedToSharded>(memory_config, dtype);
+                }
+            } else {
+                return monad.bind<InterleavedToSharded>(memory_config, dtype);
+            }
+        } else {
+            // to_interleaved path
+            if (tensor.is_sharded()) {
+                return monad.bind<ShardedToInterleaved>(memory_config, dtype);
+            } else {
+                // L1 to DRAM or DRAM to L1
+                return monad.bind<Copy>(memory_config, dtype);
+            }
+        }
+
+        return TensorMonad({tensor});
+    }
+};
+
 inline ttnn::Tensor to_memory_config(
     const ttnn::Tensor& tensor,
     const ttnn::MemoryConfig& memory_config,
-    std::optional<ttnn::DataType> dtype = std::nullopt) {
-    const auto original_memory_config = ttnn::get_memory_config(tensor);
-    if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
-        return tensor;
-    }
-
-    const auto original_shape = tensor.get_shape();
-    const auto tensor_4D = unsqueeze_to_4D(tensor);
-
-    if (memory_config.is_sharded()) {
-        // to_sharded path
-        if (tensor_4D.is_sharded()) {
-            // reshard
-            const auto input_memory_config = ttnn::get_memory_config(tensor_4D);
-            const auto input_shard_spec = input_memory_config.value().shard_spec.value();
-            const auto output_shard_spec = memory_config.shard_spec.value();
-            if (tensor_4D.get_layout() == ttnn::TILE_LAYOUT ||
-                input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
-                if (dtype.has_value()) {
-                    throw runtime_error("dtype cannot be specified when converting sharded tensor to sharded tensor");
-                }
-                return reshape(tt::tt_metal::reshard(tensor_4D, memory_config), original_shape);
-            } else {
-                // for row-major tensors where shard-spec[1] is different for input shard and output shard
-                return reshape(
-                    tt::tt_metal::interleaved_to_sharded(
-                        tt::tt_metal::sharded_to_interleaved(tensor_4D, ttnn::DRAM_MEMORY_CONFIG, dtype),
-                        memory_config,
-                        dtype),
-                    original_shape);
-            }
-        } else {
-            return reshape(tt::tt_metal::interleaved_to_sharded(tensor_4D, memory_config, dtype), original_shape);
-        }
-    } else {
-        // to_interleaved path
-        if (tensor_4D.is_sharded()) {
-            return reshape(
-                tt::tt_metal::sharded_to_interleaved(tensor_4D, memory_config, dtype), original_shape);
-        } else {
-            // L1 to DRAM or DRAM to L1
-            return reshape(tt::tt_metal::clone(tensor_4D, memory_config, dtype), original_shape);
-        }
-    }
-
-    return reshape(tensor_4D, original_shape);
+    const std::optional<ttnn::DataType>& dtype = std::nullopt) {
+    const auto new_tensor = TensorMonad({tensor}).bind<ToMemoryConfig>(memory_config, dtype).get_tensors().at(0).value();
+    new_tensor.wait_for_tensor_metadata_populated();
+    return new_tensor;
 }
 
 inline ttnn::Tensor to_device(
@@ -213,7 +260,7 @@ inline ttnn::Tensor to_device(
     return tensor.to(device_mesh, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
-inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking=true) { return tensor.cpu(blocking); }
+inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true) { return tensor.cpu(blocking); }
 
 inline void deallocate(Tensor& tensor, bool force = true) { tensor.deallocate(force); }
 
@@ -234,13 +281,15 @@ inline Tensor to_layout(
         if (dtype.has_value() and dtype.value() != tensor_arg.get_dtype()) {
             tt::log_warning(
                 tt::LogOp,
-                "ttnn::to_layout: dtype is specified but the tensor is already in the requested layout! So, the dtype "
+                "ttnn::to_layout: dtype is specified but the tensor is already in the requested layout! So, the "
+                "dtype "
                 "won't be changed!");
         }
         if (memory_config.has_value() and memory_config.value() != get_memory_config(tensor_arg).value()) {
             tt::log_warning(
                 tt::LogOp,
-                "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! So, "
+                "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! "
+                "So, "
                 "the memory_config won't be changed!");
         }
         return tensor_arg;
@@ -300,7 +349,8 @@ inline Tensor to_layout(
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
                     if (shard_shape[0] % ttnn::TILE_SIZE != 0 or shard_shape[1] % ttnn::TILE_SIZE != 0) {
                         TT_THROW(
-                            "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of TILE_SIZE!");
+                            "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
+                            "TILE_SIZE!");
                     }
                 }
                 return tt::tt_metal::tilize(tensor, output_memory_config, dtype, use_multicore);
@@ -377,7 +427,7 @@ using operations::core::reshape;
 using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::to_layout;
+using operations::core::to_memory_config;
 using operations::core::unsqueeze_to_4D;
-
 
 }  // namespace ttnn

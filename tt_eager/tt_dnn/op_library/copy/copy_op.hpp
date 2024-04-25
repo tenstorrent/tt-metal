@@ -26,6 +26,25 @@ struct Copy {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
 
+    static void validate_api_arguments(
+        const tt::tt_metal::OptionalTensors &input_tensors, const MemoryConfig output_mem_config, std::optional<const DataType> output_dtype = std::nullopt) {
+        TT_FATAL(input_tensors.size() == 1);
+    }
+
+    static std::vector<std::optional<Tensor>> create_async_output_tensors(
+        const std::vector<std::optional<Tensor>> &input_tensors, const MemoryConfig output_mem_config, std::optional<const DataType> output_dtype = std::nullopt) {
+        const auto input_tensor = input_tensors.at(0).value();
+        return {{Tensor(operation::get_workers_for_op_output({input_tensor}))}};
+    }
+
+    static Copy create_async_operation(
+        const tt::tt_metal::OptionalTensors &input_tensors, const MemoryConfig output_mem_config, std::optional<const DataType> output_dtype = std::nullopt) {
+        return Copy(output_mem_config, output_dtype.value_or(input_tensors.at(0).value().get_dtype()));
+    }
+
+
+    Copy(const MemoryConfig output_mem_config, const DataType output_dtype):output_mem_config(output_mem_config), output_dtype(output_dtype){}
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;

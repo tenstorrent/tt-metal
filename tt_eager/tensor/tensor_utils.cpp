@@ -400,6 +400,6 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     return tensor;
 }
 
-}
+} // namespace tt_metal
 
-}
+} // namespace tt

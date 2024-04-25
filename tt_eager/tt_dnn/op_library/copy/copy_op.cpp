@@ -86,8 +86,8 @@ Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
     return dst_tensor;
 }
 
-Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
-    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}).at(0);
+Tensor clone(const Tensor& input, const MemoryConfig& memory_config, std::optional<const DataType> dtype) {
+    return TensorMonad({input}).bind<Copy>(memory_config, dtype).get_tensors().at(0).value();
 }
 
 Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config ) {
