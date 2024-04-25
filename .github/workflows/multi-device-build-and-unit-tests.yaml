@@ -6,7 +6,11 @@ on:
     - cron: "0 */3 * * *"
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
   multi-chip-unit-tests:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -39,13 +43,15 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
-      - name: Build tt-metal CPP tests
-        run: make tests
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source ${{ github.workspace }}/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
