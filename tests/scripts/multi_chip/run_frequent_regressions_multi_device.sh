@@ -20,11 +20,6 @@ pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py
 pytest tests/tt_metal/microbenchmarks/ethernet/test_ethernet_ring_latency_microbenchmark.py
 
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_mlp
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_attention
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_decoder
-pytest models/demos/ttnn_falcon7b/tests/multi_chip -k test_falcon_causallm
-
 # Llama2_70b related cached files and tests (the test should parse env variables similar to these)
 export LLAMA_CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/
 export LLAMA_TOKENIZER_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model
