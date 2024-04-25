@@ -16,11 +16,10 @@ constexpr auto cb_src = get_compile_time_arg_val(0);
 constexpr auto cb_dst = get_compile_time_arg_val(1);
 
 constexpr auto cb_last_row = get_compile_time_arg_val(2);
-constexpr auto cb_last_row2 = get_compile_time_arg_val(3);
 
-constexpr auto core0_ready_to_receive_sem = get_compile_time_arg_val(4);
-constexpr auto core0_ready_to_send_sem = get_compile_time_arg_val(5);
-constexpr auto work_done_sem = get_compile_time_arg_val(6);
+constexpr auto core0_ready_to_receive_sem = get_compile_time_arg_val(5);
+constexpr auto core0_ready_to_send_sem = get_compile_time_arg_val(6);
+constexpr auto work_done_sem = get_compile_time_arg_val(7);
 
 constexpr uint32_t tile_size = get_tile_size(cb_src);
 constexpr uint32_t tiles_per_block = 8;
@@ -47,7 +46,8 @@ void kernel_main() {
     uint32_t first_core_x = get_arg_val<uint32_t>(4);
     uint32_t first_core_y = get_arg_val<uint32_t>(5);
     uint32_t reshape_offset = get_arg_val<uint32_t>(6);
-    uint32_t core_offset = get_arg_val<uint32_t>(7);
+    uint32_t ntiles_last_row_cb = get_arg_val<uint32_t>(7);
+    uint32_t core_offset = get_arg_val<uint32_t>(8);
 
     // wait for the core0 to be ready to receive last row data
     auto* core0_ready_to_receive_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(core0_ready_to_receive_sem);
@@ -73,15 +73,20 @@ void kernel_main() {
 
     uint64_t src_noc_addr =
         get_noc_addr(first_core_x, first_core_y, get_read_ptr(cb_last_row)) + core_offset - tile_size;
-    uint32_t dst_addr = get_write_ptr(cb_last_row) + core_offset;
+    uint32_t dst_addr = get_write_ptr(cb_last_row);
 
     for (uint32_t reshape = 0; reshape < reshapes_per_row; ++reshape) {
         noc_async_read(src_noc_addr, dst_addr, tile_size);
-        src_addr += reshape_offset;
-        dst_noc_addr += reshape_offset;
+        src_noc_addr += reshape_offset;
+        dst_addr += reshape_offset;
     }
 
     noc_async_read_barrier();
-    print_full_tile(cb_last_row, 1);
     noc_semaphore_inc(work_done_sem_addr, 1);
+
+    print_full_tile(cb_last_row, 0);
+
+    cb_push_back(cb_last_row, ntiles_last_row_cb);
+    cb_push_back(cb_src, total_tiles);
+    cb_wait_front(cb_dst, total_tiles);
 }

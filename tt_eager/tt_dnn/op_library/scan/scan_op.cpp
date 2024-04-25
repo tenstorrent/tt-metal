@@ -284,6 +284,15 @@ Tensor scan_only(Tensor &a) {
     return a;
 }
 
+template <typename T, typename... Args>
+std::vector<T> append(const std::vector<T> &vec, Args... args) {
+    static_assert((std::is_same_v<T, Args> && ...), "All arguments must be of the same type as the vector elements.");
+
+    std::vector<T> result = vec;
+    (result.push_back(args), ...);
+    return result;
+}
+
 operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
     Program program = Program();
     tt_metal::Device *device = input.device();
@@ -302,24 +311,21 @@ operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
     uint32_t tiles_per_col = input.shard_spec()->shape[0] / TILE_HEIGHT;
     uint32_t reshapes_per_row = input.shard_spec()->shape[1] / TILE_HW;
 
-    auto ct_args = aggregate_arrays(
+    uint32_t ntiles_last_row_cb = reshapes_per_row * num_cores;
+
+    auto cbs = aggregate_arrays(
         create_cb<2>(program, all_cores, tile_size, total_tiles, data_format, {CB::c_in0, CB::c_out0}, src_buffer),
-        create_cb<2>(
+        create_cb<3>(
             program,
             all_cores,
             tile_size,
-            reshapes_per_row * num_cores,
+            ntiles_last_row_cb,
             data_format,
-            {CB::c_intermed0, CB::c_intermed1}));
+            {CB::c_intermed0, CB::c_intermed1, CB::c_intermed2}));
 
     auto core0_ready_to_receive = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto core0_ready_to_send = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto work_done = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-
-    auto reader_ct_args = ct_args;
-    reader_ct_args.push_back(core0_ready_to_receive);
-    reader_ct_args.push_back(core0_ready_to_send);
-    reader_ct_args.push_back(work_done);
 
     auto first_core = device->worker_core_from_logical_core(cores[0]);
     auto cores_except_first = CoreRange(cores[1], cores.back());
@@ -329,16 +335,21 @@ operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
     uint32_t tiles_per_reshape = 32;
     uint32_t first_tile_offset = (total_tiles - tiles_per_row + tiles_per_reshape - 1) * tile_size;
 
-    std::vector<uint32_t> rt_args_common = {tiles_per_col, reshapes_per_row, total_tiles, first_tile_offset};
-    std::vector<uint32_t> rt_args_core0 = rt_args_common;
-    rt_args_core0.push_back(mcast_start.x);
-    rt_args_core0.push_back(mcast_start.y);
-    rt_args_core0.push_back(mcast_end.x);
-    rt_args_core0.push_back(mcast_end.y);
-    rt_args_core0.push_back(num_cores * tile_size);
-    rt_args_core0.push_back(num_cores - 1);
+    std::vector<uint32_t> rt_args_common = {tiles_per_col, reshapes_per_row, total_tiles};
+
+    std::vector<uint32_t> rt_args_core0 = append(
+        rt_args_common,
+        first_tile_offset,
+        (uint32_t)mcast_start.x,
+        (uint32_t)mcast_start.y,
+        (uint32_t)mcast_end.x,
+        (uint32_t)mcast_end.y,
+        num_cores * tile_size,
+        num_cores - 1,
+        ntiles_last_row_cb);
 
     // Reader kernel for first core
+    auto reader_ct_args = append(cbs, core0_ready_to_receive, core0_ready_to_send, work_done);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/scan/kernels/dataflow/reader_receive_then_send_last_row.cpp",
@@ -346,20 +357,26 @@ operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
         WriterDataMovementConfig(reader_ct_args));
     SetRuntimeArgs(program, reader_kernel_id, cores[0], rt_args_core0);
 
-    /*
-        // Compute kernel for first core
-        KernelHandle compute_kernel_id = CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/scan/kernels/compute/scan_last_row.cpp",
-            cores[0],
-            ComputeConfig{.compile_args = ct_args});
-        SetRuntimeArgs(program, compute_kernel_id, cores[0], rt_args_common);
-    */
-    std::vector<uint32_t> rt_args_rest = rt_args_common;
-    rt_args_rest.push_back((uint32_t)first_core.x);
-    rt_args_rest.push_back((uint32_t)first_core.y);
-    rt_args_rest.push_back(num_cores * tile_size);
-    rt_args_rest.push_back(0);  // placeholder for offset
+    // Compute kernel for first core
+    auto rt_args_compute = append(rt_args_common, num_cores);
+
+    KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/scan/kernels/compute/scan_last_row.cpp",
+        cores[0],
+        ComputeConfig{.compile_args = cbs});
+    SetRuntimeArgs(program, compute_kernel_id, cores[0], rt_args_compute);
+
+    auto rt_args_compute_rest = append(rt_args_compute, ntiles_last_row_cb);
+
+    auto rt_args_rest = append(
+        rt_args_common,
+        first_tile_offset,
+        (uint32_t)first_core.x,
+        (uint32_t)first_core.y,
+        num_cores * tile_size,
+        ntiles_last_row_cb,
+        0u);
 
     // Reader kernel for all other cores
     KernelHandle reader_kernel_id_except_first = CreateKernel(
@@ -367,14 +384,14 @@ operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
         "tt_eager/tt_dnn/op_library/scan/kernels/dataflow/reader_send_then_receive_last_row.cpp",
         cores_except_first,
         WriterDataMovementConfig(reader_ct_args));
-    /*
-        // Compute kernel for all other cores
-        KernelHandle compute_kernel_id_except_first = CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/scan/kernels/compute/mul_tiles_by_last_row.cpp",
-            cores_except_first,
-            ComputeConfig{.compile_args = ct_args});
-    */
+
+    // Compute kernel for all other cores
+    KernelHandle compute_kernel_id_except_first = CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/scan/kernels/compute/mul_tiles_by_prev_last_row.cpp",
+        cores_except_first,
+        ComputeConfig{.compile_args = cbs});
+
     // Runtime args for all other cores
     for (uint32_t core_idx = 1; core_idx < cores.size(); ++core_idx) {
         // Reader kernel
@@ -382,7 +399,7 @@ operation::ProgramWithCallbacks scan_communicate_impl(const Tensor &input) {
         SetRuntimeArgs(program, reader_kernel_id_except_first, cores[core_idx], rt_args_rest);
 
         // Compute kernel
-        // SetRuntimeArgs(program, compute_kernel_id_except_first, cores[core_idx], rt_args_common);
+        SetRuntimeArgs(program, compute_kernel_id_except_first, cores[core_idx], rt_args_compute_rest);
     }
 
     return {std::move(program), std::nullopt, std::nullopt};

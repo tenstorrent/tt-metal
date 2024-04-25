@@ -17,11 +17,11 @@ constexpr auto cb_src = get_compile_time_arg_val(0);
 constexpr auto cb_dst = get_compile_time_arg_val(1);
 
 constexpr auto cb_last_row = get_compile_time_arg_val(2);
-constexpr auto cb_last_row2 = get_compile_time_arg_val(3);
+constexpr auto cb_scanned = get_compile_time_arg_val(4);
 
-constexpr auto core0_ready_to_receive_sem = get_compile_time_arg_val(4);
-constexpr auto core0_ready_to_send_sem = get_compile_time_arg_val(5);
-constexpr auto work_done_sem = get_compile_time_arg_val(6);
+constexpr auto core0_ready_to_receive_sem = get_compile_time_arg_val(5);
+constexpr auto core0_ready_to_send_sem = get_compile_time_arg_val(6);
+constexpr auto work_done_sem = get_compile_time_arg_val(7);
 
 constexpr uint32_t tile_size = get_tile_size(cb_src);
 constexpr uint32_t tiles_per_block = 8;
@@ -53,6 +53,7 @@ void kernel_main() {
     uint32_t reshape_offset = get_arg_val<uint32_t>(8);
 
     uint32_t cores_to_wait_for = get_arg_val<uint32_t>(9);
+    uint32_t ntiles_last_row_cb = get_arg_val<uint32_t>(10);
 
     // place its own last row data to the last row buffer
     uint32_t src_addr = get_read_ptr(cb_src) + first_tile_offset;
@@ -63,6 +64,7 @@ void kernel_main() {
         src_addr += reshape_size;
         dst_noc_addr += reshape_offset;
     }
+    noc_async_write_barrier();
 
     // communicate to other cores that it's ready to receive data
     const uint64_t core0_ready_to_receive_noc_addr = get_noc_multicast_addr(
@@ -79,7 +81,16 @@ void kernel_main() {
     auto* work_done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(work_done_sem);
     noc_semaphore_wait(work_done_sem_ptr, cores_to_wait_for);
 
-    noc_async_write_barrier();
+    // all cores have placed their last row data to the last row buffer
+    // now this core runs the prefix scan on this data in compute kernel
+    cb_push_back(cb_last_row, ntiles_last_row_cb);
+
+    // compute signals to the reader that it's done
+    cb_wait_front(cb_scanned, ntiles_last_row_cb);
+
+    for (uint32_t i = 0; i < ntiles_last_row_cb; i++) {
+        print_full_tile(cb_scanned, i);
+    }
 
     // prepare for other cores to read the last row data back
     noc_semaphore_set(work_done_sem_ptr, 0);

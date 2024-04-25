@@ -48,10 +48,8 @@ void MAIN {
         cb_reserve_back(cb_factors2, reshapes_per_row);
 
         for (uint32_t reshape = 0; reshape < reshapes_per_row; ++reshape) {
-            // print_full_tile(cb_factors, 0);
-
             cb_wait_front(cb_src, tiles_per_reshape);
-            cb_reserve_back(cb_dst, tiles_per_reshape);
+            cb_reserve_back(cb_dst, 1);
 
             // multiply the first tile of cb_src by the factor and push to cb_dst
             mul_tiles_init();
@@ -71,6 +69,7 @@ void MAIN {
                 mul_tiles(cb_dst, cb_src, 0, tile, 0);
                 cb_pop_front(cb_dst, 1);
                 tile_regs_commit();
+                cb_reserve_back(cb_dst, 1);
                 tile_regs_wait();
                 pack_tile(0, cb_dst);
                 tile_regs_release();
