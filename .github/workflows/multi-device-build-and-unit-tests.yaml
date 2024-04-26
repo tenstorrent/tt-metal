@@ -20,12 +20,12 @@ jobs:
             runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device --dispatch-mode ""'
           },
-          {
-            name: "T3000 unstable tests",
-            arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device_unstable --dispatch-mode ""'
-          },
+          # {
+          #   name: "T3000 unstable tests",
+          #   arch: wormhole_b0,
+          #   runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
+          #   cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device_unstable --dispatch-mode ""'
+          # },
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:

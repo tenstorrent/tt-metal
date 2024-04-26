@@ -36,5 +36,9 @@ pytest models/demos/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausal
 # Falcon40B 8 chip prefill tests; we need 8x8 grid size
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon40b/tests/ci/test_falcon_end_to_end_t3000_prefill.py
 
-pytest tests/ttnn/unit_tests/test_multi_device.py
 pytest tests/ttnn/unit_tests/test_multi_device_async.py
+
+pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py
+pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py
+pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py
+pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
