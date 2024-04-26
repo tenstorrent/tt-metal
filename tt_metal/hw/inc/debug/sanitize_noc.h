@@ -14,6 +14,20 @@
 //
 #pragma once
 
+#include "dprint.h"
+
+// Add the ability to skip NOC logging, we can't have the tunneling cores stalling waiting for the
+// print server.
+#if !defined(SKIP_NOC_LOGGING)
+#define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l)
+#define LOG_READ_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE))
+#define LOG_WRITE_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE))
+#else
+#define LOG_LEN(l)
+#define LOG_READ_LEN_FROM_STATE()
+#define LOG_WRITE_LEN_FROM_STATE()
+#endif
+
 #if (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)) && \
     (defined(WATCHER_ENABLED)) && \
     (!defined(WATCHER_DISABLE_NOC_SANITIZE))
@@ -26,6 +40,7 @@ extern uint8_t noc_index;
 #include "noc_addr_ranges_gen.h"
 #include "noc_parameters.h"
 #include "noc_overlay_parameters.h"
+
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -199,33 +214,44 @@ void debug_sanitize_noc_and_worker_addr(
     }
 }
 
-// TODO: should be able clean up uses of the first three macros and remove them.
-#define DEBUG_SANITIZE_WORKER_ADDR(a, l) \
-    debug_sanitize_worker_addr(a, l)
+// TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_ADDR(a, l) \
-    debug_sanitize_noc_addr(a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ)
-#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) \
-    debug_sanitize_noc_addr(a, 0, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ)
+    debug_sanitize_noc_addr(a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, multicast, dir)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, multicast, dir); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION( \
+        ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
+        worker_a, \
+        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) \
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION( \
+        ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
+        worker_a, l);
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION( \
+        ((uint64_t) NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
+        worker_a, \
+        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 
 #else // !WATCHER_ENABLED
 
-#define DEBUG_SANITIZE_WORKER_ADDR(a, l)
-#define DEBUG_SANITIZE_NOC_ADDR(a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l)
-#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir)
-#define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l)
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l)
+#define DEBUG_SANITIZE_NOC_ADDR(a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) LOG_READ_LEN_FROM_STATE()
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) LOG_WRITE_LEN_FROM_STATE()
 
 #endif // WATCHER_ENABLED && not TRISC

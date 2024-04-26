@@ -17,7 +17,6 @@ void noc_fast_read_wait_ready() {
 
 FORCE_INLINE
 void noc_fast_read_set_src_xy(uint64_t src_addr) {
-    DEBUG_SANITIZE_NOC_ADDR(src_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_addr >> 32);
 }
 
@@ -64,7 +63,6 @@ void noc_fast_write_set_cmd_field(uint32_t vc, bool mcast, bool linked) {
 
 FORCE_INLINE
 void noc_fast_write_set_dst_xy(uint64_t dest_addr) {
-    DEBUG_SANITIZE_NOC_ADDR(dest_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dest_addr >> 32);
 }
 

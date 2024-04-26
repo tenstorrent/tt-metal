@@ -692,7 +692,7 @@ void Device::compile_command_queue_programs() {
                     .eth_mode = Eth::IDLE,
                     .noc = NOC::NOC_0,
                     .compile_args = mux_compile_args,
-                    .defines = {}
+                    .defines = {{"SKIP_NOC_LOGGING", "1"}}
                 }
             );
         } else {
@@ -704,7 +704,7 @@ void Device::compile_command_queue_programs() {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = mux_compile_args,
-                .defines = {}
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         }
@@ -746,7 +746,10 @@ void Device::compile_command_queue_programs() {
             tunneler_logical_core,
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_l_compile_args
+                .compile_args = tunneler_l_compile_args,
+                // Skip noc logging for tunneling cores, since stopping the print server can hang
+                // the chip in this case.
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         log_debug(LogDevice, "run tunneler at {}", tunneler_location.str());
@@ -817,7 +820,7 @@ void Device::compile_command_queue_programs() {
                     .eth_mode = Eth::IDLE,
                     .noc = NOC::NOC_0,
                     .compile_args = demux_compile_args,
-                    .defines = {}
+                    .defines = {{"SKIP_NOC_LOGGING", "1"}}
                 }
             );
         } else {
@@ -829,7 +832,7 @@ void Device::compile_command_queue_programs() {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = demux_compile_args,
-                .defines = {}
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         }
@@ -999,7 +1002,10 @@ void Device::compile_command_queue_programs() {
             r_tunneler_logical_core,
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_r_compile_args
+                .compile_args = tunneler_r_compile_args,
+                // Skip noc logging for tunneling cores, since stopping the print server can hang
+                // the chip in this case.
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         log_debug(LogDevice, "run tunneler at device {} Core {}", this->id(), r_tunneler_logical_core.str());
@@ -1067,7 +1073,7 @@ void Device::compile_command_queue_programs() {
                     .eth_mode = Eth::IDLE,
                     .noc = NOC::NOC_0,
                     .compile_args = demux_d_compile_args,
-                    .defines = {}
+                    .defines = {{"SKIP_NOC_LOGGING", "1"}}
                 }
             );
         } else {
@@ -1079,7 +1085,7 @@ void Device::compile_command_queue_programs() {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = demux_d_compile_args,
-                .defines = {}
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         }
@@ -1266,7 +1272,7 @@ void Device::compile_command_queue_programs() {
                     .eth_mode = Eth::IDLE,
                     .noc = NOC::NOC_0,
                     .compile_args = mux_d_compile_args,
-                    .defines = {}
+                    .defines = {{"SKIP_NOC_LOGGING", "1"}}
                 }
             );
         } else {
@@ -1278,7 +1284,7 @@ void Device::compile_command_queue_programs() {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = mux_d_compile_args,
-                .defines = {}
+                .defines = {{"SKIP_NOC_LOGGING", "1"}}
             }
         );
         }
