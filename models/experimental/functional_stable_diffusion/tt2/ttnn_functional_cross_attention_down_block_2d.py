@@ -114,5 +114,5 @@ class cross_attention_down_block_2d:
                 use_conv=True,
             )
             hidden_states = ttnn.reallocate(hidden_states)
-            output_states += (hidden_states,)
+            output_states += (ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG),)
         return hidden_states, output_states
