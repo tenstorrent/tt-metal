@@ -12,6 +12,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
+from enum import Enum
+
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+
 
 def run_reshard_test(
     device,
@@ -77,8 +81,9 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme ",
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
         (
             [1, 1, 64, 64],
@@ -152,6 +157,50 @@ def run_reshard_test(
             ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_reshard(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
         (
             [1, 1, 62720, 256],
             ttl.tensor.Layout.TILE,
@@ -167,9 +216,8 @@ def run_reshard_test(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_reshard(
+def test_reshard_rn50(
     device,
-    use_program_cache,
     input_shape,
     input_layout,
     input_shard_grid,
@@ -209,13 +257,13 @@ def test_reshard(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
         (
-            [1, 1, 32, 8192],
+            [1, 1, 32, 6272],
             ttl.tensor.Layout.TILE,
-            [[(0, 0), (7, 7)]],
+            [[(0, 0), (6, 6)]],
             (32, 128),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            [[(0, 0), (0, 7)]],
+            [[(0, 0), (0, 6)]],
             (32, 1024),
             ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
