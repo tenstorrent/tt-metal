@@ -79,20 +79,20 @@ class TtModelArgs:
             ), f"Number of rows in the grid should be a factor of max_batch_size ({self.max_batch_size})"
             self.max_grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size.x)  # (y,x)
 
-        # Add sharded memory config for MLP FF1/FF3
-        mlp_shard_config = ttnn.create_sharded_memory_config(
-            [self.max_batch_size, self.hidden_dim], self.max_grid_size, ttnn.ShardStrategy.WIDTH
-        )
-        self.model_config["FF1_OUTPUT_MEMCFG"] = mlp_shard_config
-        self.model_config["FF3_OUTPUT_MEMCFG"] = mlp_shard_config
+            # Add sharded memory config for MLP FF1/FF3
+            mlp_shard_config = ttnn.create_sharded_memory_config(
+                [self.max_batch_size, self.hidden_dim], self.max_grid_size, ttnn.ShardStrategy.WIDTH
+            )
+            self.model_config["FF1_OUTPUT_MEMCFG"] = mlp_shard_config
+            self.model_config["FF3_OUTPUT_MEMCFG"] = mlp_shard_config
 
-        # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+            # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def weight_cache_path(self, dtype, instruct=False):
         # Keep the weight cache separate for generative and instruct weights

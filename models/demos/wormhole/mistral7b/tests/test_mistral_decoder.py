@@ -5,14 +5,14 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.demos.mistral7b.tt.mistral_common import (
+from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
     prepare_inputs_ttnn,
     freqs_to_rotation_matrix,
 )
-from models.demos.mistral7b.tt.mistral_decoder import TtTransformerBlock
-from models.demos.mistral7b.tt.model_config import TtModelArgs
-from models.demos.mistral7b.reference.model import TransformerBlock
+from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.demos.wormhole.mistral7b.reference.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,

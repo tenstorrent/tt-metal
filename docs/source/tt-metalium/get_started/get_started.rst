@@ -39,7 +39,7 @@ for details.
 You can also check our demos for
 `ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
 `BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
-`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mistral7b>`_,
+`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b>`_,
 and
 `Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
 

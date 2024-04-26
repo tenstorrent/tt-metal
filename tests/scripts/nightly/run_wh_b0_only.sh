@@ -21,8 +21,8 @@ env pytest models/demos/mamba/tests/test_reference_model.py
 env pytest models/demos/mamba/tests/test_transforms.py
 env pytest models/demos/mamba/tests/test_mamba_demo.py
 
-env pytest models/demos/mistral7b/tests/test_mistral_embedding.py
-env pytest models/demos/mistral7b/tests/test_mistral_rms_norm.py
-env pytest models/demos/mistral7b/tests/test_mistral_mlp.py
-env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mistral7b/tests/test_mistral_attention.py
-env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mistral7b/tests/test_mistral_decoder.py
+env pytest models/demos/wormhole/mistral7b/tests/test_mistral_embedding.py
+env pytest models/demos/wormhole/mistral7b/tests/test_mistral_rms_norm.py
+env pytest models/demos/wormhole/mistral7b/tests/test_mistral_mlp.py
+env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests/test_mistral_attention.py
+env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests/test_mistral_decoder.py
