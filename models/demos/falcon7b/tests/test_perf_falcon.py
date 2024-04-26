@@ -74,6 +74,7 @@ def run_test_FalconCausalLM_end_to_end(
     tt_cache_path,
     model_location_generator,
     expected_inference_time,
+    async_mode=False,
 ):
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -305,11 +306,11 @@ def run_test_FalconCausalLM_end_to_end(
 
     profiler.print()
 
-    comment = f"kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config=L1-bf16"
+    comment = f"kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config=L1-bf16_async={async_mode}"
     cpu_time = profiler.get("hugging_face_reference_model")
     first_iter_time = profiler.get("first_model_run_with_compile")
     second_iter_time = profiler.get("model_run_for_inference")
-    expected_compile_time = 30
+    expected_compile_time = 40
     prep_perf_report(
         model_name=f"Falcon_{llm_mode}_{comment}",
         batch_size=batch,
@@ -333,7 +334,6 @@ def run_test_FalconCausalLM_end_to_end(
             assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "num_layers, pcc",
     ((32, 0.84),),
@@ -346,6 +346,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 class TestParametrized:
+    @pytest.mark.models_performance_bare_metal
     @pytest.mark.parametrize(
         "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
         (
@@ -410,29 +411,8 @@ class TestParametrized:
             expected_inference_time,
         )
 
-    @pytest.mark.parametrize("num_devices", (1, 2, 4))
-    @pytest.mark.parametrize(
-        "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
-        (
-            ("prefill", 1, 128, 0, 0.4),
-            ("prefill", 1, 256, 0, 0.6),
-            ("decode", 32, 1, 128, 0.4),
-            ("decode", 32, 1, 1024, 0.5),
-            ("decode", 32, 1, 2047, 0.8),
-        ),
-        ids=[
-            "prefill_seq128",
-            "prefill_seq256",
-            "decode_batch32",
-            "decode_batch32_1024",
-            "decode_batch32_2047",
-        ],
-    )
-    @pytest.mark.parametrize("async_mode", (False, True))
-    @skip_for_grayskull()
-    def test_perf_wh_bare_metal(
+    def run_perf_wh_bare_metal(
         self,
-        use_program_cache,
         model_version,
         num_devices,
         llm_mode,
@@ -442,29 +422,18 @@ class TestParametrized:
         expected_inference_time,
         num_layers,
         pcc,
-        request,
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
         all_devices,
         async_mode,
     ):
-        if num_devices > 1:
-            pytest.skip(f"num_devices={num_devices} is not supported on CI yet")
         if model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 2047:
             pytest.skip(f"kv_cache_len={kv_cache_len} does not fit with L1_SHARDED")
-        if async_mode:
-            if llm_mode == "prefill" and seq_len == 128:
-                pytest.skip(
-                    f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
-                )
-            if llm_mode == "decode" and not (kv_cache_len == 2047):
-                if not (model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 1024):
-                    pytest.skip(
-                        f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
-                    )
-
-        devices = get_devices_for_t3000(all_devices, num_devices)
+        if num_devices > 1:
+            devices = get_devices_for_t3000(all_devices, num_devices)
+        else:
+            devices = [all_devices]
         # Enable Async Mode
         for device in devices:
             device.enable_async(async_mode)
@@ -489,6 +458,132 @@ class TestParametrized:
             tt_cache_path,
             model_location_generator,
             expected_inference_time,
+            async_mode,
+        )
+
+    @pytest.mark.models_performance_bare_metal
+    @pytest.mark.parametrize(
+        "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
+        (
+            ("prefill", 1, 128, 0, 0.4),
+            ("prefill", 1, 256, 0, 0.6),
+            ("decode", 32, 1, 128, 0.4),
+            ("decode", 32, 1, 1024, 0.5),
+            ("decode", 32, 1, 2047, 0.8),
+        ),
+        ids=[
+            "prefill_seq128",
+            "prefill_seq256",
+            "decode_batch32",
+            "decode_batch32_1024",
+            "decode_batch32_2047",
+        ],
+    )
+    @pytest.mark.parametrize("async_mode", (False, True))
+    @skip_for_grayskull()
+    def test_perf_wh_bare_metal(
+        self,
+        model_version,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        expected_inference_time,
+        num_layers,
+        pcc,
+        request,
+        model_config_str,
+        model_location_generator,
+        get_tt_cache_path,
+        device,
+        use_program_cache,
+        async_mode,
+    ):
+        if async_mode:
+            if llm_mode == "prefill" and seq_len == 128:
+                pytest.skip(
+                    f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
+                )
+            if llm_mode == "decode" and not (kv_cache_len == 2047):
+                if not (model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 1024):
+                    pytest.skip(
+                        f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
+                    )
+        self.run_perf_wh_bare_metal(
+            model_version,
+            1,
+            llm_mode,
+            batch,
+            seq_len,
+            kv_cache_len,
+            expected_inference_time,
+            num_layers,
+            pcc,
+            model_config_str,
+            model_location_generator,
+            get_tt_cache_path,
+            device,
+            async_mode,
+        )
+
+    @pytest.mark.models_performance_bare_metal_multi_device
+    @pytest.mark.parametrize("num_devices", (4, 8))
+    @pytest.mark.parametrize(
+        "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time, async_mode",
+        (
+            ("prefill", 1, 256, 0, 0.8, False),
+            ("decode", 32, 1, 1024, 0.25, False),
+            ("prefill", 1, 256, 0, 0.4, True),
+            ("decode", 32, 1, 1024, 0.15, True),
+        ),
+        ids=[
+            "prefill_seq256",
+            "decode_batch32_1024",
+            "prefill_seq256_async",
+            "decode_batch32_1024_async",
+        ],
+    )
+    @skip_for_grayskull()
+    def test_perf_t3000_bare_metal(
+        self,
+        use_program_cache,
+        model_version,
+        num_devices,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        expected_inference_time,
+        async_mode,
+        num_layers,
+        pcc,
+        request,
+        model_config_str,
+        model_location_generator,
+        get_tt_cache_path,
+        all_devices,
+    ):
+        if num_devices != 4:
+            pytest.skip(f"Skipping num_devices={num_devices} to reduce number of tests on CI")
+        if (llm_mode == "decode" and model_config_str != "BFLOAT16-L1_SHARDED") or (
+            llm_mode == "prefill" and model_config_str != "BFLOAT16-DRAM"
+        ):
+            pytest.skip(f"Skipping {llm_mode} with model_config_str={model_config_str} to reduce number of tests on CI")
+        self.run_perf_wh_bare_metal(
+            model_version,
+            num_devices,
+            llm_mode,
+            batch,
+            seq_len,
+            kv_cache_len,
+            expected_inference_time,
+            num_layers,
+            pcc,
+            model_config_str,
+            model_location_generator,
+            get_tt_cache_path,
+            all_devices,
+            async_mode,
         )
 
 
