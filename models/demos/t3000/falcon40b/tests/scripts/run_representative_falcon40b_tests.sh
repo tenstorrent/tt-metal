@@ -37,18 +37,18 @@ pytest models/demos/t3000/falcon40b/tests/test_falcon_causallm.py::test_FalconCa
 pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-8chips-disable_program_cache]
 
 # Run a 4 chip test for decode
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-4chips]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-SHARDED-falcon_40b-layers_1-decode_batch32-4chips-disable_program_cache]
 
 # Run prefill with sequence lengths = {32, 64, 128 (done above), 256, 512, 1024, 2048}
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips]
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq64-8chips]
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq256-8chips]
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq512-8chips]
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq1024-8chips]
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips-disable_program_cache]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq64-8chips-disable_program_cache]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq256-8chips-disable_program_cache]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq512-8chips-disable_program_cache]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq1024-8chips-disable_program_cache]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq2048-8chips-disable_program_cache]
 
 # Run prefill S=128 with 60L
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_60-prefill_seq128-8chips]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_60-prefill_seq128-8chips-disable_program_cache]
 
 # Run prefill S=2048 with 60L
-pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_60-prefill_seq2048-8chips]
+pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT8_B-DRAM-falcon_40b-layers_60-prefill_seq2048-8chips-disable_program_cache]
