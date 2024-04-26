@@ -1061,14 +1061,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            std::vector<uint32_t> core_pages;
-            for (uint32_t i=0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
-                if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
-                    core_pages.push_back(i);
-                }
-            }
-
-            uint32_t num_pages = core_pages.size();
+            uint32_t num_pages = buffer_page_mapping.core_host_page_indices_[core_id].size();
             uint32_t curr_page_idx_in_shard = 0;
             while (num_pages != 0) {
                 uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)); // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -1083,8 +1076,6 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                 uint32_t pages_to_write = std::min(num_pages, (uint32_t)num_pages_available);
                 if (pages_to_write > 0) {
                     uint32_t bank_base_address = buffer.address() + curr_page_idx_in_shard * padded_page_size;
-                    // Technically we are going through dst pages in order
-                    dst_page_index = core_pages[curr_page_idx_in_shard];
 
                     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
 
@@ -1094,6 +1085,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                     this->enqueue_command(command, false);
                     curr_page_idx_in_shard += pages_to_write;
                     num_pages -= pages_to_write;
+                    dst_page_index += pages_to_write;
                 } else {
                     this->manager.wrap_issue_queue_wr_ptr(this->id);
                 }
