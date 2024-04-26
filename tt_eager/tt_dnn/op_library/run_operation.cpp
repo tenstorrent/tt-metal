@@ -47,7 +47,7 @@ void validate_op_launch(Device* worker) {
     }
 }
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
     const Program &program,
@@ -114,7 +114,7 @@ constexpr auto decorate_device_operation(const Function& function) {
     };
 }
 
-template<typename OutputTensors = Tensors>
+template<typename OutputTensors>
 OutputTensors run_host_operation(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
     ZoneScopedN("TT_DNN_HOST_OP");
     uint32_t op_id = assign_id();
@@ -132,7 +132,7 @@ template OptionalTensors run_host_operation(const HostOperation<OptionalTensors>
 
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-template<typename OutputTensors = Tensors>
+template<typename OutputTensors>
 OutputTensors run_device_operation(
     std::optional<std::reference_wrapper<CommandQueue>> queue,
     const DeviceOperation<OutputTensors>& operation,
@@ -255,7 +255,7 @@ template OptionalTensors run_device_operation(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
-template<typename OutputTensors = Tensors>
+template<typename OutputTensors>
 OutputTensors run_multi_device_operation(
     std::optional<std::reference_wrapper<CommandQueue>> queue,
     const DeviceOperation<OutputTensors>& operation,
@@ -352,14 +352,14 @@ template Tensors run_multi_device_operation(
 
 }  // namespace detail
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
     return detail::decorate_host_operation(detail::run_host_operation<OutputTensors>)(operation, input_tensors);
 }
 template Tensors run(const HostOperation<Tensors>& operation, const Tensors& input_tensors);
 template OptionalTensors run(const HostOperation<OptionalTensors>& operation, const Tensors& input_tensors);
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(
     CommandQueue& queue,
     const DeviceOperation<OutputTensors>& operation,
@@ -398,7 +398,7 @@ template OptionalTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
@@ -438,7 +438,7 @@ template OptionalTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
@@ -480,7 +480,7 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalConstTensors& optional_input_tensors
 );
 
-template<class OutputTensors=Tensors>
+template<class OutputTensors>
 OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
