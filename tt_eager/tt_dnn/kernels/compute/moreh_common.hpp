@@ -55,10 +55,14 @@ ALWI void mul_tiles_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_tiles_init();
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -83,13 +87,17 @@ ALWI void mul_tiles_and_negative_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_tiles_init();
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
 
     negative_tile_init();
     negative_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -118,6 +126,7 @@ ALWI void mul_tiles_and_mask_tile_to_cb(
     cb_wait_front(icb1, itile1 + 1);
     cb_wait_front(maskcb, mtile + 1);
 
+    tile_regs_acquire();
     mul_tiles_init();
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
 
@@ -127,8 +136,11 @@ ALWI void mul_tiles_and_mask_tile_to_cb(
 
     mask_tile_init();
     mask_tile(dst0, dst_mask);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -155,13 +167,17 @@ ALWI void mul_tiles_log_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_tiles_init();
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
 
     log_tile_init();
     log_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -187,10 +203,14 @@ ALWI void mul_tiles_bcast_rows_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_bcast_rows_init_short();
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -216,13 +236,17 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_bcast_rows_init_short();
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
 
     log_tile_init();
     log_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -248,10 +272,14 @@ ALWI void mul_tiles_bcast_cols_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_bcast_cols_init_short();
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -277,13 +305,17 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     mul_bcast_cols_init_short();
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
 
     log_tile_init();
     log_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -300,9 +332,14 @@ ALWI void copy_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb, itile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -324,10 +361,14 @@ ALWI void add_tiles_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     add_tiles_init();
     add_tiles(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -346,6 +387,7 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
     cb_wait_front(icb, itile + 1);
     cb_wait_front(maskcb, mtile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst0);
 
@@ -355,7 +397,11 @@ ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t 
     mask_tile_init();
     mask_tile(dst0, dst_mask);
 
+    tile_regs_commit();
+
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -378,6 +424,8 @@ ALWI void reduce_tile_to_cb(
     constexpr int dst0 = 0;
 
     cb_reserve_back(ocb, onetile);
+
+    tile_regs_acquire();
     cb_wait_front(icb1, onetile);
 
     reduce_init_delta<false>(reduce_op, dim);
@@ -387,13 +435,19 @@ ALWI void reduce_tile_to_cb(
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
     }
+    tile_regs_commit();
+
     if (pop0)
         cb_pop_front(icb0, pop0);
     if (pop1)
         cb_pop_front(icb1, pop1);
 
     reduce_revert_delta();
+
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
+
     cb_push_back(ocb, onetile);
 }
 
@@ -413,10 +467,14 @@ ALWI void sub_tiles_bcast_cols_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     sub_bcast_cols_init_short();
     sub_tiles_bcast<BroadcastType::COL>(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -442,14 +500,18 @@ ALWI void sub_tiles_bcast_rows_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     // sub_bcast_rows_init_short();
     {
         MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));
         UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(0, 1)));
     }
     sub_tiles_bcast<BroadcastType::ROW>(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -474,10 +536,14 @@ ALWI void sub_tiles_to_cb(
     cb_wait_front(icb0, itile0 + 1);
     cb_wait_front(icb1, itile1 + 1);
 
+    tile_regs_acquire();
     sub_tiles_init();
     sub_tiles(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop0)
         cb_pop_front(icb0, pop0);
@@ -493,13 +559,17 @@ ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb, itile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst);
 
     exp_tile_init();
     exp_tile(dst);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst, ocb);
+    tile_regs_release();
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -512,6 +582,7 @@ ALWI void rexp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb, itile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst);
 
@@ -520,8 +591,11 @@ ALWI void rexp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
 
     exp_tile_init();
     exp_tile(dst);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst, ocb);
+    tile_regs_release();
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -544,6 +618,7 @@ ALWI void exp_tile_and_mask_tile_to_cb(
     cb_wait_front(icb, itile + 1);
     cb_wait_front(maskcb, mtile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst);
 
@@ -558,11 +633,14 @@ ALWI void exp_tile_and_mask_tile_to_cb(
 
     mask_tile_init();
     mask_tile(dst, dst_mask);
+    tile_regs_commit();
 
     if (popm)
         cb_pop_front(maskcb, popm);
 
+    tile_regs_wait();
     pack_tile(dst, ocb);
+    tile_regs_release();
 
     cb_push_back(ocb, onetile);
 }
@@ -583,6 +661,7 @@ ALWI void rexp_tile_and_mask_tile_to_cb(
     cb_wait_front(icb, itile + 1);
     cb_wait_front(maskcb, mtile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst);
 
@@ -600,11 +679,14 @@ ALWI void rexp_tile_and_mask_tile_to_cb(
 
     mask_tile_init();
     mask_tile(dst, dst_mask);
+    tile_regs_commit();
 
     if (popm)
         cb_pop_front(maskcb, popm);
 
+    tile_regs_wait();
     pack_tile(dst, ocb);
+    tile_regs_release();
 
     cb_push_back(ocb, onetile);
 }
@@ -616,13 +698,17 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb, itile + 1);
 
+    tile_regs_acquire();
     copy_tile_init();
     copy_tile(icb, itile, dst0);
 
     recip_tile_init();
     recip_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -644,6 +730,7 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb1, onetile);
 
+    tile_regs_acquire();
     reduce_init_delta<false>(reduce_op, dim);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
@@ -660,8 +747,12 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
 
     recip_tile_init();
     recip_tile(dst0);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, ocb);
+    tile_regs_release();
+
     cb_push_back(ocb, onetile);
 }
 
