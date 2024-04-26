@@ -5,17 +5,17 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.demos.mistral7b.tt.mistral_common import (
+from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
     prepare_inputs_ttnn,
     freqs_to_rotation_matrix,
     sample,
 )
-from models.demos.mistral7b.tt.mistral_model import TtTransformer
-from models.demos.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.mistral7b.tt.model_config import TtModelArgs
-from models.demos.mistral7b.reference.model import Transformer
-from models.demos.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
+from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.demos.wormhole.mistral7b.reference.model import Transformer
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
@@ -186,7 +186,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 def test_mistral_perf_device(batch, iterations, expected_perf, reset_seeds):
     subdir = "ttnn_mistral7b"
     margin = 0.03
-    command = f"pytest models/demos/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
+    command = f"pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[{iterations}-generative]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

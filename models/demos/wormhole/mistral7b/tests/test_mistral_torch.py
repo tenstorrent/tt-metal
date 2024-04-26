@@ -7,12 +7,12 @@ import json
 from pathlib import Path
 
 # import ttnn
-from models.demos.mistral7b.tt.mistral_common import (
+from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
 )
-from models.demos.mistral7b.tt.model_config import TtModelArgs
-from models.demos.mistral7b.reference.model import Transformer
-from models.demos.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.demos.wormhole.mistral7b.reference.model import Transformer
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 # from transformers.generation.utils import top_k_top_p_filtering
 

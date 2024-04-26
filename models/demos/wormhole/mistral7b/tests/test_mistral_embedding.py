@@ -5,9 +5,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.demos.mistral7b.tt.model_config import TtModelArgs
-from models.demos.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
