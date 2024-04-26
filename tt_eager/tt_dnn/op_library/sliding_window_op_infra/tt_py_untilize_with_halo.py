@@ -29,9 +29,11 @@ class TTPyUntilizeWithHalo(TTPyOp):
         halo_reader_patterns_cache,
         pad_val=0x0,
         is_out_tiled=True,
+        transpose_mcast=True,
     ):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
+        self.transpose_mcast = transpose_mcast
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
         self.set_op_configs(
             device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache, is_out_tiled
@@ -50,6 +52,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["max_out_nsticks_per_core"],
                 utwh_kernel_configs["out_mem_config"],
                 utwh_kernel_configs["remote_read"],
+                self.transpose_mcast,
             )
 
         self.utwh = utwh_
@@ -121,12 +124,20 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 input_nhw_height=input_n * input_h * input_w,
             )
 
-            shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
+            shard_grid, shard_layout = calculate_shard_grid(
+                (num_cores_w, num_cores_h), num_cores_nhw, self.transpose_mcast
+            )
             block_sharding = shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
 
             def get_memory_config(shard_shape, buffer_type=ttl.tensor.BufferType.L1_SMALL):
                 shard_orientation = (
-                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
+                    ttl.tensor.ShardOrientation.ROW_MAJOR
+                    if not block_sharding
+                    else (
+                        ttl.tensor.ShardOrientation.COL_MAJOR
+                        if self.transpose_mcast
+                        else ttl.tensor.ShardOrientation.ROW_MAJOR
+                    )
                 )
                 shard_halo = False
                 shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
@@ -141,7 +152,10 @@ class TTPyUntilizeWithHalo(TTPyOp):
             def gen_per_core_gather_data_uint16_tensor(config: list):
                 assert type(config) is list
                 if block_sharding:
-                    assert len(config) == num_cores_w, f"{len(config)} {num_cores_w}"
+                    if self.transpose_mcast:
+                        assert len(config) == num_cores_w, f"{len(config)} {num_cores_w}"
+                    else:
+                        assert len(config) == num_cores_h, f"{len(config)} {num_cores_h}"
                 else:
                     assert len(config) == num_cores_nhw, f"{len(config)} {num_cores_nhw}"
                 assert type(config[0]) is list
@@ -151,7 +165,10 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 shard_shape = [1, torch_tensor.shape[-1]]
 
                 if block_sharding:
-                    torch_tensor = torch_tensor.repeat(1, num_cores_h)
+                    if self.transpose_mcast:
+                        torch_tensor = torch_tensor.repeat(1, num_cores_h)
+                    else:
+                        torch_tensor = torch_tensor.repeat(1, num_cores_w)
 
                 torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
 
@@ -161,7 +178,10 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
             def core_id_to_physical_coord(core_id):
                 if block_sharding:
-                    core_coord = ttl.tensor.CoreCoord(core_id, 0)
+                    if self.transpose_mcast:
+                        core_coord = ttl.tensor.CoreCoord(core_id, 0)
+                    else:
+                        core_coord = ttl.tensor.CoreCoord(0, core_id)
                 else:
                     core_coord = ttl.tensor.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
                 worker_core = device.worker_core_from_logical_core(core_coord)

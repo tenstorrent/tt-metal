@@ -29,6 +29,7 @@ from tt_lib.utils import (
 )
 
 import tt_lib as ttl
+import ttnn
 import torch
 import math
 import warnings
@@ -94,6 +95,7 @@ def determine_parallel_config(
     device,
     config_override=None,
     is_out_tiled=True,
+    transpose_mcast=True,
 ):
     if config_override is None:
         config_override = {}
@@ -110,12 +112,23 @@ def determine_parallel_config(
     device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
     max_num_cores = device_grid_size[0] * device_grid_size[1]
 
+    if "grid_size" in config_override:
+        grid_size = config_override["grid_size"]
+        max_num_cores = grid_size[0] * grid_size[1]
+        # print(f"max_num_cores: {max_num_cores}")
+
     def calculate_num_cores_nhw(override):
         conv_out_2d_matrix_height_ntiles = divup(conv_out_2d_matrix_height, tile_size)
         num_cores_nhw = (
             find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
             if is_1d_systolic
-            else find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0])
+            else (
+                find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0])
+                if transpose_mcast
+                else find_closest_largest_divisor_with_num_padding(
+                    conv_out_2d_matrix_height_ntiles, device_grid_size[1]
+                )
+            )
         )
         if override is not None and num_cores_nhw != override:
             warnings.warn(f"Overriding config: num_cores_nhw from {num_cores_nhw} to user provided config={override}")
@@ -132,16 +145,20 @@ def determine_parallel_config(
                 num_cores_nhw <= grid_size[0] * grid_size[1]
             ), "Error: For 1d systolic conv, num_cores_nhw must be <= grid size"
         else:
-            grid_size = [
-                num_cores_nhw,
-                find_closest_common_largest_divisor(
-                    conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[1]
-                ),
-            ]
-            assert (
-                num_cores_nhw == grid_size[0]
-            ), "Error: For 2d systolic conv, num_cores_nhw must be == # of cols in grid size"
-
+            if transpose_mcast:
+                grid_size = [
+                    num_cores_nhw,
+                    find_closest_common_largest_divisor(
+                        conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[1]
+                    ),
+                ]
+            else:
+                grid_size = [
+                    find_closest_common_largest_divisor(
+                        conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[0]
+                    ),
+                    num_cores_nhw,
+                ]
         if override is not None and grid_size != override:
             warnings.warn(f"Overriding config: grid_size from {grid_size} to user provided config={override}")
             grid_size = override
@@ -175,8 +192,8 @@ def determine_parallel_config(
 
     num_cores_nhw = calculate_num_cores_nhw(config_override.get("num_cores_nhw", None))
     grid_size = calculate_grid_size(num_cores_nhw, config_override.get("grid_size", None))
-    logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[0]
-    logical_grid_y = 1 if is_1d_systolic else grid_size[1]
+    logical_grid_x = num_cores_nhw if is_1d_systolic else (grid_size[0] if transpose_mcast else grid_size[1])
+    logical_grid_y = 1 if is_1d_systolic else (grid_size[1] if transpose_mcast else grid_size[0])
     per_core_out_matrix_height_ntiles = calculate_per_core_out_matrix_height_ntiles(
         logical_grid_x, config_override.get("per_core_out_matrix_height", None)
     )
@@ -184,9 +201,9 @@ def determine_parallel_config(
         logical_grid_y, config_override.get("per_core_out_matrix_width", None)
     )
 
-    # logger.debug(
-    #     f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
-    # )
+    logger.debug(
+        f"PARALLEL CONFIG :: {is_1d_systolic} :: {input_channels} :: {output_channels} :: {sliding_window_op_params} :: {config_override} -> {num_cores_nhw} :: {grid_size} :: {per_core_out_matrix_height_ntiles} :: {per_core_out_matrix_width_ntiles}"
+    )
 
     return ttl.tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
@@ -207,6 +224,7 @@ def determine_per_core_block_config(
     padded_input_channels,
     config_override=None,
     fp32_accum=False,
+    transpose_mcast=True,
 ):
     if config_override is None:
         config_override = {}
@@ -230,10 +248,10 @@ def determine_per_core_block_config(
     if is_1d_systolic:
         act_c_num_blocks = 1
     else:
-        act_c_num_blocks = grid_size.y
+        act_c_num_blocks = grid_size.y if transpose_mcast else grid_size.x
         assert (
             padded_input_channels % act_c_num_blocks == 0
-        ), "Cannot parallelize conv as a 2d systolic array. Input channels must be divisible by act_c_num_blocks."
+        ), f"Cannot parallelize conv as a 2d systolic array: Input channels {padded_input_channels} must be divisible by act_c_num_blocks {act_c_num_blocks}."
     out_block_h_ntiles = per_core_out_matrix_height_ntiles
     assert out_block_h_ntiles % act_block_h_ntiles == 0, "act_block_h must evenly divide out_block_h"
     weight_block_w_ntiles = per_core_out_matrix_width_ntiles
@@ -285,7 +303,7 @@ def determine_per_core_block_config(
 
 
 def determine_1x1conv_as_matmul_config(
-    conv_parallelization_config, conv_blocking_config, use_1d_systolic_array, fuse_relu
+    conv_parallelization_config, conv_blocking_config, use_1d_systolic_array, fuse_relu, transpose_mcast=True
 ):
     if use_1d_systolic_array:
         matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -302,17 +320,21 @@ def determine_1x1conv_as_matmul_config(
             mcast_in0=False,
         )
     else:
+        grid_size_along_c = (
+            conv_parallelization_config.grid_size.y if transpose_mcast else conv_parallelization_config.grid_size.x
+        )
         assert (
-            conv_blocking_config.act_block_w_ntiles % conv_parallelization_config.grid_size.y == 0
+            conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0
         ), "Expected act block width to be divisible by act channel num blocks."
         matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=conv_parallelization_config.grid_size,
-            in0_block_w=conv_blocking_config.act_block_w_ntiles // conv_parallelization_config.grid_size.y,
+            in0_block_w=conv_blocking_config.act_block_w_ntiles
+            // grid_size_along_c,  ##conv_parallelization_config.grid_size.y,
             out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
             out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
             per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
-            transpose_mcast=True,
+            transpose_mcast=transpose_mcast,
             fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
             if fuse_relu
             else None,
@@ -353,6 +375,7 @@ class TTPyCompositeConv(TTPyOp):
         using_parameters_cache=False,
         move_weights_to_device=True,
         use_shallow_conv_variant=False,
+        transpose_mcast=True,  ## default is the original CM
         enable_auto_formatting=False,
         deallocate_activation=True,
         padded_input_channels=None,
@@ -374,6 +397,7 @@ class TTPyCompositeConv(TTPyOp):
         self.enable_auto_formatting = enable_auto_formatting
         self.deallocate_activation = deallocate_activation
         self.use_shallow_conv_variant = use_shallow_conv_variant
+        self.transpose_mcast = transpose_mcast
         self.untilize_out = output_layout == ttl.tensor.Layout.ROW_MAJOR
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
@@ -402,6 +426,8 @@ class TTPyCompositeConv(TTPyOp):
         self.conv_output_shape = [batch_size, output_height, output_width, output_channels]
         self.input_tensor_shape = [batch_size, input_height, input_width, input_channels]
         self.is_1d_systolic = is_1d_systolic
+        if is_1d_systolic:
+            assert (transpose_mcast, "With 1D systolic array, please set transpose_mcast=True")
         self.device = device
         # determine conv op parallelization and blocking config
         self.opt_conv_parall_conf_auto = determine_parallel_config(
@@ -411,6 +437,7 @@ class TTPyCompositeConv(TTPyOp):
             sliding_window_op_params,
             device,
             config_override=conv_blocking_and_parallelization_config_override,
+            transpose_mcast=transpose_mcast,
         )
         self.per_core_out_matrix_height = self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
         self.per_core_out_matrix_width = self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32
@@ -427,6 +454,7 @@ class TTPyCompositeConv(TTPyOp):
             self.padded_input_channels,
             config_override=conv_blocking_and_parallelization_config_override,
             fp32_accum=fp32_accum,
+            transpose_mcast=transpose_mcast,
         )
 
         if not is_1d_systolic:  # 2D conv
@@ -455,7 +483,11 @@ class TTPyCompositeConv(TTPyOp):
         ):
             self.use_matmul_for_1x1_conv = True
             self.matmul_config = determine_1x1conv_as_matmul_config(
-                self.opt_conv_parall_conf_auto, self.opt_conv_block_conf_auto, is_1d_systolic, fuse_relu
+                self.opt_conv_parall_conf_auto,
+                self.opt_conv_block_conf_auto,
+                is_1d_systolic,
+                fuse_relu,
+                transpose_mcast,
             )
         if isinstance(sliding_window_op_params, SlidingWindowOpParams):
             # populate parallelization params in sliding_window_op_params
@@ -541,7 +573,10 @@ class TTPyCompositeConv(TTPyOp):
         if not self.use_matmul_for_1x1_conv:
             # create untilize with halo op
             self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
-                device, self.sliding_window_op_params, reader_patterns_cache["halo"]
+                device,
+                self.sliding_window_op_params,
+                reader_patterns_cache["halo"],
+                transpose_mcast=self.transpose_mcast,
             )
         self.grid_size = (self.sliding_window_op_params.num_cores_w, self.sliding_window_op_params.num_cores_h)
         self.input_sharded_memory_config = calculate_memory_config(
@@ -550,6 +585,7 @@ class TTPyCompositeConv(TTPyOp):
             self.padded_input_channels,
             calc_input=True,
             tile_size=32,
+            transpose_mcast=transpose_mcast,
         )
         self.output_sharded_memory_config = calculate_memory_config(
             self.sliding_window_op_params,
@@ -557,6 +593,7 @@ class TTPyCompositeConv(TTPyOp):
             _nearest_32(output_channels),
             calc_input=False,
             tile_size=32,
+            transpose_mcast=transpose_mcast,
         )
 
     # override abstract methods from base class TTPyOp
@@ -625,9 +662,12 @@ class TTPyCompositeConv(TTPyOp):
 
             indices_torch_dtype = torch.int16
             indices_tt_dtype = ttl.tensor.DataType.UINT16
-            # For 2d convs, each core in a column share the same specs
+            # For 2d convs, each core in a column or row share the same specs
             if conv_is_2d:
-                sliding_window_op_sharded_input_top_left_indices *= num_cores_h
+                if self.transpose_mcast:
+                    sliding_window_op_sharded_input_top_left_indices *= num_cores_h  ## replicate along columns
+                else:
+                    sliding_window_op_sharded_input_top_left_indices *= num_cores_w  ## replicate along rows
 
             # Create sharded tensor on device for conv_reader_indices
             conv_reader_indices_torch_tensor = torch.tensor(
@@ -645,9 +685,10 @@ class TTPyCompositeConv(TTPyOp):
                     )
                 }
             )
-            shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
-            shard_halo = False
-            shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, shard_halo)
+            shard_orientation = (
+                ttl.tensor.ShardOrientation.ROW_MAJOR if self.transpose_mcast else ttl.tensor.ShardOrientation.COL_MAJOR
+            )
+            shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, False)
             mem_config = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1_SMALL, shard_spec
             )
@@ -772,6 +813,7 @@ class TTPyCompositeConv(TTPyOp):
                 output_dtype=output_dtype,
                 input_tensor_shape=self.input_tensor_shape,
                 use_shallow_conv_variant=self.use_shallow_conv_variant,
+                transpose_mcast=self.transpose_mcast,
                 compute_kernel_config=compute_kernel_config,
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
@@ -835,6 +877,7 @@ class TTPyCompositeConv(TTPyOp):
         if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
+        ttnn.synchronize_device(self.device)
         if self.enable_auto_formatting and activation.is_sharded():
             activation = self.conv_output_sharded_to_interleaved(activation)
         return activation
@@ -876,16 +919,23 @@ class TTPyCompositeConv(TTPyOp):
         shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), self.ncores_nhw)
         assert self.is_1d_systolic == (shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
         shard_orientation = (
-            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
+            ttl.tensor.ShardOrientation.ROW_MAJOR
+            if self.is_1d_systolic
+            else (
+                ttl.tensor.ShardOrientation.COL_MAJOR if self.transpose_mcast else ttl.tensor.ShardOrientation.ROW_MAJOR
+            )
         )
-        shard_halo = False
         shard_shape = [
             untilize_with_halo_input_shard_height,
             input_channels
             if self.is_1d_systolic
-            else (int)(input_channels / self.opt_conv_parall_conf_auto.grid_size.y),
+            else (
+                (int)(input_channels / self.opt_conv_parall_conf_auto.grid_size.y)
+                if self.transpose_mcase
+                else (int)(input_channels / self.opt_conv_parall_conf_auto.grid_size.x),
+            ),
         ]
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
         mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)
         conv_input_on_device = conv_input.to(self.device, mem_config, shard_spec)
         return conv_input_on_device
@@ -918,8 +968,14 @@ class TTPyCompositeConv(TTPyOp):
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
         else:
-            grid_size_y = self.opt_conv_parall_conf_auto.grid_size.y
-            assert padded_input_channels % grid_size_y == 0
+            grid_size_along_c = (
+                self.opt_conv_parall_conf_auto.grid_size.y
+                if self.transpose_mcast
+                else self.opt_conv_parall_conf_auto.grid_size.x
+            )
+            assert (
+                padded_input_channels % grid_size_along_c == 0
+            ), f"Expected padded_input_channels to be divisible by grid_size_along_c. Found padded_input_channels={padded_input_channels} and grid_size_along_c={grid_size_along_c}"
             assert (
                 not self.use_shallow_conv_variant
             ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
@@ -928,10 +984,12 @@ class TTPyCompositeConv(TTPyOp):
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
-                    (int)(padded_input_channels / grid_size_y),
+                    (int)(padded_input_channels / grid_size_along_c),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttl.tensor.ShardOrientation.COL_MAJOR
+                if self.transpose_mcast
+                else ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
 
         return conv_input_on_device
