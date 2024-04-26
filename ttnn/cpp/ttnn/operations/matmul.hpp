@@ -83,7 +83,8 @@ inline ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_b,
     const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
     const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
 
@@ -102,11 +103,17 @@ inline ttnn::Tensor matmul(
     const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
+    std::optional<std::size_t> core_grid_x;
+    std::optional<std::size_t> core_grid_y;
+    if (core_grid) {
+	core_grid_x = core_grid->x;
+	core_grid_y = core_grid->y;
+    }
     auto compute_interlevead = [&]() {
         if (input_b_is_batched) {
-            return tt::tt_metal::bmm(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
+            return tt::tt_metal::bmm(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config, false /*untilize_out*/, core_grid_x, core_grid_y);
         } else {
-            return tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
+            return tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config, false /*untilize_out*/, core_grid_x, core_grid_y);
         }
     };
 
@@ -166,7 +173,8 @@ inline ttnn::Tensor linear(
     const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
@@ -191,8 +199,14 @@ inline ttnn::Tensor linear(
     if (width_a != height_b) {
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
+    std::optional<std::size_t> core_grid_x;
+    std::optional<std::size_t> core_grid_y;
+    if (core_grid) {
+	core_grid_x = core_grid->x;
+	core_grid_y = core_grid->y;
+    }
 
-    auto output_tensor = tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
+    auto output_tensor = tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config, false /*untilize_out*/, core_grid_x, core_grid_y);
     if (bias_4d.has_value()) {
         output_tensor = tt::tt_metal::bcast(
             output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);

@@ -398,23 +398,14 @@ def test_matmul_with_core_grid(device, batch_size):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    if batch_size == 1:
-        with pytest.raises(RuntimeError) as exception:
-            output_tensor = ttnn.matmul(
-                input_tensor_a,
-                input_tensor_b,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=8),
-            )
-        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
-    else:
-        output_tensor = ttnn.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=8),
-        )
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        core_grid=ttnn.CoreGrid(y=batch_size, x=8),
+    )
 
-        output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @skip_for_wormhole_b0()

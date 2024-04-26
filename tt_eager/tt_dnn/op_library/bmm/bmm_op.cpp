@@ -363,10 +363,18 @@ tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, 
 
 
 // TODO: Only supports sharded matmul for now; infer most matmul params from shard spec
-tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation, const bool matmul) {
+tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation, const bool matmul, const std::optional<const std::size_t> core_grid_x, const std::optional<const std::size_t> core_grid_y) {
     TT_FATAL(input_tensor_a.is_sharded());
-    // TODO: Should we check if grid_size is valid against device->compute_with_storage_grid_size()?
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    if (core_grid_x && core_grid_y) {
+	auto x = *core_grid_x;
+	auto y = *core_grid_y;
+	auto storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+	if (x <= storage_grid_size.x && y <= storage_grid_size.y) {
+	    grid_size.x = x;
+	    grid_size.y = y;
+	}
+    }
 
     // MCAST matmuls only support input_b in INTERLEAVED
     if (matmul) {

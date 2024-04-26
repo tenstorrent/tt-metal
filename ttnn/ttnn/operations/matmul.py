@@ -382,14 +382,6 @@ def matmul(
     if use_1d_systolic_array is not None or core_grid is not None:
         if program_config is not None:
             raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
-        program_config = create_matmul_program_config(
-            input_tensor_a=input_tensor_a,
-            input_tensor_b=input_tensor_b,
-            core_grid=core_grid or input_tensor_a.device().core_grid,
-            activation=None,
-            use_1d_systolic_array=use_1d_systolic_array,
-            compute_kernel_config=compute_kernel_config,
-        )
 
     if program_config is not None:
         return ttnn._ttnn.operations.matmul.matmul(
@@ -407,6 +399,7 @@ def matmul(
         memory_config=memory_config,
         dtype=dtype,
         compute_kernel_config=compute_kernel_config,
+        core_grid=core_grid,
     )
 
 
@@ -482,14 +475,6 @@ def linear(
     if use_1d_systolic_array is not None or core_grid is not None:
         if program_config is not None:
             raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
-        program_config = create_matmul_program_config(
-            input_tensor_a=input_tensor_a,
-            input_tensor_b=input_tensor_b,
-            core_grid=core_grid or input_tensor_a.device().core_grid,
-            activation=activation,
-            use_1d_systolic_array=use_1d_systolic_array,
-            compute_kernel_config=compute_kernel_config,
-        )
 
     if program_config is not None:
         return ttnn._ttnn.operations.matmul.linear(
@@ -511,6 +496,7 @@ def linear(
         dtype=dtype,
         activation=activation,
         compute_kernel_config=compute_kernel_config,
+        core_grid=core_grid,
     )
 
 
