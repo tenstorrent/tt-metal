@@ -641,9 +641,6 @@ class cross_attention:
                 fused_activation=None,
             )
 
-        # TODO: bug in MM means these sizes need to be interleaved for now
-        if size == 4096:
-            output_mem_config = self.l1_interleaved_memory_config
         hidden_states = ttnn.experimental.operations.primary.matmul(
             hidden_states,
             self.parameters.to_out[0].weight,
@@ -653,10 +650,7 @@ class cross_attention:
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
-        if size == 4096:
-            hidden_states = self.reshard_to(
-                hidden_states, (5, 8), ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
-            )
+
         return hidden_states
 
     def reshard_to(self, tensor, grid_size, layout, col_major=False):
