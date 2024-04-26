@@ -115,7 +115,6 @@ class cross_attention_upblock2d:
                     hidden_states,
                     ttnn.TILE_LAYOUT,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    use_multicore=True,
                 )
             elif ttnn.is_sharded(hidden_states):
                 hidden_states = dealloc_input(ttnn.to_memory_config, hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -124,7 +123,6 @@ class cross_attention_upblock2d:
                     on_dev_res_hidden_states,
                     ttnn.TILE_LAYOUT,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    use_multicore=True,
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)

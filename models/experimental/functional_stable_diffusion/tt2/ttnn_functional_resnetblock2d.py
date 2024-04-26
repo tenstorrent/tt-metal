@@ -403,9 +403,7 @@ class resnetBlock2D:
 
         # print(input_tensor.shape)
         # print(input_tensor.memory_config())
-        hidden_states = ttnn.to_layout(
-            input_tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
 
@@ -546,9 +544,7 @@ class resnetBlock2D:
 
         # print(hidden_states.shape)
         # print(hidden_states.memory_config())
-        hidden_states = ttnn.to_layout(
-            hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.to_memory_config(hidden_states, self.second_gn_expected_input_sharded_memory_config)
         hidden_states = ttnn.group_norm(
             hidden_states,

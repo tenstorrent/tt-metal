@@ -279,7 +279,7 @@ inline Tensor to_layout(
 
     if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
         if (not requires_padding_change(layout, tensor.get_shape())) {
-            bool use_multicore = tensor.is_sharded();
+            bool use_multicore = true;
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return tt::tt_metal::untilize(tensor, output_memory_config, use_multicore);

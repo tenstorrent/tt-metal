@@ -26,9 +26,15 @@ def calculate_key_values(config, key_value_states, *, parameters):
     head_size = hidden_size // config.encoder_attention_heads
 
     fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
-    fused_qkv = ttnn.to_layout(fused_qkv, ttnn.ROW_MAJOR_LAYOUT)
-    fused_qkv = ttnn.reshape(fused_qkv, shape=(bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
+
+    dtype = fused_qkv.dtype
+    device = fused_qkv.device()
+    fused_qkv = ttnn.to_torch(fused_qkv)
+    fused_qkv = torch.reshape(fused_qkv, (bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
     key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
+
+    key_states = ttnn.from_torch(key_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    value_states = ttnn.from_torch(value_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     key_states = ttnn.permute(key_states, (0, 2, 1, 3))
     value_states = ttnn.permute(value_states, (0, 2, 1, 3))
@@ -54,9 +60,16 @@ def split_query_key_value_and_split_heads(
     hidden_size = three_times_hidden_size // 3
     encoder_attention_heads = hidden_size // head_size
 
-    fused_qkv = ttnn.to_layout(fused_qkv, layout=ttnn.ROW_MAJOR_LAYOUT)
-    fused_qkv = ttnn.reshape(fused_qkv, shape=(batch_size, seq_length, 3, encoder_attention_heads, head_size))
+    dtype = fused_qkv.dtype
+    device = fused_qkv.device()
+    fused_qkv = ttnn.to_torch(fused_qkv)
+    fused_qkv = torch.reshape(fused_qkv, shape=(batch_size, seq_length, 3, encoder_attention_heads, head_size))
     query_states, key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :], fused_qkv[..., 2, :, :]
+
+    query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    key_states = ttnn.from_torch(key_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    value_states = ttnn.from_torch(value_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
     query_states = ttnn.permute(query_states, (0, 2, 1, 3))
     key_states = ttnn.permute(key_states, (0, 2, 1, 3))
     value_states = ttnn.permute(value_states, (0, 2, 1, 3))
@@ -69,12 +82,8 @@ def split_query_key_value_and_split_heads(
         [batch_size, encoder_attention_heads, seq_length, head_size],
         [batch_size, encoder_attention_heads, padded_seq_length, head_size],
     )
-    key_desired_shape = ttnn.Shape(
-        [batch_size, encoder_attention_heads, head_size, seq_length],
-        [batch_size, encoder_attention_heads, head_size, padded_seq_length],
-    )
     query_states = ttnn.reshape(query_states, shape=desired_shape)
-    key_states = ttnn.reshape(key_states, shape=key_desired_shape)
+    key_states = ttnn.reshape(key_states, shape=desired_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
     return query_states, key_states, value_states
 
@@ -93,9 +102,12 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        query_states = ttnn.to_layout(query_states, ttnn.ROW_MAJOR_LAYOUT)
-        query_states = ttnn.reshape(query_states, shape=(bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT)
+
+        dtype = query_states.dtype
+        device = query_states.device()
+        query_states = ttnn.to_torch(query_states)
+        query_states = torch.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+        query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
         padded_key_value_tgt_len = key_states.shape.with_tile_padding()[2]
@@ -144,12 +156,12 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     attn_output = ttnn.to_layout(attn_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     attn_output = ttnn.reshape(attn_output, shape=(bsz, config.encoder_attention_heads, tgt_len, head_size))
     attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-    attn_output = ttnn.to_layout(attn_output, ttnn.ROW_MAJOR_LAYOUT)
-    attn_output = ttnn.reshape(
-        attn_output,
-        shape=ttnn.Shape([bsz, tgt_len, config.d_model], [bsz, tgt_len, config.d_model]),
-    )
-    attn_output = ttnn.to_layout(attn_output, ttnn.TILE_LAYOUT)
+
+    dtype = attn_output.dtype
+    device = attn_output.device()
+    attn_output = ttnn.to_torch(attn_output)
+    attn_output = torch.reshape(attn_output, (bsz, tgt_len, config.d_model))
+    attn_output = ttnn.from_torch(attn_output, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 

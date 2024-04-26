@@ -86,7 +86,7 @@ class upsample2d:
 
     def __call__(self, input, in_channels, out_channels):
         if input.layout == ttnn.TILE_LAYOUT:
-            input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+            input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
         # # slice out batch
         input = ttnn.reshape(input, (2, self.input_height, self.input_width, input.shape[3]))
         tt_out = upsample_nearest2d(input, self.scale_factor)
