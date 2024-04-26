@@ -234,7 +234,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
    private:
     void add_dispatch_write(DeviceCommand &command) override;
-    BufferPageMapping buffer_page_mapping;
+    const BufferPageMapping& buffer_page_mapping;
 
    public:
     EnqueueWriteShardedBufferCommand(
