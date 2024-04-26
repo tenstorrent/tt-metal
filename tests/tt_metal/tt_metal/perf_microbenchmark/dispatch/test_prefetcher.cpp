@@ -29,7 +29,7 @@ constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_PAGE_SIZE = 1 << DRAM_EXEC_BUF_DEFAULT_
 
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
-constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 128;
+constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
 constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
 constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024;
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
@@ -1143,10 +1143,38 @@ void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_TERMINATE, empty_payload);
 }
 
+// Ideally would work by cachelines, but the min size is less than that
+void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n)
+{
+    size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    size_t i;
+    for (i = 0; i < num_lines; i++) {
+        size_t j;
+        for (j = 0; j < CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(__m128i); j++) {
+            // __m128i blk = _mm_stream_load_si128((__m128i *)src);
+            __m128i blk = _mm_loadu_si128((const __m128i *)src);
+            /* non-temporal store */
+            _mm_stream_si128((__m128i *)dst, blk);
+            src += sizeof(__m128i);
+            dst += sizeof(__m128i);
+        }
+        n -= CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    }
+
+    if (num_lines > 0)
+        _mm_sfence();
+}
+
+// how_many is an experiment w/ writing multiple FetchQ entries w/ one PCIe write
+// code here is set up to let it be either 1 or 2 and presently relies on
+// FetchQ entries being 16bits, though should be generalized
+// disabled for now pending other changes/fixes
 void write_prefetcher_cmd(Device *device,
                           vector<uint32_t>& cmds,
                           uint32_t& cmd_offset,
-                          uint32_t cmd_size16b,
+                          uint16_t* cmd_sizes16b,
+                          uint32_t& how_many,
                           uint32_t*& host_mem_ptr,
                           uint32_t& prefetch_q_dev_ptr,
                           uint32_t& prefetch_q_dev_fence,
@@ -1155,17 +1183,6 @@ void write_prefetcher_cmd(Device *device,
                           CoreCoord phys_prefetch_core) {
 
     static vector<uint32_t> read_vec;  // static to avoid realloc
-
-    uint32_t cmd_size_bytes = (uint32_t)cmd_size16b << dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
-    uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
-
-    for (uint32_t i = 0; i < cmd_size_words; i++) {
-        *host_mem_ptr = cmds[cmd_offset];
-        host_mem_ptr++;
-        cmd_offset++;
-    }
-    // Not clear to me if this is needed, writing to cached PCIe memory
-    tt_driver_atomics::sfence();
 
     // wait for space
     while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
@@ -1183,9 +1200,25 @@ void write_prefetcher_cmd(Device *device,
         }
     }
 
+    if (prefetch_q_dev_ptr == prefetch_q_base + (prefetch_q_entries_g - 1) * sizeof(dispatch_constants::prefetch_q_entry_type)) {
+        how_many = 1;
+    }
+
+    uint16_t* cmd_sizes_tmp = cmd_sizes16b;
+    for (int i = 0; i < how_many; i++) {
+        uint32_t cmd_size_bytes = (uint32_t)*cmd_sizes_tmp << dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
+        cmd_sizes_tmp++;
+        uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
+
+        nt_memcpy((uint8_t *)host_mem_ptr, (uint8_t *)&cmds[cmd_offset], cmd_size_bytes);
+        cmd_offset += cmd_size_words;
+        host_mem_ptr += cmd_size_words;
+    }
+
+    uint32_t cmd_size16b = (how_many == 1) ? cmd_sizes16b[0] : ((cmd_sizes16b[1] << 16) | cmd_sizes16b[0]);
     tt::Cluster::instance().write_reg(&cmd_size16b, tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_dev_ptr);
 
-    prefetch_q_dev_ptr += sizeof(dispatch_constants::prefetch_q_entry_type);
+    prefetch_q_dev_ptr += sizeof(dispatch_constants::prefetch_q_entry_type) * how_many;
 }
 
 void write_prefetcher_cmds(uint32_t iterations,
@@ -1227,7 +1260,19 @@ void write_prefetcher_cmds(uint32_t iterations,
 
     for (uint32_t i = 0; i < iterations; i++) {
         uint32_t cmd_ptr = 0;
-        for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
+        uint32_t how_many = 0;
+        for (uint32_t j = 0; j < cmd_sizes.size(); j += how_many) {
+            // how_many = (j == cmd_sizes.size() - 1) ? 1 : 2;
+            how_many = 1; // see comment above, experiment on hold
+            if (how_many == 2) {
+                uint32_t cmd_size = cmd_sizes[j] + cmd_sizes[j+1];
+                uint32_t cmd_size_words = ((uint32_t)cmd_size << dispatch_constants::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
+
+                if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_issue_buffer_size_g)) {
+                    how_many = 1;
+                }
+            }
+
             uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << dispatch_constants::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
             uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
             if ((void *)(host_mem_ptr + cmd_size_words) > (void *)((uint8_t *)host_hugepage_base + hugepage_issue_buffer_size_g)) {
@@ -1235,7 +1280,8 @@ void write_prefetcher_cmds(uint32_t iterations,
                 uint32_t offset = 0;
                 host_mem_ptr = (uint32_t *)host_hugepage_base;
             }
-            write_prefetcher_cmd(device, prefetch_cmds, cmd_ptr, cmd_sizes[j],
+
+            write_prefetcher_cmd(device, prefetch_cmds, cmd_ptr, &cmd_sizes[j], how_many,
                                  host_mem_ptr, prefetch_q_dev_ptr, prefetch_q_dev_fence, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
         }
     }
