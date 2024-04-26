@@ -4,6 +4,7 @@
 
 #include "tensor/serialization.hpp"
 
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <string>

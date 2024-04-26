@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "tensor/types.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"

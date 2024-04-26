@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/tensor.hpp"
+#include <cstdint>
 #include <memory>
 
+#include "tensor/tensor.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_impl_wrapper.hpp"
 #include "tensor/tensor_utils.hpp"

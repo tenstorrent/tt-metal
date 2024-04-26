@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #ifndef REDUCE_OP
 #define REDUCE_OP PoolType::SUM
 #endif
