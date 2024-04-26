@@ -157,10 +157,16 @@ packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn"]
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [buda_eager_lib_C]
+print("VERSION!!!")
+version = get_version(buda_eager_build_config)
+
+print(str(version["version_scheme"]))
+print(str(version["local_scheme"]))
+
 
 setup(
     url="http://www.tenstorrent.com",
-    use_scm_version=get_version(buda_eager_build_config),
+    #use_scm_version="0.0.1",
     packages=packages,
     package_dir={
         "": "tt_eager",

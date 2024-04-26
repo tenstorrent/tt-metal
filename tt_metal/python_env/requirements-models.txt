@@ -1,0 +1,15 @@
+twine==4.0.2
+torchmetrics==1.3.1
+torch-fidelity==0.3.0
+xlsxwriter==3.0.8
+tiktoken==0.3.3
+numba==0.58.1
+librosa==0.10.0
+opencv-python-headless==4.8.0.74
+accelerate==0.27.2
+ftfy==6.1.1
+gitpython==3.1.32
+einops==0.6.1
+
+bert-score==0.3.12
+fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent-metal/tt-metal/issues/3314

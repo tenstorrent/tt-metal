@@ -43,7 +43,8 @@ jobs:
         timeout-minutes: 90
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.runner-info.machine-type }}
+          pip install tox
+          VENV_DIR=${{ github.workspace }}/python_env TT_ARCH=${{ matrix.arch }} MACHINE_TYPE=${{ matrix.runner-info.machine-type }} tox -e performance_device_models
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
