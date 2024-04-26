@@ -145,12 +145,13 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (zero_srcA ? 0b010001 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
     static constexpr uint unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);     // Needed for dot product
+    static constexpr uint unpack_srcb_2_face = TT_OP_UNPACR(SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr uint unpack_srca_dat_valid = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr uint unpack_srcb_dat_valid = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
 
     const uint32_t innerloop = zero_srcA ? (num_faces-1) : 1;
     const uint32_t outerloop = zero_srcA ? 1 : (num_faces>2) ? num_faces/2 : num_faces;
-    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
+    ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces==2) ? unpack_srcb_2_face : unpack_srcb));
     if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
     } else if constexpr (zero_srcA) {
