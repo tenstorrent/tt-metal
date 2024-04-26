@@ -314,7 +314,7 @@ running such tests.
   - Run `gdb --args python <python file> `
   - You can add breakpoints for future loaded libraries
 - To log the compile time arguments passed with `-D` during the kernel build phase:
-  - Run with Watcher enabled. Please refer to the [Watcher documentation](docs/source/tools/watcher.rst)
+  - Run with Watcher enabled. Please refer to the [Watcher documentation](docs/source/tt-metalium/tools/watcher.rst)
   - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
