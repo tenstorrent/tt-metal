@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+//#include "debug/dprint.h"
 
 void kernel_main() {
 	constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
@@ -25,6 +26,7 @@ void kernel_main() {
 	uint32_t mask_byte = 0x0ff; //8 bits
 	uint32_t mask_short = 0x0ffff; //16 bits
 
+
 	for(uint32_t range_id = 0; range_id <num_ranges; range_id++) {
 		const uint32_t core_start_stride = get_arg_val<uint32_t>(arg_index++);
 		const uint32_t start_x_index = (core_start_stride >> 24);
@@ -42,8 +44,9 @@ void kernel_main() {
 		const uint32_t stride_data = ((stride_data_offset >> 16)) * page_size;
 		const uint32_t offset = ((stride_data_offset) & mask_short) * page_size;
 		const uint32_t stride_size = ((stride_size_num_strides >> 16)) * page_size;
+		const bool stride_size_one_packet = stride_size <= 8*1024*1024;
 
-		uint32_t addr_offset = offset;
+		uint64_t addr_offset = (uint64_t)offset;
 		uint32_t core_id_x_index = start_x_index;
 		uint32_t core_id_y_index = start_y_index;
 
@@ -51,15 +54,21 @@ void kernel_main() {
 
 			uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
 			uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
+
 			uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
-					input_shard_addr + addr_offset);
-			noc_async_read(noc_address, l1_write_addr, stride_size);
-			l1_write_addr+=stride_size;
-			if(stride_x == 0 and stride_y == 0) {
-				addr_offset += (stride_data + stride_size);
+					input_shard_addr);
+			if(stride_size <= NOC_MAX_BURST_SIZE) {
+				noc_async_read_one_packet(noc_address + addr_offset, l1_write_addr, stride_size);
 			}
 			else {
-				addr_offset += (stride_data);
+				noc_async_read(noc_address + addr_offset, l1_write_addr, stride_size);
+			}
+			l1_write_addr+=stride_size;
+			if(stride_x == 0 and stride_y == 0) {
+				addr_offset += (uint64_t)(stride_data + stride_size);
+			}
+			else {
+				addr_offset += (uint64_t)(stride_data);
 			}
 			core_id_x_index += stride_x;
 			core_id_y_index += stride_y;
