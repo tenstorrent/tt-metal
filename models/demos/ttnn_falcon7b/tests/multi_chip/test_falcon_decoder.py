@@ -45,7 +45,7 @@ def torch_model():
     return torch_model
 
 
-@pytest.mark.parametrize("#7841: Possible hang, need to investigate on t3k")
+@pytest.mark.skip("#7841: Possible hang, need to investigate on t3k")
 @pytest.mark.parametrize(
     "llm_mode, device_batch_size, seq_len, kv_cache_len",
     (
