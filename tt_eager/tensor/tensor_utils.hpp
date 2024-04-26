@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "tensor/tensor.hpp"
 
 namespace tt {
