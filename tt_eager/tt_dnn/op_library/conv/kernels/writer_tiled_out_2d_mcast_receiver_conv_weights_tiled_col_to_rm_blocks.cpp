@@ -4,7 +4,23 @@
 
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
+
+#define ENABLE_DEBUG 0
+
+#if ENABLE_DEBUG
+#include "debug/dprint.h"
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+#endif
 
 
 void kernel_main() {
@@ -78,35 +94,11 @@ void kernel_main() {
     bool load_bias = true;
     #endif
 
-    // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
-    // DPRINT << "out_num_blocks_h - " << out_num_blocks_h << ENDL();
-    // DPRINT << "out_num_blocks_w - " << out_num_blocks_w << ENDL();
-
-    // DPRINT << "out_num_subblocks_h - " << out_num_subblocks_h << ENDL();
-    // DPRINT << "out_num_subblocks_w - " << out_num_subblocks_w << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-
-    // DPRINT << "out_subblock_tile_count - " << out_subblock_tile_count << ENDL();
-
-    // DPRINT << "num_blocks_weight_h - " << num_blocks_weight_h << ENDL();
-    // DPRINT << "weight_block_height_ntiles - " << weight_block_height_ntiles << ENDL();
-    // DPRINT << "weight_block_width_ntiles - " << weight_block_width_ntiles << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-    // DPRINT << "out_block_height_num_tiles - " << out_block_height_num_tiles << ENDL();
-    // DPRINT << "out_height_num_tiles - " << out_height_num_tiles << ENDL();
-    // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
-
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
-    //DPRINT << "out_start_tile_id=" << out_start_tile_id << ENDL();
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
-    //DPRINT << "weight_start_tile_id=" << weight_start_tile_id << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
@@ -169,9 +161,7 @@ void kernel_main() {
                             if (out_tile_id_w >= out_width_num_tiles) { // block shape width padding
                                 l1_read_addr += tile_nbytes;
                             } else {
-                                //DPRINT << "out_tile_id - " << out_tile_id << ENDL();
                                 uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
-                                //DPRINT << "out_tile_id=" << out_tile_id << ENDL();
                                 noc_async_write(l1_read_addr, out_tile_noc_addr, tile_nbytes);
                                 l1_read_addr += tile_nbytes;
                                 out_tile_id += out_next_tile_stride_w;
@@ -180,7 +170,6 @@ void kernel_main() {
                         out_sb_row_start_tile_id += out_next_tile_stride_h;
                     } // out_subblock_h (ntiles)
                     noc_async_write_barrier();
-                    //DPRINT << "Done writing subblock." << ENDL();
                     cb_pop_front(cb_id_out0, out_subblock_tile_count);
                     out_sbw_start_tile_id += out_next_subblock_stride_w;
                     out_sbw_start_tile_id_w += out_subblock_w;

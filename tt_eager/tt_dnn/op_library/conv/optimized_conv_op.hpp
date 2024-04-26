@@ -65,7 +65,7 @@ struct OptimizedConvBlockConfig {
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 
 struct OptimizedConv {
     OptimizedConvParallelizationConfig parallelization_config;
@@ -80,6 +80,7 @@ struct OptimizedConv {
     const DataType output_dtype;
     Shape input_tensor_shape; // For sharded input, input tensor shape is nonsense
     bool use_shallow_conv_variant;
+    bool transpose_mcast;   // default for GS = true, WH = false
     const DeviceComputeKernelConfig compute_kernel_config;
     OptimizedConv(const std::vector<int>&c_params,
         uint32_t output_channels, bool untile_out,
@@ -87,7 +88,7 @@ struct OptimizedConv {
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment,
-        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, const DeviceComputeKernelConfig compute_kernel_config) :
+        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, bool transpose_mcast, const DeviceComputeKernelConfig compute_kernel_config) :
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -99,6 +100,7 @@ struct OptimizedConv {
             extra_padding_for_32B_alignment(e_padding_for_32B_alignment),
             output_mem_config(output_mem_config), output_dtype(output_dtype), input_tensor_shape(input_tensor_shape),
             use_shallow_conv_variant(use_shallow_conv_variant),
+            transpose_mcast(transpose_mcast),
             compute_kernel_config(compute_kernel_config) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -149,6 +151,7 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
     std::optional<DataType> output_dtype=std::nullopt,
     std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
     bool use_shallow_conv_variant = false,
+    bool tranpose_mcast = true,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 );
 

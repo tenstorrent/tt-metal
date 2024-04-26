@@ -108,6 +108,7 @@ struct UntilizeWithHaloV2 {
     const uint32_t max_out_nsticks_per_core_;
     const MemoryConfig out_mem_config_;
     const bool remote_read_;
+    const bool transpose_mcast_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -115,14 +116,16 @@ struct UntilizeWithHaloV2 {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("pad_val_", "ncores_nhw_", "max_out_nsticks_per_core_", "out_mem_config_", "remote_read_");
+        std::make_tuple("pad_val_", "ncores_nhw_", "max_out_nsticks_per_core_", "out_mem_config_", "remote_read_", "transpose_mcast_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(pad_val_),
             std::cref(ncores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(out_mem_config_),
-            std::cref(remote_read_));
+            std::cref(remote_read_),
+            std::cref(transpose_mcast_)
+            );
     }
 };
 Tensor untilize_with_halo_v2(
@@ -134,7 +137,8 @@ Tensor untilize_with_halo_v2(
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
     const MemoryConfig &mem_config,
-    const bool remote_read);
+    const bool remote_read,
+    const bool transpose_mcast);
 
 namespace untilize_helpers {
 
