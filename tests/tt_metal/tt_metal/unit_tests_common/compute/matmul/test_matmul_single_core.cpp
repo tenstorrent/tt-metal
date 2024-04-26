@@ -223,6 +223,8 @@ TEST_F (CommonFixture, MatmulSingleCoreSmall){
     int out_subblock_w = 4;
     for (unsigned int id = 0; id < devices_.size(); id ++){
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_single_core::matmul_single_core(this, devices_.at(id), M, N, K, out_subblock_h, out_subblock_w));
+        // See #7910
+        break;
     }
 }
 

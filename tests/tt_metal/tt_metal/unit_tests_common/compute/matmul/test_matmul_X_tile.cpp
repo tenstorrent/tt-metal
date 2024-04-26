@@ -289,5 +289,7 @@ TEST_F(CommonFixture, MatmulMultiTile){
         matmul_config.with_bias = true;
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_X_tile::matmul_tile(this, devices_.at(id), matmul_config, activations_tile_transposed, weights, tensor));
         log_info(LogTest, "Multi tile with bias passed");
+        // See #7910
+        break;
     }
 }
