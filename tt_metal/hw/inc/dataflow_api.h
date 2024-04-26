@@ -558,7 +558,6 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
     DEBUG_STATUS("RPD");
 
     DEBUG_STATUS("NARW");
-    DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
 
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_addr >> 32);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, size);
@@ -582,8 +581,8 @@ void noc_async_read_one_packet_with_state(std::uint32_t src_noc_addr, std::uint3
 
     DEBUG_STATUS("NARW");
 
-    // TODO: need a way sanitize size + addr w/o directly providing x/y here (grab x/y form state?)
-    // DEBUG_SANITIZE_READ_NOC_TRANSACTION(src_noc_addr, dst_local_l1_addr, size);
+    // In order to sanitize, need to grab full noc addr + xfer size from state.
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_index, src_noc_addr, dst_local_l1_addr);
 
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_noc_addr);
@@ -609,9 +608,6 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr) {
     while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
     DEBUG_STATUS("RPD");
 
-    // TODO: need to sanitize in noc_async_read_with_state
-    // DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
-
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_addr >> 32);
 
     DEBUG_STATUS("NARD");
@@ -627,9 +623,8 @@ void noc_async_read_with_state(std::uint32_t src_noc_addr, std::uint32_t dst_loc
     */
     DEBUG_STATUS("NARW");
 
-    // TODO: need a way sanitize size + addr w/o directly providing x/y here (grab x/y form state?)
-    // DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
-    DEBUG_SANITIZE_WORKER_ADDR(dst_local_l1_addr, size);
+    // In order to sanitize, need to grab full noc addr + xfer size from state.
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_index, src_noc_addr, dst_local_l1_addr, size);
 
     while (size > NOC_MAX_BURST_SIZE) {
         DEBUG_STATUS("RPW");
@@ -701,7 +696,6 @@ FORCE_INLINE
 void noc_async_write_one_packet_set_state(std::uint64_t dst_noc_addr, std::uint32_t size) {
 
     DEBUG_STATUS("NWPW");
-    DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, size);
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
     DEBUG_STATUS("NWPD");
 
@@ -722,10 +716,11 @@ FORCE_INLINE
 void noc_async_write_one_packet_with_state(std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr) {
 
     DEBUG_STATUS("NWPW");
-    // TODO: need a way sanitize size + addr w/o directly providing x/y here (grab x/y form state?)
-    // DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
     DEBUG_STATUS("NWPD");
+
+    // In order to sanitize, need to grab full noc addr + xfer size from state.
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_index, dst_noc_addr, src_local_l1_addr);
 
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, dst_noc_addr);
@@ -1004,7 +999,7 @@ struct InterleavedPow2AddrGenFast {
         }
 
         DEBUG_STATUS("NRPW");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, log_base_2_of_page_size);
+        DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, 1 << log_base_2_of_page_size);
         while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
         DEBUG_STATUS("NRPD");
 
@@ -1047,6 +1042,7 @@ struct InterleavedPow2AddrGenFast {
         DEBUG_STATUS("RPW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
         DEBUG_STATUS("RPD");
+        DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, size);
 
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);      // (uint32_t)src_addr
