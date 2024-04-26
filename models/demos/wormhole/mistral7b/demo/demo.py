@@ -7,16 +7,16 @@ import json
 from time import time
 from loguru import logger
 import ttnn
-from models.demos.mistral7b.tt.mistral_common import (
+from models.demos.wormhole.mistral7b.tt.mistral_common import (
     prepare_inputs_ttnn,
     sample,
     precompute_freqs,
     freqs_to_rotation_matrix,
 )
-from models.demos.mistral7b.tt.mistral_model import TtTransformer
-from models.demos.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.mistral7b.tt.model_config import TtModelArgs
-from models.demos.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
+from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 
 class Emb(torch.nn.Module):

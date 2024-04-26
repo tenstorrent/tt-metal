@@ -6,11 +6,11 @@ Demo showcasing Mistral-7B-instruct running on Wormhole, using ttnn.
 
 To run the model for a single user you can use the command line input:
 
-`pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/mistral7b/demo/demo.py`
+`pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/mistral7b/demo/demo.py`
 
 To run the demo using pre-written prompts for a batch of 32 users run (currently only supports same token-length inputs):
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/mistral7b/demo/input_data_questions.json' models/demos/mistral7b/demo/demo.py`
+`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mistral7b/demo/input_data_questions.json' models/demos/wormhole/mistral7b/demo/demo.py`
 
 
 ## Inputs
@@ -20,7 +20,7 @@ We also provide another set of generative inputs `input_data.json` for generativ
 
 If you wish you to run the model using a different set of input prompts you can provide a different path, e.g.:
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/mistral7b/demo/demo.py`
+`pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/wormhole/mistral7b/demo/demo.py`
 
 Keep in mind that for the instruct-mode, the prompts are automatically prefixed and suffixed by `[INST]` and `[/INST]`, respectively.
 
