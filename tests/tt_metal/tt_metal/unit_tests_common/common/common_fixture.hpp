@@ -85,8 +85,6 @@ protected:
                 continue;
             auto* device = tt::tt_metal::CreateDevice(id);
             devices_.push_back(device);
-            // TODO(FD2_MULTI): Remove this break when FD2.0 supports multi-device
-            break;
         }
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     }
