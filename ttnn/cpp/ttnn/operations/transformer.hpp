@@ -18,11 +18,11 @@ namespace transformer {
 
 namespace detail {
 inline std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
-    std::tuple<Tensor, Tensor, Tensor> outputs,
+    const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
     const uint32_t sequence_size_padded,
     const bool transpose_key) {
-    auto &&[query, key, value] = outputs;
+    auto [query, key, value] = outputs;
 
     auto batch_size = query.get_shape()[0];
     auto num_heads = query.get_shape()[1];
@@ -91,8 +91,9 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             input_shape.with_tile_padding()[1],
             input_shape.with_tile_padding()[2]);
         auto outputs = tt::tt_metal::nlp_create_qkv_heads_falcon7b(input_4d, memory_config.value_or(input_tensor.memory_config()));
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            {outputs.at(0), outputs.at(1), outputs.at(2)}, sequence_size, sequence_size_padded, transpose_key);
+        return {outputs.at(0), outputs.at(1), outputs.at(2)};
+        // return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        //     {outputs.at(0), outputs.at(1), outputs.at(2)}, sequence_size, sequence_size_padded, transpose_key);
     }
 
     uint32_t hidden_dim_padded = 0, hidden_dim = 0;

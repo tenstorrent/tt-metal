@@ -39,10 +39,6 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
         return tensor;
     }
 
-    const auto reshape_helper([](const ttnn::Tensor& tensor, const ttnn::Shape& shape) -> ttnn::Tensor {
-        return tensor.reshape(shape.value());
-    });
-
     const auto layout = tensor.get_layout();
 
     if (layout == ttnn::Layout::ROW_MAJOR) {
@@ -50,10 +46,10 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
             if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
                 // Page size depends on the width, so only modify the shape if the width is the same
                 if (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]) {
-                    return reshape_helper(tensor, shape);
+                    return tensor.reshape(shape.value());
                 }
             } else {
-                return reshape_helper(tensor, shape);
+                return tensor.reshape(shape.value());
             }
         } else if (tensor_shape.rank() >= 2 and shape.rank() >= 2) {
             // Handle the case when the tensor is not contiguous but the last two dimensions are the same and so reshape
@@ -61,7 +57,7 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
             if (tensor_shape[-1] == shape[-1] and tensor_shape[-2] == shape[-2] and
                 tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1] and
                 tensor_shape.with_tile_padding()[-2] == shape.with_tile_padding()[-2]) {
-                return reshape_helper(tensor, shape);
+                return tensor.reshape(shape.value());
             }
         }
     } else if (layout == ttnn::Layout::TILE) {
@@ -78,10 +74,10 @@ inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape
 
         if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
             if (tensor_shape.with_tile_padding()[-1] == new_width) {
-                return reshape_helper(tensor, shape);
+                return tensor.reshape(shape.value());
             }
         } else {
-            return reshape_helper(tensor, shape);
+            return tensor.reshape(shape.value());
         }
     }
     TT_THROW("Unable to reshape given tensor!");
@@ -152,23 +148,6 @@ inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) 
     }
 }
 
-inline bool is_tensor_storage_on_device(const ttnn::Tensor& tensor) {
-    const auto storage_type = tensor.storage_type();
-    if (storage_type == DEVICE_STORAGE_TYPE) {
-        return true;
-    }
-    if (storage_type == MULTI_DEVICE_STORAGE_TYPE) {
-        return true;
-    }
-    return false;
-}
-
-inline auto get_memory_config(const ttnn::Tensor& tensor) -> std::optional<ttnn::MemoryConfig> {
-    return is_tensor_storage_on_device(tensor) ? tensor.memory_config()
-                                               : std::optional<ttnn::MemoryConfig>{std::nullopt};
-}
-
-
 inline ttnn::Tensor to_memory_config(
     const ttnn::Tensor& tensor,
     const ttnn::MemoryConfig& memory_config,
@@ -221,7 +200,7 @@ inline ttnn::Tensor to_memory_config(
     return reshape(tensor_4D, original_shape);
 }
 
-inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking=true) { return tensor.cpu(blocking=blocking); }
+inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking=true) { return tensor.cpu(blocking); }
 
 inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     if (input_tensor.is_sharded()) {
