@@ -34,10 +34,6 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 
 #include "dprint_buffer.h"
-#if defined(COMPILE_FOR_ERISC)
-#include "ethernet/tunneling.h"
-#endif
-
 #include "status.h"
 
 #define DPRINT DebugPrinter()
@@ -83,6 +79,7 @@ struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
 struct OCT  { char tmp; } ATTR_PACK; // Analog of cout << std::oct
 struct DEC  { char tmp; } ATTR_PACK; // Analog of cout << std::dec
 struct SETW { char w; SETW(char w) : w(w) {} } ATTR_PACK; // Analog of cout << std::setw()
+struct NOC_LOG_XFER { uint32_t size; NOC_LOG_XFER(uint32_t sz) : size(sz) {} } ATTR_PACK; // For tracking noc transactions.
 struct U32_ARRAY {
     uint32_t* ptr; uint32_t len;
     U32_ARRAY(uint32_t* ptr, uint32_t len) : ptr(ptr), len(len) {}
@@ -142,6 +139,7 @@ template<> uint8_t DebugPrintTypeToId<RAISE>()         { return DPrintRAISE; }
 template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DPrintWAIT; }
 template<> uint8_t DebugPrintTypeToId<BF16>()          { return DPrintBFLOAT16; }
 template<> uint8_t DebugPrintTypeToId<SETPRECISION>()  { return DPrintSETPRECISION; }
+template<> uint8_t DebugPrintTypeToId<NOC_LOG_XFER>()  { return DPrintNOC_LOG_XFER; }
 template<> uint8_t DebugPrintTypeToId<FIXED>()         { return DPrintFIXED; }
 template<> uint8_t DebugPrintTypeToId<DEFAULTFLOAT>()  { return DPrintDEFAULTFLOAT; }
 template<> uint8_t DebugPrintTypeToId<HEX>()           { return DPrintHEX; }
@@ -213,6 +211,9 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
+            // If we've closed the device, we've now disabled printing on it, don't hang.
+            if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC)
+                return;
             ; // wait for host to catch up to wpos with it's rpos
         }
         DEBUG_STATUS("DPD");
@@ -293,6 +294,7 @@ template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);
 template DebugPrinter operator<< <OCT>(DebugPrinter, OCT val);
 template DebugPrinter operator<< <DEC>(DebugPrinter, DEC val);
 template DebugPrinter operator<< <SETPRECISION>(DebugPrinter, SETPRECISION val);
+template DebugPrinter operator<< <NOC_LOG_XFER>(DebugPrinter, NOC_LOG_XFER val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);

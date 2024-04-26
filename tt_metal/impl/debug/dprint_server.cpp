@@ -68,6 +68,30 @@ static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
     return (tt::llrt::is_ethernet_core(core, chip_id))? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }
 
+// Helper function to get all physical printable cores on a device
+static map<CoreType, set<CoreCoord>> get_all_physical_printable_cores(Device *device) {
+    map<CoreType, set<CoreCoord>> all_physical_printable_cores;
+    // The set of all printable cores is Tensix + Eth cores
+    CoreCoord logical_grid_size = device->logical_grid_size();
+    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+            CoreCoord logical_coord(x, y);
+            CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
+            all_physical_printable_cores[CoreType::WORKER].insert(worker_core);
+        }
+    }
+    for (const auto& eth_core : device->get_active_ethernet_cores()) {
+        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
+    }
+    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
+    }
+
+    return all_physical_printable_cores;
+}
+
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -131,6 +155,8 @@ private:
 
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
+    std::ofstream* noc_log_ = nullptr;
+    std::map<uint32_t, uint32_t> noc_xfer_counts;
 
     // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
     std::map<tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
@@ -297,7 +323,8 @@ void WriteInitMagic(Device *device, const CoreCoord& core, int hart_id, bool ena
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
-    vector<uint32_t> initbuf = { uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
+    vector<uint32_t> initbuf = vector<uint32_t>(PRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
+    initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
     tt::llrt::write_hex_vec_to_core(device->id(), core, initbuf, base_addr);
 } // WriteInitMagic
 
@@ -327,6 +354,7 @@ DebugPrintServerContext::DebugPrintServerContext() {
         outfile_ = new std::ofstream(file_name);
     }
     stream_ = outfile_ ? outfile_ : &cout;
+    noc_log_ = new std::ofstream("noc_log.csv");
 
     stop_print_server_ = false;
     mute_print_server_ = false;
@@ -355,6 +383,10 @@ DebugPrintServerContext::~DebugPrintServerContext() {
         outfile_->close();
         delete outfile_;
     }
+    for (auto &size_and_count : noc_xfer_counts)
+        *noc_log_ << size_and_count.first << "," << size_and_count.second << "\n";
+    noc_log_->close();
+    delete noc_log_;
     inst = nullptr;
 } // ~DebugPrintServerContext
 
@@ -384,24 +416,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are physical.
-    map<CoreType, set<CoreCoord>> all_physical_printable_cores;
-    // The set of all printable cores is Tensix + Eth cores
-    CoreCoord logical_grid_size = device->logical_grid_size();
-    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-            CoreCoord logical_coord(x, y);
-            CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
-            all_physical_printable_cores[CoreType::WORKER].insert(worker_core);
-        }
-    }
-    for (const auto& eth_core : device->get_active_ethernet_cores()) {
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
-    }
-    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
-    }
+    map<CoreType, set<CoreCoord>> all_physical_printable_cores = get_all_physical_printable_cores(device);
 
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
@@ -554,6 +569,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
+                        log_warning("Phys core {} is still waiting!", core.str());
                         break;
                     }
                 }
@@ -570,6 +586,17 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
     device_to_core_range_.erase(device);
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
+
+    // When detaching a device, disable prints on it.
+    map<CoreType, set<CoreCoord>> all_physical_printable_cores = get_all_physical_printable_cores(device);
+    for (auto &type_and_cores : all_physical_printable_cores) {
+        for (auto &core : type_and_cores.second) {
+            int hart_count = GetNumRiscs(device->id(), core);
+            for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+                WriteInitMagic(device, core, hart_index, false);
+            }
+        }
+    }
 } // DetachDevice
 
 void DebugPrintServerContext::ClearLogFile() {
@@ -708,6 +735,11 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintSETPRECISION:
                     stream << std::setprecision(*ptr);
                     TT_ASSERT(sz == 1);
+                break;
+                case DPrintNOC_LOG_XFER:
+                    if (tt::llrt::OptionsG.get_dprint_noc_transfers())
+                        noc_xfer_counts[*reinterpret_cast<uint32_t*>(ptr)]++;
+                    TT_ASSERT(sz == 4);
                 break;
                 case DPrintFIXED:
                     stream << std::fixed;

@@ -40,6 +40,7 @@ class RunTimeOptions {
     bool dprint_all_chips = false;
     uint32_t dprint_riscv_mask = 0;
     std::string dprint_file_name;
+    bool dprint_noc_transfer_data = false;
 
     bool test_mode_enabled = false;
 
@@ -127,6 +128,8 @@ class RunTimeOptions {
     inline void set_dprint_file_name(std::string file_name) {
         dprint_file_name = file_name;
     }
+    inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
+    inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
     // whether to catch exceptions (test mode = true) coming from debug servers or to throw them
