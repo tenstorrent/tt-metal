@@ -331,7 +331,6 @@ def run_test_FalconDecoder_inference(
         assert does_pass
 
 
-@pytest.mark.skip("#7842: Possible hangs in t3k")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("enable_program_cache", (True, False), ids=["enable_program_cache", "disable_program_cache"])
 @pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
@@ -392,6 +391,9 @@ def test_FalconDecoder_inference(
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
     if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
+
+    if llm_mode == "decode" and num_devices == 4:
+        pytest.skip("#7842: Possible hangs in t3k")
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)

@@ -439,6 +439,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
+    if llm_mode == "decode" and num_devices == 4:
+        pytest.skip("#7842: Possible hangs in t3k")
+
     if llm_mode == "prefill":
         if num_layers == 60:
             if seq_len == 2048:
