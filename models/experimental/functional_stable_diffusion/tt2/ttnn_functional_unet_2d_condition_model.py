@@ -596,7 +596,7 @@ class UNet2DConditionModel:
         # 6.post-process
         # print(sample.shape)
         # print(sample.memory_config())
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
             # sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
