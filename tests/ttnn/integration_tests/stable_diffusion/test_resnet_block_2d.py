@@ -154,9 +154,8 @@ def test_resnet_block_2d_512x512(
         else:
             parameters = parameters.mid_block.resnets[index2]
             resnet = pipe.unet.mid_block.resnets[index2]
-        torch.save(resnet, "resnet.pt")
-        torch.save(config, "config.pt")
-
+        # torch.save(resnet, "resnet.pt")
+        # torch.save(config, "config.pt")
     else:
         resnet = torch.load("resnet.pt")
         config = torch.load("config.pt")

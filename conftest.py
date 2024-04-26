@@ -105,6 +105,9 @@ def pytest_addoption(parser):
         help="Path to json file with inputs",
     )
     parser.addoption("--cli-input", action="store", default=None, help="Enter prompt if --input-method=cli")
+    parser.addoption(
+        "--option", action="store", default="", help="Selectively run legacy pass for SD tests if --option legacy"
+    )
 
 
 def pytest_generate_tests(metafunc):

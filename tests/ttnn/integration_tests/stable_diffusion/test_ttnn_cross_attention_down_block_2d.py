@@ -24,6 +24,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@pytest.fixture(scope="session")
+def option(pytestconfig):
+    return pytestconfig.getoption("option")
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
@@ -152,8 +157,10 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
         ),
     ],
 )
-def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index, in_channels):
+def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index, in_channels, option):
     torch.manual_seed(0)
+
+    use_legacy_4096 = option == "legacy"
 
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     down_block = pipe.unet.down_blocks[index]
@@ -218,6 +225,7 @@ def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index,
         add_downsample=True,
         cross_attention_kwargs={},
         config=config,
+        use_legacy_4096=use_legacy_4096,
     )
     ttnn_output = post_process_output(device, ttnn_output, N, H // 2, W // 2, in_channels)
     ttnn_output = ttnn.to_torch(ttnn_output)

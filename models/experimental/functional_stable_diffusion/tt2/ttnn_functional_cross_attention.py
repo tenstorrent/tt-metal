@@ -547,12 +547,14 @@ class cross_attention:
         v_sharded.deallocate()
         return ttnn.reshape(attention_scores, (2, 8, attention_scores.shape[-2], attention_scores.shape[-1]))
 
-    def get_attention_scores_opt(self, query, t_key, value, original_seq_len, head_size, index=-1):
-        if (query.shape[-2] == 4096 and t_key.shape[-1] == 4096) or (
+    def get_attention_scores_opt(
+        self, query, t_key, value, original_seq_len, head_size, index=-1, use_legacy_4096=False
+    ):
+        if (query.shape[-2] == 4096 and t_key.shape[-1] == 4096 and not use_legacy_4096) or (
             query.shape[-2] == 1024 and t_key.shape[-1] == 1024
         ):
             return self.time_sharded_attention(query, t_key, value, head_size)
-        else:
+        elif not (query.shape[-2] == 4096 and t_key.shape[-1] == 4096 and use_legacy_4096):
             return self.sharded_attention(query, t_key, value, original_seq_len, head_size, index)
 
         print("Legacy path")
@@ -566,18 +568,20 @@ class cross_attention:
         ttnn.deallocate(query)
         ttnn.deallocate(t_key)
         orig_shape = attention_scores.shape
-        attention_scores = ttnn.reshape(
-            attention_scores,
-            (
-                1,
-                attention_scores.shape[-4] * attention_scores.shape[-3],
-                attention_scores.shape[-2],
-                attention_scores.shape[-1],
-            ),
-        )
-        attention_scores = ttnn.transformer.attention_softmax_(
-            attention_scores, attention_mask=attention_mask, head_size=head_size
-        )
+        # attention_scores = ttnn.reshape(
+        #    attention_scores,
+        #    (
+        #        1,
+        #        attention_scores.shape[-4] * attention_scores.shape[-3],
+        #        attention_scores.shape[-2],
+        #        attention_scores.shape[-1],
+        #    ),
+        # )
+        attention_scores = attention_scores * self.scales[head_size]
+        # attention_scores = ttnn.transformer.attention_softmax_(
+        #    attention_scores, attention_mask=attention_mask, head_size=head_size
+        # )
+        attention_scores = ttnn.experimental.operations.primary.softmax_in_place(attention_scores)
         attention_scores = ttnn.reshape(attention_scores, orig_shape)
         if attention_scores.shape[-2] > original_seq_len:
             attention_scores = attention_scores[:, :, :original_seq_len, :]
@@ -714,6 +718,7 @@ class cross_attention:
         upcast_softmax: bool = False,
         cross_attention_kwargs={},
         index=-1,
+        use_legacy_4096: bool = False,
     ):
         assert dim_head in self.scales
         original_seq_len = hidden_states.shape[-2] // 2  # 2 is the batch size
@@ -811,11 +816,12 @@ class cross_attention:
             )
             ttnn.deallocate(hidden_states)
 
-            M, K, N = (
-                encoder_hidden_states.shape[-2],
-                encoder_hidden_states.shape[-1],
-                self.parameters.kv.weight.shape[-1],
-            )
+            if encoder_hidden_states is not None:
+                M, K, N = (
+                    encoder_hidden_states.shape[-2],
+                    encoder_hidden_states.shape[-1],
+                    self.parameters.kv.weight.shape[-1],
+                )
             grid_sizes = {8192: (8, 2), 2048: (8, 2), 512: (8, 2), 128: (4, 2)}
             grid_size = grid_size = grid_sizes[hidden_states.shape[-2]]
             in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
@@ -907,6 +913,7 @@ class cross_attention:
             original_seq_len,
             dim_head,
             index=index,
+            use_legacy_4096=use_legacy_4096,
         )
 
         hidden_states = ttnn.transformer.concatenate_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)

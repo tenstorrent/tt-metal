@@ -23,6 +23,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@pytest.fixture(scope="session")
+def option(pytestconfig):
+    return pytestconfig.getoption("option")
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape, index1, index2, attention_head_dim, block",
@@ -171,7 +176,7 @@ def test_transformer_2d_model_256x256(
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 def test_transformer_2d_model_512x512(
-    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
+    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds, option
 ):
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
@@ -179,6 +184,7 @@ def test_transformer_2d_model_512x512(
     class_labels = (None,)
     cross_attention_kwargs = (None,)
     return_dict = True
+    use_legacy_4096 = option == "legacy"
 
     num_layers = 1
     num_attention_heads = 8
@@ -270,6 +276,7 @@ def test_transformer_2d_model_512x512(
             norm_type=norm_type,
             cross_attention_dim=cross_attention_dim,
             upcast_attention=upcast_attention,
+            use_legacy_4096=use_legacy_4096,
         )
 
         output = post_process_output(

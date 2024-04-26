@@ -26,6 +26,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 )
 
 
+@pytest.fixture(scope="session")
+def option(pytestconfig):
+    return pytestconfig.getoption("option")
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
@@ -133,12 +138,13 @@ def test_unet_mid_block_2d_cross_attn_256x256(device, model_name, hidden_state_s
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_shapes, reset_seeds):
+def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_shapes, reset_seeds, option):
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     config = unet.config
     mid_block = pipe.unet.mid_block
+    use_legacy_4096 = option == "legacy"
 
     num_layers = 1
     resnet_eps = 1e-05
@@ -228,6 +234,7 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
         use_linear_projection=use_linear_projection,
         upcast_attention=upcast_attention,
         cross_attention_dim=cross_attention_dim,
+        use_legacy_4096=use_legacy_4096,
     )
 
     ttnn_output = post_process_output(device, ttnn_mid_block, N, H, W, in_channels)

@@ -56,6 +56,7 @@ class basic_transformer_block:
         norm_elementwise_affine: bool = True,
         attention_bias: bool = False,
         attention_head_dim=None,
+        use_legacy_4096: bool = False,
     ):
         use_ada_layer_norm_zero = (num_embeds_ada_norm is not None) and norm_type == "ada_norm_zero"
         use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
@@ -120,6 +121,7 @@ class basic_transformer_block:
             cross_attention_dim=cross_attention_dim,
             dim_head=attention_head_dim,
             upcast_attention=upcast_attention,
+            use_legacy_4096=use_legacy_4096,
         )
 
         if use_ada_layer_norm_zero:
@@ -156,6 +158,7 @@ class basic_transformer_block:
                 cross_attention_dim=cross_attention_dim,
                 dim_head=attention_head_dim,
                 upcast_attention=upcast_attention,
+                use_legacy_4096=use_legacy_4096,
             )
             if attn_output.memory_config() != hidden_states.memory_config():
                 if attn_output.memory_config().is_sharded():

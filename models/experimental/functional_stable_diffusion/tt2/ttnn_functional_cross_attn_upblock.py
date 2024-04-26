@@ -94,6 +94,7 @@ class cross_attention_upblock2d:
         attn_num_head_channels=1,
         only_cross_attention: bool = False,
         index=-1,
+        use_legacy_4096: bool = False,
     ):
         for i, (resnet, attention) in enumerate(zip(self.resnets, self.attentions)):
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
@@ -167,6 +168,7 @@ class cross_attention_upblock2d:
                     upcast_attention=upcast_attention,
                     cross_attention_dim=cross_attention_dim,
                     output_bfloat16=(not add_upsample) and (i == len(self.resnets) - 1),
+                    use_legacy_4096=use_legacy_4096,
                 )
             else:
                 assert False, "We do not support Dual Transformer2DModel"

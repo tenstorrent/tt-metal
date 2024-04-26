@@ -26,6 +26,11 @@ from models.utility_functions import (
 )
 
 
+@pytest.fixture(scope="session")
+def option(pytestconfig):
+    return pytestconfig.getoption("option")
+
+
 @skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
@@ -155,7 +160,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
         ),
     ],
 )
-def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, attention_head_dim):
+def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, attention_head_dim, option):
     torch.manual_seed(0)
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
@@ -163,6 +168,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     model.eval()
     config = model.config
     basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
+    use_legacy_4096 = option == "legacy"
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.rand(hidden_states_shape) * 0.01
@@ -209,6 +215,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
         class_labels=class_labels,
         config=config,
         attention_head_dim=attention_head_dim,
+        use_legacy_4096=use_legacy_4096,
     )
 
     ttnn_output = ttnn.reshape(ttnn_output, [1, 2, ttnn_output.shape[-2] // 2, ttnn_output.shape[-1]])

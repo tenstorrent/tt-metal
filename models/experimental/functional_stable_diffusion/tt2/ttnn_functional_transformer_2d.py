@@ -193,6 +193,7 @@ class transformer_2d_model:
         eps=1e-5,
         norm_elementwise_affine: bool = True,
         output_bfloat16: bool = False,
+        use_legacy_4096: bool = False,
     ):
         inner_dim = num_attention_heads * attention_head_dim
         assert norm_num_groups == 32
@@ -306,6 +307,7 @@ class transformer_2d_model:
                 upcast_attention=upcast_attention,
                 attention_bias=attention_bias,
                 only_cross_attention=only_cross_attention,
+                use_legacy_4096=use_legacy_4096,
             )
 
         # 3. Output

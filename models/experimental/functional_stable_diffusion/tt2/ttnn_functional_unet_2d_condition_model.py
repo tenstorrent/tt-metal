@@ -345,6 +345,7 @@ class UNet2DConditionModel:
         return_dict: bool = True,
         reader_patterns_cache: Optional[Dict] = None,
         dtype: Optional[ttnn.DataType] = None,
+        use_legacy_4096: bool = False,
     ):
         num_upsamplers = len(block_out_channels) - 1
         default_overall_up_factor = 2**num_upsamplers
@@ -460,6 +461,7 @@ class UNet2DConditionModel:
                     only_cross_attention=only_cross_attention[i],
                     upcast_attention=upcast_attention,
                     resnet_time_scale_shift=resnet_time_scale_shift,
+                    use_legacy_4096=use_legacy_4096,
                 )
             elif down_block_type == "DownBlock2D":
                 sample, res_samples = down_block(
@@ -506,6 +508,7 @@ class UNet2DConditionModel:
             dual_cross_attention=dual_cross_attention,
             use_linear_projection=use_linear_projection,
             upcast_attention=upcast_attention,
+            use_legacy_4096=use_legacy_4096,
         )
 
         # 5.up
@@ -567,6 +570,7 @@ class UNet2DConditionModel:
                     upcast_attention=upcast_attention,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     index=i,
+                    use_legacy_4096=use_legacy_4096,
                 )
             elif up_block_type == "UpBlock2D":
                 sample = up_block(

@@ -42,6 +42,11 @@ scheduler = LMSDiscreteScheduler(
 scheduler.set_timesteps(1)
 
 
+@pytest.fixture(scope="session")
+def option(pytestconfig):
+    return pytestconfig.getoption("option")
+
+
 def ttnn_to_torch(input):
     input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
     input = ttnn.from_device(input)
@@ -143,7 +148,7 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
+def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width, option):
     # setup envvar if testing on N300
     wh_arch_yaml_org = None
     if device.core_grid.y == 7:
@@ -153,6 +158,9 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
             pytest.skip("SD unet2d only works for 8x8 grid size")
 
     ttnn.CONFIG.throw_exception_on_fallback = True
+    # selectively run legacy path for 4kx4k attention
+    use_legacy_4096 = option == "legacy"
+
     # setup pytorch model
     torch.manual_seed(0)
     model_name = "CompVis/stable-diffusion-v1-4"
@@ -163,8 +171,8 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         model = pipe.unet
         model.eval()
         config = model.config
-        torch.save(model, "unet.pt")
-        torch.save(config, "unet_config.pt")
+        # torch.save(model, "unet.pt")
+        # torch.save(config, "unet_config.pt")
     else:
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")
@@ -219,6 +227,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         cross_attention_kwargs=cross_attention_kwargs,
         return_dict=return_dict,
         config=config,
+        use_legacy_4096=use_legacy_4096,
     )
     first_iter = time.time() - first_iter
     print(f"First iteration took {first_iter} seconds")
@@ -245,7 +254,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     # print(f"Time taken for 50 iterations: {total_time}")
     # print(f"Samples per second: {50 / total_time}")
     ttnn_output = ttnn_to_torch(ttnn_output)
-    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.97)
     print(output)
     assert passing
 

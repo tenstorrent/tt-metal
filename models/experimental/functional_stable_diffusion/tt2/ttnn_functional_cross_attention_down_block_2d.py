@@ -68,6 +68,7 @@ class cross_attention_down_block_2d:
         only_cross_attention=False,
         upcast_attention=False,
         resnet_time_scale_shift: str = "default",
+        use_legacy_4096: bool = False,
     ):
         output_states = ()
 
@@ -101,6 +102,7 @@ class cross_attention_down_block_2d:
                     use_linear_projection=use_linear_projection,
                     only_cross_attention=only_cross_attention,
                     upcast_attention=upcast_attention,
+                    use_legacy_4096=use_legacy_4096,
                 )
 
             output_states += (ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG),)

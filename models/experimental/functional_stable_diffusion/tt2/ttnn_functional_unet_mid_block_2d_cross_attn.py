@@ -51,6 +51,7 @@ class unet_mid_block_2d_cross_attn:
         dual_cross_attention=False,
         use_linear_projection=False,
         upcast_attention=False,
+        use_legacy_4096=False,
     ):
         has_cross_attention = True
 
@@ -90,6 +91,7 @@ class unet_mid_block_2d_cross_attn:
                     eps=1e-5,
                     cross_attention_dim=cross_attention_dim,
                     upcast_attention=upcast_attention,
+                    use_legacy_4096=use_legacy_4096,
                 )
             else:
                 assert False, "We do not support Dual Transformer"
