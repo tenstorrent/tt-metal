@@ -57,6 +57,14 @@ void py_module(py::module& module) {
         py::arg("shape"));
 
     module.def(
+        "reshape",
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 5>& shape) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape);
+        },
+        py::arg("tensor"),
+        py::arg("shape"));
+
+    module.def(
         "unsqueeze_to_4D",
         [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttnn::unsqueeze_to_4D(tensor); },
         py::arg("tensor"));

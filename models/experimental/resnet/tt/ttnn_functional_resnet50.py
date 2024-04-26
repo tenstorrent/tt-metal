@@ -632,7 +632,6 @@ class resnet50:
             x = ttnn.to_layout(
                 x,
                 ttnn.ROW_MAJOR_LAYOUT,
-                use_multicore=True,
                 memory_config=self.max_pool.max_pool.input_sharded_memory_config,
             )
             # x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
