@@ -435,6 +435,7 @@ ALWI void reduce_tile_to_cb(
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         reduce_tile(icb0, icb1, x, bcast_scaler0, dst0);
     }
+    reduce_revert_delta();
     tile_regs_commit();
 
     if (pop0)
@@ -442,7 +443,6 @@ ALWI void reduce_tile_to_cb(
     if (pop1)
         cb_pop_front(icb1, pop1);
 
-    reduce_revert_delta();
 
     tile_regs_wait();
     pack_tile(dst0, ocb);
