@@ -32,57 +32,40 @@ void MAIN {
         #ifdef LOG
             for (uint32_t i = 0; i < dim_size; ++i) {
                 if (i == 0) {
-                    ACQ();
                     copy_tile_to_cb(cb_dy, cb_sum);
-                    REL();
                 } else {
-                    ACQ();
                     add_tiles_to_cb(cb_sum, cb_dy, cb_sum);
-                    REL();
                 }
             }
 
             for (uint32_t i = 0; i < dim_size; ++i) {
                 // exp(y)
                 constexpr auto cb_exp = tt::CB::c_intermed0;
-                ACQ();
                 exp_tile_to_cb(cb_y, cb_exp);
-                REL();
 
                 // sum * exp(y)
                 constexpr auto cb_inter2 = tt::CB::c_intermed2;
-                ACQ();
                 mul_tiles_to_cb(cb_sum, cb_exp, cb_inter2, 0, 0, /*pop0=*/0, /*pop1=*/1);
-                REL();
 
                 // dy - sum * exp(y)
-                ACQ();
                 sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx);
-                REL();
             }
             cb_pop_front(cb_sum, onetile);
         #else
             // compute sum(y * dy)
             for (uint32_t i = 0; i < dim_size; ++i) {
-                ACQ();
                 mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
-                REL();
 
                 if (i == 0) {
-                    ACQ();
                     copy_tile_to_cb(cb_ydy, cb_sum);
-                    REL();
                 } else {
-                    ACQ();
                     add_tiles_to_cb(cb_sum, cb_ydy, cb_sum);
-                    REL();
                 }
             }
 
             // compute final result
             for (uint32_t i = 0; i < dim_size; ++i) {
                 // dy - sum
-                ACQ();
                 sub_tiles_to_cb(
                     cb_dy,
                     cb_sum,
@@ -91,9 +74,7 @@ void MAIN {
                     /*itile1=*/0,
                     /*pop0=*/1,
                     /*pop1=*/0);
-                REL();
 
-                ACQ();
                 #ifdef SOFTMAX
                     // (dy - sum) * y
                     mul_tiles_to_cb(cb_dy_m_sum, cb_y, cb_dx);
@@ -101,7 +82,6 @@ void MAIN {
                     // -(dy - sum) * y
                     mul_tiles_and_negative_to_cb(cb_dy_m_sum, cb_y, cb_dx);
                 #endif
-                REL();
             }
             cb_pop_front(cb_sum, onetile);
         #endif

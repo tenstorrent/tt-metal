@@ -30,7 +30,6 @@ void MAIN {
         // step 1
         for (uint32_t w = 0; w < Wt; ++w) {
             // compute exp(x)
-            ACQ();
             if (w == Wt - 1) {
                 #ifdef SOFTMAX
                     exp_tile_and_mask_tile_to_cb(
@@ -58,44 +57,33 @@ void MAIN {
                     rexp_tile_to_cb(cb_in0, cb_exps);
                 #endif
             }
-            REL();
 
             if (w == 0) {
-                ACQ();
                 copy_tile_to_cb(cb_exps, cb_add);
-                REL();
             } else {
-                ACQ();
                 add_tiles_to_cb(cb_add, cb_exps, cb_add);
-                REL();
             }
         }
 
         // step 2, compute 1/sum(exp(x))
-        ACQ();
         reduce_tile_and_recip_tile_to_cb(
             REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_recipsumexps, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
-        REL();
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // compute exp(x)
-            ACQ();
             #ifdef SOFTMAX
                 exp_tile_to_cb(cb_in0, cb_exps);
             #else
                 rexp_tile_to_cb(cb_in0, cb_exps);
             #endif
-            REL();
 
             // compute exp(x)/sum(exp(x))
-            ACQ();
             #ifdef LOG
                 mul_tiles_bcast_cols_log_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
             #else
                 mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
             #endif
-            REL();
         }
 
         cb_pop_front(cb_recipsumexps, onetile);

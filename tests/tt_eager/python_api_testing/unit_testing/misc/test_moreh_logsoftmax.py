@@ -190,7 +190,6 @@ def test_logsoftmax_backward_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@skip_for_wormhole_b0("watcher error, see issue #7521")
 @pytest.mark.parametrize(
     "shape_dim",
     (
