@@ -100,8 +100,7 @@ struct MakeBinary {
                     return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
                 }(input_tensors.at(0), input_tensors.at(1));
 
-                auto output_memory_config = memory_config.value_or(
-                    ttnn::get_memory_config(input_tensor_a).value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG));
+                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
                 // TODO(arakhmati): #7731 - remove this!
                 auto input_shape_a = input_tensor_a.get_shape();
