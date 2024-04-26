@@ -69,6 +69,7 @@ Tensor optimized_conv(const Tensor& a,
             std::optional<DataType> output_dtype,
             std::optional<std::array<std::uint32_t, 4>> input_tensor_shape,
             bool use_shallow_conv_variant,
+            bool transpose_mcast,
             std::optional<const DeviceComputeKernelConfig> compute_kernel_config
 ) {
     //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
@@ -89,7 +90,7 @@ Tensor optimized_conv(const Tensor& a,
     bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
     return operation::run_without_autoformat(
-        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, kernel_config_val
+        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.get_dtype()), ashape, use_shallow_conv_variant, transpose_mcast, kernel_config_val
         ),
         {a, b},
         {bias, conv_reader_indices}).at(0);
@@ -113,7 +114,11 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
         } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
-            out_width_ntiles /= this->parallelization_config.grid_size.y;
+            if (transpose_mcast) {
+                out_width_ntiles /= this->parallelization_config.grid_size.y;
+            } else {
+                out_width_ntiles /= this->parallelization_config.grid_size.x;
+            }
             TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         }
     }
@@ -172,7 +177,7 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
             CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::COL_MAJOR};
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
@@ -194,7 +199,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     if (input_tensor_a.memory_config().is_sharded()) {
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
-            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, output_tensor, this->compute_kernel_config);
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
         }

@@ -14,6 +14,20 @@ import math
 import os
 
 
+# def plot_diff(vals, fid, nsticks, stick_len):
+#     import matplotlib.pyplot as plt
+
+#     plt.clf()
+#     plt.figure(figsize=(100, 50))
+#     plt.xticks(torch.arange(0, stick_len) + 0.5, range(0, stick_len))
+#     plt.yticks(torch.arange(0, nsticks) + 0.5, range(0, nsticks))
+#     # plt.grid()
+#     bool_vals = vals > 0
+#     plt.imshow(bool_vals, interpolation="none", vmin=0, vmax=1, cmap="Blues")
+#     plt.savefig(f"diff_core_{fid}.png", bbox_inches="tight", pad_inches=0.1)
+#     plt.close()
+
+
 def prepare_conv_input_and_copy_to_device_interleaved(
     device, torch_input_tensor_nhwc, input_tensor_shape, use_shallow_conv_variant, mem_config=None
 ):
@@ -68,12 +82,15 @@ def run_conv(
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant=False,
+    transpose_mcast=True,
     enable_auto_formatting=False,
     padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
 ):
+    # has_bias = False
+    has_bias = True
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels, filter_height, filter_width]
@@ -81,14 +98,11 @@ def run_conv(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.empty(conv_input_shape, dtype=torch.bfloat16).fill_(0.2).float()
-    # torch_weight_tensor = torch.empty(conv_weight_shape, dtype=torch.bfloat16).fill_(0.1).float()
-    # torch_bias_tensor = torch.empty(conv_bias_shape, dtype=torch.bfloat16).fill_(0).float()
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
-        bias=torch_bias_tensor.reshape(-1),
+        bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
     )
@@ -104,9 +118,11 @@ def run_conv(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
-    tt_bias_tensor = ttnn.from_torch(
-        torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-    )
+    tt_bias_tensor = None
+    if has_bias:
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
 
     if not is_grayskull():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -135,6 +151,7 @@ def run_conv(
         weights_dtype=weights_dtype,
         conv_blocking_and_parallelization_config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_mcast=transpose_mcast,
         enable_auto_formatting=enable_auto_formatting,
         deallocate_activation=True,
         padded_input_channels=padded_input_channels,
@@ -395,7 +412,6 @@ def test_resnet50_conv_gs(
     )
 
 
-@skip_for_wormhole_b0()
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
@@ -431,6 +447,11 @@ def test_resnet50_conv_gs(
         (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
         (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
         (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        ## small test
+        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
+        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
+        (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -464,8 +485,8 @@ def test_resnet50_conv_wh(
     config_override,
     packer_l1_acc,
 ):
-    # if device.core_grid.y == 7:
-    #     pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
 
@@ -506,11 +527,11 @@ def test_resnet50_conv_wh(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
     )
 
 
-@skip_for_wormhole_b0("WH ND hangs")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
@@ -628,6 +649,7 @@ def test_resnet50_conv_wh_fp32(
         use_shallow_conv_variant=use_shallow_conv_variant,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
     )
 
 
@@ -764,7 +786,7 @@ def test_sd_conv(
         )
 
 
-@skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
+# @skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
@@ -858,8 +880,8 @@ def test_sd_conv_wh(
     config_override,
     enable_auto_formatting,
 ):
-    # if device.core_grid.y == 7:
-    #     pytest.skip("This test is not supported for N300")
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
 
     # Skip test cases raising OOM, but do not affect the SD e2e test
     if (
@@ -918,6 +940,7 @@ def test_sd_conv_wh(
             use_1d_systolic_array,
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
+            transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
             fp32_accum=fp32_accum,
@@ -1123,6 +1146,7 @@ def test_unet_conv_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
     )

@@ -225,6 +225,7 @@ namespace tt::tt_metal::detail{
             py::arg("max_out_nsticks_per_core").noconvert(),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             py::arg("remote_read").noconvert() = false,
+            py::arg("transpose_mcast").noconvert() = true,
             R"doc(
                 Untilizes input tiled data to row major format and constructs halo'd output shards.
             )doc");

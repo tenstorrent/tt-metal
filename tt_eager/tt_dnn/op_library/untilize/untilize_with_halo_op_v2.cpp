@@ -46,6 +46,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& local_config,
     const Tensor& remote_config,
     const bool remote_read,
+    const bool transpose_mcast,
     Tensor& output_tensor) {
     Program program = CreateProgram();
 
@@ -195,6 +196,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         out_stick_nbytes,
         is_block_sharded,
         remote_read,
+        (uint32_t) (transpose_mcast ? 1 : 0),
     };
 
     reader_ct_args[0] = 0;
@@ -331,6 +333,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
         local_config,
         remote_config,
         remote_read_,
+        transpose_mcast_,
         output_tensor)};
 }
 
@@ -343,14 +346,15 @@ Tensor untilize_with_halo_v2(
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
     const MemoryConfig& mem_config,
-    const bool remote_read) {
+    const bool remote_read,
+    const bool transpose_mcast) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
     return operation::run_without_autoformat(
-               UntilizeWithHaloV2{pad_val, ncores_nhw, max_out_nsticks_per_core, mem_config, remote_read},
+               UntilizeWithHaloV2{pad_val, ncores_nhw, max_out_nsticks_per_core, mem_config, remote_read, transpose_mcast},
                {
                    input_tensor,
                    padding_config,

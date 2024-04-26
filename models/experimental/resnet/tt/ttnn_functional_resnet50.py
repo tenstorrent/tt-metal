@@ -129,6 +129,8 @@ class resnet50Bottleneck:
         self.output_memory_config = sharded_memory_config_type if module_out_sharded else ttnn.L1_MEMORY_CONFIG
         self.out_in_place = module_out_sharded
 
+        self.transpose_mcast = (not conv_2d) if is_wormhole_b0() else True
+
         conv1_in_channels = parameters.conv1.weight.shape[1]
 
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
@@ -177,6 +179,7 @@ class resnet50Bottleneck:
             dtype=model_config["ACTIVATIONS_DTYPE"],
             device=device,
             use_1d_systolic_array=not conv_2d,
+            # transpose_mcast=self.transpose_mcast,
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -220,6 +223,7 @@ class resnet50Bottleneck:
             dtype=model_config["ACTIVATIONS_DTYPE"],
             device=device,
             use_1d_systolic_array=not conv_2d,
+            # transpose_mcast=self.transpose_mcast,
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -250,6 +254,7 @@ class resnet50Bottleneck:
             dtype=model_config["ACTIVATIONS_DTYPE"],
             device=device,
             use_1d_systolic_array=not conv_2d,
+            # transpose_mcast=self.transpose_mcast,
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -532,6 +537,7 @@ class resnet50:
                 dtype=model_config["ACTIVATIONS_DTYPE"],
                 device=self.device,
                 use_1d_systolic_array=not conv_2d,
+                # transpose_mcast=(not conv_2d) if is_wormhole_b0() else True,
                 batch_size=batch_size,
                 input_height=input_height,
                 input_width=input_width,

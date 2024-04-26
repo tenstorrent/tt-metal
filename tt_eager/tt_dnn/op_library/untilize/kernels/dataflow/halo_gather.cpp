@@ -6,6 +6,35 @@
 
 #include "dataflow_api.h"
 
+#define ENABLE_DEBUG 0
+
+#if ENABLE_DEBUG
+#include "debug/dprint.h"
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+
+inline void print_data_u16(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << uint16_t(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+#endif
+
+
 // Fill an L1 buffer with the given val
 inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     // simplest impl:
@@ -16,7 +45,7 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-template <uint32_t stick_nbytes, bool is_block_sharded, bool is_read>
+template <uint32_t stick_nbytes, bool is_block_sharded, bool is_read, bool is_col_major>
 void copy_sticks_async(
     tt_l1_ptr uint16_t const* config_data,
     const uint16_t my_noc_x,
@@ -26,8 +55,8 @@ void copy_sticks_async(
     int i = 0;
     int length = config_data[i + 2];
     while (length) {
-        uint16_t noc_x = config_data[i + 0];
-        uint16_t noc_y = is_block_sharded ? my_noc_y : config_data[i + 1];
+        uint16_t noc_x = is_block_sharded && !is_col_major ? my_noc_x : config_data[i + 0];
+        uint16_t noc_y = is_block_sharded && is_col_major ? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
 
@@ -68,6 +97,8 @@ void kernel_main() {
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
     constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
     constexpr uint32_t remote_read = get_compile_time_arg_val(11);
+    constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
+
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
 
@@ -88,6 +119,7 @@ void kernel_main() {
         uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
         volatile tt_l1_ptr uint16_t* config_data =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
+        // print_data_u16(padding_config_l1_addr, 1, 16);
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
         const uint32_t dst_base_addr = out_base_l1_addr;
         uint16_t nsticks = 1;
@@ -114,14 +146,14 @@ void kernel_main() {
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded, remote_read>(
+        copy_sticks_async<stick_nbytes, is_block_sharded, remote_read, is_col_major>(
             config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded, false>(
+        copy_sticks_async<stick_nbytes, is_block_sharded, false, is_col_major>(
             config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 

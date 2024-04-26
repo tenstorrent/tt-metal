@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "firmware_common.h"
-#include "debug/dprint.h"
 
 
 void kernel_main() {
@@ -30,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
 
     uint32_t i = 0;
-    i+=15;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
 
     if(noop) {
