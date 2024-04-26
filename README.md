@@ -54,7 +54,7 @@
 | [Falcon7B-decode](./models/demos/t3000/falcon7b)              | 1025th             |  256                 | 5.3 t/s/u - 1359 t/s        |  coming soon                |   21 t/s/u     |
 | [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)         | 129th              |  32                  | 0.95 t/s/u - 30.4 t/s       |  8.4 t/s/u - 268.8 t/s      |   20 t/s/u     |
 | [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)         | 129th              |  32                  | 0.95 t/s/u - 30.4 t/s       |  7.7 t/s/u - 246.4 t/s      |   20 t/s/u     |
-| [Falcon40B-decode](./models/demos/falcon40b)                  | coming soon        |                      |                             |                             |                |
+| [Falcon40B-decode](./models/demos/t3000/falcon40b)                  | coming soon        |                      |                             |                             |                |
 | Mixtral7Bx8-decode                                            | coming soon        |                      |                             |                             |                |
 | ResNet50 (data parallel)                                      | coming soon        |                      |                             |                             |                |
 
