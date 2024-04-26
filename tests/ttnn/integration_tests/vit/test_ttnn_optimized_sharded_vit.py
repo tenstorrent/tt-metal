@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
 from models.experimental.functional_vit.reference import torch_functional_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -61,16 +61,16 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
         shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
     )
 
-    pixel_values = torch2tt_tensor(
+    pixel_values = ttnn.from_torch(
         torch_pixel_values,
-        device,
-        ttnn.experimental.tensor.Layout.ROW_MAJOR,
-        tt_memory_config=ttnn.experimental.tensor.MemoryConfig(
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.experimental.tensor.MemoryConfig(
             ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.experimental.tensor.BufferType.L1,
             shard_spec,
         ),
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     )
     # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -150,16 +150,16 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
     )
 
-    pixel_values = torch2tt_tensor(
+    pixel_values = ttnn.from_torch(
         torch_pixel_values,
-        device,
-        ttnn.experimental.tensor.Layout.ROW_MAJOR,
-        tt_memory_config=ttnn.experimental.tensor.MemoryConfig(
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.experimental.tensor.MemoryConfig(
             ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.experimental.tensor.BufferType.L1,
             shard_spec,
         ),
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     )
 
     output = ttnn_optimized_sharded_vit.vit_embeddings(
@@ -503,16 +503,16 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
     )
 
-    pixel_values = torch2tt_tensor(
+    pixel_values = ttnn.from_torch(
         torch_pixel_values,
-        device,
-        ttnn.experimental.tensor.Layout.ROW_MAJOR,
-        tt_memory_config=ttnn.experimental.tensor.MemoryConfig(
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.experimental.tensor.MemoryConfig(
             ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.experimental.tensor.BufferType.L1,
             shard_spec,
         ),
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     )
 
     if torch_attention_mask is not None:
