@@ -25,7 +25,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.sd_helper_funcs import TtLMSDiscreteScheduler
+from models.experimental.functional_stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
@@ -58,31 +58,12 @@ def tt_guide(noise_pred, guidance_scale):  # will return latents
     return noise_pred
 
 
-def tt_latent_expansion(latents, scheduler, sigma, device):
-    latent_model_input = ttnn.concat([latents, latents], dim=0)
-    latent_model_input = scheduler.scale_model_input(latent_model_input, sigma, device)
-    return latent_model_input
-
-
-def get_lms_coefficient(order, t, current_order, sigmas):
-    def lms_derivative(tau):
-        prod = 1.0
-        for k in range(order):
-            if current_order == k:
-                continue
-            prod *= (tau - sigmas[t - k]) / (sigmas[t - current_order] - sigmas[t - k])
-        return prod
-
-    integrated_coeff = integrate.quad(lms_derivative, sigmas[t], sigmas[t + 1], epsrel=1e-4)[0]
-
-    return integrated_coeff
-
-
-def save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
+def _save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
+    latents = ttnn.to_torch(latents).to(torch.float32)
     pre_fix = "" if pre_fix == "" else f"{pre_fix}_"
     pre_fix2 = "" if pre_fix2 == "" else f"{pre_fix2}_"
-    latents = ttnn.to_torch(latents).to(torch.float32)
     _latents = 1 / 0.18215 * latents
+
     with torch.no_grad():
         image = vae.decode(_latents).sample
     # Image post-processing
@@ -91,7 +72,6 @@ def save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
     images = (image * 255).round().astype("uint8")
     pil_images = [Image.fromarray(image) for image in images][0]
     pil_images.save(f"{pre_fix}{pre_fix2}image_iter_{iter}.png")
-    torch.save(_latents, f"{pre_fix}{pre_fix2}latents_{iter}.pt")
 
 
 def calculate_fid_score(imgs_path1, imgs_path2):
@@ -126,12 +106,10 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
     # 4. load the K-LMS scheduler with some fitting parameters.
-    ttnn_scheduler = TtLMSDiscreteScheduler(
-        beta_start=0.00085,
-        beta_end=0.012,
-        beta_schedule="scaled_linear",
-        num_train_timesteps=1000,
+    ttnn_scheduler = TtPNDMScheduler(
+        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
     )
+
     torch_device = "cpu"
     vae.to(torch_device)
     text_encoder.to(torch_device)
@@ -194,84 +172,50 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         input_height = 64
         input_width = 64
         reader_patterns_cache = {} if height == 512 and width == 512 else None
-
-        time_step_list = []
-        ttnn_sigma = []
-        ttnn_step_index = []
-        timesteps_bkp = ttnn.to_torch(ttnn_scheduler.timesteps)
-        sigma_tensor = ttnn.to_torch(ttnn_scheduler.sigmas)[0]
-        step_index = (timesteps_bkp[0] == timesteps_bkp[0][0]).nonzero().item()
-
-        ttnn_latent_model_input = tt_latent_expansion(
-            ttnn_latents, ttnn_scheduler, float(sigma_tensor[step_index]), device
-        )
-
-        for t in timesteps_bkp[0]:
+        ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+        _tlist = []
+        for t in ttnn_scheduler.timesteps:
             _t = constant_prop_time_embeddings(t, ttnn_latent_model_input, unet.time_proj)
             _t = _t.unsqueeze(0).unsqueeze(0)
+            _t = _t.permute(2, 0, 1, 3)  # pre-permute temb
             _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            time_step_list.append(_t)
-            step_index = (timesteps_bkp[0] == t).nonzero().item()
-            ttnn_step_index.append(step_index)
-            ttnn_sigma.append(sigma_tensor[step_index])
+            _tlist.append(_t)
 
-        orders = 4
-        order_list = []
-        ttnn_lms_coeff = []
-        lms_coeff = []
-        for step_index in ttnn_step_index:
-            order = min(step_index + 1, orders)
-            order_list.append(order)
-            lms_coeffs = [
-                get_lms_coefficient(order, step_index, curr_order, sigma_tensor) for curr_order in range(order)
-            ]
-            lms_coeff.append(lms_coeffs)
-
-        for lms in lms_coeff:
-            ttnn_lms_tensor = None
-            for value in lms:
-                lms_tensor = ttnn.full(
-                    (1, 4, 64, 64), fill_value=value, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-                )
-                if ttnn_lms_tensor is not None:
-                    ttnn_lms_tensor = ttnn.concat([ttnn_lms_tensor, lms_tensor], dim=0)
-                else:
-                    ttnn_lms_tensor = lms_tensor
-
-            ttnn_lms_coeff.append(ttnn_lms_tensor)
+        time_step = ttnn_scheduler.timesteps.tolist()
 
         model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
-
+        iter = 0
         # # Denoising loop
-        for i in range(len(time_step_list)):
+        for index in range(len(time_step)):
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
-            ttnn_latent_model_input = tt_latent_expansion(ttnn_latents, ttnn_scheduler, float(ttnn_sigma[i]), device)
-
+            ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+            _t = _tlist[index]
+            t = time_step[index]
             # predict the noise residual
             with torch.no_grad():
-                ttnn_noise_pred = model(
-                    sample=ttnn_latent_model_input,
-                    timestep=time_step_list[i],
+                ttnn_output = model(
+                    ttnn_latent_model_input,  # input
+                    timestep=_t,
                     encoder_hidden_states=ttnn_text_embeddings,
+                    class_labels=None,
+                    attention_mask=None,
+                    cross_attention_kwargs=None,
+                    return_dict=True,
                     config=config,
                 )
+            print(f"Sample: {iter}")
 
             # perform guidance
-            noise_pred = tt_guide(ttnn_noise_pred, guidance_scale)
+            noise_pred = tt_guide(ttnn_output, guidance_scale)
 
-            ttnn_latents = ttnn_scheduler.step(
-                model_output=noise_pred,
-                sample=ttnn_latents,
-                sigma=float(ttnn_sigma[i]),
-                lms_coeffs=ttnn_lms_coeff[i],
-                device=device,
-                order=order_list[i],
-            ).prev_sample
-            save_image_and_latents(ttnn_latents, i, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
+            ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
+            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
+            iter += 1
             enable_persistent_kernel_cache()
 
         latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
+
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
         with torch.no_grad():
@@ -318,11 +262,8 @@ def run_demo_inference_diffusiondb(
         unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
         # 4. load the K-LMS scheduler with some fitting parameters.
-        ttnn_scheduler = TtLMSDiscreteScheduler(
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule="scaled_linear",
-            num_train_timesteps=1000,
+        ttnn_scheduler = TtPNDMScheduler(
+            beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
         )
 
         torch_device = "cpu"
@@ -378,81 +319,46 @@ def run_demo_inference_diffusiondb(
         input_height = 64
         input_width = 64
         reader_patterns_cache = {} if height == 512 and width == 512 else None
-
-        time_step_list = []
-        ttnn_sigma = []
-        ttnn_step_index = []
-        timesteps_bkp = ttnn.to_torch(ttnn_scheduler.timesteps)
-        sigma_tensor = ttnn.to_torch(ttnn_scheduler.sigmas)[0]
-        step_index = (timesteps_bkp[0] == timesteps_bkp[0][0]).nonzero().item()
-        ttnn_latent_model_input = tt_latent_expansion(
-            ttnn_latents, ttnn_scheduler, float(sigma_tensor[step_index]), device
-        )
-
-        for t in timesteps_bkp[0]:
+        ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+        _tlist = []
+        for t in ttnn_scheduler.timesteps:
             _t = constant_prop_time_embeddings(t, ttnn_latent_model_input, unet.time_proj)
             _t = _t.unsqueeze(0).unsqueeze(0)
-            _t = _t.permute(2, 0, 1, 3)
+            _t = _t.permute(2, 0, 1, 3)  # pre-permute temb
             _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            time_step_list.append(_t)
-            step_index = (timesteps_bkp[0] == t).nonzero().item()
-            ttnn_step_index.append(step_index)
-            ttnn_sigma.append(sigma_tensor[step_index])
+            _tlist.append(_t)
 
-        orders = 4
-        order_list = []
-        ttnn_lms_coeff = []
-        lms_coeff = []
-        for step_index in ttnn_step_index:
-            order = min(step_index + 1, orders)
-            order_list.append(order)
-            lms_coeffs = [
-                get_lms_coefficient(order, step_index, curr_order, sigma_tensor) for curr_order in range(order)
-            ]
-            lms_coeff.append(lms_coeffs)
-
-        for lms in lms_coeff:
-            ttnn_lms_tensor = None
-            for value in lms:
-                lms_tensor = ttnn.full(
-                    (1, 4, 64, 64), fill_value=value, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-                )
-                if ttnn_lms_tensor is not None:
-                    ttnn_lms_tensor = ttnn.concat([ttnn_lms_tensor, lms_tensor], dim=0)
-                else:
-                    ttnn_lms_tensor = lms_tensor
-
-            ttnn_lms_coeff.append(ttnn_lms_tensor)
+        time_step = ttnn_scheduler.timesteps.tolist()
 
         model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
-
+        iter = 0
         # # Denoising loop
-        for i in range(len(time_step_list)):
+        for index in range(len(time_step)):
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
-            ttnn_latent_model_input = tt_latent_expansion(ttnn_latents, ttnn_scheduler, float(ttnn_sigma[i]), device)
-
+            ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+            _t = _tlist[index]
+            t = time_step[index]
             # predict the noise residual
             with torch.no_grad():
-                ttnn_noise_pred = model(
-                    sample=ttnn_latent_model_input,
-                    timestep=time_step_list[i],
+                ttnn_output = model(
+                    ttnn_latent_model_input,  # input
+                    timestep=_t,
                     encoder_hidden_states=ttnn_text_embeddings,
+                    class_labels=None,
+                    attention_mask=None,
+                    cross_attention_kwargs=None,
+                    return_dict=True,
                     config=config,
                 )
+            print(f"Sample: {iter}")
 
             # perform guidance
-            noise_pred = tt_guide(ttnn_noise_pred, guidance_scale)
+            noise_pred = tt_guide(ttnn_output, guidance_scale)
+            ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
+            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
-            ttnn_latents = ttnn_scheduler.step(
-                model_output=noise_pred,
-                sample=ttnn_latents,
-                sigma=float(ttnn_sigma[i]),
-                lms_coeffs=ttnn_lms_coeff[i],
-                device=device,
-                order=order_list[i],
-            ).prev_sample
-            save_image_and_latents(ttnn_latents, i, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
-
+            iter += 1
             enable_persistent_kernel_cache()
 
         latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
