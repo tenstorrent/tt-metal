@@ -154,6 +154,37 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     return recv;
 }
 
+// Ideally would work by cachelines, but the min size is less than that
+// TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
+// TODO: ditto alignment isues
+// TODO: move _sfence out
+static inline void memcpy_to_device(void *__restrict dst, const void * __restrict src, size_t n)
+{
+    if (n < CQ_PREFETCH_CMD_BARE_MIN_SIZE) {
+        memcpy(dst, src, n);
+        return;
+    }
+
+    size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    uint8_t *src8 = (uint8_t *)src;
+    uint8_t *dst8 = (uint8_t *)dst;
+    for (size_t i = 0; i < num_lines; i++) {
+        for (size_t j = 0; j < CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(__m128i); j++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src);
+            _mm_stream_si128((__m128i *)dst, blk);
+            src8 += sizeof(__m128i);
+            dst8 += sizeof(__m128i);
+        }
+        n -= CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    }
+
+    if (num_lines > 0)
+        _mm_sfence();
+
+    memcpy(dst8, src8, n);
+}
+
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
     // Host writes commands and data for H2D transfers in the issue region, device reads from the issue region
@@ -410,7 +441,7 @@ class SystemMemoryManager {
             TT_FATAL(size_in_bytes % sizeof(uint32_t) == 0, "Data size_in_bytes={} is not {}-byte aligned", size_in_bytes, sizeof(uint32_t));
             std::copy((uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t), this->bypass_buffer.begin() + this->bypass_buffer_write_offset);
         } else {
-            memcpy(user_scratchspace, data, size_in_bytes);
+            memcpy_to_device(user_scratchspace, data, size_in_bytes);
         }
     }
 

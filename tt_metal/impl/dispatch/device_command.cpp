@@ -150,6 +150,6 @@ void DeviceCommand::add_prefetch_exec_buf_end() {
 
 void DeviceCommand::add_data(const void *data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB) {
     this->validate_cmd_write(cmd_write_offset_incrementB);
-    memcpy((char *)this->cmd_region + this->cmd_write_offsetB, data, data_size_to_copyB);
+    memcpy_to_device((uint8_t *)this->cmd_region + this->cmd_write_offsetB, data, data_size_to_copyB);
     this->cmd_write_offsetB += cmd_write_offset_incrementB;
 }
