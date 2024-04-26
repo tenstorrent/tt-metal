@@ -102,6 +102,8 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = ttnn.{(name)}(tensor)
 
+            {math_op_function.__doc__}
+
             """
     setattr(THIS_MODULE, name, math_op_function)
 
