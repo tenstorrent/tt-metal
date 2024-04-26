@@ -169,3 +169,25 @@ def test_add_with_batch_broadcast(device, shape_a, shape_b):
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape_a
+
+
+@pytest.mark.parametrize("shape_a", [(4096, 4096)])
+@pytest.mark.parametrize("shape_b", [(1, 4096)])
+def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert output_tensor.shape == shape_a
