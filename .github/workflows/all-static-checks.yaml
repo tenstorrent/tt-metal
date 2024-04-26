@@ -13,15 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5.0.0
+      - uses: ./.github/actions/install-tox-env
         with:
-          cache: 'pip'
-          cache-dependency-path: infra/requirements-infra.txt
-      - uses: actions/cache@v4.0.0
-        id: cache-tox-env
-        with:
-          path: |
-            .tox/post_commit_check_spdx_licenses
+          tox-env: post_commit_check_spdx_licenses
+          cache-dependency-path: |
+            tox.ini
+            infra/requirements-infra.txt
       - name: Check SPDX licenses
         run: |
           tox -e post_commit_check_spdx_licenses

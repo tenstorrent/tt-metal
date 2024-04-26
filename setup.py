@@ -84,7 +84,6 @@ def get_version(buda_eager_build_config):
         "local_scheme": partial(get_buda_eager_local_version_scheme, buda_eager_build_config),
     }
 
-
 @dataclass(frozen=True)
 class BUDAEagerBuildConfig:
     is_dev_build = get_is_dev_build()
@@ -117,6 +116,7 @@ class BUDAEagerBuild(build_ext):
             len(self.extensions) == 2
         ), f"Detected {len(self.extensions)} extensions, but should be only 2: tt_lib_csrc and ttnn"
 
+        ext = self.extensions[0]
         if self.is_editable_install_():
             assert (
                 buda_eager_build_config.is_srcdir_build

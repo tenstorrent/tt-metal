@@ -32,7 +32,7 @@ jobs:
           {name: eager unit tests 2, cmd: GROUP_NUM=2 tox -e post_commit_fd_eager },
           {name: eager unit tests 3, cmd: GROUP_NUM=3 tox -e post_commit_fd_eager },
           {name: eager unit tests 4, cmd: GROUP_NUM=4 tox -e post_commit_fd_eager },
-          {name: sweep, cmd: tox -e post_commit_fd_eager_sweep },
+          {name: sweep, cmd: VENV_DIR=.tox/post_commit_fd_eager tox -e post_commit_fd_eager_sweep },
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
@@ -52,14 +52,18 @@ jobs:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/install-tox-env
+        with:
+          tox-env: post_commit_fd_eager
+          cache-dependency-path: |
+            tox.ini
+            tt_metal/python_env/requirements-dev.txt
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          VENV_DIR=${{ github.workspace }}/python_env ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }}
   build-docs:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion

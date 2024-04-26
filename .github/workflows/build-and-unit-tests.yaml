@@ -37,9 +37,15 @@ jobs:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/install-tox-env
+        with:
+          tox-env: post_commit_sd
+          cache-dependency-path: |
+            tox.ini
+            tt_metal/python_env/requirements-dev.txt
       - name: Run pre/post regression tests
         timeout-minutes: 15
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          export TT_METAL_HOME=$(pwd)
+          export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/tt-eager
           VENV_DIR=${{ github.workspace }}/python_env TT_ARCH=$ARCH_NAME tox -e post_commit_sd
