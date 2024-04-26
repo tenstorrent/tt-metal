@@ -52,7 +52,10 @@ run_perf_models_llm_javelin_multi_device() {
     local tt_arch=$1
     local test_marker=$2
 
-    # Add tests here
+    env pytest models/demos/falcon7b/tests -m $test_marker
+
+    ## Merge all the generated reports
+    env python models/perf/merge_perf_results.py
 }
 
 run_perf_models_cnn_javelin() {
@@ -74,6 +77,9 @@ run_perf_models_cnn_javelin_multi_device() {
     local test_marker=$2
 
     # Add tests here
+
+    ## Merge all the generated reports
+    env python models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
