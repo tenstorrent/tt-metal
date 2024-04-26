@@ -1115,7 +1115,9 @@ void EnqueueTraceCommand::process() {
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
+    const bool stall_prefetcher = true;
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id, stall_prefetcher);
+
     // log_trace(LogDispatch, "EnqueueTraceCommand issued write_ptr={}, fetch_size={}, commands={}", write_ptr, fetch_size_bytes, this->commands);
 }
 

@@ -81,6 +81,9 @@ static struct PrefetchExecBufState {
     uint32_t length;
 } exec_buf_state;
 
+// Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
+static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0} stall_state = NOT_STALLED;
+
 static_assert((downstream_cb_base & (downstream_cb_page_size - 1)) == 0);
 
 template<bool cmddat_wrap_enable,
@@ -106,6 +109,15 @@ void write_downstream(uint32_t& data_ptr,
 
     noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
     downstream_data_ptr += length;
+}
+
+// If prefetcher must stall after this fetch, wait for data to come back, and move to stalled state.
+FORCE_INLINE
+void barrier_and_stall(uint32_t& pending_read_size, uint32_t& fence) {
+    noc_async_read_barrier();
+    fence += pending_read_size;
+    pending_read_size = 0;
+    stall_state = STALLED;
 }
 
 template<uint32_t preamble_size>
@@ -176,6 +188,12 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 
     static uint32_t pending_read_size = 0;
     static volatile tt_l1_ptr uint32_t* prefetch_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)prefetch_q_base;
+    constexpr uint32_t prefetch_q_msb_mask = 1u << 31; // dispatch_constants::prefetch_q_entry_type is 32 bit.
+
+    if (stall_state == STALLED) {
+         ASSERT(pending_read_size == 0); // Before stalling, fetch must have been completed.
+         return;
+    }
 
     DPRINT << "fetch_q_get_cmds: " << cmd_ptr << " " << fence << ENDL();
     if (fence < cmd_ptr) {
@@ -184,11 +202,18 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     }
 
     bool cmd_ready = (cmd_ptr != fence);
-    uint32_t fetch_size = (uint32_t)*prefetch_q_rd_ptr << prefetch_q_log_minsize;
+
+    uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+    uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
+    bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;
+    stall_state = static_cast<StallState>(stall_flag << 1); // NOT_STALLED -> STALL_NEXT if stall_flag is set
 
     if (fetch_size != 0 && pending_read_size == 0) {
         read_from_pcie<preamble_size>
             (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+        if (stall_state == STALL_NEXT) {
+            barrier_and_stall(pending_read_size, fence); // STALL_NEXT -> STALLED
+        }
     }
     if (!cmd_ready) {
         if (pending_read_size != 0) {
@@ -203,14 +228,18 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             fence += pending_read_size;
             pending_read_size = 0;
 
-            // Ugly hack for now.  Snoops the command, don't fetch the next if we are doing an exec_buf
-            volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-            if (cmd->base.cmd_id != CQ_PREFETCH_CMD_EXEC_BUF) {
-                // After the stall, re-check the host
-                fetch_size = (uint32_t)*prefetch_q_rd_ptr << prefetch_q_log_minsize;
-                if (fetch_size != 0) {
-                    read_from_pcie<preamble_size>
-                        (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+            // After the stall, re-check the host
+            prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+            fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
+
+            if (fetch_size != 0) {
+                stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;
+                stall_state = static_cast<StallState>(stall_flag << 1); // NOT_STALLED -> STALL_NEXT if stall_flag is set
+
+                read_from_pcie<preamble_size>
+                    (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+                if (stall_state == STALL_NEXT) {
+                    barrier_and_stall(pending_read_size, fence); // STALL_NEXT -> STALLED
                 }
             }
         } else {
@@ -817,7 +846,9 @@ bool process_cmd(uint32_t& cmd_ptr,
     case CQ_PREFETCH_CMD_EXEC_BUF:
         DPRINT << "exec buf: " << cmd_ptr << ENDL();
         ASSERT(!exec_buf);
+        ASSERT(stall_state == STALLED); // ExecBuf must be preceded by a stall
         stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
+        stall_state = NOT_STALLED; // Stall is no longer required after ExecBuf finishd.
         break;
 
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
