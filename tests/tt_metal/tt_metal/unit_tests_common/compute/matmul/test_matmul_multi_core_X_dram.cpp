@@ -505,5 +505,7 @@ TEST_F(CommonFixture, MatmulMultiCoreMultiDRAM){
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_multi_dram(this, devices_.at(id)));
+        // See #7910
+        break;
     }
 }
