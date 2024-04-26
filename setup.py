@@ -166,7 +166,7 @@ build_constants_lookup = {
 
 setup(
     url="http://www.tenstorrent.com",
-    use_scm_version=get_version(buda_eager_build_config),
+    #use_scm_version="0.0.1",
     packages=packages,
     package_dir={
         "": "tt_eager",
