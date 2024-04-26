@@ -313,8 +313,6 @@ def all_devices(request):
     print(num_devices)
 
     # Get only physical devices
-    if num_devices > 1:
-        pytest.skip("FD2_MULTI: FD2 multichip currently unsupported")
     devices = ttl.device.CreateDevices([i for i in range(num_devices)])
 
     yield [devices[i] for i in range(num_devices)]
@@ -338,8 +336,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
 
     if num_devices_requested <= 1:
         pytest.skip("Requires multiple devices to run")
-
-    pytest.skip("FD2_MULTI: FD2 multichip currently unsupported")
 
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
