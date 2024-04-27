@@ -21,6 +21,7 @@ parameters = {
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "alpha": [1, 2.5, 5.0],
 }
 
 
@@ -32,9 +33,10 @@ def skip(
     input_memory_config,
     output_memory_config,
     layout,
+    alpha,
 ) -> Tuple[bool, Optional[str]]:
-    if input_dtype == ttnn.bfloat8_b:
-        return True, "BFLOAT8_B is not supported"
+    if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "BFLOAT8_B is supported in TILE layout"
     return False, None
 
 
@@ -50,22 +52,23 @@ def run(
     input_memory_config,
     output_memory_config,
     layout,
+    alpha,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
-    low = -2.0
-    high = 2.0
+    low = -100.0
+    high = 100.0
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
-    torch_output_tensor = F.hardtanh(torch_input_tensor)
+    torch_output_tensor = F.celu(torch_input_tensor, alpha)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.hardtanh(input_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.celu(input_tensor, alpha, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    return check_with_pcc(torch_output_tensor, output_tensor, 0.99)

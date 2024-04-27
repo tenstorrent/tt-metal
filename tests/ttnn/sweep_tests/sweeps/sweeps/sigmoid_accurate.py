@@ -5,7 +5,6 @@
 from typing import Optional, Tuple
 
 import torch
-import torch.nn.functional as F
 
 import ttnn
 
@@ -33,8 +32,8 @@ def skip(
     output_memory_config,
     layout,
 ) -> Tuple[bool, Optional[str]]:
-    if input_dtype == ttnn.bfloat8_b:
-        return True, "BFLOAT8_B is not supported"
+    if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "BFLOAT8_B is supported in TILE layout"
     return False, None
 
 
@@ -55,17 +54,17 @@ def run(
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
-    low = -2.0
-    high = 2.0
+    low = -100.0
+    high = 100.0
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
-    torch_output_tensor = F.hardtanh(torch_input_tensor)
+    torch_output_tensor = torch.sigmoid(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.hardtanh(input_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.sigmoid_accurate(input_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.999)

@@ -20,7 +20,7 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def register_ttl_activation_function_unary(name, ttl_activation_function, op_name):
+def register_ttl_activation_function_unary(name, ttl_activation_function, op_name, supported_dtype, supported_layout):
     def _golden_function(input_tensor: ttnn.Tensor, **_):
         name_to_torch_function = {
             "hardsigmoid": F.hardsigmoid,
@@ -32,10 +32,9 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
             "sigmoid": torch.sigmoid,
             "sigmoid_accurate": torch.sigmoid,
             "sign": torch.sign,
-            "celu": F.celu,
             "softsign": F.softsign,
             "swish": F.hardswish,
-            "softplus": F.softplus,
+            "tanhshrink": F.tanhshrink,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -46,8 +45,8 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
+            dtypes=supported_dtype,
+            layouts=supported_layout,
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -111,7 +110,9 @@ def torch_prelu(x, *args, **kwargs):
     return result
 
 
-def register_ttl_activation_function_with_float(name, ttl_activation_function, op_name, param):
+def register_ttl_activation_function_with_float(
+    name, ttl_activation_function, op_name, param, supported_dtype, supported_layout
+):
     def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
         name_to_torch_function = {
             "hardshrink": F.hardshrink,
@@ -120,7 +121,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
             "prelu": torch_prelu,
             "elu": F.elu,
             "softshrink": F.softshrink,
-            "tanhshrink": F.tanhshrink,
+            "celu": F.celu,
         }
         torch_function = name_to_torch_function[name]
 
@@ -134,8 +135,8 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
+            dtypes=supported_dtype,
+            layouts=supported_layout,
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -351,28 +352,94 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
 
 
 TTL_ACTIVATION_FUNCTIONS_UNARY = [
-    ("hardsigmoid", ttl.tensor.hardsigmoid, "hardsigmoid"),
-    ("hardswish", ttl.tensor.hardswish, "hardswish"),
-    ("hardtanh", ttl.tensor.hardtanh, "hardtanh"),
-    ("log_sigmoid", ttl.tensor.log_sigmoid, "log sigmoid"),
-    ("mish", ttl.tensor.mish, "mish"),
-    ("relu6", ttl.tensor.relu6, "relu6"),
-    ("sigmoid", ttl.tensor.sigmoid, "sigmoid"),
-    ("sigmoid_accurate", ttl.tensor.sigmoid_accurate, "sigmoid_accurate"),
-    ("sign", ttl.tensor.sign, "sign"),
-    ("softsign", ttl.tensor.softsign, "softsign"),
-    ("swish", ttl.tensor.swish, "swish"),
-    ("tanhshrink", ttl.tensor.tanhshrink, "tanhshrink"),
+    ("hardsigmoid", ttl.tensor.hardsigmoid, "hardsigmoid", (ttnn.bfloat16,), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    ("hardswish", ttl.tensor.hardswish, "hardswish", (ttnn.bfloat16,), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    ("hardtanh", ttl.tensor.hardtanh, "hardtanh", (ttnn.bfloat16,), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    (
+        "log_sigmoid",
+        ttl.tensor.log_sigmoid,
+        "log sigmoid",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    ("mish", ttl.tensor.mish, "mish", (ttnn.bfloat16,), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    ("relu6", ttl.tensor.relu6, "relu6", (ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    (
+        "sigmoid",
+        ttl.tensor.sigmoid,
+        "sigmoid",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    (
+        "sigmoid_accurate",
+        ttl.tensor.sigmoid_accurate,
+        "sigmoid_accurate",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    ("sign", ttl.tensor.sign, "sign", (ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    ("softsign", ttl.tensor.softsign, "softsign", (ttnn.bfloat16,), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    ("swish", ttl.tensor.swish, "swish", (ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    (
+        "tanhshrink",
+        ttl.tensor.tanhshrink,
+        "tanhshrink",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("hardshrink", ttl.tensor.hardshrink, "hardshrink", "lambda"),
-    ("heaviside", ttl.tensor.heaviside, "heaviside", "value"),
-    ("leaky_relu", ttl.tensor.leaky_relu, "leaky relu", "slope"),
-    ("prelu", ttl.tensor.prelu, "prelu", "weight"),
-    ("elu", ttl.tensor.elu, "elu", "alpha"),
-    ("celu", ttl.tensor.celu, "celu", "alpha"),
-    ("softshrink", ttl.tensor.softshrink, "softshrink", "lambda"),
+    (
+        "hardshrink",
+        ttl.tensor.hardshrink,
+        "hardshrink",
+        "lambd",
+        (ttnn.bfloat16,),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    (
+        "heaviside",
+        ttl.tensor.heaviside,
+        "heaviside",
+        "value",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    (
+        "leaky_relu",
+        ttl.tensor.leaky_relu,
+        "leaky relu",
+        "slope",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    (
+        "prelu",
+        ttl.tensor.prelu,
+        "prelu",
+        "weight",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    ("elu", ttl.tensor.elu, "elu", "alpha", (ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)),
+    (
+        "softshrink",
+        ttl.tensor.softshrink,
+        "softshrink",
+        "lambd",
+        (ttnn.bfloat16,),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+    (
+        "celu",
+        ttl.tensor.celu,
+        "celu",
+        "alpha",
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
@@ -387,8 +454,17 @@ TTL_ACTIVATION_FUNCTIONS_GLU = [
     ("geglu", ttl.tensor.geglu, "Gaussian Error Gated Linear Units (GeGLU)", "dim"),
 ]
 
-for activation_function_name, ttl_activation_function, name, param in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:
-    register_ttl_activation_function_with_float(activation_function_name, ttl_activation_function, name, param)
+for (
+    activation_function_name,
+    ttl_activation_function,
+    name,
+    param,
+    supported_dtype,
+    supported_layout,
+) in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:
+    register_ttl_activation_function_with_float(
+        activation_function_name, ttl_activation_function, name, param, supported_dtype, supported_layout
+    )
 
 for (
     activation_function_name,
@@ -401,8 +477,16 @@ for (
         activation_function_name, ttl_activation_function, name, param1, param2
     )
 
-for activation_function_name, ttl_activation_function, name in TTL_ACTIVATION_FUNCTIONS_UNARY:
-    register_ttl_activation_function_unary(activation_function_name, ttl_activation_function, name)
+for (
+    activation_function_name,
+    ttl_activation_function,
+    name,
+    supported_dtype,
+    supported_layout,
+) in TTL_ACTIVATION_FUNCTIONS_UNARY:
+    register_ttl_activation_function_unary(
+        activation_function_name, ttl_activation_function, name, supported_dtype, supported_layout
+    )
 
 for activation_function_name, ttl_activation_function, op_name, param in TTL_ACTIVATION_FUNCTIONS_GLU:
     register_ttl_activation_function_glu(activation_function_name, ttl_activation_function, op_name, param)
