@@ -10,7 +10,8 @@ def create_model_config(batch_size, hidden_size):
     configs = {}
     row = 5
     col = 8
-    latent = 16
+    latent = 32
+    configs["latent_size"] = latent
     configs["sharded_d"] = ttnn.create_sharded_memory_config(
         shape=(1, 1, batch_size, hidden_size * 2),
         core_grid=ttnn.CoreGrid(y=row, x=col),

@@ -25,7 +25,7 @@ class TtMambaSSM(torch.nn.Module):
         self.batch_size = args.batch_size
         self.hidden_size = args.d_inner
         self.configs = configs
-        self.n = 16
+        self.n = 32
         self.rank = self.args.dt_rank
 
         """
@@ -50,7 +50,7 @@ class TtMambaSSM(torch.nn.Module):
         def preprocess_B(x):
             x = x[self.args.dt_rank : (self.args.dt_rank + self.args.d_state), :]
             x = x.transpose(-1, -2)
-            # x = F.pad(x, (0, 16), "constant", 0)
+            x = torch.nn.functional.pad(x, (0, 16), "constant", 0)
             return x
 
         self.B_proj_weights = load_fn(
@@ -63,7 +63,7 @@ class TtMambaSSM(torch.nn.Module):
         # C_proj_weights
         def preprocess_C(x):
             x = x[(self.args.dt_rank + self.args.d_state) :, :].transpose(-1, -2)
-            # x = F.pad(x, (0, 16), "constant", 0)
+            x = torch.nn.functional.pad(x, (0, 16), "constant", 0)
             return x
 
         self.C_proj_weights = load_fn(x_proj_weight_name, preprocess_C, postfix="C_proj", tt_dtype=ttnn.bfloat8_b)
@@ -74,17 +74,14 @@ class TtMambaSSM(torch.nn.Module):
         self.dt_proj_weights = load_fn(dt_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=ttnn.bfloat8_b)
         self.dt_proj_bias = load_fn(dt_proj_bias_name, tt_dtype=ttnn.bfloat8_b)
 
-        # B_intermediate_tranform_weights = torch.eye(self.n).repeat(1, self.hidden_size).unsqueeze(0).unsqueeze(0)
-
-        # A weight
         A_weight_name = "mixer.A_log"
 
         def preprocess_A(x):
             x = -torch.exp(x.float())
             # padding with inf
-            # x = F.pad(x, (0, 16), "constant", float("-inf"))
-            x = x.reshape(1, self.hidden_size * self.n)  # (1, 2en)
-            return x.repeat(self.batch_size, 1)  # b, 2en
+            x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))
+            # x = x.reshape(1, self.hidden_size * self.n)  # (1, 2en)
+            return x[0, :].repeat(self.batch_size, 1)  # b, n
 
         self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
 
@@ -102,11 +99,6 @@ class TtMambaSSM(torch.nn.Module):
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi3,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
-        self.compute_kernel_config_mask = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -141,37 +133,29 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(delta_t1)
 
         # calculate abar
-        delta_t3 = self.transformer.repeat_interleave(
+        abar0 = ttnn.to_memory_config(self.A, memory_config=ttnn.L1_MEMORY_CONFIG)
+        abar1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+            abar0,
             delta_t2,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_mask,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
-        )  # b,n
-
-        ttnn.deallocate(delta_t2)
-
-        # shard delta and A
-        delta_t4 = ttnn.to_memory_config(delta_t3, memory_config=self.configs["sharded_dn"])
-        abar0 = ttnn.to_memory_config(self.A, memory_config=self.configs["sharded_dn"])
-
-        abar1 = ttnn.mul(delta_t4, abar0, memory_config=self.configs["sharded_dn"])
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
+        )
         ttnn.deallocate(abar0)
-        ttnn.deallocate(delta_t4)
 
-        abar2 = ttnn.to_memory_config(abar1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        abar2 = ttl.tensor.exp(
+            abar1,
+            fast_and_approx=True,
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
+        )
         ttnn.deallocate(abar1)
-        abar3 = ttnn.exp(abar2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(abar2)
-
-        abar4 = ttnn.to_memory_config(abar3, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(abar3)
 
         # multiply abar and hidden_state
-        hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=self.configs["sharded_dn"])
-        amulh0 = ttnn.mul(abar4, hidden_state0, memory_config=self.configs["sharded_dn"])
-
-        # deallocate abar and hidden_state
-        ttnn.deallocate(abar4)
+        hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
+        amulh0 = ttnn.mul(abar2, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(abar2)
         ttnn.deallocate(hidden_state0)
 
         # B
@@ -184,50 +168,31 @@ class TtMambaSSM(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
         )
 
-        # repeat using mask+matmul instead of ttnn.repeat to avoid fallback
-        B1 = self.transformer.repeat(
+        # bbar
+        bbar0 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
             B0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_mask,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
+            delta_t2,
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
         )
+        ttnn.deallocate(delta_t2)
         ttnn.deallocate(B0)
 
-        # shard B
-        B2 = ttnn.to_memory_config(B1, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(B1)
-
-        # shard delta
-        delta_t4 = ttnn.to_memory_config(delta_t3, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(delta_t3)
-
-        # bbar
-        bbar0 = ttnn.mul(delta_t4, B2, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(delta_t4)
-        ttnn.deallocate(B2)
-
-        # multiply bbar and x with mask instead of ttnn.repeat_interleave(x, self.n, dim=3)
         x0 = self.transformer.repeat_interleave(
             x,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_mask,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
-        )  # b,n
-
-        x1 = ttnn.to_memory_config(x0, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(x0)
-        bmulx0 = ttnn.mul(bbar0, x1, memory_config=self.configs["sharded_dn"])
+            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        )
+        bmulx0 = ttnn.mul(bbar0, x0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # deallocate bbar
         ttnn.deallocate(bbar0)
-        ttnn.deallocate(x1)
+        ttnn.deallocate(x0)
 
         # add amulh and bmulx
-        hidden_state1 = ttnn.add(amulh0, bmulx0, memory_config=self.configs["sharded_dn"])
+        hidden_state1 = ttnn.add(amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(self.tt_hidden_state)
         self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # deallocate amulh and bmulx
         ttnn.deallocate(amulh0)
         ttnn.deallocate(bmulx0)
 
@@ -244,45 +209,31 @@ class TtMambaSSM(torch.nn.Module):
         # repeat using mask+matmul instead of ttnn.repeat to avoid fallback
         C1 = self.transformer.repeat(
             C0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_mask,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
+            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         )
         ttnn.deallocate(C0)
 
-        # shard c
-        C2 = ttnn.to_memory_config(C1, memory_config=self.configs["sharded_dn"])
+        C2 = ttnn.mul(hidden_state1, C1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(hidden_state1)
         ttnn.deallocate(C1)
 
-        C3 = ttnn.mul(hidden_state1, C2, memory_config=self.configs["sharded_dn"])
-        ttnn.deallocate(hidden_state1)
+        # Reduction matmul
+        C3 = ttnn.experimental.operations.primary.transformers.ssm_1d_sum_reduce(
+            C2,
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
+        )
         ttnn.deallocate(C2)
 
-        # Reduction matmul
-        C3 = ttnn.to_memory_config(C3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        C4 = self.transformer.reduce(
-            C3,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_mask,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
-        )  # b,n
-        ttnn.deallocate(C3)
-
-        # shard x, C
-        x = ttnn.to_memory_config(x, memory_config=self.configs["sharded_d"])
-        C5 = ttnn.to_memory_config(C4, memory_config=self.configs["sharded_d"])
-        ttnn.deallocate(C4)
-
-        # shard D
-        D = ttnn.to_memory_config(self.D, memory_config=self.configs["sharded_d"])
-
         # x * D
-        xD = ttnn.mul(x, D, memory_config=self.configs["sharded_d"])
+        D = ttnn.to_memory_config(self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xD = ttnn.mul(x, D, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x)
 
         # add xD and x
-        output = ttnn.add(xD, C5, memory_config=self.configs["sharded_d"])
+        output = ttnn.add(xD, C3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(C3)
         ttnn.deallocate(xD)
-        ttnn.deallocate(C5)
 
         return output
