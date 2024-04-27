@@ -75,7 +75,7 @@ struct dispatch_constants {
         // make this 2^N as required by the packetized stages
         uint32_t dispatch_buffer_block_size;
         if (core_type == CoreType::WORKER) {
-            prefetch_q_entries_ = 4 * 1024;
+            prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 128 * 1024;
             cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
