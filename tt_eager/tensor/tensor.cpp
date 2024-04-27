@@ -75,7 +75,7 @@ Tensor::~Tensor() {
     this->deallocate_through_destructor = true;
     this->deallocate();
     // Decrement main thread ref count for all tensors on device
-    if (this->workers.size()) {
+    if (this->workers.size() and this->tensor_attributes) {
         this->tensor_attributes->decrement_main_thread_ref_count(this->workers.at(0));
     }
     tensor_attributes.reset();
@@ -142,7 +142,7 @@ void Tensor::deallocate(bool force) {
                                         std::visit([force, worker] (auto&& s) {
                                             using type = std::decay_t<decltype(s)>;
                                             if constexpr (std::is_same_v<type, MultiDeviceStorage>) {
-                                                if (s.num_buffers()) {
+                                                if (s.buffers.find(worker->id()) != s.buffers.end()) {
                                                     if (force or s.buffers.at(worker->id()).use_count() == 1) {
                                                         DeallocateBuffer(*(s.buffers.at(worker->id())));
                                                     }
@@ -168,6 +168,23 @@ void Tensor::deallocate(bool force) {
                     }
                 },
         this->tensor_attributes->storage);
+    }
+}
+
+void Tensor::perform_cleanup_for_async_mode() {
+    // Used when tensor attributes object for this is reassigned by copy
+    // or move assignment operator
+    if (this->tensor_attributes) {
+        // Object has tensor_attributes that will be reassigned
+        if (this->workers.size() and this->workers.at(0)->in_main_thread() and this->workers.at(0)->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
+            // Operator called in main thread with async mode. Main thread Ref Count must be decremented.
+            // This is the last tensor in the main thread holding these attributes. Deallocate the buffer
+            // for this tensor.
+            if (this->tensor_attributes->main_thread_ref_count == 1) {
+                this->deallocate();
+            }
+            this->tensor_attributes->main_thread_ref_count--;
+        }
     }
 }
 
