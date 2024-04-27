@@ -8,8 +8,6 @@ import ttnn
 import tt_lib as ttl
 from typing import Callable
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.helper_funcs import Linear
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
 from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
@@ -136,12 +134,10 @@ class TtMambaBlock(torch.nn.Module):
         ttnn.deallocate(conv1d_bias)
 
         conv_out_with_bias_l1 = ttnn.to_memory_config(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(conv_out_with_bias)
         conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(conv_out_with_bias_l1)
 
         ssm_output = self.tt_ssm(conv_out_after_silu)
-        ttnn.deallocate(conv_out_after_silu)
 
         residual = ttnn.linear(
             residual_connection,
@@ -156,20 +152,18 @@ class TtMambaBlock(torch.nn.Module):
         residual_with_silu = ttnn.silu(residual, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual)
 
-        residual_with_silu = ttnn.to_memory_config(residual_with_silu, memory_config=self.configs["sharded_d"])
-        out = ttnn.mul(ssm_output, residual_with_silu, memory_config=self.configs["sharded_d"])
+        out = ttnn.mul(ssm_output, residual_with_silu, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual_with_silu)
         ttnn.deallocate(ssm_output)
 
-        out_l1 = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(out)
         out_proj = ttnn.linear(
-            out_l1,
+            out,
             self.out_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(y=4, x=8),
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
         )
+        ttnn.deallocate(out)
 
         return out_proj

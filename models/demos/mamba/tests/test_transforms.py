@@ -8,11 +8,14 @@ import pytest
 import ttnn
 import tt_lib as ttl
 
-from models.demos.mamba.tt.full_model import MambaSsmBlockTransformer
+from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
+
+N = 32
+HIDDEN_SIZE = 2560
 
 
 @pytest.mark.parametrize(
@@ -30,29 +33,26 @@ def test_mamba_ssm_block_repeat_interleave(
     batch: int,
     pcc: float,
 ):
-    n = 16
-    hidden_size = 2560
-    input = torch.rand(1, 1, batch, hidden_size * 2)
-    dtype = ttnn.bfloat16
-    fidelity = ttl.tensor.MathFidelity.LoFi
+    input = torch.rand(1, 1, batch, HIDDEN_SIZE * 2)
 
-    expected = torch.repeat_interleave(input, n, dim=3)
+    expected = torch.repeat_interleave(input, N, dim=3)
 
-    transformer = MambaSsmBlockTransformer(device, hidden_size * 2, n, dtype=dtype)
+    transformer = MambaSsmBlockTransformer(device, batch, HIDDEN_SIZE * 2, N)
     input = ttnn.to_device(
         ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
+    actual = transformer.repeat_interleave(
+        input,
+        memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     )
-    core_grid = ttnn.CoreGrid(y=7, x=8)
-    actual = transformer.repeat_interleave(input, ttnn.L1_MEMORY_CONFIG, compute_kernel_config, core_grid)
 
-    print(comp_allclose(expected, ttnn.to_torch(actual)))
+    assert list(actual.get_legacy_shape()) == [1, 1, batch, 2 * HIDDEN_SIZE * N]
+
+    actual = ttnn.to_torch(actual)
+    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.9999)
+    assert passing_pcc
 
 
 @pytest.mark.parametrize(
@@ -66,72 +66,28 @@ def test_mamba_ssm_block_repeat_interleave(
 )
 def test_mamba_ssm_block_repeat(
     device: ttnn.Device,
-    use_program_cache,
     batch: int,
     pcc: float,
+    use_program_cache,
 ):
-    n = 16
-    hidden_size = 2560
-    input = torch.rand(1, 1, batch, n)
-    dtype = ttnn.bfloat16
-    fidelity = ttl.tensor.MathFidelity.LoFi
+    input = torch.rand(1, 1, batch, N)
 
     # (1, 1, B, n) -> (1, 1, B, hidden * 2 * n)
-    expected = input.repeat((1, 1, 1, hidden_size * 2))
+    expected = input.repeat((1, 1, 1, HIDDEN_SIZE * 2))
 
-    transformer = MambaSsmBlockTransformer(device, hidden_size * 2, n, dtype=dtype)
+    transformer = MambaSsmBlockTransformer(device, batch, HIDDEN_SIZE * 2, N)
     input = ttnn.to_device(
         ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
+    actual = transformer.repeat(
+        input,
+        memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     )
-    core_grid = ttnn.CoreGrid(y=7, x=8)
-    actual = transformer.repeat(input, ttnn.L1_MEMORY_CONFIG, compute_kernel_config, core_grid)
 
-    print(comp_allclose(expected, ttnn.to_torch(actual)))
+    assert list(actual.get_legacy_shape()) == [1, 1, batch, 2 * HIDDEN_SIZE * N]
 
-
-@pytest.mark.parametrize(
-    "batch, pcc",
-    (
-        (
-            32,
-            0.99,
-        ),
-    ),
-)
-def test_mamba_ssm_block_reduce(
-    device: ttnn.Device,
-    use_program_cache,
-    batch: int,
-    pcc: float,
-):
-    n = 16
-    hidden_size = 2560
-    input = torch.rand(1, 1, batch, hidden_size * 2 * n)
-    dtype = ttnn.bfloat16
-    fidelity = ttl.tensor.MathFidelity.LoFi
-
-    # (1, 1, b, hidden_size * 2 * n) -> (1, b, hidden_size * 2)
-    expected = torch.sum(torch.reshape(input, (1, batch, hidden_size * 2, n)), dim=-1).unsqueeze(0)
-
-    transformer = MambaSsmBlockTransformer(device, hidden_size * 2, n, dtype=dtype)
-    input = ttnn.to_device(
-        ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-    )
-    core_grid = ttnn.CoreGrid(y=7, x=8)
-    actual = transformer.reduce(input, ttnn.L1_MEMORY_CONFIG, compute_kernel_config, core_grid)
-
-    print(comp_allclose(expected, ttnn.to_torch(actual)))
+    actual = ttnn.to_torch(actual)
+    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.9999)
+    assert passing_pcc

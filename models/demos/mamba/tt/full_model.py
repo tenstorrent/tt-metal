@@ -80,8 +80,9 @@ class MambaTT(torch.nn.Module):
         self.embedding = reference_model.embedding
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
-
-        transformer = MambaSsmBlockTransformer(self.device, self.args.d_inner, self.args.d_state)
+        transformer = MambaSsmBlockTransformer(
+            self.device, self.args.batch_size, self.args.d_inner, configs["latent_size"]
+        )
 
         self.layers = [
             TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i), transformer)

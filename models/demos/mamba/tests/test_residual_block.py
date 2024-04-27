@@ -70,7 +70,9 @@ def test_mamba_residual_block_inference(
     config = model_config.create_model_config(batch, d_model)
 
     loader = TtTensorLoader(reference_model.state_dict(), device, tt_cache_path=cache_path)
-    transformer = MambaSsmBlockTransformer(device, reference_model.args.d_inner, reference_model.args.d_state)
+    transformer = MambaSsmBlockTransformer(
+        device, batch, reference_model.args.d_inner, reference_model.args.d_state * 2
+    )
 
     model = TtResidualBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM), transformer)
     tt_input = input.view(1, 1, batch, d_model)
