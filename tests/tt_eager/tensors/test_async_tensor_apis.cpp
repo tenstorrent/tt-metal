@@ -147,6 +147,58 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
     device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
 
+Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
+
+TEST_F(CommonFixture, TestAsyncRefCountManager) {
+    Device* device = this->devices_[0];
+    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+
+    log_info(LogTest, "Testing Device tensor copy assignment");
+    for (int i = 0; i < 5; i++) {
+        // Run for multiple loops to ensure deterministic behaviour with device addresses
+        // Initialize 2 tensors on device
+        Tensor tensor1 = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor2 = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        uint32_t tensor2_device_buf_addr = tensor2.device_buffer()->address();
+        // Assign tensor1 to tensor2 and ensure that ref counts are appropriately updated with the buffer for tensor2 deallocated
+        tensor2 = tensor1;
+        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 2);
+        EXPECT_EQ(tensor1.tensor_attributes->main_thread_ref_count, 2);
+        // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the prev addr for tensor2
+        Tensor tensor3 = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        EXPECT_EQ(tensor3.device_buffer()->address(), tensor2_device_buf_addr);
+        EXPECT_EQ(tensor1.device_buffer()->address(), tensor2.device_buffer()->address());
+    }
+    log_info(LogTest, "Testing Device tensor self-assignment through function");
+    for (int i = 0; i < 5; i++) {
+        Tensor device_tensor = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        uint32_t device_tensor_address = device_tensor.device_buffer()->address();
+        // This step will copy the tensor to a temp rval and std::move it back to the caller's instance of device_tensor
+        // Ensure ref count and address remain unchanged
+        device_tensor = tensor_identity_copy_function(device_tensor);
+        EXPECT_EQ(device_tensor.tensor_attributes->main_thread_ref_count, 1);
+        EXPECT_EQ(device_tensor.device_buffer()->address(), device_tensor_address);
+    }
+
+    log_info(LogTest, "Testing Device tensor move assignment");
+    for (int i = 0; i < 5; i++) {
+        Tensor tensor1 = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor2 = std::move(tensor1);
+        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 1);
+        EXPECT_EQ(tensor1.tensor_attributes, nullptr);
+    }
+
+    log_info(LogTest, "Testing Device tensor self-assignment");
+    Tensor tensor_to_self_assign = tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16).to(device);
+    uint32_t tensor_to_self_assign_address = tensor_to_self_assign.device_buffer()->address();
+    tensor_to_self_assign = tensor_to_self_assign;
+    EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
+    tensor_to_self_assign = std::move(tensor_to_self_assign);
+    EXPECT_EQ(tensor_to_self_assign.device_buffer()->address(), tensor_to_self_assign_address);
+    Finish(device->command_queue());
+    device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+}
+
 TEST_F(CommonFixture, TestAsyncEltwiseBinaryAutoFormat) {
     // Test usecase where both inputs and outputs are on host and autoformat is used
     Device* device = this->devices_[0];
