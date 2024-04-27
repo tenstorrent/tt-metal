@@ -426,14 +426,17 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
                 query_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
+        for i in range(len(query_layer)):
             query_layer[i] = tt_lib.tensor.pad(
                 query_layer[i], [1, self.padded_local_heads, 32, self.head_dim], [0, 0, 0, 0], 0.0
             )
+        for i in range(len(query_layer)):
             query_layer[i] = tt_lib.tensor.transpose(
                 query_layer[i],
                 -2,
                 -3,
             )
+        for i in range(len(query_layer)):
             query_layer[i] = tt_lib.tensor.reshape(
                 query_layer[i],
                 32,
@@ -606,12 +609,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             # TRANSPOSE
             # Get batch in dim 1
             attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, 32, 32, 128)
+        for i in range(len(attn_output)):
             # Get batch in dim 2
             attn_output[i] = tt_lib.tensor.transpose(
                 attn_output[i],
                 -2,
                 -3,
             )
+        for i in range(len(attn_output)):
             # UNPAD
             attn_output_shape = attn_output[i].shape
             attn_output[i] = tt_lib.tensor.unpad(
@@ -625,6 +630,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 ],
                 output_mem_config=self.model_config["L1_MEMCFG"],
             )
+        for i in range(len(attn_output)):
             # SHARD TO SCORES_TRANSPOSED_OUTPUT_MEMCFG
             attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
                 attn_output[i], sharded_mem_config=self.model_config["SCORES_TRANSPOSED_OUTPUT_MEMCFG"]

@@ -75,10 +75,16 @@ def run_all_gather_on_t3000_impl(
     use_program_cache,
     function_level_defaults,
     num_iters=1,
+    enable_async=False,
 ):
     if len(all_devices) != 8:
         pytest.skip("Not T3000!")
 
+    # Use Async mode based on test input config
+    for device in all_devices:
+        device.enable_async(enable_async)
+    if enable_async:
+        logger.info(f"Using Async Mode for All Gather Op Dispatch")
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -133,6 +139,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     use_program_cache,
     function_level_defaults,
     num_iters,
+    enable_async=False,
 ):
     run_all_gather_on_t3000_impl(
         all_devices,
@@ -146,6 +153,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         use_program_cache,
         function_level_defaults,
         num_iters,
+        enable_async,
     )
 
 
@@ -180,6 +188,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     ],
 )
 @pytest.mark.parametrize("num_iters", [100])  # TODO: restore to 500
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_post_commit_looping(
     all_devices,
     num_devices,
@@ -192,6 +201,7 @@ def test_all_gather_on_t3000_post_commit_looping(
     num_iters,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
         all_devices,
@@ -205,6 +215,7 @@ def test_all_gather_on_t3000_post_commit_looping(
         use_program_cache,
         function_level_defaults,
         num_iters,
+        enable_async,
     )
 
 
@@ -325,6 +336,7 @@ def test_all_gather_on_t3000_post_commit(
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
     all_devices,
     num_devices,
@@ -336,10 +348,14 @@ def test_line_all_gather_on_t3000_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
+    enable_async,
     num_iters=1,
 ):
     if len(all_devices) != 8:
         pytest.skip("Not T3000!")
+
+    for device in all_devices:
+        device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")

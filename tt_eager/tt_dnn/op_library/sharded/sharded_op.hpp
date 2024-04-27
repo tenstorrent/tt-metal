@@ -196,10 +196,15 @@ inline Tensor sharded_to_interleaved(
 }
 
 inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config) {
-    TT_FATAL(input_tensor.shard_spec().has_value());
-    TT_FATAL(output_mem_config.is_sharded());
-
-    return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            TT_FATAL(input_tensor.shard_spec().has_value());
+            TT_FATAL(output_mem_config.is_sharded());
+            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor});
+        }, {input_tensor}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

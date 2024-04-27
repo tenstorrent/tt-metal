@@ -91,23 +91,32 @@ std::vector<Tensor> all_gather_impl(const std::vector<Tensor>& input_tensors, co
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(input_tensors.size());
-    std::vector<AllGather> ops;
-    ops.reserve(input_tensors.size());
-    bool is_ring = topology == all_gather_op::Topology::Ring;
-    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-        bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
-        bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
+    std::vector<Tensor> output_tensors = std::vector<Tensor>(input_tensors.size());
 
-        std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
-            std::nullopt :
-            std::optional<chip_id_t>(input_tensors[(i + 1) % input_tensors.size()].device()->id());
-        std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-            std::nullopt :
-            std::optional<chip_id_t>(input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id());
-        ops.emplace_back(AllGather{dim, num_links, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config,topology});
-        output_tensors.push_back(operation::run(ops[i], {input_tensors[i]}).at(0));
+    bool is_ring = topology == all_gather_op::Topology::Ring;
+    uint32_t num_inputs = static_cast<uint32_t>(input_tensors.size());
+    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+        output_tensors[i] = Tensor(operation::get_workers_for_op_output({input_tensors[i]}));
+        // Extract these tensors in the main thread, since they're used to get the sender and receiver device ids
+        // Dont get the device in the main thread, since it can cause stalls in async mode.
+        const Tensor& tensor_on_receiver = input_tensors[(i + 1) % num_inputs];
+        const Tensor& tensor_on_sender = input_tensors[i == 0 ? num_inputs - 1 : i - 1];
+        // Package output in vector, to populate it with launch_op
+        std::vector<Tensor> output_for_curr_device = {output_tensors[i]};
+        operation::launch_op(
+            [is_ring, dim, num_links, i, num_inputs, output_mem_config, topology] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (num_inputs - 1);
+                bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
+
+                std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                    std::nullopt :
+                    std::optional<chip_id_t>(input_tensors.at(1).device()->id());
+                std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                    std::nullopt :
+                    std::optional<chip_id_t>(input_tensors.at(2).device()->id());
+                return operation::run(AllGather{dim, num_links, num_inputs, i, receiver_device_id, sender_device_id, output_mem_config,topology}, {input_tensors.at(0)});
+            },
+        {input_tensors[i], tensor_on_receiver, tensor_on_sender}, output_for_curr_device);
     }
     return output_tensors;
 }

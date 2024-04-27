@@ -103,6 +103,14 @@ void Tensor::deallocate(bool force) {
                                 // Record ref count before sending to worker
                                 uint32_t device_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
                                 this->workers.at(0)->push_work([force, *this] () mutable {
+                                    // Cross worker synchronization: If the tensor being deallocated is shared across workers (ex: all_gather op),
+                                    // wait until all workers are done with this tensor before deallocating.
+                                    bool num_threads_sharing_tensor = this->tensor_attributes->num_sibling_workers_sharing_tensor;
+                                    if (num_threads_sharing_tensor) {
+                                        while (num_threads_sharing_tensor) {
+                                           num_threads_sharing_tensor = this->tensor_attributes->num_sibling_workers_sharing_tensor;;
+                                        }
+                                    }
                                     std::visit([force, this] (auto&& s) {
                                         using type = std::decay_t<decltype(s)>;
                                         if constexpr (std::is_same_v<type, DeviceStorage>) {
@@ -251,7 +259,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     std::visit([this] (auto&& storage) {
         using StorageType = std::decay_t<decltype(storage)>;
         if constexpr(std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, DeviceStorage>) {
-            std::get<StorageType>(this->tensor_attributes->storage).buffer = storage.buffer;
+            std::get<StorageType>(this->tensor_attributes->storage).insert_buffer(storage.get_buffer());
             this->tensor_attributes->tensor_populated = {true};
         } else if constexpr(std::is_same_v<StorageType, MultiDeviceHostStorage> or std::is_same_v<StorageType, MultiDeviceStorage>) {
             std::get<StorageType>(this->tensor_attributes->storage).buffers = storage.buffers;
@@ -490,8 +498,9 @@ Tensor Tensor::extract_shard(const uint32_t & core_id) const{
 
 Tensor Tensor::to(Layout target_layout, Device* worker) const {
     ZoneScoped;
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    if (worker) {
+    // Only push layout conversion to worker if running in async mode
+    if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
+        // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
         Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, *this);
         Tensor tensor_modified_layout = Tensor({}, 1);
         worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout] () mutable {
