@@ -814,18 +814,19 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         page_size = output.get_legacy_shape()[-1] * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
+    bool is_grayskull = device->arch() == ARCH::GRAYSKULL;
 
     tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, (uint32_t)is_grayskull}));
 
     tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, (uint32_t)is_grayskull}));
 
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(
