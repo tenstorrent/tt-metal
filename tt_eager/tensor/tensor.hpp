@@ -88,10 +88,11 @@ struct Tensor {
     std::optional<std::size_t> tensor_id = std::nullopt;
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes;
+    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
     // Tensor gets worker queue handle through the device
     std::vector<Device*> workers = {};
     bool deallocate_through_destructor = false;
+
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
@@ -149,24 +150,45 @@ struct Tensor {
     }
 
     Tensor &operator=(const Tensor &other) {
-        this->tensor_id = other.tensor_id;
-        this->workers = other.workers;
-        this->tensor_attributes = other.tensor_attributes;
-        this->deallocate_through_destructor = other.deallocate_through_destructor;
-        if (this->workers.size()) {
-            if (this->workers.at(0)->in_main_thread()) {
-                this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+        // Don't self-assign
+        if (this->tensor_attributes != other.tensor_attributes) {
+            // Assign workers before cleanup
+            this->workers = other.workers;
+            // Update ref count for curr tensor_attr and deallocate if needed
+            perform_cleanup_for_async_mode();
+            this->tensor_id = other.tensor_id;
+            this->tensor_attributes = other.tensor_attributes;
+            this->deallocate_through_destructor = other.deallocate_through_destructor;
+            if (this->workers.size()) {
+                if (this->workers.at(0)->in_main_thread()) {
+                    this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+                }
             }
         }
         return *this;
     }
 
     Tensor(Tensor &&other) noexcept = default;
-    Tensor &operator=(Tensor &&other) = default;
+
+    Tensor &operator=(Tensor &&other) {
+        // Don't self assign
+        if (this->tensor_attributes != other.tensor_attributes) {
+            // Assign workers before cleanup
+            this->workers = std::move(other.workers);
+            // Update ref count for curr tensor_attr and deallocate if needed
+            perform_cleanup_for_async_mode();
+            this->tensor_id = std::move(other.tensor_id);
+            this->tensor_attributes = std::move(other.tensor_attributes);
+            this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);
+        }
+        return *this;
+    }
 
     ~Tensor();
 
     void track_ref_count() { this->tensor_attributes->track_ref_count = true; }
+
+    void perform_cleanup_for_async_mode();
 
     void deepcopy(const Tensor& other);
 
