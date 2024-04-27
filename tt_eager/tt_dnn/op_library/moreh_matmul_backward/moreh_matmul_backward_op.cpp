@@ -63,7 +63,7 @@ std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
                 moreh_matmul(output_grad, other, std::nullopt, false, true, output_mem_config);
             auto reduce_dims =
                 find_reduce_dim(temp_input_grad.get_legacy_shape(), input_grad_tensor.get_legacy_shape());
-            moreh_sum(temp_input_grad, input_grad_tensor, reduce_dims);
+            moreh_sum(temp_input_grad, reduce_dims, input_grad_tensor);
         }
         outputs.push_back(input_grad_tensor);
     } else {
@@ -79,7 +79,7 @@ std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
                 moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
             auto reduce_dims =
                 find_reduce_dim(temp_other_grad.get_legacy_shape(), other_grad_tensor.get_legacy_shape());
-            moreh_sum(temp_other_grad, other_grad_tensor, reduce_dims);
+            moreh_sum(temp_other_grad, reduce_dims, other_grad_tensor);
         }
         outputs.push_back(other_grad_tensor);
     } else {
