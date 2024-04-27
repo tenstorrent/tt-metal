@@ -672,6 +672,8 @@ void launch_op(
 
     std::vector<Tensor> async_safe_input_tensors = {};
     std::vector<std::optional<const Tensor>> async_safe_optional_input_tensors = {};
+    std::unordered_set<uint32_t> cross_worker_input_tensor_idx = {};
+    std::unordered_set<uint32_t> cross_worker_optional_input_tensor_idx = {};
     // When running on a single device, input tensors can be using borrowed storage. If so, when running in async mode,
     // copy borrowed tensors to owned storage.
     for (int i = 0; i < input_tensors.size(); i++) {
@@ -691,10 +693,31 @@ void launch_op(
     for (int i = 0; i < output_tensors.size(); i++) {
         output_tensor_ref_count.push_back(output_tensors[i].tensor_attributes->record_main_thread_ref_count());
     }
+    // Check if this op dispatch step relies on tensors from other workers.
+    // If so, mark them in use by current worker. Tensors shared across workers
+    // are only supported when each tensor is tied to a single device/worker
+    // (example all-gather).
+    if (workers.size() == 1) {
+        // Single worker per tensor and.
+        for (int i = 0; i < async_safe_input_tensors.size(); i++) {
+            if (async_safe_input_tensors.at(i).get_workers().size() and async_safe_input_tensors.at(i).get_workers().at(0) != workers.at(0)) {
+                // This input has a worker assigned that doesn't match the worker of the output being created (its shared).
+                async_safe_input_tensors.at(i).tensor_attributes->num_sibling_workers_sharing_tensor++;
+                cross_worker_input_tensor_idx.insert(i);
+            }
+        }
+        for (int i = 0; i < async_safe_optional_input_tensors.size(); i++) {
+            if (async_safe_optional_input_tensors.at(i).has_value() and async_safe_optional_input_tensors.at(i).value().get_workers().size() and async_safe_optional_input_tensors.at(i).value().get_workers().at(0) != workers.at(0)) {
+                async_safe_optional_input_tensors.at(i).value().tensor_attributes->num_sibling_workers_sharing_tensor++;
+                cross_worker_optional_input_tensor_idx.insert(i);
+            }
+        }
+    }
+
     {
         ZoneScopedN("PushOpToWorkers");
         for (auto target_device : workers) {
-            target_device->push_work([target_device, workers, op_func, async_safe_optional_input_tensors, inputs = async_safe_input_tensors, outputs = output_tensors] () mutable {
+            target_device->push_work([target_device, workers, op_func, async_safe_optional_input_tensors, inputs = async_safe_input_tensors, outputs = output_tensors, shared_input_idx = cross_worker_input_tensor_idx, shared_optional_input_idx = cross_worker_optional_input_tensor_idx] () mutable {
                 std::vector<Tensor> input_shards = {};
                 std::vector<std::optional<const Tensor>> optional_input_shards = {};
 
@@ -710,6 +733,14 @@ void launch_op(
                     }
                 }
                 auto local_tensors = op_func(input_shards, optional_input_shards);
+                // Release shared ownership of tensors belonging to other workers.
+                // If the workers for this tensor are stalled to deallocate
+                for (auto& shared_input : shared_input_idx) {
+                    inputs.at(shared_input).tensor_attributes->num_sibling_workers_sharing_tensor--;
+                }
+                for (auto& shared_optional_input : shared_optional_input_idx) {
+                    async_safe_optional_input_tensors.at(shared_optional_input).value().tensor_attributes->num_sibling_workers_sharing_tensor--;
+                }
                 for (int i = 0; i < local_tensors.size(); i++) {
                     if (local_tensors.at(i).storage_type() == StorageType::OWNED) {
                         TT_ASSERT(outputs.at(i).tensor_attributes->dynamic_storage, "launch_with_autoformat must be used if output tensor for op can be placed on host.");

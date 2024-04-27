@@ -34,6 +34,7 @@ struct Tensor {
         std::mutex populated_mutex;
         std::vector<bool> tensor_populated = {};
         uint32_t main_thread_ref_count = 0;
+        std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
         bool deallocated = false; // Set to true if device side storage was deallocated
         bool dynamic_storage = false; // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
@@ -278,8 +279,8 @@ struct Tensor {
     }
 
     // TODO(arakhmati): clean up the methods below
-    Buffer *buffer() const { return std::get<DeviceStorage>(this->get_storage()).buffer.get(); }
-    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).buffer; }
+    Buffer *buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer().get(); }
+    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     Device *device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {

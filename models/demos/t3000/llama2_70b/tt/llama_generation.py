@@ -9,7 +9,13 @@ import ttnn
 from loguru import logger
 
 import copy
-from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
+from models.utility_functions import (
+    torch2tt_tensor,
+    pad_by_zero,
+    tt2torch_tensor,
+    nearest_32,
+    tt_tensors_to_torch_tensors,
+)
 from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
 from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
 from models.demos.t3000.llama2_70b.tt.model_config import (
@@ -96,7 +102,7 @@ class TtLlamaModelForGeneration:
         for device in self.devices:
             tt_lib.device.Synchronize(device)
 
-        logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
+        logits = torch.cat(tt_tensors_to_torch_tensors(tt_logits), -1)
         logits = logits[..., : self.params.vocab_size].float()
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
         del tt_logits
