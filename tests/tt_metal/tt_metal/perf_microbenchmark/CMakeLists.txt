@@ -19,6 +19,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     2_noc_adjacent/test_noc_adjacent
     2_noc_rtor/test_noc_rtor
     3_pcie_transfer/test_rw_buffer
+    3_pcie_transfer/tell_pull_from_pcie
     6_dram_offchip/test_dram_offchip
     7_kernel_launch/test_kernel_launch
 )
