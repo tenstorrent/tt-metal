@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-  "setuptools==68.0.0",
+  "setuptools==69.5.1",
   "setuptools-scm==7.1.0",
   "wheel",
 ]
@@ -15,11 +15,11 @@ authors = [
 ]
 dependencies = [
   "pyyaml==5.3.1",
-  "numpy==1.24.4",
+  "numpy>=1.24.4",
   "loguru==0.6.0",
   "toolz==0.12.0",
   "matplotlib==3.7.1",
-  "Pillow==9.5.0",
+  "Pillow==10.3.0",
   "jupyterlab==4.0.7",
   "ipywidgets==8.1.1",
 
