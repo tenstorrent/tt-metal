@@ -41,6 +41,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent \
 		 tests/tt_metal/perf_microbenchmark/2_noc_rtor/test_noc_rtor \
 		 tests/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer \
+		 tests/tt_metal/perf_microbenchmark/3_pcie_transfer/test_pull_from_pcie \
 		 tests/tt_metal/perf_microbenchmark/6_dram_offchip/test_dram_offchip \
 		 tests/tt_metal/perf_microbenchmark/7_kernel_launch/test_kernel_launch \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
