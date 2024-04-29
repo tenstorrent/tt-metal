@@ -157,8 +157,6 @@ class JitBuildSettings {
     virtual const string& get_full_kernel_name() const = 0;
     virtual void process_defines(const std::function<void (const string& define, const string &value)>) const = 0;
     virtual void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const = 0;
-    void set_multithreaded_compile(bool mt_compile) { this->use_multi_threaded_compile = mt_compile; }
-    bool using_multithreaded_compile() const { return this->use_multi_threaded_compile; }
   private:
     bool use_multi_threaded_compile = true;
 };
@@ -174,20 +172,13 @@ inline const string jit_build_get_kernel_compile_outpath(int device_id) {
     return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(device_id) + "/kernels/";
 }
 
-inline void launch_build_step(bool multi_threaded, const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
-    if (multi_threaded) {
-      events.emplace_back(detail::async(build_func));
-    }
-    else {
-      build_func();
-    }
+inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
+  events.emplace_back(detail::async(build_func));
 }
 
-inline void sync_build_step(bool multi_threaded, std::vector<std::shared_future<void>>& events) {
-  if (multi_threaded) {
-    for (auto & f : events) {
-      f.get();
-    }
+inline void sync_build_step(std::vector<std::shared_future<void>>& events) {
+  for (auto & f : events) {
+    f.get();
   }
 }
 } // namespace tt::tt_metal

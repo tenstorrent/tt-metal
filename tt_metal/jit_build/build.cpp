@@ -480,14 +480,13 @@ void JitBuildState::compile_one(const string& log_file,
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     std::vector<std::shared_future<void>> events;
-    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        launch_build_step(using_multithreaded_compile, [this, &log_file, &out_dir, settings, i] {
+        launch_build_step([this, &log_file, &out_dir, settings, i] {
             this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
         }, events);
     }
 
-    sync_build_step(using_multithreaded_compile, events);
+    sync_build_step(events);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -659,34 +658,32 @@ void jit_build(const JitBuildState& build,
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
     std::vector<std::shared_future<void>> events;
-    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
         auto& build = build_set[i];
-        launch_build_step(using_multithreaded_compile, [build, settings, &kernel_in_path] {
+        launch_build_step([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
         }, events );
     }
-    sync_build_step(using_multithreaded_compile, events);
+    sync_build_step(events);
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
     std::vector<std::shared_future<void>> events;
-    bool using_multithreaded_compile = (settings == nullptr) ? true : settings->using_multithreaded_compile();
     for (size_t i = 0; i < build_subset.size; ++i) {
         // Capture the necessary objects by reference
         auto& build = build_subset.build_ptr[i];
-        launch_build_step(using_multithreaded_compile, [build, settings, &kernel_in_path] {
+        launch_build_step([build, settings, &kernel_in_path] {
             if (settings != nullptr) {
                 build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
             build->build(settings);
         }, events );
     }
-    sync_build_step(using_multithreaded_compile, events);
+    sync_build_step(events);
 }
 
 } // namespace tt_metal

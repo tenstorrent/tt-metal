@@ -37,6 +37,7 @@ pytest models/demos/t3000/falcon40b/tests/test_falcon_end_to_end.py::test_Falcon
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_t3000_prefill.py
 
 pytest tests/ttnn/unit_tests/test_multi_device_async.py
+TT_METAL_THREADCOUNT=1 pytest tests/ttnn/unit_tests/test_multi_device_async.py::test_multi_device_unary_binary_op_chain
 
 pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py
 pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py
