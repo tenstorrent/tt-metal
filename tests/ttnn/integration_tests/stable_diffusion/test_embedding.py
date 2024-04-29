@@ -16,6 +16,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddi
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 def test_embeddings(
     device,
 ):
