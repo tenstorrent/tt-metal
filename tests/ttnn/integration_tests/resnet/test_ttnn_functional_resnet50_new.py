@@ -223,6 +223,7 @@ class ResNet50TestInfra:
         self.ttnn_resnet50_model = resnet50(
             device=device, parameters=parameters, batch_size=batch_size, model_config=model_config
         )
+        self.ops_parallel_config = {}
 
     def preprocess_torch_input(self, torch_input_tensor=None):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
@@ -231,7 +232,9 @@ class ResNet50TestInfra:
     def run(self, torch_input_tensor=None):
         # Note: currently not including the time to flip from torch to ttnn tensors.
         # self.preprocess_torch_input(torch_input_tensor)
-        self.output_tensor = self.ttnn_resnet50_model(self.input_tensor, self.device, self.batch_size)
+        self.output_tensor = self.ttnn_resnet50_model(
+            self.input_tensor, self.device, self.batch_size, self.ops_parallel_config
+        )
         return self.output_tensor
 
     def validate(self, output_tensor=None):
@@ -280,5 +283,8 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
     enable_memory_reports()
     test_infra.preprocess_torch_input()
+    # First run configures convs JIT
     test_infra.run()
+    # Optimized run
+    # test_infra.run()
     test_infra.validate()

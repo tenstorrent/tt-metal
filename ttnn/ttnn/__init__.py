@@ -213,6 +213,7 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    create_sharded_memory_config_,
     dump_memory_config,
     load_memory_config,
 )
