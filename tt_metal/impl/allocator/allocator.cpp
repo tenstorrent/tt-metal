@@ -74,7 +74,7 @@ uint32_t BankManager::num_banks() const {
 }
 
 uint32_t BankManager::bank_size() const {
-    TT_ASSERT(bool(this->allocator_));
+    TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     uint64_t max_size_bytes_u64 = this->allocator_->max_size_bytes();
     if (max_size_bytes_u64 > std::numeric_limits<uint32_t>::max()) {
         TT_THROW("Bank size {} overflows uint32_t", max_size_bytes_u64);
@@ -89,7 +89,11 @@ int64_t BankManager::bank_offset(uint32_t bank_id) const {
 }
 
 void BankManager::validate_bank_id(uint32_t bank_id) const {
-    TT_FATAL(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
+    TT_FATAL(
+        this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(),
+        "Expected bank {} to be tracked!",
+        bank_id,
+        bank_id_to_bank_offset_.size());
 }
 
 uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, CoreCoord compute_grid_size, std::optional<uint32_t> num_shards) {
@@ -108,7 +112,7 @@ uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bo
         address_limit = this->interleaved_address_limit_;
         TT_FATAL(address_limit > 0);
     }
-    TT_ASSERT(bool(this->allocator_));
+    TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
         TT_THROW("Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
@@ -200,7 +204,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
         for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
             CoreCoord logical_core = CoreCoord{x, y};
             allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
-            allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
+            allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, {bank_id}});
             bank_id++;
         }
     }
@@ -258,11 +262,13 @@ const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocat
     return allocator.dram_channel_to_bank_ids.at(dram_channel);
 }
 
-const std::vector<uint32_t> &bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core) {
-    if (allocator.logical_core_to_bank_ids.find(logical_core) == allocator.logical_core_to_bank_ids.end()) {
+const std::vector<uint32_t> &bank_ids_from_logical_core(
+    const Allocator &allocator, BufferType buffer_type, const CoreCoord &logical_core) {
+    if (allocator.logical_core_to_bank_ids.at(buffer_type).find(logical_core) ==
+        allocator.logical_core_to_bank_ids.at(buffer_type).end()) {
         TT_THROW("No L1 bank exists for core {}", logical_core.str());
     }
-    return allocator.logical_core_to_bank_ids.at(logical_core);
+    return allocator.logical_core_to_bank_ids.at(buffer_type).at(logical_core);
 }
 
 Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type) {
@@ -363,7 +369,9 @@ void Allocator::reset() {
     bank_id_to_dram_channel.clear();
     dram_channel_to_bank_ids.clear();
     bank_id_to_logical_core.clear();
-    logical_core_to_bank_ids.clear();
+    for (auto &[buffer_type, submap] : logical_core_to_bank_ids) {
+        submap.clear();
+    }
 
     dram_manager.clear();
     l1_manager.clear();

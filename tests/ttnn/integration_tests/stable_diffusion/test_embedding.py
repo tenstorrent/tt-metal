@@ -14,6 +14,7 @@ from models.utility_functions import (
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
+import pytest
 
 
 @skip_for_grayskull()

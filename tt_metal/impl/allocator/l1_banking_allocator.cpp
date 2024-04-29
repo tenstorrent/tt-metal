@@ -113,7 +113,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
 
             if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
                 uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
-                allocator.logical_core_to_bank_ids.insert({logical_core, {remapped_bank_id}});
+                allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, {remapped_bank_id}});
                 allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
                 bank_id_to_bank_offset.insert({remapped_bank_id, 0});
                 bank_id++;
@@ -133,7 +133,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
                     bank_id++;
                 }
-                allocator.logical_core_to_bank_ids.insert({logical_core, bank_ids});
+                allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, bank_ids});
             }
         }
     }
@@ -151,7 +151,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     continue;
                 }
 
-                allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
+                allocator.logical_core_to_bank_ids[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
                 allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
                 small_bank_id_to_bank_offset.insert({bank_id, 0});
                 bank_id++;

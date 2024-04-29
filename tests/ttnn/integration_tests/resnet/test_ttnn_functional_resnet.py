@@ -114,6 +114,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 def test_basic_block(device):
     torch.manual_seed(0)
 
@@ -157,6 +158,7 @@ def test_basic_block(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 def test_basic_block_with_downsample(device):
     torch.manual_seed(0)
 
@@ -206,6 +208,7 @@ def test_basic_block_with_downsample(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 def test_resnet_conv7s2(device):
     in_planes = 64
 
@@ -242,6 +245,7 @@ def test_resnet_conv7s2(device):
 
 @skip_for_wormhole_b0()
 @pytest.mark.skip(reason="#7681: Failing with shape volume mismatch")
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 def test_resnet(device):
     torch.manual_seed(0)
 
