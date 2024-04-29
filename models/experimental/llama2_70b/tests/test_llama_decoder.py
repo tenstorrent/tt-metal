@@ -169,8 +169,8 @@ def run_test_LlamaDecoder_inference(
         generation_start_pos = 0
         generation_length = 1
     else:
-        generation_start_pos = UNIT_TEST_START_POS
-        generation_length = UNIT_TEST_GENERATION_LENGTH
+        generation_start_pos = 127
+        generation_length = 1
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -311,6 +311,7 @@ def test_LlamaDecoder_inference(
     n_devices,
     all_devices,
     emulated,
+    use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)

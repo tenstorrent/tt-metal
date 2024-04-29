@@ -109,8 +109,8 @@ def run_test_LlamaModel_inference(
         generation_start_pos = 0
         generation_length = 1
     else:
-        generation_start_pos = UNIT_TEST_START_POS
-        generation_length = UNIT_TEST_GENERATION_LENGTH
+        generation_start_pos = 127
+        generation_length = 1
     all_tests_pass = True
     all_pccs, all_top1, all_top5 = [], [], []
     for i in range(generation_length):

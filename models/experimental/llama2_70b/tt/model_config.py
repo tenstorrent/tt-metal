@@ -121,6 +121,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "COMPUTE_KERNEL_CONFIG_LOFI": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
         "LN_COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -129,6 +135,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         ),
         "COMPUTE_KERNEL_FP16_ACC_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+        "COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -184,6 +196,14 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             ),
         }
     )
+    shard_spec_40_cores_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0),
+                ttl.tensor.CoreCoord(7, 4),
+            ),
+        }
+    )
     shard_spec_16_cores_grid = ttl.tensor.CoreRangeSet(
         {
             ttl.tensor.CoreRange(
@@ -229,8 +249,8 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
     n_local_kv_heads = n_kv_heads // num_devices
     total_width_of_qkv_heads_per_device = total_width_per_group_of_qkv_heads * n_local_kv_heads
     shard_width_qkv_heads_per_device_across_16_cores = total_width_of_qkv_heads_per_device // 16
-    shard_width_qkv_heads_per_device_across_8_cores = total_width_of_qkv_heads_per_device // 8
-    shard_width_qkv_heads_per_device_across_32_cores = total_width_of_qkv_heads_per_device // 32
+
+    shard_width_qkv_heads_per_device_across_40_cores = total_width_of_qkv_heads_per_device // 40
 
     # Constants based on padded_mlp_dim
     padded_mlp_dim = model_config_entries["padded_mlp_dim"]
@@ -472,10 +492,10 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
-            shard_spec_8_cores_grid,
+            shard_spec_40_cores_grid,
             [
                 shard_height,
-                shard_width_hidden_dim_across_8_cores,
+                256,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -485,10 +505,10 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
-            shard_spec_8_cores_grid,
+            shard_spec_40_cores_grid,
             [
                 shard_height,
-                shard_width_qkv_heads_per_device_across_8_cores,
+                shard_width_qkv_heads_per_device_across_40_cores,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -514,12 +534,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         )
     else:
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
-            in0_block_w=32,
+            compute_with_storage_grid_size=(8, 5),
+            in0_block_w=8,
             out_subblock_h=1,
-            out_subblock_w=1,  # TODO: Maximize for fp32
+            out_subblock_w=1,
             per_core_M=shard_height // 32,
-            per_core_N=5,
+            per_core_N=1,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,

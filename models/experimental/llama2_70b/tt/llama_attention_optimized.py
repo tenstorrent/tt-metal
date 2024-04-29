@@ -366,7 +366,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
             for i in range(len(xs)):
-                xs[i] = tt_lib.tensor.reshard(xs[i], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
+                xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], self.model_config["L1_MEMCFG"])
+                xs[i] = tt_lib.tensor.interleaved_to_sharded(xs[i], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
+                # xs[i] = tt_lib.tensor.reshard(xs[i], self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
 
         # Fused QKV
         fused_query_key_value = []
@@ -660,7 +662,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
                 output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["BFP8_DTYPE"],
+                # output_dtype=self.model_config["BFP8_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size
 
@@ -871,7 +873,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                         value_layer[i],
                         program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"],
                         output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                        output_dtype=self.model_config["BFP8_DTYPE"],
+                        # output_dtype=self.model_config["BFP8_DTYPE"],
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
                 )

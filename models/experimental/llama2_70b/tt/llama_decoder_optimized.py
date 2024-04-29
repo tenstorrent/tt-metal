@@ -299,7 +299,11 @@ class TtLlamaDecoder_optimized:
         # Put xs back on DRAM and do allgather
         for i in range(self.num_devices):
             xs_replicated.append(
-                tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
+                tt_lib.tensor.sharded_to_interleaved(
+                    xs[i],
+                    output_mem_config=self.model_config["L1_MEMCFG"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
+                )
             )
         ### Duplicate inputs for layernorm
         if self.emulated:
@@ -315,7 +319,9 @@ class TtLlamaDecoder_optimized:
         for i in range(self.num_devices):
             # RMSNorm must execute on sharded input
             xs_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
-                xs_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+                xs_replicated[i],
+                sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["BFLOAT16_DTYPE"],
             )
         attn_norm_replicated = []
         for i in range(self.num_devices):
@@ -440,6 +446,7 @@ class TtLlamaDecoder_optimized:
                         slice_i,  # slice_index
                         tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                         tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                        output_dtype=self.model_config["BFLOAT16_DTYPE"],
                     )
                 )
 
@@ -475,7 +482,7 @@ class TtLlamaDecoder_optimized:
         xs_replicated = []
         for i in range(self.num_devices):
             xs_replicated.append(
-                tt_lib.tensor.typecast(tt_lib.tensor.clone(xs[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+                tt_lib.tensor.typecast(tt_lib.tensor.clone(xs[i]), dtype=self.model_config["BFP8_DTYPE"])
             )
 
         ### Duplicate inputs for layernorm
@@ -512,7 +519,8 @@ class TtLlamaDecoder_optimized:
         attn_resid_replicated = []
         for i in range(self.num_devices):
             attn_resid_replicated.append(
-                tt_lib.tensor.typecast(tt_lib.tensor.clone(output[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+                # tt_lib.tensor.typecast(tt_lib.tensor.clone(output[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+                tt_lib.tensor.clone(output[i])
             )
 
         ### Duplicate attention residual on all chips
