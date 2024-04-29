@@ -75,6 +75,7 @@ def test_downsample_2d_256x256(device, model_name, batch_size, in_channels, inpu
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",

@@ -135,6 +135,7 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
@@ -150,6 +151,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         ):
             pytest.skip("SD unet2d only works for 8x8 grid size")
 
+    ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
     model_name = "CompVis/stable-diffusion-v1-4"

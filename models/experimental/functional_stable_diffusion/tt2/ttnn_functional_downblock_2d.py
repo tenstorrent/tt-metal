@@ -80,7 +80,7 @@ class downblock2d:
             )
 
             hidden_states = ttnn.reallocate(hidden_states)
-            output_states += (hidden_states,)
+            output_states += (ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG),)
 
         if add_downsample:
             assert False, "Bug in model implementation"
