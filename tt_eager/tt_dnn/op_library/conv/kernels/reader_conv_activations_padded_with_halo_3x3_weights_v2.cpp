@@ -31,9 +31,6 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
 
-    if(noop) {
-        return;
-    }
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;

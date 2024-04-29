@@ -27,8 +27,8 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     assert output_tensor.shape == (size,)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("h", [32, 128])
+@pytest.mark.parametrize("w", [64, 128])
 def test_add_2D_tensors(device, h, w):
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
