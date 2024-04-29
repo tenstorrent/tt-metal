@@ -229,10 +229,13 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
 
 inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
                                     CQDispatchCmd cmd) {
+    static_assert(sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
+    const size_t num_uint32s = sizeof(CQDispatchCmd) / sizeof(uint32_t);
+    uint32_t buf[num_uint32s];
 
-    uint32_t *ptr = (uint32_t *)&cmd;
-    for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
-        cmds.push_back(*ptr++);
+    memcpy(buf, &cmd, sizeof(cmd));
+    for (size_t i = 0; i < num_uint32s; i++) {
+        cmds.push_back(buf[i]);
     }
 }
 
