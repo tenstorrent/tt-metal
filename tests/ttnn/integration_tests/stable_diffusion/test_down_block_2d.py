@@ -100,6 +100,7 @@ def test_down_block_2d_256x256_ttnn(input_shape, temb_shape, device, model_name,
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
     [
