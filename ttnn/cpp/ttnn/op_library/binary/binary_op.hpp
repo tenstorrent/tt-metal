@@ -113,6 +113,20 @@ struct MakeBinary {
                     input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
                 }
 
+                if (input_shape_a.rank() == 3 and input_shape_b.rank() == 3 and input_shape_a[0] > input_shape_b[0] and
+                    input_shape_a[-1] == input_shape_b[-1] and input_shape_a[-2] == input_shape_b[-2] ) {
+                    tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim for rank 3");
+                    Shape repeats({input_shape_a[0], 1, 1});
+                    input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
+                }
+                if (input_shape_a.rank() == 4 and input_shape_b.rank() == 4 and input_shape_a[1] > input_shape_b[1] and
+                    input_shape_a[-1] == input_shape_b[-1] and input_shape_a[-2] == input_shape_b[-2] and
+                    input_shape_a[-4] == input_shape_b[-4]) {
+                    tt::log_warning(tt::LogOp, "Using repeat op to broadcast channel dim");
+                    Shape repeats({1, input_shape_a[1], 1, 1});
+                    input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
+                }
+
                 return operation::run(
                     Binary{BinaryProgramConfig{
                         binary_op_type,
