@@ -1165,7 +1165,6 @@ void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chi
 }
 
 void HWCommandQueue::read_completion_queue() {
-    tracy::SetThreadName("COMPLETION QUEUE");
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     while (true) {
