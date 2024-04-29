@@ -160,6 +160,7 @@ def run_perf_resnet(
     logger.info(f"resnet50 inference for {batch_size}x{iterations} Samples: {third_iter_time}")
 
 
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
@@ -190,6 +191,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
