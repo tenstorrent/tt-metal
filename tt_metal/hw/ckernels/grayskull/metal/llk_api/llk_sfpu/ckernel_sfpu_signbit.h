@@ -21,9 +21,9 @@ inline void calculate_signbit()
     {
         vFloat val = dst_reg[0];
 
-        v_if (val <= -0.0f) {
+        v_if (val < 0.0f) {
             val = 1.0f;
-        } v_elseif (val >= 0.0f) {
+        } v_else {
             val = 0.0f;
         }
         v_endif;
