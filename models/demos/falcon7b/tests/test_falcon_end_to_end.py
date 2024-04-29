@@ -328,7 +328,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
 
-    is_low_card_setup = tt_lib.device.GetNumPCIeDevices() <= 1 or device.arch() == tt_lib.device.Arch.GRAYSKULL
+    is_grayskull = device.arch() == tt_lib.device.Arch.GRAYSKULL
+
+    is_low_card_setup = tt_lib.device.GetNumPCIeDevices() <= 1 or is_grayskull
 
     current_low_card_gs_only_working_config = not (
         model_config_str != "BFLOAT16-L1"
@@ -348,10 +350,13 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         )
 
     # gs only
-    if is_low_card_setup and device.arch() != tt_lib.device.Arch.GRAYSKULL and current_low_card_gs_only_working_config:
+    if is_low_card_setup and not is_grayskull and current_low_card_gs_only_working_config:
         pytest.skip(
             "Single-card falcon cannot run this config on non-Grayskull: BFLOAT16-L1-falcon_7b-layers_32-decode_batch32"
         )
+
+    if is_grayskull and model_config_str == "BFLOAT16-L1" and num_layers == 32 and llm_mode == "prefill" and seq_len == 1024:
+        pytest.skip("#7933: Out of DRAM space error for tensor")
 
     model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
