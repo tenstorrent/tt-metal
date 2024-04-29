@@ -31,19 +31,11 @@ def run_reshard_test(
     output_sharding_scheme,
     tt_dtype,
 ):
-    available_compute_grid = device.compute_with_storage_grid_size()
     input_shard_grid_set = set()
     for _input_shard_grid in input_shard_grid:
         compute_grid_start = ttl.tensor.CoreCoord(_input_shard_grid[0][0], _input_shard_grid[0][1])
         compute_grid_end = ttl.tensor.CoreCoord(_input_shard_grid[1][0], _input_shard_grid[1][1])
         input_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
-        if (
-            (compute_grid_start.x >= available_compute_grid.x)
-            or (compute_grid_start.y >= available_compute_grid.y)
-            or (compute_grid_end.x >= available_compute_grid.x)
-            or (compute_grid_end.y >= available_compute_grid.y)
-        ):
-            pytest.skip("Input Shard Spec not compatible on device")
 
     input_shard_grid = ttl.tensor.CoreRangeSet(input_shard_grid_set)
 
@@ -52,13 +44,6 @@ def run_reshard_test(
         compute_grid_start = ttl.tensor.CoreCoord(_output_shard_grid[0][0], _output_shard_grid[0][1])
         compute_grid_end = ttl.tensor.CoreCoord(_output_shard_grid[1][0], _output_shard_grid[1][1])
         output_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
-        if (
-            (compute_grid_start.x >= available_compute_grid.x)
-            or (compute_grid_start.y >= available_compute_grid.y)
-            or (compute_grid_end.x >= available_compute_grid.x)
-            or (compute_grid_end.y >= available_compute_grid.y)
-        ):
-            pytest.skip("Output Shard Spec not compatible on device")
 
     output_shard_grid = ttl.tensor.CoreRangeSet(output_shard_grid_set)
 
@@ -96,6 +81,7 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
