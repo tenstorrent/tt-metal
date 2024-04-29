@@ -1481,10 +1481,7 @@ void prepare_inputs(
 }
 
 float to_float(bfloat16 bfloat16_num) {
-    uint16_t uint16_data = *reinterpret_cast<uint16_t*>(&bfloat16_num);
-    uint32_t uint32_data = (uint16_data << 16);
-    float float_data = *reinterpret_cast<float*>(&uint32_data);
-    return float_data;
+    return bfloat16_num.to_float();
 }
 
 bool validation_single_core(
