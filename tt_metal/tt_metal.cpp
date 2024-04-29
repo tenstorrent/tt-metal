@@ -201,7 +201,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         for(int host_page_id=0; host_page_id<total_pages; host_page_id++){
             auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
             auto data_index = host_page_id * num_entries_per_page;
             std::vector<uint32_t> page;
@@ -371,7 +371,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
             if(host_page_id.has_value()) {
                 if(!shard_order){
@@ -466,7 +466,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             read_pages_to_host_helper(
                 device,
                 buffer,

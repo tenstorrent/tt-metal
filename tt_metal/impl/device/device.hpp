@@ -149,7 +149,8 @@ class Device {
 
     const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const;
 
-    const std::vector<uint32_t> &bank_ids_from_logical_core(const CoreCoord &logical_core) const;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(
+        BufferType buffer_type, const CoreCoord &logical_core) const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
 

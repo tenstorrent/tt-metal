@@ -77,6 +77,7 @@ def get_lms_coefficient(order, t, current_order, sigmas):
 
 @skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts, num_inference_steps, image_size, expected_compile_time, expected_inference_time",
     ((1, 2, (512, 512), 3600, 1.8),),
