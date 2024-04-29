@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
     uint32_t num_tiles = 204800;
-    uint32_t noc_index;
+    uint32_t noc_index = 0;
     uint32_t access_type = 0;
     uint32_t num_tests = 10;
     bool use_device_profiler = false;
