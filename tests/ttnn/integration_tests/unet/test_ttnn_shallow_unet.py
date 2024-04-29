@@ -511,6 +511,7 @@ class UNet(nn.Module):
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize("loop", [0])
 @pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1)])  # , (True, 2)])
 def test_unet(device, loop, perf_mode, groups):

@@ -1114,9 +1114,10 @@ const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_ch
     return allocator::bank_ids_from_dram_channel(*this->allocator_, dram_channel);
 }
 
-const std::vector<uint32_t> &Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
+const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord &logical_core) const {
     this->check_allocator_is_initialized();
-    return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
+    return allocator::bank_ids_from_logical_core(*this->allocator_, buffer_type, logical_core);
 }
 
 allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
