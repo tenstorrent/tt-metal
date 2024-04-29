@@ -198,7 +198,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
                 run_mailbox_read_val = tt::llrt::read_hex_vec_from_core(device->id(), phys_dispatch_core, run_mailbox_address & ~0x3, sizeof(uint32_t));
                 run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
             } while (run != RUN_MSG_GO);
-            sleep(2);
+            sleep(1);
             std::vector<uint32_t> read_ptr_update_val = {(read_ptr_update.value().first >> 4) | (read_ptr_update.value().second << 31)};
             tt::llrt::write_hex_vec_to_core(
                 device->id(), phys_dispatch_core, read_ptr_update_val, CQ_COMPLETION_READ_PTR);
@@ -235,7 +235,7 @@ TEST_F(DeviceSingleCardFixture, TestWriteHostWrap) {
 
 TEST_F(DeviceSingleCardFixture, TestWriteHostStall) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
-    EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {hugepage_buffer_size_g - 5 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 1 * dispatch_buffer_page_size_g, 1)));
+    EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base + 5 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1}, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1)));
 }
 
