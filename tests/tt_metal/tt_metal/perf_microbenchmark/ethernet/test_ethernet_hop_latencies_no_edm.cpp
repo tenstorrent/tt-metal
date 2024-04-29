@@ -8,7 +8,7 @@
 #include <random>
 #include <tuple>
 
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "device/tt_arch_types.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"

@@ -11,7 +11,7 @@
 #include <chrono>
 #include <set>
 #include "llrt/llrt.hpp"
-#include "common/logger.hpp"
+#include "tt_metal/common/logger.hpp"
 
 #include "dprint_server.hpp"
 #include "llrt/tt_cluster.hpp"
