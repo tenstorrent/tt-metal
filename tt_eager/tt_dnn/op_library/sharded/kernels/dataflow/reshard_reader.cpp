@@ -11,7 +11,6 @@ void kernel_main() {
 	constexpr uint32_t num_x_cores = get_compile_time_arg_val(1);
 	constexpr uint32_t num_y_cores = get_compile_time_arg_val(2);
 	constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    #define GRAYSKULL get_compile_time_arg_val(4) == 1
 
 	uint32_t y_offset = num_x_cores;
 
@@ -58,16 +57,12 @@ void kernel_main() {
 
 			uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
 					input_shard_addr);
-			#if GRAYSKULL
-				if(stride_size <= NOC_MAX_BURST_SIZE) {
-					noc_async_read_one_packet(noc_address + addr_offset, l1_write_addr, stride_size);
-				}
-				else {
-					noc_async_read(noc_address + addr_offset, l1_write_addr, stride_size);
-				}
-			#else
+			if(stride_size <= NOC_MAX_BURST_SIZE) {
 				noc_async_read_one_packet(noc_address + addr_offset, l1_write_addr, stride_size);
-			#endif
+			}
+			else {
+				noc_async_read(noc_address + addr_offset, l1_write_addr, stride_size);
+			}
 			l1_write_addr+=stride_size;
 			if(stride_x == 0 and stride_y == 0) {
 				addr_offset += (uint64_t)(stride_data + stride_size);
