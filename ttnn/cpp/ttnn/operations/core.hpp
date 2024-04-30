@@ -203,13 +203,25 @@ inline ttnn::Tensor to_memory_config(
     return reshape(tensor_4D, original_shape);
 }
 
+inline ttnn::Tensor to_device(
+    const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config) {
+    return tensor.to(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+}
+
+inline ttnn::Tensor to_device(
+    const ttnn::Tensor& tensor, DeviceMesh* device_mesh, const std::optional<MemoryConfig>& memory_config) {
+    return tensor.to(device_mesh, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+}
+
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking=true) { return tensor.cpu(blocking); }
 
-inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+inline void deallocate(Tensor& tensor, bool force = true) { tensor.deallocate(force); }
+
+inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     if (input_tensor.is_sharded()) {
-        return move_sharded(input_tensor, mem_config);
+        return move_sharded(input_tensor, memory_config);
     } else {
-        return move(input_tensor, mem_config);
+        return move(input_tensor, memory_config);
     }
 }
 
@@ -358,10 +370,12 @@ inline Tensor to_layout(
 }  // namespace core
 }  // namespace operations
 
+using operations::core::deallocate;
 using operations::core::from_device;
 using operations::core::reallocate;
 using operations::core::reshape;
 using operations::core::squeeze_from_4D;
+using operations::core::to_device;
 using operations::core::to_layout;
 using operations::core::unsqueeze_to_4D;
 

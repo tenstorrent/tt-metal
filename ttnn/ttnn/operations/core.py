@@ -411,7 +411,7 @@ to_device = ttnn.register_operation(
     validate_input_tensors=_to_device_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
-)(lambda tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG: tensor.to(device, memory_config))
+)(ttnn._ttnn.operations.core.to_device)
 
 
 def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -453,7 +453,7 @@ from_device = ttnn.register_operation(
     validate_input_tensors=_from_device_validate_input_tensors,
     golden_function=_golden_function,
     doc=doc,
-)(lambda tensor, blocking=True: tensor.cpu(blocking=blocking))
+)(ttnn._ttnn.operations.core.from_device)
 
 
 doc = """
@@ -474,7 +474,7 @@ Example::
 """
 
 deallocate = ttnn.register_operation(name="ttnn.deallocate", is_cpp_function=True, doc=doc)(
-    lambda tensor, force=True: tensor.deallocate(force=force)
+    ttnn._ttnn.operations.core.deallocate
 )
 
 
