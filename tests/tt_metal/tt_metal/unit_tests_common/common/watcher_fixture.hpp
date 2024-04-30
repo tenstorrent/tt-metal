@@ -14,15 +14,17 @@ public:
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program) {
+    void RunProgram(Device* device, Program& program, bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         CommonFixture::RunProgram(device, program);
 
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
-        int curr_count = tt::watcher_get_dump_count();
-        while (tt::watcher_get_dump_count() < curr_count + 2) {;}
+        if (wait_for_dump) {
+            int curr_count = tt::watcher_get_dump_count();
+            while (tt::watcher_get_dump_count() < curr_count + 2) {;}
+        }
     }
 
 protected:
