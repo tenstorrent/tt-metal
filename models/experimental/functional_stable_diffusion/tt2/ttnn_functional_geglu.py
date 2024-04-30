@@ -12,7 +12,6 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
 
 
 def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input
