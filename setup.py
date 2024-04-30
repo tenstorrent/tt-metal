@@ -10,14 +10,11 @@ import platform
 import subprocess
 from dataclasses import dataclass
 from functools import partial
+from collections import namedtuple
 
 from pathlib import Path
 from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
-
-
-class BUDAEagerBuildConstants:
-    BUDA_EAGER_SO_SRC_LOCATION = "build/lib/libtt_lib_csrc.so"
 
 
 class EnvVarNotFoundException(Exception):
@@ -117,10 +114,9 @@ class BUDAEagerBuild(build_ext):
 
     def run(self):
         assert (
-            len(self.extensions) == 1
-        ), f"Detected more than 1 extension module - aborting because we shouldn't be doing more yet"
+            len(self.extensions) == 2
+        ), f"Detected {len(self.extensions)} extensions, but should be only 2: tt_lib_csrc and ttnn"
 
-        ext = self.extensions[0]
         if self.is_editable_install_():
             assert (
                 buda_eager_build_config.is_srcdir_build
@@ -131,18 +127,20 @@ class BUDAEagerBuild(build_ext):
         subprocess.check_call(["make", "build"], env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], env=build_env)
 
-        fullname = self.get_ext_fullname(ext.name)
-        filename = self.get_ext_filename(fullname)
+        # Move built SOs into appropriate locations
+        for ext in self.extensions:
+            fullname = self.get_ext_fullname(ext.name)
+            filename = self.get_ext_filename(fullname)
 
-        build_lib = self.build_lib
-        full_lib_path = build_lib + "/" + filename
+            build_lib = self.build_lib
+            full_lib_path = build_lib + "/" + filename
 
-        dir_path = os.path.dirname(full_lib_path)
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path)
+            dir_path = os.path.dirname(full_lib_path)
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
 
-        src = BUDAEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
-        self.copy_file(src, full_lib_path)
+            src = build_constants_lookup[ext].so_src_location
+            self.copy_file(src, full_lib_path)
 
     def is_editable_install_(self):
         return not os.path.exists(self.build_lib)
@@ -151,12 +149,20 @@ class BUDAEagerBuild(build_ext):
 # Include tt_metal_C for kernels and src/ and tools
 # And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside
 # tt_dnn
-packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn"]
+packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn"]
 
-# Empty sources in order to force a BUDAEagerBuild execution
+# Empty sources in order to force extension executions
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
+ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
 
-ext_modules = [buda_eager_lib_C]
+ext_modules = [buda_eager_lib_C, ttnn_lib_C]
+
+BuildConstants = namedtuple("BuildConstants", ["so_src_location"])
+
+build_constants_lookup = {
+    buda_eager_lib_C: BuildConstants(so_src_location="build/lib/libtt_lib_csrc.so"),
+    ttnn_lib_C: BuildConstants(so_src_location="build/lib/_ttnn.so"),
+}
 
 setup(
     url="http://www.tenstorrent.com",
@@ -167,6 +173,7 @@ setup(
         "tt_metal": "tt_metal",
         "tt_lib.models": "models",
         "tt_eager.tt_dnn": "tt_eager/tt_dnn",
+        "ttnn": "ttnn/ttnn",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
