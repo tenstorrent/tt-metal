@@ -8,6 +8,7 @@ from diffusers import StableDiffusionPipeline
 import pytest
 from tqdm.auto import tqdm
 import time
+from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
@@ -210,6 +211,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
 
     first_iter = time.time()
+    signpost(header="start")
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -220,6 +222,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
+    signpost(header="stop")
     first_iter = time.time() - first_iter
     print(f"First iteration took {first_iter} seconds")
     # times = []

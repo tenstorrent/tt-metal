@@ -278,11 +278,11 @@ def test_stable_diffusion_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((0.9),),
+    ((6.60),),
 )
 def test_stable_diffusion_device_perf(expected_perf):
     subdir = "ttnn_stable_diffusion"
-    margin = 0.12
+    margin = 0.02
     batch = 1
     iterations = 1
     command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64-device_l1_small_size=32768]"
@@ -297,7 +297,7 @@ def test_stable_diffusion_device_perf(expected_perf):
         wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
 
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch)
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
     prep_device_perf_report(
         model_name=f"stable_diffusion_{batch}batch",

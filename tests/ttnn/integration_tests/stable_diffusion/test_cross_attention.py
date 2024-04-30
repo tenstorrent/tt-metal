@@ -6,6 +6,7 @@ import pytest
 import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
+from tracy import signpost
 
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attention import (
     cross_attention as ttnn_cross_attention,
@@ -253,12 +254,14 @@ def test_cross_attention_512x512(device, model_name, N, C, H, W, index, has_enco
     ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
 
     model = tt2_ttnn_cross_attention(device, parameters)
+    signpost(header="start")
     ttnn_output = model(
         ttnn_hidden_states,
         ttnn_encoder_hidden_states,
         attention_mask=None,
         dim_head=W // 8,
     )
+    signpost(header="stop")
 
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
