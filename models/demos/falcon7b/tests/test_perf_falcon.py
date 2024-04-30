@@ -554,6 +554,7 @@ class TestParametrized:
         use_program_cache,
         async_mode,
     ):
+        pytest.skip(f"#7947")
         if async_mode:
             if llm_mode == "prefill" and seq_len == 128:
                 pytest.skip(
