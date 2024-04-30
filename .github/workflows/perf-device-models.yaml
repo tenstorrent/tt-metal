@@ -44,7 +44,7 @@ jobs:
         timeout-minutes: 90
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
-          VENV_DIR=${{ github.workspace }}/python_env ARCH_NAME=${{ matrix.arch }} MACHINE_TYPE=${{ matrix.runner-info.machine-type }} tox -e performance_device_models
+          VENV_DIR=${{ github.workspace }}/python_env ARCH_NAME=${{ matrix.runner-info.arch }} MACHINE_TYPE=${{ matrix.runner-info.machine-type }} tox -e performance_device_models
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
