@@ -493,12 +493,12 @@ class resnet50:
         if not ops_parallel_config:
             return self.first_run(input_tensor, device, batch_size, ops_parallel_config)
         else:
-            return self.optimized_run(input_tensor, device, batch_size, ops_parallel_config)
+            return self.optimized_run(input_tensor, device, batch_size, ops_parallel_config, self.conv_op_cache)
 
     def first_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
         ## copy input to device sharded directly
         # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
-        conv_op_cache = self.conv_op_cache
+        conv_op_cache = {}
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -560,14 +560,23 @@ class resnet50:
 
         # do reshard before layer3
         # x = ttnn.to_memory_config(x, self.layer3_module1.conv1.conv.input_sharded_memory_config)
-        # breakpoint()
-        # layer3_module1_input_shape = [x.get_legacy_shape()[0], x.get_legacy_shape()[1], x.get_legacy_shape()[2], x.get_legacy_shape()[3]]
-        # breakpoint()
+        layer3_module1_input_shape = [
+            x.get_legacy_shape()[0],
+            x.get_legacy_shape()[1],
+            x.get_legacy_shape()[2],
+            x.get_legacy_shape()[3],
+        ]
         x, x_height, x_width = self.layer3_module1(
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
-        # x_memory_config = ttnn.get_memory_config(x)
-        # ops_parallel_config["layer3_module1_input"] = ttnn.create_sharded_memory_config_(layer3_module1_input_shape, x_memory_config.shard_spec.grid, x_memory_config.memory_layout, x_memory_config.shard_spec.orientation)
+        x_memory_config = ttnn.get_memory_config(x)
+        ops_parallel_config["layer3_module1_input"] = ttnn.create_sharded_memory_config_(
+            layer3_module1_input_shape,
+            x_memory_config.shard_spec.grid,
+            x_memory_config.memory_layout,
+            x_memory_config.shard_spec.orientation,
+            tile_layout=True,
+        )
         x, x_height, x_width = self.layer3_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer3_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer3_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
@@ -579,33 +588,38 @@ class resnet50:
             x_height,
             x_width,
             conv_op_cache,
-            reshard_if_not_optimal=True,
-            height_sharding=False,
             eltwise_binary_out_in_place=False,
         )
 
         # do reshard before layer4
         # x = ttnn.to_memory_config(x, self.layer4_module1.conv1.conv.input_sharded_memory_config)
-        # breakpoint()
-        # layer4_module1_input_shape = [x.get_legacy_shape()[0], x.get_legacy_shape()[1], x.get_legacy_shape()[2], x.get_legacy_shape()[3]]
-        # breakpoint()
+        layer4_module1_input_shape = [
+            x.get_legacy_shape()[0],
+            x.get_legacy_shape()[1],
+            x.get_legacy_shape()[2],
+            x.get_legacy_shape()[3],
+        ]
         x, x_height, x_width = self.layer4_module1(
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
-        # x_memory_config = ttnn.get_memory_config(x)
-        # ops_parallel_config["layer4_module1_input"] = ttnn.create_sharded_memory_config_(layer4_module1_input_shape, x_memory_config.shard_spec.grid, x_memory_config.memory_layout, x_memory_config.shard_spec.orientation)
+        x_memory_config = ttnn.get_memory_config(x)
+        ops_parallel_config["layer4_module1_input"] = ttnn.create_sharded_memory_config_(
+            layer4_module1_input_shape,
+            x_memory_config.shard_spec.grid,
+            x_memory_config.memory_layout,
+            x_memory_config.shard_spec.orientation,
+            tile_layout=True,
+        )
         x, x_height, x_width = self.layer4_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
-        unpadded_shape = x.get_legacy_shape()
-        breakpoint()
+        unpadded_shape = x.shape_without_padding()
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
             (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )
-        breakpoint()
         x = ttnn.reshape(
             x,
             (
@@ -706,10 +720,9 @@ class resnet50:
 
         return x
 
-    def optimized_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
+    def optimized_run(self, input_tensor, device, batch_size, ops_parallel_config, conv_op_cache) -> ttnn.Tensor:
         ## copy input to device sharded directly
         # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
-        conv_op_cache = self.conv_op_cache
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -783,8 +796,6 @@ class resnet50:
             x_height,
             x_width,
             conv_op_cache,
-            reshard_if_not_optimal=True,
-            height_sharding=False,
             eltwise_binary_out_in_place=False,
         )
 

@@ -326,6 +326,7 @@ def determine_parallel_config(
     conv_out_2d_matrix_height = batch_size * output_height * output_width
     # pad height to 32
     conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
+
     if is_out_tiled:
         conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
         conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
@@ -570,8 +571,6 @@ def conv2d(
         if parallel_config != optimal_parallel_config:
             parallel_config = optimal_parallel_config
             needs_reshard = True
-    # if reshard_if_not_optimal and needs_reshard:
-    #     breakpoint()
     if needs_reshard:
         input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
         # not sure if reshard op works for all cases

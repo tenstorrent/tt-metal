@@ -24,6 +24,11 @@ def divup(a, b):
     return (a + b - 1) // b
 
 
+def roundup(a, b):
+    result = divup(a, b) * b
+    return result
+
+
 def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
     return tensor.storage_type() == storage_type
 
@@ -187,6 +192,7 @@ def create_sharded_memory_config_(
     orientation,
     halo: bool = False,
     use_height_and_width_as_shard_shape: bool = False,
+    tile_layout: bool = False,
 ) -> MemoryConfig:
     """
     create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, halo: bool = False, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
@@ -201,6 +207,7 @@ def create_sharded_memory_config_(
         * :attr:`orientation`: the order in which to traverse the cores when reading/writing shards. Defaults to ttnn.ShardOrientation.ROW_MAJOR
         * :attr:`halo`: if the shards have overlapping values. Defaults to False
         * :attr:`use_height_and_width_as_shard_shape`: if True, the height and width of the tensor will be used as the shard shape. Defaults to False. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
+        * :attr:`tile_layout`: if set to True, shard height will be set to multiple of 32. Last shard may be height padded.
 
 
     Example::
@@ -285,22 +292,26 @@ def create_sharded_memory_config_(
         grid_size = shard_grid.bounding_box().grid_size()
         if tensor_memory_layout == TensorMemoryLayout.BLOCK_SHARDED:
             if grid_size.y * grid_size.x != total_num_cores:
-                breakpoint()
                 raise RuntimeError("Invalid CoreRangeSet for block sharding strategy")
             if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR:
-                shard_shape = divup(tensor_height, grid_size.y), divup(tensor_width, grid_size.x)
+                tensor_height_padded = roundup(tensor_height, grid_size.y * 32) if tile_layout else tensor_height
+                shard_shape = divup(tensor_height_padded, grid_size.y), divup(tensor_width, grid_size.x)
 
             elif shard_orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR:
-                shard_shape = divup(tensor_height, grid_size.x), divup(tensor_width, grid_size.y)
+                tensor_height_padded = roundup(tensor_height, grid_size.x * 32) if tile_layout else tensor_height
+                shard_shape = divup(tensor_height_padded, grid_size.x), divup(tensor_width, grid_size.y)
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            shard_shape = divup(tensor_height, total_num_cores), tensor_width
+            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
+            shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
             shard_shape = tensor_height, divup(tensor_width, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
 
+    if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
+        raise RuntimeError("Incorrent tensor shape")
     shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config
