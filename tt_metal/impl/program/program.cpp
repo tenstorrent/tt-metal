@@ -682,13 +682,13 @@ void Program::populate_dispatch_data(Device* device) {
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
                     dst_base_addrs[k] = (uint32_t)relo_addr;
-                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[k] = len * sizeof(uint32_t);
 
                     binaries_data.resize(binaries_data.size() + len);
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
                     binaries_data.resize(
-                        align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+                        align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     k++;
                 });
                 kernel_bins_transfer_info kernel_bins_transfer_info = {
@@ -703,7 +703,7 @@ void Program::populate_dispatch_data(Device* device) {
                 this->kg_buffers.push_back(std::make_unique<Buffer>(
                     device,
                     binaries_data.size() * sizeof(uint32_t),
-                    DeviceCommand::PROGRAM_PAGE_SIZE,
+                    HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                     BufferType::DRAM));
                 sub_kernel_index++;
             }
@@ -756,13 +756,13 @@ void Program::populate_dispatch_data(Device* device) {
                         tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
 
                     dst_base_addrs[k] = (uint32_t)relo_addr;
-                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / DeviceCommand::PROGRAM_PAGE_SIZE;
+                    page_offsets[k] = binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[k] = len * sizeof(uint32_t);
 
                     binaries_data.resize(binaries_data.size() + len);
                     std::copy(mem_ptr, mem_ptr + len, binaries_data.end() - len);
                     binaries_data.resize(
-                        align(binaries_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+                        align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     k++;
                 });
                 kernel_bins_transfer_info kernel_bins_transfer_info = {
@@ -777,7 +777,7 @@ void Program::populate_dispatch_data(Device* device) {
                 this->kg_buffers.push_back(std::make_unique<Buffer>(
                     device,
                     binaries_data.size() * sizeof(uint32_t),
-                    DeviceCommand::PROGRAM_PAGE_SIZE,
+                    HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                     BufferType::DRAM));
                 sub_kernel_index++;
             }
