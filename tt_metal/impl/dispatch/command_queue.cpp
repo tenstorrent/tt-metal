@@ -1376,8 +1376,13 @@ void HWCommandQueue::enqueue_program(
         }
     });
 
-    auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, this->expected_num_workers_completed);
+    // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
+    uint32_t expected_workers_completed = this->manager.get_bypass_mode() ? this->trace_ctx->num_completion_worker_cores : this->expected_num_workers_completed;
+    auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, expected_workers_completed);
     this->enqueue_command(command, blocking);
+
+    log_trace(tt::LogMetal, "Created EnqueueProgramCommand (active_cores: {} bypass_mode: {} expected_workers_completed: {})",
+        program.program_transfer_info.num_active_cores, this->manager.get_bypass_mode(), expected_workers_completed);
 
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
