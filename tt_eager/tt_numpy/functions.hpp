@@ -49,6 +49,20 @@ static Tensor full(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    if (layout == Layout::TILE) {
+        if (shape.rank() < 2) {
+            TT_THROW("TILE layout requires rank >= 2");
+        }
+        TT_ASSERT(
+            shape[-1] % tt::constants::TILE_WIDTH == 0,
+            "TILE layout requires width dimension to be multiple of {}",
+            tt::constants::TILE_WIDTH);
+        TT_ASSERT(
+            shape[-2] % tt::constants::TILE_HEIGHT == 0,
+            "TILE layout requires height dimension to be multiple of {}",
+            tt::constants::TILE_HEIGHT);
+    }
+
     constexpr DataType data_type = detail::get_data_type<T>();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
