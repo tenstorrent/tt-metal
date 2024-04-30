@@ -56,10 +56,8 @@ if not is_grayskull():
 
 
 def permute_conv_weights(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
     weight = ttnn.to_torch(weight)
     weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias = ttnn.to_torch(bias)
     return weight, bias
 
@@ -72,7 +70,6 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
 
 
 def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input

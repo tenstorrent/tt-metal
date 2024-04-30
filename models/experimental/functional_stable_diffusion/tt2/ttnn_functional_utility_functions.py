@@ -19,7 +19,6 @@ def is_tile_dim_alligned(dim):
 
 
 def pre_process_input(device, tensor):
-    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
     batch_size = tensor.shape[0]
     input_channels = tensor.shape[1]
     input_height = tensor.shape[2]
