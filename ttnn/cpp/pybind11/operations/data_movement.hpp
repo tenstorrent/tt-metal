@@ -61,6 +61,25 @@ Example::
 
     )doc");
 
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::upsample,
+        R"doc(
+Upsamples a given multi-channel 2D (spatial) data.
+The input data is assumed to be of the form [N, H, W, C].
+
+The algorithms available for upsampling are 'nearest' for now.
+
+Args:
+    * :attr:`input_tensor`: the input tensor
+    * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
+    )doc",
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::arg("scale_factor"),
+            py::arg("memory_config") = std::nullopt
+        }
+    );
 }
 
 }  // namespace data_movement
