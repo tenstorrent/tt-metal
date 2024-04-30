@@ -27,8 +27,6 @@ from tt_lib.utils import (
     find_closest_largest_divisor_with_num_padding,
     divup,
 )
-from models.utility_functions import is_wormhole_b0, is_grayskull
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 import tt_lib as ttl
 import torch
