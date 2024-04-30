@@ -24,7 +24,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             "relu": torch.relu,
-            "silu": torch.nn.functional.silu,
             "log": torch.log,
             "sin": torch.sin,
             "cos": torch.cos,
@@ -104,7 +103,6 @@ TTL_UNARY_FUNCTIONS = [
     ("gelu", ttl.tensor.gelu),
     ("relu", ttl.tensor.relu),
     ("rsqrt", ttl.tensor.rsqrt),
-    ("silu", ttl.tensor.silu),
     ("log", ttl.tensor.log),
     ("sin", ttl.tensor.sin),
     ("cos", ttl.tensor.cos),
@@ -203,6 +201,45 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
 
 for unary_function_name, ttl_unary_function, name, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, name, param)
+
+
+def register_eltwise_unary_cpp_function(name, unary_function):
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
+        import torch
+
+        name_to_golden_function_function = {
+            "silu": torch.nn.functional.silu,
+        }
+        torch_function = name_to_golden_function_function[name]
+        return torch_function(input_tensor)
+
+    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+        Applies {name} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.{name}(tensor)
+    """
+
+    eltwise_unary_op = ttnn.register_operation(
+        name=f"ttnn.{name}", golden_function=_golden_function, is_cpp_function=True, doc=doc
+    )(unary_function)
+    setattr(THIS_MODULE, name, eltwise_unary_op)
+
+
+TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
+    ("silu", ttnn._ttnn.operations.unary.silu),
+]
+for unary_function_name, unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
+    register_eltwise_unary_cpp_function(unary_function_name, unary_function)
 
 
 __all__ = []
