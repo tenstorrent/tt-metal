@@ -36,8 +36,54 @@ namespace op_profiler {
 
 
 #if defined(TRACY_ENABLE)
-    inline std::unordered_map<uint32_t, std::unordered_map<tt::tt_metal::operation::Hash, std::string>> cached_ops {};
-    inline stack<TracyCZoneCtx> call_stack;
+    class thread_safe_cached_ops_map {
+        public:
+            auto find(uint32_t device_id) {
+                std::scoped_lock<std::mutex> lock(map_mutex);
+                return map.find(device_id);
+            }
+            auto end() {
+                std::scoped_lock<std::mutex> lock(map_mutex);
+                return map.end();
+            }
+            auto at(uint32_t device_id) {
+                std::scoped_lock<std::mutex> lock(map_mutex);
+                return map.at(device_id);
+            }
+            void emplace(uint32_t device_id, std::unordered_map<tt::tt_metal::operation::Hash, std::string>&& device_op_entry) {
+                std::scoped_lock<std::mutex> lock(map_mutex);
+                map.emplace(device_id, device_op_entry);
+            }
+        private:
+            std::mutex map_mutex;
+            std::unordered_map<uint32_t, std::unordered_map<tt::tt_metal::operation::Hash, std::string>> map;
+    };
+
+    class thread_safe_call_stack {
+        public:
+            void push(const TracyCZoneCtx& ctx) {
+                std::scoped_lock<std::mutex> lock(stack_mutex);
+                call_stack.push(ctx);
+            }
+            bool empty() {
+                std::scoped_lock<std::mutex> lock(stack_mutex);
+                return call_stack.empty();
+            }
+            auto pop() {
+                std::scoped_lock<std::mutex> lock(stack_mutex);
+                return call_stack.pop();
+            }
+            auto top() {
+                std::scoped_lock<std::mutex> lock(stack_mutex);
+                return call_stack.top();
+            }
+        private:
+            std::mutex stack_mutex;
+            stack<TracyCZoneCtx> call_stack;
+    };
+
+    inline thread_safe_cached_ops_map cached_ops {};
+    inline thread_safe_call_stack call_stack;
 #endif
 
     static void start_tracy_zone (const string& source,const string& functName, uint32_t lineNum, uint32_t color = 0)
@@ -282,7 +328,7 @@ namespace op_profiler {
                 !useCachedOps ||\
                 !isProgramCached ||\
                 (cached_ops.find(device_id) == cached_ops.end()) ||\
-                (cached_ops[device_id].find(opHash) == cached_ops[device_id].end())
+                (cached_ops.at(device_id).find(opHash) == cached_ops.at(device_id).end())
            )
         {
             auto j = get_base_json(opID, op, input_tensors, output_tensors);
@@ -318,7 +364,7 @@ namespace op_profiler {
             }
             else
             {
-                cached_ops[device_id].emplace(opHash, short_str);
+                cached_ops.at(device_id).emplace(opHash, short_str);
             }
 
             std::string ser = j.dump(4);
@@ -326,7 +372,7 @@ namespace op_profiler {
         }
         else
         {
-            return fmt::format("{}{}`", cached_ops[device_id][opHash], opID);
+            return fmt::format("{}{}`", cached_ops.at(device_id).at(opHash), opID);
         }
     }
 
