@@ -15,7 +15,6 @@ import math
 def compare(tensor, name, reshape=False):
     from models.utility_functions import comp_pcc
 
-    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
     tensor = ttnn.from_device(tensor)
     tensor = ttnn.to_torch(tensor)
 

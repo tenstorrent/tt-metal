@@ -16,10 +16,8 @@ import math
 
 
 def permute_conv_parameters(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
     weight = ttnn.to_torch(weight)
     weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias = ttnn.to_torch(bias)
     return weight, bias
 
