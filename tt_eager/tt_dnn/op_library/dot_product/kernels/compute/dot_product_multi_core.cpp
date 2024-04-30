@@ -66,9 +66,9 @@ inline void reduce_h_fused(
     cb_reserve_back(out_cb_id, 1);
     tile_regs_acquire();
     for (uint32_t out_elem_i = 0; out_elem_i < nblocks; ++ out_elem_i) {
-        const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index * nblocks + out_elem_i)&0x1) : in_cb_id;
+        const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + ((in_stick_index * nblocks + out_elem_i)&0x1)) : in_cb_id;
         cb_wait_front(curr_in_cb_id, 1);
-        unpack_tilizeA_B_block(curr_in_cb_id, in_weights_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
+        unpack_tilizeA_B_dot_product_block(curr_in_cb_id, in_weights_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
             matmul_tiles_math(in_ntiles_c * out_elem_i + c_i);
         }
@@ -114,7 +114,7 @@ void MAIN {
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    tilizeA_B_dot_product_init(in_cb_id, in_weights_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile, 16);
+    tilizeA_B_dot_product_init(in_cb_id, in_weights_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<num_output_tiles, num_output_tiles, true>(out_cb_id, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
 
     cb_wait_front(in_weights_cb_id, 1);
