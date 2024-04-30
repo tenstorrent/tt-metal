@@ -216,11 +216,11 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         } else {
             // By here, prefetch_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
-            DEBUG_STATUS('H', 'Q', 'W');
+            DEBUG_STATUS("HQW");
             DPRINT << "fetch_q_get_cmds stall" << ENDL();
             while ((fetch_size = *prefetch_q_rd_ptr) == 0);
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
-            DEBUG_STATUS('H', 'Q', 'D');
+            DEBUG_STATUS("HQD");
         }
     }
 }
@@ -246,7 +246,7 @@ uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DEBUG_STATUS('!', 'C', 'H', 'K');
+        DEBUG_STATUS("!CHK");
         ASSERT(0);
     }
 
@@ -628,7 +628,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     count++;
 
-    DEBUG_STATUS('P', 'S', 'W');
+    DEBUG_STATUS("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(downstream_sync_sem_id));
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -639,7 +639,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
         RISC_POST_HEARTBEAT(heartbeat);
 #endif
     }
-    DEBUG_STATUS('P', 'S', 'D');
+    DEBUG_STATUS("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -852,7 +852,7 @@ bool process_cmd(uint32_t& cmd_ptr,
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
-        DEBUG_STATUS('!', 'C', 'M', 'D');
+        DEBUG_STATUS("!CMD");
         ASSERT(0);
     }
 
@@ -959,9 +959,9 @@ void process_exec_buf_cmd_h() {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_h_exec_buf_sem_id));
 
-    DEBUG_STATUS('E', 'B', 'C', 'W');
+    DEBUG_STATUS("EBCW");
     while (*sem_addr == 0);
-    DEBUG_STATUS('E', 'B', 'C', 'D');
+    DEBUG_STATUS("EBCD");
     *sem_addr = 0;
 }
 

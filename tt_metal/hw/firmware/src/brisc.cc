@@ -248,9 +248,9 @@ inline void deassert_ncrisc_trisc()
 inline void set_ncrisc_kernel_resume_deassert_address()
 {
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    DEBUG_STATUS('I', 'N', 'W');
+    DEBUG_STATUS("INW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
-    DEBUG_STATUS('I', 'N', 'D');
+    DEBUG_STATUS("IND");
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 }
 
@@ -275,14 +275,14 @@ inline void finish_ncrisc_copy_and_run()
 
 inline void wait_ncrisc_trisc()
 {
-    DEBUG_STATUS('N', 'T', 'W');
+    DEBUG_STATUS("NTW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
-    DEBUG_STATUS('N', 'T', 'D');
+    DEBUG_STATUS("NTD");
 }
 
 int main() {
 
-    DEBUG_STATUS('I');
+    DEBUG_STATUS("I");
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
@@ -298,9 +298,9 @@ int main() {
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
-    DEBUG_STATUS('I', 'N', 'W');
+    DEBUG_STATUS("INW");
     while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
-    DEBUG_STATUS('I', 'N', 'D');
+    DEBUG_STATUS("IND");
 
     mailboxes->launch.run = RUN_MSG_DONE;
 
@@ -308,9 +308,9 @@ int main() {
         init_sync_registers();
         assert_just_ncrisc_reset();
 
-        DEBUG_STATUS('G', 'W');
+        DEBUG_STATUS("GW");
         while (mailboxes->launch.run != RUN_MSG_GO);
-        DEBUG_STATUS('G', 'D');
+        DEBUG_STATUS("GD");
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
@@ -332,7 +332,7 @@ int main() {
             finish_ncrisc_copy_and_run();
 
             // Run the BRISC kernel
-            DEBUG_STATUS('R');
+            DEBUG_STATUS("R");
             if (mailboxes->launch.enable_brisc) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();
@@ -340,7 +340,7 @@ int main() {
                 // This was not initialized in kernel_init
                 noc_local_state_init(noc_index);
             }
-            DEBUG_STATUS('D');
+            DEBUG_STATUS("D");
 
             wait_ncrisc_trisc();
 
