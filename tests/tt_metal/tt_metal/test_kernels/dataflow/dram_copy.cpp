@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or other RISCs
@@ -22,6 +23,15 @@ void kernel_main() {
     std::uint32_t dram_dst_noc_y        = get_arg_val<uint32_t>(6);
 
     std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(7);
+
+#if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
+        //We will assert later. This kernel will hang.
+        //Need to signal completion to dispatcher before hanging so that
+        //Dispatcher Kernel is able to finish.
+        //Device Close () requires fast dispatch kernels to finish.
+        uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+        noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31, false);
+#endif
 
     // DRAM NOC src address
     std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
