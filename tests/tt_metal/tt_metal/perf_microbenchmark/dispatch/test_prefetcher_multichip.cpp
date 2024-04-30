@@ -1349,7 +1349,10 @@ int main(int argc, char **argv) {
 
         tt_metal::Device *device = tt_metal::CreateDevice(device_id_l);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
-
+        auto remote_chips = tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id_l);
+        //remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
+        //holds mmio chips as well as remote chips accessed through that mmmio chip.
+        remote_chips.erase(device_id_l);
         if (device_active_eth_cores.size() == 0) {
             log_info(LogTest,
                 "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
@@ -1358,8 +1361,21 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto eth_core_iter = device_active_eth_cores.begin();
-        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+        int device_id_r = test_device_id;
+        for (auto eth_core : device_active_eth_cores) {
+            auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
+            if (remote_chips.find(connected_device_id) != remote_chips.end()) {
+                device_id_r = connected_device_id;
+                break;
+            }
+        }
+        if (device_id_r == device_id_l) {
+            log_info(LogTest,
+                "Device {} does not have a remote device connected to it.",
+                device_id_l);
+            tt_metal::CloseDevice(device);
+            throw std::runtime_error("Test cannot run on specified device.");
+        }
 
         tt_metal::Device *device_r = tt_metal::CreateDevice(device_id_r);
 
