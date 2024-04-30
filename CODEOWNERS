@@ -113,6 +113,8 @@ tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 # TTNN
 ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 ttnn/setup.py @tt-rkim
+ttnn/module.mk @tt-rkim
+ttnn/CMakeLists.txt @tt-rkim
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 
 # models
