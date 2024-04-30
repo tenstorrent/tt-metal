@@ -21,6 +21,43 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
+bool _get_use_same_noc(const Tensor& input_tensor_a, const Tensor& input_tensor_b, MathFidelity math_fidelity) {
+    const auto& in_a_shape = input_tensor_a.get_legacy_shape();
+    const auto& in_b_shape = input_tensor_b.get_legacy_shape();
+
+    uint32_t M = in_a_shape[0] * in_a_shape[2];
+    uint32_t K = in_a_shape[3];
+    uint32_t N = in_b_shape[3];
+
+    auto in_a_dtype = input_tensor_a.get_dtype();
+    auto in_b_dtype = input_tensor_b.get_dtype();
+
+    bool use_same_noc = false;
+
+    std::vector<std::vector<int> > bfp8_bfp8_lofi_threshold = { {512, 8192, 1024} };
+    std::vector<std::vector<int> > fp16_fp16_hifi2_threshold = { {256, 8192, 1024}, {512, 256, 4096}, {512, 512, 2048}, {512, 2048, 1024}, {512, 4096, 2048}, {512, 8192, 1024}};
+    std::vector<std::vector<int> > fp16_bfp8_lofi_threshold = { {512, 8192, 2048} };
+
+    auto check_thresholds = [&](const std::vector<std::vector<int>>& thresholds) {
+        return std::any_of(thresholds.begin(), thresholds.end(), [&](const std::vector<int>& threshold) {
+            auto [m_thresh, k_thresh, n_thresh] = std::tie(threshold[0], threshold[1], threshold[2]);
+            return M <= m_thresh && K <= k_thresh && N >= n_thresh;
+        });
+    };
+
+    if (in_a_dtype == DataType::BFLOAT8_B && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
+        use_same_noc = check_thresholds(bfp8_bfp8_lofi_threshold);
+    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT16 && math_fidelity == MathFidelity::HiFi2) {
+        use_same_noc = check_thresholds(fp16_fp16_hifi2_threshold);
+    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
+        use_same_noc = check_thresholds(fp16_bfp8_lofi_threshold);
+    }
+
+    tt::log_debug("M: {}, K: {}, N: {}, a_df: {}, b_df: {}, mf: {}, Use same noc: {}", M, K, N, in_a_dtype, in_b_dtype, math_fidelity, use_same_noc);
+
+    return use_same_noc;
+}
+
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
     MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc,
@@ -63,10 +100,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
     const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-
-    if (not in0_is_sharded or in1_is_sharded) {
-        mcast_use_same_noc = false;
-    }
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -992,7 +1025,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool mcast_use_same_noc, bool use_noc_vc) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool use_noc_vc) {
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1070,6 +1103,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
         TT_FATAL(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
+    bool mcast_use_same_noc = reuse_mcast_optimized_helpers::_get_use_same_noc(a, b, math_fidelity);
+    bool in0_is_sharded = a.shard_spec().has_value();
+    bool in1_is_sharded = b.shard_spec().has_value();
+    if (not in0_is_sharded or in1_is_sharded) {
+        mcast_use_same_noc = false;
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -1143,8 +1183,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool mcast_use_same_noc, bool use_noc_vc) {
-     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation, untilize_out, mcast_use_same_noc, use_noc_vc);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool use_noc_vc) {
+     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation, untilize_out, use_noc_vc);
 }
 
 }  // namespace tt_metal
