@@ -172,12 +172,12 @@ def zeros(
     *,
     device: ttnn.Device,
     dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
 
-    zeros(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    zeros(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Returns a new tensor filled with zeros by taking input tensor shape as reference.
 
@@ -216,12 +216,12 @@ def ones(
     *,
     device: ttnn.Device,
     dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
 
-    ones(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    ones(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Returns a new tensor filled with ones by taking input tensor shape as reference.
 
@@ -261,13 +261,13 @@ def full(
     *,
     device: ttnn.Device,
     dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
     fill_value: float,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
 
-    full(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    full(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Returns a new tensor filled with fill_value by taking input tensor shape as reference.
 
