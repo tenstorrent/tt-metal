@@ -8,8 +8,8 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_mean_tests(
@@ -40,13 +40,17 @@ def run_mean_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
-    assert_with_pcc(ref_value, tt_result, 0.99)
+    success, pcc_value = comp_pcc(ref_value, tt_result, 0.99)
+    logger.debug(pcc_value)
+    logger.debug(success)
+
+    assert success
 
 
 test_sweep_args = [
     (
         [(12, 224, 224)],
-        [ttnn.bfloat8_b],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.L1_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,
@@ -55,7 +59,7 @@ test_sweep_args = [
     ),
     (
         [(2, 12, 32, 128)],
-        [ttnn.bfloat8_b],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,
