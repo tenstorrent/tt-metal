@@ -94,7 +94,7 @@ vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 TEST_F(CommandQueueFixture, TraceInstanceManagement) {
     CommandQueue& cq = this->device_->command_queue();
     vector<uint64_t> trace_size = {32*1024, 32};
-    vector<uint64_t> page_size = {DeviceCommand::PROGRAM_PAGE_SIZE, 32};
+    vector<uint64_t> page_size = {HostMemDeviceCommand::PROGRAM_PAGE_SIZE, 32};
     vector<uint64_t> buf_size_per_bank;
 
     for (int i=0; i<trace_size.size(); i++) {
