@@ -154,7 +154,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on.
     string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    int line_num = 30;
+    int line_num = 50;
 
     string expected = fmt::format(
         "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
@@ -169,7 +169,11 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
 
     log_info(LogTest, "Expected error: {}", expected);
-    log_info(LogTest, "Reported error: {}", watcher_server_get_exception_message());
+    std::string exception = "";
+    do {
+        exception = watcher_server_get_exception_message();
+    } while (exception == "");
+    log_info(LogTest, "Reported error: {}", exception);
     EXPECT_TRUE(expected == watcher_server_get_exception_message());
 }
 
@@ -177,7 +181,6 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
-    GTEST_SKIP();
     // Only run on device 0 because this test takes the watcher server down.
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
@@ -188,7 +191,6 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
 TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
-    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
         this->devices_[0]
@@ -198,7 +200,6 @@ TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
-    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
         this->devices_[0]
@@ -208,7 +209,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
-    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
         this->devices_[0]
@@ -218,7 +218,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
 TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
-    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
         this->devices_[0]
@@ -228,7 +227,6 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
 TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
-    GTEST_SKIP();
     this->RunTestOnDevice(
         [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
         this->devices_[0]
