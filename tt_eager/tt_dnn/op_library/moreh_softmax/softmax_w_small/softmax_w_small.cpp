@@ -40,7 +40,7 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
+operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input.get_legacy_shape();
@@ -58,6 +58,9 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, num_kernel_rows);
 
+    auto arch = input.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
+
     Program program = Program();
 
     // create circular buffers
@@ -71,8 +74,8 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
             {CB::c_in0, 2},         // input
             {CB::c_in1, 1},         // mask
             {CB::c_out0, 2},        // output
-            {CB::c_intermed0, Wt},  // exp(x)
-            {CB::c_intermed1, 1},   // reduce
+            {CB::c_intermed0, Wt, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // exp(x)
+            {CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // reduce
             {CB::c_in2, 1}          // scaler
         });
 
@@ -96,6 +99,10 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
         compute_defines["LOG"] = "1";
     }
 
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
     // create compute kernel
     CreateComputeKernel(
         program,
@@ -104,7 +111,10 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Wt}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Wt}},
         },
-        compute_defines);
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     // Set Runtime Args
     auto core_x_offset = core_range.start.x;
