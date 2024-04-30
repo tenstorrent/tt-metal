@@ -210,7 +210,7 @@ We have had {failures_since_last_run} new failures since the prior run.
 
 
 All Sweep Tests
---------------------
+---------------
 
 These are the sweep tests for commit hash {most_recent_commit_hash}
 

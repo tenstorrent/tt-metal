@@ -15,13 +15,13 @@ PORT          	?= 8888
 DOCS_VERSION       	?= latest
 
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
-TTNN_SWEEPS_DIR = $(HTMLDIR)/ttnn/ttnn_sweeps
+TTNN_SWEEPS_DIR = source/ttnn/ttnn_sweeps
 
 # Put it first so that "make" without argument is like "make help".
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
-.PHONY: help default clean html publish build_doxygen sphinx_build_dir html/ttnn html/tt-metalium ttnn_sweeps ttnn_sweeps/check_directory
+.PHONY: help default clean html publish build_doxygen sphinx_build_dir html/ttnn html/tt-metalium ttnn_sweeps
 
 default: html
 
@@ -48,14 +48,6 @@ html: html/tt-metalium html/ttnn
 	mv -f $(TT_METALIUM_BUILDDIR) $(HTMLDIR)/tt-metalium
 	mv -f $(TTNN_BUILDDIR) $(HTMLDIR)/ttnn
 	cp source/index.html $(HTMLDIR)/
-
-ttnn_sweeps/check_directory:
-	@if [ -d "$(TTNN_SWEEPS_DIR)" ]; then \
-		echo "Error: ttnn sweeps dir $(TTNN_SWEEPS_DIR) exists already."; \
-		exit 1; \
-	else \
-		mkdir -p $(TTNN_SWEEPS_DIR); \
-	fi
 
 ttnn_sweeps:
 	@echo "Note that GITHUB_TOKEN must be set before calling this"
