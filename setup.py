@@ -87,6 +87,7 @@ def get_version(buda_eager_build_config):
         "local_scheme": partial(get_buda_eager_local_version_scheme, buda_eager_build_config),
     }
 
+
 @dataclass(frozen=True)
 class BUDAEagerBuildConfig:
     is_dev_build = get_is_dev_build()
