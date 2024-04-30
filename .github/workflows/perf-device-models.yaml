@@ -42,7 +42,6 @@ jobs:
       - name: Run device performance regressions
         timeout-minutes: 90
         run: |
-          source build/python_env/bin/activate
           VENV_DIR=${{ github.workspace }}/python_env ARCH_NAME=${{ matrix.arch }} MACHINE_TYPE=${{ matrix.runner-info.machine-type }} tox -e performance_device_models
       - name: Check device perf report exists
         id: check-device-perf-report
