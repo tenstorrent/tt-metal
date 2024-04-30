@@ -19,7 +19,7 @@ def run_clamp_bw(input_shape, dtype, dlayout, in_mem_config, out_mem_config, dat
     torch.manual_seed(data_seed)
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape).uniform_(-200, 200)
 
     ref_value = pytorch_ops.clamp_max_bw(x, y, scalar)
 
