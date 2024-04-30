@@ -4,6 +4,9 @@ source common.sh
 source tools_versioning.sh
 
 install_tt_smi() {
+    # Source rust environment
+    source "$HOME/.cargo/env"
+
     # Check if tt-smi directory exists
     if [ -d "$HOME/tt-smi" ]; then
         # If it exists, remove it
