@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "unary.hpp"
 #include "binary.hpp"
 #include "core.hpp"
 #include "matmul.hpp"
@@ -20,6 +21,9 @@ namespace ttnn {
 namespace operations {
 
 void py_module(py::module& module) {
+    auto m_unary = module.def_submodule("unary", "unary operations");
+    unary::py_module(m_unary);
+
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
 
