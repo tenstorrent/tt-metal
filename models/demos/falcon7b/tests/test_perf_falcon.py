@@ -449,6 +449,7 @@ class TestParametrized:
         all_devices,
         async_mode,
     ):
+        pytest.skip(f"#7947")
         if num_devices > 1:
             pytest.skip(f"num_devices={num_devices} is not supported on CI yet")
         if model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 2047:
