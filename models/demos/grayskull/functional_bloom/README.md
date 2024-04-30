@@ -6,7 +6,7 @@
 
 The Bloom model, exemplified by the `bigscience/bloom-560m` version, is a powerful language model renowned for its text generation capabilities. From simple completions to complex linguistic analyses, Bloom excels in tasks like cloze tests, counterfactuals, and reframed text generations. Applied downstream, it aids in information extraction, question answering, and summarization.
 
-The demos showcases the Functional Bloom Model for Text Generation and Question Answering tasks.
+The demos showcases Functional Bloom Model for Text Generation and Question Answering tasks.
 
 ### Details
 
@@ -29,7 +29,7 @@ To run the demo for text generation using the Bloom model, follow these instruct
   pytest --disable-warnings --input-path="models/demos/grayskull/functional_bloom/demo/input_data_causal_lm.json" models/demos/grayskull/functional_bloom/demo/demo_causal_lm.py::test_demo[models.demos.grayskull.functional_bloom.tt.ttnn_functional_bloom]
   ```
 
-- Alternatively, use the following command to run the bloom for question answering demo with the ttnn optimized functional bloom model:
+- Alternatively, use the following command to run the bloom for text generation demo with the ttnn optimized functional bloom model:
   ```
   pytest --disable-warnings --input-path="models/demos/grayskull/functional_bloom/demo/input_data_causal_lm.json" models/demos/grayskull/functional_bloom/demo/demo_causal_lm.py::test_demo[models.demos.grayskull.functional_bloom.tt.ttnn_optimized_functional_bloom]
   ```
