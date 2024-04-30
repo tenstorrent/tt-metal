@@ -195,7 +195,7 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
     EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
     tensor_to_self_assign = std::move(tensor_to_self_assign);
     EXPECT_EQ(tensor_to_self_assign.device_buffer()->address(), tensor_to_self_assign_address);
-    Finish(device->command_queue());
+    auto barrier_tensor = tensor_to_self_assign.cpu();
     device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
 
