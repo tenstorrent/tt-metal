@@ -1393,8 +1393,8 @@ int main(int argc, char **argv) {
         CoreCoord dispatch_h_core = {7, 0};
 
         phys_prefetch_core_g = device->worker_core_from_logical_core(prefetch_core);
-        CoreCoord phys_prefetch_d_core = device->worker_core_from_logical_core(prefetch_d_core);
-        CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
+        CoreCoord phys_prefetch_d_core = device_r->worker_core_from_logical_core(prefetch_d_core);
+        CoreCoord phys_dispatch_core = device_r->worker_core_from_logical_core(dispatch_core);
         CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
 
         // Packetized relay nodes - instantiated only if packetized_path_en_g is set
@@ -1404,8 +1404,8 @@ int main(int argc, char **argv) {
         CoreCoord dispatch_relay_demux_core = {6, 0};
 
         CoreCoord phys_prefetch_relay_mux_core = device->worker_core_from_logical_core(prefetch_relay_mux_core);
-        CoreCoord phys_prefetch_relay_demux_core = device->worker_core_from_logical_core(prefetch_relay_demux_core);
-        CoreCoord phys_dispatch_relay_mux_core = device->worker_core_from_logical_core(dispatch_relay_mux_core);
+        CoreCoord phys_prefetch_relay_demux_core = device_r->worker_core_from_logical_core(prefetch_relay_demux_core);
+        CoreCoord phys_dispatch_relay_mux_core = device_r->worker_core_from_logical_core(dispatch_relay_mux_core);
         CoreCoord phys_dispatch_relay_demux_core = device->worker_core_from_logical_core(dispatch_relay_demux_core);
         CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
@@ -1434,7 +1434,7 @@ int main(int argc, char **argv) {
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
         dispatch_wait_addr_g = l1_unreserved_base_aligned + 16;
         vector<uint32_t>zero_data(0);
-        llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
+        llrt::write_hex_vec_to_core(device_r->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
         uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(dispatch_constants::prefetch_q_entry_type);
         uint32_t noc_read_alignment = 32;
@@ -1859,7 +1859,7 @@ int main(int argc, char **argv) {
              dev_hugepage_completion_buffer_base,
              DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
-             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
              0, // unused on hd, filled in below for h and d
              0, // unused on hd, filled in below for h and d
              0, // unused unless tunneler is between h and d
