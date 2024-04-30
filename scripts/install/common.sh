@@ -25,19 +25,19 @@ install_dependencies() {
 }
 
 create_activate_venv() {
-    # Check if .venv directory exists in the home directory
-    if [ -d "$HOME/.venv" ]; then
+    # Check if .tools_env directory exists in the home directory
+    if [ -d "$HOME/.tools_env" ]; then
         echo "Virtual environment already exists. Activating..."
-        source "$HOME/.venv/bin/activate"
+        source "$HOME/.tools_env/bin/activate"
     else
         # Install python3-venv
         sudo apt install -y python3-venv || { echo "Failed to install python3-venv."; return 1; }
 
         # Create virtual environment in the home directory
-        python3 -m venv "$HOME/.venv" || { echo "Failed to create virtual environment."; return 1; }
+        python3 -m venv "$HOME/.tools_env" || { echo "Failed to create virtual environment."; return 1; }
 
         # Activate virtual environment
-        source "$HOME/.venv/bin/activate"
+        source "$HOME/.tools_env/bin/activate"
 
         echo "Virtual environment created and activated."
     fi
@@ -111,7 +111,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Activate virtual environment
-execute_function_with_timer create_activate_venv
+create_activate_venv
 
 if [ $? -ne 0 ]; then
     echo "Error: create_activate_venv failed."
