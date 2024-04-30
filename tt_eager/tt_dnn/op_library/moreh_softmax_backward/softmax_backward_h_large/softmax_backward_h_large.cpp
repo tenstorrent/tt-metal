@@ -18,7 +18,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
+operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op, const DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Large tensor algorithm selected");
 
     // split work
@@ -37,6 +37,9 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, num_cols_tiles);
 
+    auto arch = input_grad.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
+
     Program program = Program();
 
     // create circular buffers
@@ -52,10 +55,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
             {CB::c_in2, 1},        // scaler
             {CB::c_in3, 1},        // mask
             {CB::c_out0, 2},       // input_grad
-            {CB::c_intermed0, 1},  // output * output_grad
-            {CB::c_intermed1, 1},  // reduce
-            {CB::c_intermed2, 1},  // dy - sum
-            {CB::c_intermed3, 2},  // add(output * output_grad)
+            {CB::c_intermed0, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
+            {CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
+            {CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {CB::c_intermed3, 2, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // add(output * output_grad)
         });
 
     // create read/wrtie kernel
@@ -74,6 +77,9 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
         reader_defines["LOG"] = 1;
     }
 
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
 
     auto reader_kernel_id = CreateReadKernel(
         program, "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/reader_moreh_softmax_backward_h_large.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
@@ -88,7 +94,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
         },
-        compute_defines);
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     // Set Runtime Args
     auto core_x_offset = core_range.start.x;
