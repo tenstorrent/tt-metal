@@ -467,7 +467,7 @@ void Device::compile_command_queue_programs() {
                 completion_queue_start_addr,
                 completion_queue_size,
                 dispatch_constants::DISPATCH_BUFFER_BASE,
-                dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
+                (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
                 0, // unused on hd, filled in below for h and d
                 0, // unused on hd, filled in below for h and d
                 0, // unused unless tunneler is between h and d
@@ -843,7 +843,7 @@ void Device::compile_command_queue_programs() {
             completion_queue_start_addr,
             completion_queue_size,
             dispatch_constants::DISPATCH_BUFFER_BASE,
-            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
+            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
             dispatch_h_cb_sem, // unused on hd, filled in below for h and d
             dispatch_downstream_cb_sem, // unused on hd, filled in below for h and d
             0, // preamble size. unused unless tunneler is between h and d
@@ -1167,7 +1167,7 @@ void Device::compile_command_queue_programs() {
             128 + 256 * 1024 * 1024,
             256 * 1024 * 1024,
             dispatch_constants::DISPATCH_BUFFER_BASE,
-            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
             dispatch_downstream_cb_sem, // unused on hd, filled in below for h and d
             dispatch_h_cb_sem, // unused on hd, filled in below for h and d
             sizeof(dispatch_packet_header_t), // unused unless tunneler is between h and d
