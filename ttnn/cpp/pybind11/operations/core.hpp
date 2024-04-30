@@ -64,10 +64,27 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("shape"));
 
+    module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
+
     module.def(
-        "unsqueeze_to_4D",
-        [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttnn::unsqueeze_to_4D(tensor); },
-        py::arg("tensor"));
+        "to_device",
+        py::overload_cast<const ttnn::Tensor&, Device*, const std::optional<MemoryConfig>&>(
+            &ttnn::operations::core::to_device),
+        py::arg("tensor"),
+        py::arg("device"),
+        py::arg("memory_config") = std::nullopt);
+
+    module.def(
+        "to_device",
+        py::overload_cast<const ttnn::Tensor&, DeviceMesh*, const std::optional<MemoryConfig>&>(
+            &ttnn::operations::core::to_device),
+        py::arg("tensor"),
+        py::arg("device"),
+        py::arg("memory_config") = std::nullopt);
+
+    module.def("from_device", &ttnn::operations::core::from_device, py::arg("tensor"), py::arg("blocking") = true);
+
+    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true);
 
     module.def(
         "to_memory_config",
