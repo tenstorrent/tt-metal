@@ -51,7 +51,7 @@ void __attribute__((section("code_l1"))) risc_init() {
 }
 
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
-    DEBUG_STATUS('I');
+    DEBUG_STATUS("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     // Not using firmware_kernel_common_init since it is copying to registers
@@ -66,7 +66,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
-    DEBUG_STATUS('R', 'E', 'W');
+    DEBUG_STATUS("REW");
     uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
         volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
@@ -74,14 +74,14 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
-    DEBUG_STATUS('R', 'E', 'D');
+    DEBUG_STATUS("RED");
 
 
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         if (mailboxes->launch.run == RUN_MSG_GO) {
             DeviceZoneScopedMainN("ERISC-FW");
-            DEBUG_STATUS('R');
+            DEBUG_STATUS("R");
             kernel_init();
         } else {
             internal_::risc_context_switch();

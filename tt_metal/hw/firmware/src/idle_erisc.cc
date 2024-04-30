@@ -71,7 +71,7 @@ void init_sync_registers() {
 
 int main() {
 
-    DEBUG_STATUS('I');
+    DEBUG_STATUS("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
     uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE;
@@ -91,12 +91,12 @@ int main() {
 
         init_sync_registers();
         // Wait...
-        DEBUG_STATUS('G', 'W');
+        DEBUG_STATUS("GW");
         while (mailboxes->launch.run != RUN_MSG_GO)
         {
             RISC_POST_HEARTBEAT(heartbeat);
         };
-        DEBUG_STATUS('G', 'D');
+        DEBUG_STATUS("GD");
 
         {
             DeviceZoneScopedMainN("ERISC-FW");
@@ -107,7 +107,7 @@ int main() {
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
 
             // Run the ERISC kernel
-            DEBUG_STATUS('R');
+            DEBUG_STATUS("R");
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
@@ -116,7 +116,7 @@ int main() {
                 // This was not initialized in kernel_init
             //    noc_local_state_init(noc_index);
             //}
-            DEBUG_STATUS('D');
+            DEBUG_STATUS("D");
 
             mailboxes->launch.run = RUN_MSG_DONE;
 

@@ -43,7 +43,7 @@ extern "C" void notify_brisc_and_halt(uint32_t status);
 
 int main(int argc, char *argv[]) {
 
-  DEBUG_STATUS('I');
+  DEBUG_STATUS("I");
 
   int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
   l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE, num_words);
@@ -54,16 +54,16 @@ int main(int argc, char *argv[]) {
 
   // Cleanup profiler buffer incase we never get the go message
   while (1) {
-      DEBUG_STATUS('W');
+      DEBUG_STATUS("W");
       notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
       DeviceZoneScopedMainN("NCRISC-FW");
 
 
       setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
 
-      DEBUG_STATUS('R');
+      DEBUG_STATUS("R");
       kernel_init();
-      DEBUG_STATUS('D');
+      DEBUG_STATUS("D");
   }
 
   return 0;

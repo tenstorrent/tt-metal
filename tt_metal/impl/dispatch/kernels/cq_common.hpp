@@ -31,10 +31,10 @@ FORCE_INLINE
 void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
-    DEBUG_STATUS('T', 'A', 'P', 'W');
+    DEBUG_STATUS("TAPW");
     // TODO: this masks off the upper bit used by mux/dmux for terminate, remove
     while ((*sem_addr & 0x7FFFFFFF) != n);
-    DEBUG_STATUS('T', 'A', 'P', 'D');
+    DEBUG_STATUS("TAPD");
 }
 
 template<uint32_t noc_xy, uint32_t sem_id>
@@ -48,9 +48,9 @@ void cb_acquire_pages(uint32_t n) {
     noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
     noc_async_atomic_barrier();
 
-    DEBUG_STATUS('D', 'A', 'P', 'W');
+    DEBUG_STATUS("DAPW");
     while (*sem_addr < n);
-    DEBUG_STATUS('D', 'A', 'P', 'D');
+    DEBUG_STATUS("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
 
@@ -78,9 +78,9 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
         noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
         noc_async_atomic_barrier();
 
-        DEBUG_STATUS('U', 'A', 'P', 'W');
+        DEBUG_STATUS("UAPW");
         while ((available = *sem_addr) == 0);
-        DEBUG_STATUS('U', 'A', 'P', 'D');
+        DEBUG_STATUS("UAPD");
     }
 
     // Set a fence to limit how much is processed at once

@@ -164,7 +164,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         } else {
             // By here, prefetch_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
-            DEBUG_STATUS('H', 'Q', 'W');
+            DEBUG_STATUS("HQW");
             DPRINT << "prefetcher stall" << ENDL();
             while ((fetch_size = *prefetch_q_rd_ptr) == 0);
             DPRINT << "recurse" << ENDL();
@@ -177,7 +177,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                              prefetch_q_log_minsize,
                              prefetch_q_rd_ptr_addr,
                              preamble_size>(fence, cmd_ptr, pcie_read_ptr);
-            DEBUG_STATUS('H', 'Q', 'D');
+            DEBUG_STATUS("HQD");
         }
     }
 }
@@ -205,7 +205,7 @@ uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DEBUG_STATUS('!', 'C', 'H', 'K');
+        DEBUG_STATUS("!CHK");
         ASSERT(0);
     }
 
@@ -548,11 +548,11 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     count++;
 
-    DEBUG_STATUS('P', 'S', 'W');
+    DEBUG_STATUS("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_sync_sem_id));
     while (*sem_addr != count);
-    DEBUG_STATUS('P', 'S', 'D');
+    DEBUG_STATUS("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -666,7 +666,7 @@ bool process_cmd(uint32_t cmd_ptr,
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
-        DEBUG_STATUS('!', 'C', 'M', 'D');
+        DEBUG_STATUS("!CMD");
         ASSERT(0);
     }
 

@@ -35,11 +35,11 @@ void MAIN {
 
     // Post a new waypoint with a delay after (to let the watcher poll it)
     hacky_sync(1, sync_wait_cycles, sync_address);
-    DEBUG_STATUS('A', 'A', 'A', 'A');
+    DEBUG_STATUS("AAAA");
     hacky_sync(2, sync_wait_cycles, sync_address);
-    DEBUG_STATUS('B', 'B', 'B', 'B');
+    DEBUG_STATUS("BBBB");
     hacky_sync(3, sync_wait_cycles, sync_address);
-    DEBUG_STATUS('C', 'C', 'C', 'C');
+    DEBUG_STATUS("CCCC");
     hacky_sync(4, sync_wait_cycles, sync_address);
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 }

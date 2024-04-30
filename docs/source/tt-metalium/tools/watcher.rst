@@ -57,10 +57,10 @@ below:
     #include "debug/status.h"
 
     void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-        DEBUG_STATUS('N', 'S', 'W');
+        DEBUG_STATUS("NSW");
         while ((*sem_addr) != val)
             ;
-        DEBUG_STATUS('N', 'S', 'D');
+        DEBUG_STATUS("NSD");
     }
 
 Waypoints have no overhead when the watcher is disabled and can be used inside user written kernels.  They indicate
@@ -124,7 +124,7 @@ assert was tripped. An example of an assert and the resulting message is shown b
         uint32_t a = get_arg_val<uint32_t>(0);
         uint32_t b = get_arg_val<uint32_t>(1);
 
-        DEBUG_STATUS('A', 'S', 'T', '1');
+        DEBUG_STATUS("AST1");
         ASSERT(a != b);
     }
 

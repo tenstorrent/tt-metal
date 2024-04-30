@@ -20,9 +20,9 @@
  *************************************************************************/
 
 inline void llk_math_wait_for_dest_available() {
-    DEBUG_STATUS('M', 'W', 'D', 'W');
+    DEBUG_STATUS("MWDW");
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    DEBUG_STATUS('M', 'W', 'D', 'D');
+    DEBUG_STATUS("MWDD");
 }
 
 template <bool is_fp32_dest_acc_en = false /*not used*/>

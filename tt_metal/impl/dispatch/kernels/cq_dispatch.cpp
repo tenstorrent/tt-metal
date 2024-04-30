@@ -84,7 +84,7 @@ FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
 
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t num_pages) {
-    DEBUG_STATUS('Q', 'R', 'B', 'W');
+    DEBUG_STATUS("QRBW");
     // Transfer pages are aligned
     uint32_t data_size_16B = num_pages * completion_queue_page_size_16B;
     uint32_t completion_rd_ptr_and_toggle;
@@ -104,7 +104,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
                           (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
     } while (data_size_16B > available_space);
 
-    DEBUG_STATUS('Q', 'R', 'B', 'D');
+    DEBUG_STATUS("QRBD");
 }
 
 FORCE_INLINE
@@ -630,7 +630,7 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     }
 
     if (checksum != cmd->debug.checksum) {
-        DEBUG_STATUS('!', 'C', 'H', 'K');
+        DEBUG_STATUS("!CHK");
         ASSERT(0);
     }
 
@@ -650,7 +650,7 @@ static void process_wait() {
         noc_async_write_barrier();
     }
 
-    DEBUG_STATUS('P', 'W', 'W');
+    DEBUG_STATUS("PWW");
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
@@ -662,7 +662,7 @@ static void process_wait() {
         RISC_POST_HEARTBEAT(heartbeat);
 #endif
     }
-    DEBUG_STATUS('P', 'W', 'D');
+    DEBUG_STATUS("PWD");
 
     if (clear_count) {
         *sem_addr = 0;
@@ -692,10 +692,10 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
 
     switch (cmd->base.cmd_id) {
     case CQ_DISPATCH_CMD_WRITE_LINEAR:
-        DEBUG_STATUS('D', 'W', 'B');
+        DEBUG_STATUS("DWB");
         DPRINT << "cmd_write\n";
         process_write();
-        DEBUG_STATUS('D', 'W', 'D');
+        DEBUG_STATUS("DWD");
         break;
 
     case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
@@ -773,7 +773,7 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-        DEBUG_STATUS('!', 'C', 'M', 'D');
+        DEBUG_STATUS("!CMD");
         ASSERT(0);
     }
 
@@ -809,7 +809,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
         DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-        DEBUG_STATUS('!', 'C', 'M', 'D');
+        DEBUG_STATUS("!CMD");
         ASSERT(0);
     }
 
