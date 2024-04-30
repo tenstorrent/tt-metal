@@ -80,7 +80,7 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t command_queue_id;
     CoreType dispatch_core_type;
 
-    virtual void add_prefetch_relay(DeviceCommand &command) = 0;
+    virtual void add_prefetch_relay(HugepageDeviceCommand &command) = 0;
 
    protected:
     Device* device;
@@ -108,7 +108,7 @@ class EnqueueReadBufferCommand : public Command {
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
    private:
-    void add_prefetch_relay(DeviceCommand &command) override;
+    void add_prefetch_relay(HugepageDeviceCommand &command) override;
 
    public:
     EnqueueReadInterleavedBufferCommand(
@@ -133,7 +133,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
    private:
-    void add_prefetch_relay(DeviceCommand &command) override;
+    void add_prefetch_relay(HugepageDeviceCommand &command) override;
     BufferPageMapping buffer_page_mapping;
 
    public:
@@ -166,7 +166,7 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t command_queue_id;
     CoreType dispatch_core_type;
 
-    virtual void add_dispatch_write(DeviceCommand &command) = 0;
+    virtual void add_dispatch_write(HugepageDeviceCommand &command) = 0;
 
    protected:
     Device* device;
@@ -201,7 +201,7 @@ class EnqueueWriteBufferCommand : public Command {
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
    private:
-    void add_dispatch_write(DeviceCommand &command) override;
+    void add_dispatch_write(HugepageDeviceCommand &command) override;
 
    public:
     EnqueueWriteInterleavedBufferCommand(
@@ -233,7 +233,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
 
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
    private:
-    void add_dispatch_write(DeviceCommand &command) override;
+    void add_dispatch_write(HugepageDeviceCommand &command) override;
     const BufferPageMapping& buffer_page_mapping;
 
    public:
@@ -272,9 +272,9 @@ class EnqueueProgramCommand : public Command {
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
-    DeviceCommand preamble_command_sequence;
-    thread_local static std::unordered_map<uint64_t, std::vector<DeviceCommand>> runtime_args_command_sequences;
-    DeviceCommand program_command_sequence;
+    HostMemDeviceCommand preamble_command_sequence;
+    thread_local static std::unordered_map<uint64_t, std::vector<HostMemDeviceCommand>> runtime_args_command_sequences;
+    HostMemDeviceCommand program_command_sequence;
 
    public:
     EnqueueProgramCommand(uint32_t command_queue_id, Device* device, Program& program, SystemMemoryManager& manager, uint32_t expected_num_workers_completed);

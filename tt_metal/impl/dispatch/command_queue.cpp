@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <variant>
+#include <malloc.h>
 
 #include "allocator/allocator.hpp"
 #include "assert.hpp"
@@ -37,7 +38,7 @@ std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
 
-thread_local std::unordered_map<uint64_t, std::vector<DeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
+thread_local std::unordered_map<uint64_t, std::vector<HostMemDeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
 
 uint32_t get_noc_unicast_encoding(const CoreCoord &coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end) { return NOC_MULTICAST_ENCODING(start.x, start.y, end.x, end.y); }
@@ -73,13 +74,13 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
-void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(DeviceCommand &command) {
+void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand &command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     command.add_prefetch_relay_paged(
         this->buffer.buffer_type() == BufferType::DRAM, this->src_page_index, this->buffer.address(), padded_page_size, this->pages_to_read);
 }
 
-void EnqueueReadShardedBufferCommand::add_prefetch_relay(DeviceCommand &command) {
+void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand &command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     CoreCoord logical_core = this->buffer_page_mapping.all_cores_[this->buffer_page_mapping.dev_page_to_core_mapping_[this->src_page_index]];
     CoreCoord core = this->buffer.device()->worker_core_from_logical_core(logical_core);
@@ -100,7 +101,7 @@ void EnqueueReadBufferCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait_with_prefetch_stall(true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
@@ -146,7 +147,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
-void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence) {
+void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(HugepageDeviceCommand &command_sequence) {
     uint8_t is_dram = uint8_t(this->buffer.buffer_type() == BufferType::DRAM);
     TT_ASSERT(this->dst_page_index <= 0xFFFF, "Page offset needs to fit within range of uint16_t, bank_base_address was computed incorrectly!");
     uint16_t start_page = uint16_t(this->dst_page_index & 0xFFFF);
@@ -155,7 +156,7 @@ void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(DeviceCommand &com
         flush_prefetch, is_dram, start_page, this->bank_base_address, this->padded_page_size, this->pages_to_write);
 }
 
-void EnqueueWriteShardedBufferCommand::add_dispatch_write(DeviceCommand &command_sequence) {
+void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand &command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
     CoreCoord logical_core = this->buffer_page_mapping.all_cores_[this->buffer_page_mapping.dev_page_to_core_mapping_[this->dst_page_index]];
     CoreCoord core = this->buffer.device()->worker_core_from_logical_core(logical_core);
@@ -176,7 +177,7 @@ void EnqueueWriteBufferCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     if (this->issue_wait) {
         command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
@@ -250,7 +251,7 @@ void EnqueueProgramCommand::assemble_preamble_commands() {
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        this->preamble_command_sequence = DeviceCommand(cmd_sequence_sizeB);
+        this->preamble_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
         // wait for binaries to commit to dram, also wait for previous program to be done
@@ -266,14 +267,14 @@ void EnqueueProgramCommand::assemble_preamble_commands() {
         uint32_t cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-        this->preamble_command_sequence = DeviceCommand(cmd_sequence_sizeB);
+        this->preamble_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
         this->preamble_command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     }
 }
 
 template <typename PackedSubCmd>
 void generate_dispatch_write_packed(
-    std::vector<DeviceCommand>& runtime_args_command_sequences,
+    std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
     std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>>& cmd_mapping,
     const uint32_t& l1_arg_base_addr,
     const std::vector<PackedSubCmd>& sub_cmds,
@@ -319,7 +320,7 @@ void generate_dispatch_write_packed(
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast);
         uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
-        DeviceCommand command_sequence(cmd_sequence_sizeB);
+        HostMemDeviceCommand command_sequence(cmd_sequence_sizeB);
         command_sequence.add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
             l1_arg_base_addr,
@@ -633,7 +634,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
 
-        this->program_command_sequence = DeviceCommand(cmd_sequence_sizeB);
+        this->program_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
         // Semaphores
         // Multicast Semaphore Cmd
@@ -736,7 +737,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
                         align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
                     // Difference between prefetch total relayed pages and dispatch write linear
                     uint32_t relayed_bytes =
-                        align(kg_transfer_info.lengths[kernel_idx], DeviceCommand::PROGRAM_PAGE_SIZE);
+                        align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
                     // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
                     uint16_t length_adjust =
                         uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
@@ -789,7 +790,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         // TODO: add GO for FD2.1
         program.cached_device_commands = this->program_command_sequence.cmd_vector();
     } else {
-        this->program_command_sequence = DeviceCommand(program.cached_device_commands.size() * sizeof(uint32_t));
+        this->program_command_sequence = HostMemDeviceCommand(program.cached_device_commands.size() * sizeof(uint32_t));
         this->program_command_sequence.update_cmd_sequence(
             0, program.cached_device_commands.data(), program.cached_device_commands.size() * sizeof(uint32_t));
 
@@ -924,7 +925,7 @@ void EnqueueRecordEventCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
         false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
@@ -990,7 +991,7 @@ void EnqueueWaitForEventCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     uint32_t last_completed_event_address = sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
     command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
@@ -1022,7 +1023,7 @@ void EnqueueTraceCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
         false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
@@ -1058,7 +1059,7 @@ void EnqueueTerminateCommand::process() {
 
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
-    DeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     command_sequence.add_dispatch_terminate();
     command_sequence.add_prefetch_terminate();
 
@@ -1127,6 +1128,9 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
 void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, const Buffer& buffer) {
     const uint32_t num_pages = buffer.num_pages();
     const uint32_t page_size = buffer.page_size();
+
+    const uint32_t size_in_bytes = num_pages * page_size;
+    void* swapped = std::aligned_alloc(MEMCPY_ALIGNMENT, round_up(size_in_bytes, MEMCPY_ALIGNMENT));
 
     std::set<uint32_t> pages_seen;
     uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];

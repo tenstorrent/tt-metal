@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <boost/align/aligned_allocator.hpp>
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
@@ -17,6 +18,11 @@ using namespace tt::tt_metal;
 // todo consider moving these to dispatch_addr_map
 static constexpr uint32_t PCIE_ALIGNMENT = 32;
 static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
+
+static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
+
+template <typename T>
+using vector_memcpy_aligned = std::vector<T, boost::alignment::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 struct dispatch_constants {
    public:
@@ -157,32 +163,66 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
 // Ideally would work by cachelines, but the min size is less than that
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
 // TODO: ditto alignment isues
-// TODO: move _sfence out
+template <bool blocking = false>
 static inline void memcpy_to_device(void *__restrict dst, const void * __restrict src, size_t n)
 {
-    if (n < CQ_PREFETCH_CMD_BARE_MIN_SIZE) {
-        memcpy(dst, src, n);
-        return;
-    }
+    TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
+    TT_ASSERT(n % sizeof(uint32_t) == 0);
 
-    size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    static constexpr uint32_t inner_loop = 8;
+    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m128i);
 
     uint8_t *src8 = (uint8_t *)src;
     uint8_t *dst8 = (uint8_t *)dst;
-    for (size_t i = 0; i < num_lines; i++) {
-        for (size_t j = 0; j < CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(__m128i); j++) {
-            __m128i blk = _mm_loadu_si128((const __m128i *)src);
-            _mm_stream_si128((__m128i *)dst, blk);
+    if (n < inner_blk_size) {
+        for (size_t i = 0; i < n / sizeof(__m128i); i++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+            _mm_stream_si128((__m128i *)dst8, blk);
             src8 += sizeof(__m128i);
             dst8 += sizeof(__m128i);
         }
-        n -= CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+        n -= n / sizeof(__m128i) * sizeof(__m128i);
+        int32_t *src32 = (int32_t *)src8;
+        int32_t *dst32 = (int32_t *)dst8;
+        for (size_t i = 0; i < n / sizeof(int32_t); i++) {
+            _mm_stream_si32(dst32 + i, src32[i]);
+        }
+        if constexpr(blocking) {
+            tt_driver_atomics::sfence();
+        }
+        return;
     }
 
-    if (num_lines > 0)
-        _mm_sfence();
+    size_t num_lines = n / inner_blk_size;
 
-    memcpy(dst8, src8, n);
+    for (size_t i = 0; i < num_lines; i++) {
+        for (size_t j = 0; j < inner_loop; j++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+            _mm_stream_si128((__m128i *)dst8, blk);
+            src8 += sizeof(__m128i);
+            dst8 += sizeof(__m128i);
+        }
+        n -= inner_blk_size;
+    }
+
+    if (n > 0) {
+        for (size_t i = 0; i < n / sizeof(__m128i); i++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+            _mm_stream_si128((__m128i *)dst8, blk);
+            src8 += sizeof(__m128i);
+            dst8 += sizeof(__m128i);
+        }
+        n -= n / sizeof(__m128i) * sizeof(__m128i);
+        int32_t *src32 = (int32_t *)src8;
+        int32_t *dst32 = (int32_t *)dst8;
+        for (size_t i = 0; i < n / sizeof(int32_t); i++) {
+            _mm_stream_si32(dst32 + i, src32[i]);
+        }
+    }
+    if constexpr(blocking) {
+        tt_driver_atomics::sfence();
+    }
+    return;
 }
 
 struct SystemMemoryCQInterface {
@@ -485,7 +525,6 @@ class SystemMemoryManager {
         uint32_t read_ptr_and_toggle =
             cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
         this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle, this->m_dma_buf_size);
-        tt_driver_atomics::sfence();
     }
 
     void wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
@@ -547,9 +586,9 @@ class SystemMemoryManager {
         TT_FATAL((command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
 
         if (this->bypass_enable) return;
+        tt_driver_atomics::sfence();
         uint32_t command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
         tt::Cluster::instance().write_reg(&command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
-        tt_driver_atomics::sfence();
     }
 };
