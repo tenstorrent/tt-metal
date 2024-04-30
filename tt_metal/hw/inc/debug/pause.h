@@ -15,13 +15,13 @@ void watcher_pause() {
     pause_msg->flags[debug_get_which_riscv()] = 1;
 
     // Wait for the pause flag to be cleared.
-    DEBUG_STATUS('P', 'A', 'S', 'W');
+    DEBUG_STATUS("PASW");
     while (pause_msg->flags[debug_get_which_riscv()]) {
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
 #endif
     }
-    DEBUG_STATUS('P', 'A', 'S', 'D');
+    DEBUG_STATUS("PASD");
 }
 
 // The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
