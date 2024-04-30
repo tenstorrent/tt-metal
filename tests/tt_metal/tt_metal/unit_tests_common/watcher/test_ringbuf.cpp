@@ -128,7 +128,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     }
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(device, program, true);
 
     // Check log
     EXPECT_TRUE(
