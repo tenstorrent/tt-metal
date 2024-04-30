@@ -805,6 +805,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_tensor").noconvert() = std::nullopt,
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a softmax backward operation. Returns an input grad tensor.");
     m_primary.def(
         "moreh_softmin",
@@ -825,6 +826,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_tensor").noconvert() = std::nullopt,
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a softmin backward operation. Returns an input grad tensor.");
 
     m_primary.def(
@@ -847,6 +849,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_tensor").noconvert() = std::nullopt,
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a logsoftmax backward operation. Returns an input grad tensor.");
 
     m_primary.def(
