@@ -51,6 +51,7 @@ jobs:
       - name: Run performance regressions
         timeout-minutes: 60
         run: |
+          source ${{ github.workspace }}/python_env/bin/activate
           VENV_DIR=${{ github.workspace }}/python_env ARCH_NAME=${{ matrix.runner-info.arch }} MODEL_TYPE=${{ matrix.model-type }} MACHINE_TYPE=${{ matrix.runner-info.machine-type }} tox -e model_performance
       - name: Check perf report exists
         id: check-perf-report
