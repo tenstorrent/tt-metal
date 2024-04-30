@@ -223,7 +223,7 @@ void relay_to_next_cb(uint32_t data_ptr,
 
     uint32_t extra = preamble_size;
     while (length > 0) {
-        uint32_t avail = downstream_cb_end - downstream_cb_data_ptr;
+        ASSERT (downstream_cb_end > downstream_cb_data_ptr);
 
         uint32_t xfer_size = (length > dispatch_cb_page_size - extra) ?
             dispatch_cb_page_size - extra :
@@ -278,6 +278,12 @@ void relay_to_next_cb(uint32_t data_ptr,
         extra = 0;
     }
 
+    // Move to next page
+    downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
+    if (downstream_cb_data_ptr == downstream_cb_end) {
+        downstream_cb_data_ptr = downstream_cb_base;
+    }
+
     cmd_ptr = data_ptr;
 }
 
@@ -290,9 +296,6 @@ void process_write_host_d() {
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
-
-    // Move to next page
-    downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
 }
 
 FORCE_INLINE
@@ -303,9 +306,6 @@ void relay_write_h() {
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
-
-    // Move to next page
-    downstream_cb_data_ptr = round_up_pow2(downstream_cb_data_ptr, dispatch_cb_page_size);
 }
 
 // Note that for non-paged writes, the number of writes per page is always 1
