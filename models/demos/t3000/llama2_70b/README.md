@@ -2,7 +2,7 @@
 
 ## How to Run
 
-### For Users on TT VPN
+### For Users on TT-VPN
 
 If you have access to TT-VPN, you can copy the weights directly to your local machine using the following SCP commands:
 
@@ -16,13 +16,13 @@ If you have access to TT-VPN, you can copy the weights directly to your local ma
     scp -r 10.230.36.208:/home/llama-data/tokenizer.model <path_to_checkpoint_dir>
     ```
 
-### For Users without TT VPN Access
+### For Users without TT-VPN Access
 
-If you do not have access to TT VPN, follow these steps to download the weights directly from Meta and use the repacking script:
+If you do not have access to TT-VPN, follow these steps to download the weights directly from Meta and use the repacking script:
 
 1. **Download the Llama2-70B weights from Meta (https://llama.meta.com/):**
 
-2. **Repack the weights:**
+2. **Repack the weights and copy params.json:**
     ```bash
     # This concatenates the sharded checkpoints and makes it easier for us to load.
     python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
@@ -41,11 +41,16 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 2. **Set up environment variables:**
     ```bash
     export LLAMA_CKPT_DIR=<repacked_output_dir>
-    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir>
+    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
     export LLAMA_CACHE_PATH=<weight_cache_dir>
+
+    # Example:
+    export LLAMA_CKPT_DIR="/home/llama-data-repacked/llama-2-70b/"
+    export LLAMA_TOKENIZER_PATH="/home/llama-data-repacked/tokenizer.model"
+    export LLAMA_CACHE_PATH="/home/llama-data-cache/weights-cache"
     ```
 
-3. **Cache the weights (first-time setup):**
+3. **Cache the weights (first-time setup only):**
     ```bash
     # Build a full 80 layer model to cache the weights. This will take some time.
     pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-80L]
