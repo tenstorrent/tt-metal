@@ -30,6 +30,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         model_config,
         configuration,
         transformation_mats,
+        padded_heads,
         emulated=False,
         cache_path=None,
         batch_size=None,
@@ -56,6 +57,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
         self.padded_local_heads = 32
+
+        self.padded_heads = padded_heads
 
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
@@ -422,14 +425,13 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
                 # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
             )
-        # Pad and transpose Q for batched matmul
         for i in range(len(query_layer)):
             # Pad and transpose Q for batched matmul
             query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
                 query_layer[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
-            query_layer[i] = tt_lib.tensor.pad(
-                query_layer[i], [1, self.padded_local_heads, 32, self.head_dim], [0, 0, 0, 0], 0.0
+            query_layer[i] = tt_lib.tensor.concat(
+                [query_layer[i], self.padded_heads[i]], dim=1, output_mem_config=self.model_config["L1_MEMCFG"]
             )
             query_layer[i] = tt_lib.tensor.transpose(
                 query_layer[i],
