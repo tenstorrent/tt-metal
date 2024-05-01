@@ -226,10 +226,15 @@ TEST_F(CommandQueueFixture, TestEventsEventsQueryBasic) {
         }
     }
 
-    // Wait until an earlier event is finished, then ensure query says it's finished.
-    auto &early_event = sync_events.at(3);
-    EnqueueWaitForEvent(this->device_->command_queue(), early_event);
-    event_status = EventQuery(early_event);
+    // Wait until earlier events are finished, then ensure query says they are finished.
+    auto &early_event_1 = sync_events.at(num_events - 10);
+    EventSynchronize(early_event_1); // Block until this event is finished.
+    event_status = EventQuery(early_event_1);
+    EXPECT_EQ(event_status, true);
+
+    auto &early_event_2 = sync_events.at(num_events - 5);
+    Finish(this->device_->command_queue()); // Block until all events finished.
+    event_status = EventQuery(early_event_2);
     EXPECT_EQ(event_status, true);
 
     // Query a future event that hasn't completed and ensure it's not finished.
