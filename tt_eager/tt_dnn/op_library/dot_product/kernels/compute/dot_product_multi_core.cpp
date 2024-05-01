@@ -70,7 +70,7 @@ inline void reduce_h_fused(
         cb_wait_front(curr_in_cb_id, 1);
         unpack_tilizeA_B_dot_product_block(curr_in_cb_id, in_weights_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
-            matmul_tiles_math(in_ntiles_c * out_elem_i + c_i);
+            matmul_tiles_math<num_faces_in_tile>(in_ntiles_c * out_elem_i + c_i);
         }
         cb_pop_front(curr_in_cb_id, 1);
     }
@@ -111,7 +111,7 @@ void MAIN {
     // const uint32_t TILE_WIDTH = 32;
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2; // this can be 1, 2, or 4 depending on input
     constexpr uint32_t num_out_rows = 1;
 
     tilizeA_B_dot_product_init(in_cb_id, in_weights_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile, window_size_hw);
