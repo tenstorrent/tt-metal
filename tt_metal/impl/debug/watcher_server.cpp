@@ -557,24 +557,26 @@ static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
 
 static void validate_kernel_ids(FILE *f,
                                 std::map<int, bool>& used_kernel_names,
+                                chip_id_t device_id,
                                 CoreCoord core,
                                 const launch_msg_t *launch) {
 
     if (launch->brisc_watcher_kernel_id >= kernel_names.size()) {
-        TT_THROW("Watcher data corruption, unexpected brisc kernel id on core {}: {} (last valid {})",
-                  core.str(), launch->brisc_watcher_kernel_id, kernel_names.size());
+        TT_THROW("Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
+                  device_id, core.str(), launch->brisc_watcher_kernel_id, kernel_names.size());
+
     }
     used_kernel_names[launch->brisc_watcher_kernel_id] = true;
 
     if (launch->ncrisc_watcher_kernel_id >= kernel_names.size()) {
-        TT_THROW("Watcher data corruption, unexpected ncrisc kernel id on core {}: {} (last valid {})",
-                  core.str(), launch->ncrisc_watcher_kernel_id, kernel_names.size());
+        TT_THROW("Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
+                  device_id, core.str(), launch->ncrisc_watcher_kernel_id, kernel_names.size());
     }
     used_kernel_names[launch->ncrisc_watcher_kernel_id] = true;
 
     if (launch->triscs_watcher_kernel_id >= kernel_names.size()) {
-        TT_THROW("Watcher data corruption, unexpected trisc kernel id on core {}: {} (last valid {})",
-                  core.str(), launch->triscs_watcher_kernel_id, kernel_names.size());
+        TT_THROW("Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
+                  device_id, core.str(), launch->triscs_watcher_kernel_id, kernel_names.size());
     }
     used_kernel_names[launch->triscs_watcher_kernel_id] = true;
 }
@@ -614,7 +616,7 @@ static void dump_core(
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
     // Validate these first since they are used in diagnostic messages below.
-    validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
+    validate_kernel_ids(f, used_kernel_names, device->id(), core, &mbox_data->launch);
 
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
