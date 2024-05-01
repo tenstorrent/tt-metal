@@ -62,8 +62,9 @@ ALWI void matmul_tiles(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile
     MATH(( llk_math_matmul<MATH_FIDELITY>(idst, transpose)  ));
 }
 
+template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
-    MATH(( llk_math_matmul<MATH_FIDELITY>(idst)  ));
+    MATH(( llk_math_matmul<MATH_FIDELITY, num_faces>(idst)  ));
 }
 
 /**

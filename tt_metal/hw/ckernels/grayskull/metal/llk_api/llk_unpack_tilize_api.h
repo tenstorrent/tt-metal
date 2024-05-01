@@ -107,17 +107,22 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces) {
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reuse_srcB ? 0b010010 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr::UNP_NEGINFSRC); // Needed for max pool
-    static constexpr uint unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr::UNP_ZEROSRC); // Needed for dot product
-    static constexpr uint unpack_src_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 1, 0b0001); // Needed for dot product
+    static constexpr uint unpack_zero_srcb = TT_OP_UNPACR_NOP(SrcB, p_unpacr::UNP_ZEROSRC); // Needed for dot product
     static constexpr uint unpack_srcb_no_dat_valid = TT_OP_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // needed for dot product
 
     constexpr uint32_t innerloop = 1;
     const uint32_t outerloop = reuse_srcB ? 1 : ((num_faces>2) ? num_faces/2 : num_faces);
     if constexpr (reuse_srcB) {
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb_no_dat_valid, unpack_srcb);
-        tmp.set_start_op(unpack_zero_srca);
-        tmp.set_end_ops(unpack_srca, unpack_srca);
-        tmp.program(instrn_buffer);
+        if (num_faces == 1) {
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca);
+            tmp.set_start_op(unpack_zero_srcb);
+            tmp.program(instrn_buffer);
+        } else {
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb_no_dat_valid, unpack_srcb);
+            tmp.set_start_op(unpack_zero_srcb);
+            tmp.set_end_ops(unpack_srca, unpack_srca);
+            tmp.program(instrn_buffer);
+        }
     } else if constexpr (neginf_srcA) {
         ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
         tmp.set_start_op(unpack_neginf_srca);
@@ -187,7 +192,7 @@ inline void llk_unpack_tilizeA_B(
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     DEBUG_STATUS('U', 'P', 'T', 'W');
-    const std::uint32_t num_loops = reuse_srcB ? 1 : ((num_faces>1) ? num_faces/2 : 1);
+    const std::uint32_t num_loops = (num_faces>1) ? num_faces/2 : 1;
     for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
@@ -210,40 +215,9 @@ inline void llk_unpack_tilizeA_B(
         }
 
         // Run MOP
-        if (reuse_srcB) {
-            if (num_faces == 1) {
-                TTI_UNPACR_NOP(SrcA, p_unpacr::UNP_ZEROSRC);
-
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-
-                TTI_SETADCZW(0b010, 0, 0, 0, 1, 0b0001);
-
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-            } else if (num_faces == 2) {
-                ckernel::ckernel_template::run(instrn_buffer);
-
-                TTI_SETADCZW(0b010, 0, 0, 0, 1, 0b0001);
-
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-            } else {
-                ckernel::ckernel_template::run(instrn_buffer);
-                TTI_SETADCZW(0b010, 0, 0, 0, 1, 0b0001);
-                ckernel::ckernel_template::run(instrn_buffer);
-            }
-        } else {
-            ckernel::ckernel_template::run(instrn_buffer);
+        ckernel::ckernel_template::run(instrn_buffer);
+        if (reuse_srcB && num_faces==4) {
+            TTI_SETADCZW(UNP1, 0, 0, 0, 1, 0b0001);
         }
 
         // T6::SEMGET for context release
