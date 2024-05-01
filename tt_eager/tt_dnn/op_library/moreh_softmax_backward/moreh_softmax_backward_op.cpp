@@ -111,7 +111,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H,
-            fmt::format("Invalid parallelization strategy. {} is not for dim 2", this->strategy));
+            fmt::format("Invalid parallelization strategy. {} is not for dim H", this->strategy));
 
         if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H) {
             TT_ASSERT(
@@ -122,7 +122,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W,
-            fmt::format("Invalid parallelization strategy. {} is not for dim 3", this->strategy));
+            fmt::format("Invalid parallelization strategy. {} is not for dim W", this->strategy));
 
         if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W) {
             TT_ASSERT(
@@ -132,7 +132,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
     } else {
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C,
-            "Invalid parallelization strategy. large c is for dim 0, 1");
+            "Invalid parallelization strategy. large c is for dim 0 - (rank - 3)");
     }
 
     return this->strategy;
