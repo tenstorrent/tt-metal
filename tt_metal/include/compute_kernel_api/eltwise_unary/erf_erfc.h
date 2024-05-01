@@ -19,12 +19,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erf_tile_init(bool fast_and_approx = true) {
-    if (fast_and_approx) {
-        MATH((llk_math_eltwise_unary_sfpu_erf_init<true>()));
-    } else {
-        MATH((llk_math_eltwise_unary_sfpu_erf_init<false>()));
-    }
+template <bool fast_and_approx = true>
+ALWI void erf_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_erf_init<fast_and_approx>()));
 }
 
 
@@ -40,12 +37,9 @@ ALWI void erf_tile_init(bool fast_and_approx = true) {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-ALWI void erf_tile(uint32_t idst, bool fast_and_approx = true) {
-    if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_erf<true>(idst) ));
-    } else {
-        MATH(( llk_math_eltwise_unary_sfpu_erf<false>(idst) ));
-    }
+template <bool fast_and_approx = true>
+ALWI void erf_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_erf<fast_and_approx>(idst) ));
 }
 
 /************** ERFC *****************/
@@ -53,12 +47,9 @@ ALWI void erf_tile(uint32_t idst, bool fast_and_approx = true) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init(bool fast_and_approx = true) {
-    if (fast_and_approx) {
-        MATH((llk_math_eltwise_unary_sfpu_erfc_init<true>()));
-    } else {
-        MATH((llk_math_eltwise_unary_sfpu_erfc_init<false>()));
-    }
+template <bool fast_and_approx = true>
+ALWI void erfc_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_erfc_init<fast_and_approx>()));
 }
 
 
@@ -74,12 +65,9 @@ ALWI void erfc_tile_init(bool fast_and_approx = true) {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-ALWI void erfc_tile(uint32_t idst, bool fast_and_approx = true) {
-    if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_erfc<true>(idst) ));
-    } else {
-        MATH(( llk_math_eltwise_unary_sfpu_erfc<false>(idst) ));
-    }
+template <bool fast_and_approx = true>
+ALWI void erfc_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_erfc<fast_and_approx>(idst) ));
 }
 
 }  // namespace ckernel

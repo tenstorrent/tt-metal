@@ -78,7 +78,7 @@ void MAIN {
                 add_bcast_rows_init_short();
             #endif
 
-            exp_tile_init(EXP_APPROX);
+            exp_tile_init<EXP_APPROX>();
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 ACQ();
                 #ifdef CAUSAL_MASK
@@ -94,7 +94,7 @@ void MAIN {
                 #endif
                 cb_reserve_back(cb_exps, subblock_w);
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    exp_tile(w,EXP_APPROX);
+                    exp_tile<EXP_APPROX>(w);
                     pack_tile(w, cb_exps);
                 }
                 cb_push_back(cb_exps, subblock_w);
@@ -114,7 +114,7 @@ void MAIN {
             // exp(x)
             index_subblock_w_offset = 0;
             copy_tile_to_dst_init_short();
-            exp_tile_init(EXP_APPROX);
+            exp_tile_init<EXP_APPROX>();
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 ACQ();
                 for (uint32_t w = 0; w < subblock_w; w++) {
@@ -123,7 +123,7 @@ void MAIN {
                 }
                 cb_reserve_back(cb_exps, subblock_w);
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    exp_tile(w, EXP_APPROX);
+                    exp_tile<EXP_APPROX>(w);
                     pack_tile(w, cb_exps);
                 }
                 cb_push_back(cb_exps, subblock_w);

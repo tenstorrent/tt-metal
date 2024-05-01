@@ -79,7 +79,7 @@ void MAIN {
             }
             unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
-            exp_tile_init(EXP_APPROX);
+            exp_tile_init<EXP_APPROX>();
             #ifdef CAUSAL_MASK
             add_tiles_init();
             #else
@@ -105,7 +105,7 @@ void MAIN {
                 cb_pop_front(cb_scale_mask, ndst);
                 cb_reserve_back(cb_exps, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    exp_tile(wt8,EXP_APPROX); // exp on DST[0]
+                    exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
                     pack_tile(wt8, cb_exps); // reuse the exps buffer again, this time in a circular manner
                 }
                 cb_push_back(cb_exps, ndst);
@@ -130,7 +130,7 @@ void MAIN {
             unpack_reconfig_data_format(cb_in0, cb_in0);
             pack_reconfig_data_format(cb_exps);
             copy_tile_to_dst_init_short(); // need to copy from CB to DST to be able to run sfpu math
-            exp_tile_init(EXP_APPROX);
+            exp_tile_init<EXP_APPROX>();
             for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
 
                 ACQ();
@@ -142,7 +142,7 @@ void MAIN {
 
                 cb_reserve_back(cb_exps, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile(wt8, EXP_APPROX); // exp on DST[0]
+                    exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
                     pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
                 }
                 cb_push_back(cb_exps, ndst);

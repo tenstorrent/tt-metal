@@ -101,7 +101,7 @@ void sub_exp_block_bcast_cols_inplace() {
     // Postcondition: in1_cb has rows produced
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init(true);
+    exp_tile_init<true>();
     cb_wait_front(in0_cb, rows*cols);
     cb_wait_front(in1_cb, rows);
 
@@ -113,7 +113,7 @@ void sub_exp_block_bcast_cols_inplace() {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile(j, true);
+                exp_tile<true>(j);
             }
             cb_pop_front(in0_cb, dst_tiles);
             tile_regs_commit();
@@ -226,7 +226,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init();
-    exp_tile_init(true);
+    exp_tile_init<true>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -237,7 +237,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile(0, true);
+        exp_tile<true>(0);
 
         pack_tile(0, out_cb);
 
