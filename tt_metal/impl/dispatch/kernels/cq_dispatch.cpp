@@ -236,7 +236,19 @@ void relay_to_next_cb(uint32_t data_ptr,
             if (cb_fence == block_next_start_addr[rd_block_idx]) {
                 // Check for dispatch_cb wrap
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
-                    // Note: we're processing aligned blocks in/out, no fractional transaction
+                    // We can be misalgined when orphan_size is non=zero
+                    // Code could be structured to stay aligned after wrap,
+                    // but instead making this behave like other routines
+                    uint32_t orphan_size = preamble_size;
+                    ASSERT(dispatch_cb_end - data_ptr == preamble_size);
+                    if (orphan_size != 0) {
+                        noc_async_write(data_ptr, dst, orphan_size);
+                        block_noc_writes_to_clear[rd_block_idx]++;
+                        length -= orphan_size;
+                        xfer_size -= orphan_size;
+                        downstream_cb_data_ptr += orphan_size;
+                        dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
+                    }
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
                 }
