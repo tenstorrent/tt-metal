@@ -178,6 +178,10 @@ void DeviceModule(py::module &m_device) {
     m_device.def("ExecuteLastTrace", &detail::ExecuteLastTrace, R"doc(
         Execute last captured trace on Device handle
     )doc");
+    m_device.def("ReleaseLastTrace", &detail::ReleaseLastTrace, R"doc(
+        Release last captured Trace on Device handle
+    )doc");
+
 }
 
 void ProfilerModule(py::module &m_profiler) {
