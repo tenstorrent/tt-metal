@@ -47,10 +47,8 @@ struct dispatch_constants {
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
     static constexpr uint32_t DISPATCH_BUFFER_BASE = ((DISPATCH_L1_UNRESERVED_BASE - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
 
-    static constexpr uint32_t PREFETCH_D_BUFFER_SIZE = 256 * 1024;
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-    static constexpr uint32_t PREFETCH_D_BUFFER_PAGES = PREFETCH_D_BUFFER_SIZE >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
     // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken down into equal sized partial pages
@@ -75,6 +73,10 @@ struct dispatch_constants {
 
     uint32_t dispatch_buffer_pages() const { return dispatch_buffer_pages_; }
 
+    uint32_t prefetch_d_buffer_size() const { return prefetch_d_buffer_size_; }
+
+    uint32_t prefetch_d_buffer_pages() const { return prefetch_d_buffer_pages_; }
+
    private:
     dispatch_constants(const CoreType &core_type) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
@@ -86,12 +88,14 @@ struct dispatch_constants {
             cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
             dispatch_buffer_block_size = 512 * 1024;
+            prefetch_d_buffer_size_ = 256 * 1024;
         } else {
             prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 32 * 1024;
             cmddat_q_size_ = 64 * 1024;
-            scratch_db_size_ = 64 * 1024;
+            scratch_db_size_ = 20 * 1024;
             dispatch_buffer_block_size = 128 * 1024;
+            prefetch_d_buffer_size_ = 128 * 1024;
         }
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
@@ -106,6 +110,7 @@ struct dispatch_constants {
         dispatch_buffer_pages_ = dispatch_buffer_block_size_pages_ * DISPATCH_BUFFER_SIZE_BLOCKS;
         uint32_t dispatch_cb_end = DISPATCH_BUFFER_BASE + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages_;
         TT_ASSERT(dispatch_cb_end < l1_size);
+        prefetch_d_buffer_pages_ = prefetch_d_buffer_size_ >> PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
     }
 
     uint32_t prefetch_q_entries_;
@@ -117,6 +122,8 @@ struct dispatch_constants {
     uint32_t scratch_db_size_;
     uint32_t dispatch_buffer_block_size_pages_;
     uint32_t dispatch_buffer_pages_;
+    uint32_t prefetch_d_buffer_size_;
+    uint32_t prefetch_d_buffer_pages_;
 };
 
 /// @brief Get offset of the command queue relative to its channel
