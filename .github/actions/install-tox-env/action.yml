@@ -1,0 +1,34 @@
+name: 'Install Tox Dependencies'
+description: "Installs Tox Python Dependencies from cache or from PyPI if cache is not available.
+Uses pyproject.toml and requirements-dev.txt as cache keys."
+inputs:
+  python-version:
+    description: "Version of Python that should be used to run Tox"
+    default: "3.8"
+  cache-dependency-path:
+    description: "Requirement files to install. Can be a glob pattern."
+    default: "**/requirements*.txt"
+  tox-env:
+    description: "Name of tox environment to use/run."
+outputs:
+  cache-hit:
+    description: "A boolean value to indicate if a cache was restored"
+    value: ${{ steps.cache-tox-env.outputs.cache-hit }}
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-python@v5.0.0
+      id: setup-python
+      with:
+        python-version: ${{ inputs.python-version }}
+    - run: echo '::remove-matcher owner=python::'
+      shell: bash
+    - name: Install Tox
+      run: pip3 install tox==4.11.4
+      shell: bash
+    - uses: actions/cache@v4.0.0
+      id: cache-tox-env
+      with:
+        key: tox-${{ runner.os }}-py-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles(inputs.cache-dependency-path) }}-${{ inputs.tox-env }}
+        path: |
+          .tox/${{ inputs.tox-env }}
