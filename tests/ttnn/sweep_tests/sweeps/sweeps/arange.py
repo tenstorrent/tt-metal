@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, divup
 
 
 parameters = {
@@ -62,5 +62,7 @@ def run(
     )
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor[-1, -1, -1, :]
+    if divup((end - start), step) % 2 != 0:
+        output_tensor = output_tensor.view(-1)[:-1]
 
     return check_with_pcc(torch_output_tensor, output_tensor)
