@@ -19,7 +19,7 @@ using namespace ckernel;
 inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
-template <int MATH_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
+template <int MATH_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor, uint32_t num_faces=4>
 inline void _llk_math_matmul_(uint dst_index, bool transpose = false) {
 
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
@@ -37,7 +37,13 @@ inline void _llk_math_matmul_(uint dst_index, bool transpose = false) {
         }
     } else {
         if constexpr (MATH_FIDELITY_PHASES > 0) {
-            for (int j=0; j<2; j++) {
+            if constexpr (num_faces == 1) {
+                if (transpose) TTI_TRNSPSRCA;
+                for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
+                    ckernel_template::run(instrn_buffer);
+                }
+                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_D_F);                      // DEST = 0, DEST_CR = 0, FIDELITY_PHASE = 0
+            } else if constexpr (num_faces == 2) {
                 if (transpose) TTI_TRNSPSRCA;
                 for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
                     ckernel_template::run(instrn_buffer);
@@ -49,18 +55,44 @@ inline void _llk_math_matmul_(uint dst_index, bool transpose = false) {
                     ckernel_template::run(instrn_buffer);
                 }
                 TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_D_F);                      // DEST = 0, DEST_CR = 0, FIDELITY_PHASE = 0
+            } else {
+                for (int j=0; j<2; j++) {
+                    if (transpose) TTI_TRNSPSRCA;
+                    for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
+                        ckernel_template::run(instrn_buffer);
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);          // DEST = 8, DEST_CR = 8
+                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D_F);     // DEST = 16, DEST_CR = 16, FIDELITY_PHASE = 0
+                    if (transpose) TTI_TRNSPSRCA;
+                    for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
+                        ckernel_template::run(instrn_buffer);
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_D_F);                      // DEST = 0, DEST_CR = 0, FIDELITY_PHASE = 0
+                }
             }
         } else {
-            if (transpose) TTI_TRNSPSRCA;
-            ckernel_template::run(instrn_buffer);
-            if (transpose) TTI_TRNSPSRCA;
-            ckernel_template::run(instrn_buffer);
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-            if (transpose) TTI_TRNSPSRCA;
-            ckernel_template::run(instrn_buffer);
-            if (transpose) TTI_TRNSPSRCA;
-            ckernel_template::run(instrn_buffer);
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            if constexpr (num_faces == 1) {
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            } else if constexpr (num_faces == 2) {
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            } else {
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                if (transpose) TTI_TRNSPSRCA;
+                ckernel_template::run(instrn_buffer);
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            }
         }
     }
 }
