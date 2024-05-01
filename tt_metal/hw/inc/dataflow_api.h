@@ -913,6 +913,8 @@ struct InterleavedAddrGenFast {
         noc_reads_num_issued[noc_index] += 1;
     }
 
+
+
     FORCE_INLINE
     void noc_async_write_tile(const uint32_t id, uint32_t src_addr) const {
         uint32_t bank_id;

@@ -33,6 +33,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     3_pcie_transfer/test_pull_from_pcie
     6_dram_offchip/test_dram_offchip
     7_kernel_launch/test_kernel_launch
+    8_dram_adjacent_core_read/test_dram_read
 )
 
 foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
