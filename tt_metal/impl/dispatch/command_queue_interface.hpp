@@ -163,7 +163,7 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
 // Ideally would work by cachelines, but the min size is less than that
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
 // TODO: ditto alignment isues
-template <bool blocking = false>
+template <bool debug_sync = false>
 static inline void memcpy_to_device(void *__restrict dst, const void * __restrict src, size_t n)
 {
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
@@ -187,7 +187,7 @@ static inline void memcpy_to_device(void *__restrict dst, const void * __restric
         for (size_t i = 0; i < n / sizeof(int32_t); i++) {
             _mm_stream_si32(dst32 + i, src32[i]);
         }
-        if constexpr(blocking) {
+        if constexpr (debug_sync) {
             tt_driver_atomics::sfence();
         }
         return;
@@ -219,7 +219,7 @@ static inline void memcpy_to_device(void *__restrict dst, const void * __restric
             _mm_stream_si32(dst32 + i, src32[i]);
         }
     }
-    if constexpr(blocking) {
+    if constexpr (debug_sync) {
         tt_driver_atomics::sfence();
     }
     return;
