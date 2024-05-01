@@ -50,6 +50,7 @@ namespace tt::tt_metal{
         void BeginTraceCapture(Device *device);
         void EndTraceCapture(Device *device);
         void ExecuteLastTrace(Device *device, bool blocking);
+        void ReleaseLastTrace(Device *device);
 
         void BeginTraceCaptures(std::map<chip_id_t, Device *> devices);
         void EndTraceCaptures(std::map<chip_id_t, Device *> devices);

@@ -709,6 +709,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         device->execute_last_trace(blocking);
     }
 
+    void ReleaseLastTrace(Device *device) {
+        device->release_last_trace();
+    }
+
     void BeginTraceCaptures(std::map<chip_id_t, Device *> devices) {
         for (const auto &[device_id, dev] : devices) {
             dev->begin_trace();
