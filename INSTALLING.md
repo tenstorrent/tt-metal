@@ -17,8 +17,8 @@ Note the current compatability matrix:
 | Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.4.0.0_acec1267.tar.gz (v4.0.0)  | v2.1.0 or above       | N/A                            |
-| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.8.11.0.tar.gz (v80.8.11.0)      | v2.1.0 or above       | N/A                            |
-| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.26              | fw_pack-80.8.11.0.tar.gz (v80.8.11.0)      | v2.1.0 or above       | v1.0.2 or above, `mesh` config |
+| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.8.12.0.tar.gz (v80.8.12.0)      | v2.1.0 or above       | N/A                            |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.8.12.0.tar.gz (v80.8.12.0)      | v2.1.0 or above       | v1.0.2 or above, `mesh` config |
 
 ---
 
