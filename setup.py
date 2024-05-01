@@ -159,14 +159,11 @@ ext_modules = [buda_eager_lib_C, ttnn_lib_C]
 
 BuildConstants = namedtuple("BuildConstants", ["so_src_location"])
 
-<<<<<<< HEAD
 build_constants_lookup = {
     buda_eager_lib_C: BuildConstants(so_src_location="build/lib/libtt_lib_csrc.so"),
     ttnn_lib_C: BuildConstants(so_src_location="build/lib/_ttnn.so"),
 }
 
-=======
->>>>>>> 80507682a ( #6858: Continue to clean up the tox code for the changes in the workflows)
 setup(
     url="http://www.tenstorrent.com",
     use_scm_version=get_version(buda_eager_build_config),
