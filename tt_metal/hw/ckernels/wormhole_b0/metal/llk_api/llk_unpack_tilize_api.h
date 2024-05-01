@@ -149,14 +149,16 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     static constexpr uint unpack_srca_dat_valid = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr uint unpack_srcb_dat_valid = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
 
-    const uint32_t innerloop = zero_srcA ? (num_faces-1) : 1;
+    const uint32_t innerloop = zero_srcA ? (num_faces>2 ? 2 : (num_faces-1)) : 1;
     const uint32_t outerloop = zero_srcA ? 1 : (num_faces>2) ? num_faces/2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces==2) ? unpack_srcb_2_face : unpack_srcb));
     if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
     } else if constexpr (zero_srcA) {
-        tmp.set_start_op(unpack_zero_srca);
-        tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
+        if (num_faces < 4) {
+            tmp.set_start_op(unpack_zero_srca);
+            tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
+        }
     }
     tmp.program(instrn_buffer);
 }
@@ -228,7 +230,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = zero_srcA ? 1 : (narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1));
+    std::uint32_t num_loops = narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1);
 
     // Clear z/w start counters for SrcB
     TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
@@ -241,7 +243,15 @@ inline void llk_unpack_tilizeA_B(
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
-        TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+        if constexpr (zero_srcA) {
+            if (num_faces==4 && n==1) {
+                TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1011);
+            } else {
+                TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+            }
+        } else {
+            TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+        }
 
         // Wait for free context
         wait_for_next_context(2);
@@ -259,7 +269,22 @@ inline void llk_unpack_tilizeA_B(
         }
 
         // Run MOP
-        ckernel::ckernel_template::run(instrn_buffer);
+        if constexpr (zero_srcA) {
+            if (num_faces==4) {
+                if (n==0) {
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+                    ckernel::ckernel_template::run(instrn_buffer);
+                } else {
+                    ckernel::ckernel_template::run(instrn_buffer);
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                }
+            } else {
+                ckernel::ckernel_template::run(instrn_buffer);
+            }
+        } else {
+            ckernel::ckernel_template::run(instrn_buffer);
+        }
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
