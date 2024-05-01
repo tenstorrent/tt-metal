@@ -2117,7 +2117,7 @@ int main(int argc, char **argv) {
                 cmds.resize(0);
                 cmd_sizes.resize(0);
                 reset_worker_data(worker_data);
-                gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
+                gen_prefetcher_cmds(device_r, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
                 TT_FATAL(worker_data_size(worker_data) * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
                          "Test overflowed L1 memory");
                 run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
