@@ -12,6 +12,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -30,7 +31,20 @@ using std::chrono::microseconds;
 // Run ./test_pull_from_pcie --help to see usage
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+void *align(void *ptr, std::size_t max_alignment) {
+    const std::uintptr_t uptr = reinterpret_cast<std::uintptr_t>(ptr);
+    std::uintptr_t aligned = (uptr - 1u + max_alignment) & -max_alignment;
+    // Make max alignment of ptr equal to the actual specified alignment
+    // ex. if the current ptr here is 16, but we specified an alignment of 8,
+    // then this is both 8 and 16 byte aligned, so we offset again by our
+    // specified alignment to make the max alignment what was specified
+    aligned = aligned & (max_alignment << 1 - 1) ? aligned : aligned + max_alignment;
+
+    return reinterpret_cast<void *>(aligned);
+}
+
 #define CACHE_LINE_SIZE 64
+
 void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n)
 {
     size_t num_lines = n / CACHE_LINE_SIZE;
@@ -63,6 +77,7 @@ int main(int argc, char** argv) {
     bool simulate_write_ptr_update = false;
     uint32_t write_ptr_readback_interval = 0;
     uint32_t copy_mode = 0;
+    std::size_t addr_align = MEMCPY_ALIGNMENT;
 
     try {
         // Input arguments parsing
@@ -77,7 +92,8 @@ int main(int argc, char** argv) {
             log_info(LogTest, "  --enable-kernel-read: whether to run a kernel that reads from PCIe (default false)");
             log_info(LogTest, "  --simulate-wr-ptr-update: whether host writes to reg address at 32KB intervals (default false)");
             log_info(LogTest, "  --wr-ptr-rdbk-interval: after this many num writes to reg address, do readback (default 0 means no readbacks)");
-            log_info(LogTest, "  --copy-mode: method used to write to pcie. 0: memcpy, 1: 4 byte writes, 2: nt_memcpy (uncached writes + 16B stores)");
+            log_info(LogTest, "  --copy-mode: method used to write to pcie. 0: memcpy, 1: 4 byte writes, 2: nt_memcpy (uncached writes + 16B stores), 3: memcpy_to_device (uncached writes + unaligned 16B stores)");
+            log_info(LogTest, "  --addr-align: Alignment of start of data. Must be a power of 2 (default {} B)", MEMCPY_ALIGNMENT);
             exit(0);
         }
 
@@ -103,13 +119,17 @@ int main(int argc, char** argv) {
             std::tie(copy_mode, input_args) = test_args::get_command_option_uint32_and_remaining_args(
                 input_args, "--copy-mode", 0);
 
+            std::tie(addr_align, input_args) = test_args::get_command_option_uint32_and_remaining_args(
+                input_args, "--addr-align", MEMCPY_ALIGNMENT);
+
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
-
-        TT_ASSERT(copy_mode == 0 or copy_mode == 1 or copy_mode == 2, "Invalid --copy-mode arg! Only three modes to copy data data from host into hugepages support! memcpy, 4 byte writes, and nt_copy");
+        TT_ASSERT((addr_align >= 4 && (addr_align & (addr_align - 1)) == 0), "Address alignment must be a power of 2 >= 4");
+        TT_ASSERT(copy_mode <= 3, "Invalid --copy-mode arg! Only four modes to copy data data from host into hugepages support! memcpy, 4 byte writes, nt_copy, and memcpy_to_device");
         if (copy_mode == 2) {
+            TT_ASSERT(addr_align % 16 == 0, "Address alignment must be a multiple of 16 when using nt_memcpy");
             TT_ASSERT(transfer_size % 64 == 0, "Each copy to hugepage must be mod64==0 when using nt_memcpy");
         }
 
@@ -148,8 +168,13 @@ int main(int argc, char** argv) {
                 .compile_args = {host_write_ptr, hugepage_size, kernel_read_size}
             });
 
+        // Add 2 * alignment so that we have enough space when aligning the ptr
+        // First add is for aligning to next aligned addr
+        // Second add is for making sure the specified alignment is the max alignment
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-            total_transfer_size, 1000, std::chrono::system_clock::now().time_since_epoch().count());
+            total_transfer_size + 2 * addr_align, 1000, std::chrono::system_clock::now().time_since_epoch().count());
+
+        uint32_t * start_ptr = (uint32_t *)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
 
         const std::string copy_mode_str = copy_mode == 0 ? "memcpy" : copy_mode == 1 ? "4 byte writes" : "nt_memcpy";
@@ -186,24 +211,27 @@ int main(int argc, char** argv) {
                 uint32_t write_size_bytes = std::min((uint32_t)space_available, transfer_size);
                 write_size_bytes = std::min(write_size_bytes, (total_transfer_size - data_written_bytes));
                 uint8_t* host_mem_ptr = (uint8_t *)host_hugepage_start + host_write_ptr;
+                uint32_t src_data_offset = data_written_bytes / sizeof(uint32_t);
 
                 if (copy_mode == 0) {
-                    memcpy(host_mem_ptr, src_vec.data() + (data_written_bytes / sizeof(uint32_t)), write_size_bytes);
+                    memcpy(host_mem_ptr, start_ptr + src_data_offset, write_size_bytes);
                 } else if (copy_mode == 1) {
 
                     uint32_t *host_mem_ptr4B = (uint32_t *)host_mem_ptr;
                     uint32_t write_size_words = write_size_bytes / sizeof(uint32_t);
-                    uint32_t src_data_offset = data_written_bytes / sizeof(uint32_t);
 
                     for (uint32_t i = 0; i < write_size_words; i++) {
-                        *host_mem_ptr4B = src_vec[src_data_offset];
+                        *host_mem_ptr4B = start_ptr[src_data_offset];
                         host_mem_ptr4B++;
                         src_data_offset++;
                     }
 
                 } else if (copy_mode == 2) {
                     TT_ASSERT(host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0);
-                    nt_memcpy(host_mem_ptr, (uint8_t *)(src_vec.data() + (data_written_bytes / sizeof(uint32_t))), write_size_bytes);
+                    nt_memcpy(host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
+                } else if (copy_mode == 3) {
+                    TT_ASSERT(host_write_ptr % 16 == 0);
+                    memcpy_to_device<true>(host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
                 }
 
                 uint32_t num_reg_writes = (reg_addr - dispatch_constants::PREFETCH_Q_BASE) / sizeof(uint32_t);
