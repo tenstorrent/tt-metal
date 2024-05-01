@@ -273,7 +273,7 @@ class EnqueueProgramCommand : public Command {
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
     DeviceCommand preamble_command_sequence;
-    static std::unordered_map<uint64_t, std::vector<DeviceCommand>> runtime_args_command_sequences;
+    thread_local static std::unordered_map<uint64_t, std::vector<DeviceCommand>> runtime_args_command_sequences;
     DeviceCommand program_command_sequence;
 
    public:
