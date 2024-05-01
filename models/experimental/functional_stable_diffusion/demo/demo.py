@@ -319,7 +319,7 @@ def run_demo_inference_diffusiondb(
         input_height = 64
         input_width = 64
         reader_patterns_cache = {} if height == 512 and width == 512 else None
-        ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        # ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
         _tlist = []
         for t in ttnn_scheduler.timesteps:
@@ -411,13 +411,14 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((2),),
+    ((30),),
 )
 @pytest.mark.parametrize(
     "image_size",
