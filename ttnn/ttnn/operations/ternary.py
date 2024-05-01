@@ -154,7 +154,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
             input_tensor,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -163,7 +163,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
             input_tensor1,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -172,7 +172,7 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
             input_tensor2,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16,),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -240,6 +240,8 @@ def register_ttl_ternary_function_with_float(name, ttl_ternary_function, op_name
                 >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = ttnn.{(name)}(tensor, tensor1, tensor2, {param})
+
+            {ternary_function.__doc__}
 
             """
     setattr(THIS_MODULE, name, ternary_function)
