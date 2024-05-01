@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 
 #include "tensor/borrowed_buffer_functions.hpp"
 #include "tensor/owned_buffer_functions.hpp"

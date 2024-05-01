@@ -18,7 +18,7 @@ $(PYTHON_ENV)/.installed:
 	python3 -m venv $(PYTHON_ENV)
 	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu"
 	echo "Installing python env build backend requirements..."
-	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip install setuptools wheel"
+	bash -c "source $(PYTHON_ENV)/bin/activate && python3 -m pip install --upgrade setuptools wheel"
 	touch $@
 
 $(PYTHON_ENV)/%: $(PYTHON_ENV)/.installed
