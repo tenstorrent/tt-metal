@@ -22,17 +22,12 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
     auto shape = input.get_legacy_shape();
-    auto N = shape[0];
-    auto C = shape[1];
-    auto H = shape[2];
-    auto W = shape[3];
+    auto H = shape[-2];
+    auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
-    uint32_t num_tiles = N * Ht * Wt;
-    if (dim == 0) {
-        num_tiles = C * Ht * Wt;
-    }
+    uint32_t num_tiles = input.volume() / shape[dim] / H / W * Ht * Wt;
 
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
     uint32_t core_h = core_range.end.y - core_range.start.y + 1;
@@ -69,17 +64,12 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     auto writer_kernel_id = CreateWriteKernel(
         program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_c.cpp", all_cores, {dst_is_dram}, writer_defines);
 
-    // for C
-    uint32_t outer_stride = C * Ht * Wt;
-    uint32_t inner_size = Wt * Ht;
-    uint32_t dim_size = C;
-
-    // for N
-    if (dim == 0) {
-        outer_stride = N * C * Ht * Wt; // not used
-        inner_size = C * Wt * Ht;
-        dim_size = N;
+    auto outer_stride = Ht * Wt;
+    for(int i = dim ; i < shape.rank() - 2; i++ ) {
+        outer_stride *= shape[i];
     }
+    auto dim_size = shape[dim];
+    auto inner_size = outer_stride / dim_size;
 
     std::map<string, string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) compute_defines["SOFTMAX"] = "1";

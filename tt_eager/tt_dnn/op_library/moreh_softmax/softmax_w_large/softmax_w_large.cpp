@@ -22,14 +22,14 @@ operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, const
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
     auto shape = input.get_legacy_shape();
-    auto N = shape[0];
-    auto C = shape[1];
-    auto H = shape[2];
-    auto W = shape[3];
+    auto H = shape[-2];
+    auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
-    uint32_t num_kernel_rows = N * C * Ht;
+    auto num = input.volume() / H / W;
+
+    uint32_t num_kernel_rows = num * Ht;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
     uint32_t core_h = core_range.end.y - core_range.start.y + 1;
 
@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, const
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[3] % TILE_WIDTH;
+        uint32_t mask_w = shape.without_padding()[-1] % TILE_WIDTH;
         if(mask_w == 0) mask_w = TILE_WIDTH;
         vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_w};
