@@ -125,7 +125,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::PREFETCH_D_BUFFER_SIZE);
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
@@ -154,7 +154,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::PREFETCH_D_BUFFER_SIZE);
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end.x);
