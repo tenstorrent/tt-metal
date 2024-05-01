@@ -15,12 +15,12 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3),  # single tile
-        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((32, 32), 1),  # single tile
+        ((3, 32, 32 * 5), 2),  # mutiple tile with dim W
         ((5, 6, 32, 32), 3),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
-        ((1, 1, 32, 32), 2),  # single tile
-        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((32, 32), 0),  # single tile
+        ((3, 32 * 5, 32), 1),  # mutiple tile with dim H
         ((5, 6, 32, 32), 2),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
@@ -155,12 +155,12 @@ def test_logsoftmax_for_dim_nc(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3),  # single tile
-        ((1, 1, 32, 32 * 2), 3),  # mutiple tile with dim W
+        ((32, 32), 1),  # single tile
+        ((3, 32, 32 * 2), 2),  # mutiple tile with dim W
         ((5, 6, 32, 32), 3),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
-        ((1, 1, 32, 32), 2),  # single tile
-        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((32, 32), 0),  # single tile
+        ((3, 32 * 5, 32), 1),  # mutiple tile with dim H
         ((5, 6, 32, 32), 2),  # multiple cores
         ((10, 20, 32 * 5, 32), 2),  # multiple tiles per core
     ),
@@ -320,7 +320,7 @@ def test_logsoftmax_backward_for_dim_nc(shape_dim, device):
 
 @pytest.mark.parametrize(
     "shape_dim",
-    (((1, 1, 32, 32), 3),),  # single tile
+    (((32, 32), 1),),  # single tile
 )
 @pytest.mark.parametrize(
     "optional_output_tensor",
@@ -357,7 +357,7 @@ def test_logsoftmax_optional_output_tensor(shape_dim, optional_output_tensor, de
 
 @pytest.mark.parametrize(
     "shape_dim",
-    (((1, 1, 32, 32), 3),),  # single tile
+    (((32, 32), 1),),  # single tile
 )
 @pytest.mark.parametrize(
     "optional_output_tensor",

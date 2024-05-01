@@ -13,12 +13,12 @@ from loguru import logger
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3),  # single tile
-        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((32, 32), 1),  # single tile
+        ((3, 32, 32 * 5), 2),  # mutiple tile with dim W
         ((5, 6, 32, 32), 3),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
-        ((1, 1, 32, 32), 2),  # single tile
-        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((32, 32), 0),  # single tile
+        ((3, 32 * 5, 32), 1),  # mutiple tile with dim H
         ((5, 6, 32, 32), 2),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
@@ -275,8 +275,8 @@ def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 15, 32, 32), 1),  # single tile c
-        ((1, 15, 32 * 7, 32 * 5), 1),  # mutiple cores
+        ((15, 32, 32), 0),  # single tile c
+        ((15, 32 * 7, 32 * 5), 0),  # mutiple cores
         ((109, 15, 32, 32), 1),  # mutiple tiles per cores
         ((15, 1, 32, 32), 0),  # single tile n
         ((15, 1, 32 * 7, 32 * 5), 0),  # mutiple cores
@@ -311,10 +311,10 @@ def test_softmax_backward_for_dim_nc(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim_strategy",
     (
-        ((1, 1, 32, 32), 3, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_W),
-        ((1, 1, 32, 32), 2, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_H),
-        ((1, 1, 32, 32), 3, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W),
-        ((1, 1, 32, 32), 2, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H),
+        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_W),
+        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_H),
+        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W),
+        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H),
         ((1, 1, 32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
         ((1, 1, 32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
     ),
@@ -381,7 +381,7 @@ def test_softmax_backward_callback(shape_dim_strategy, device):
 
 @pytest.mark.parametrize(
     "shape_dim",
-    (((1, 1, 32, 32), 3),),  # single tile
+    (((32, 32), 1),),  # single tile
 )
 @pytest.mark.parametrize(
     "optional_output_tensor",
