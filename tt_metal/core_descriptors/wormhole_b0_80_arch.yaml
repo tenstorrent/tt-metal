@@ -23,6 +23,23 @@ galaxy:
     dispatch_core_type:
       "tensix"
 
+  2:
+    l1_bank_size:
+      1376256
+
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+    dispatch_core_type:
+      "tensix"
+
 nebula_x1:
   1:
     l1_bank_size:
