@@ -278,7 +278,7 @@ def test_stable_diffusion_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((6.60),),
+    ((8.23),),
 )
 def test_stable_diffusion_device_perf(expected_perf):
     subdir = "ttnn_stable_diffusion"
