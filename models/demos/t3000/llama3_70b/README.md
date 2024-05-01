@@ -22,7 +22,7 @@ If you do not have access to TT-VPN, follow these steps to download the weights 
 
 1. **Download the Llama3-70B weights from Meta (https://llama.meta.com/):**
 
-2. **Repack the weights:**
+2. **Repack the weights and copy params.json:**
     ```bash
     # This concatenates the sharded checkpoints and makes it easier for us to load.
     python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
@@ -32,27 +32,36 @@ If you do not have access to TT-VPN, follow these steps to download the weights 
 
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
-1. **Prepare the weight cache directory:**
+1. **Install requirements for refernce/llama folder:**
+    ```bash
+    pip install blobfile
+    ```
+
+2. **Prepare the weight cache directory:**
     ```bash
     # Make a directory for us to cache weights into. This speeds up subsequent runs.
     mkdir <weight_cache_dir>
     ```
 
-2. **Set up environment variables:**
+3. **Set up environment variables:**
     ```bash
-    # Make sure you export the correct llama3 weights and tokenizer paths.
     export LLAMA_CKPT_DIR=<repacked_output_dir>
-    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir>
+    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
     export LLAMA_CACHE_PATH=<weight_cache_dir>
+
+    # Example:
+    # export LLAMA_CKPT_DIR="/home/llama3-data-repacked/llama-3-70b/"
+    # export LLAMA_TOKENIZER_PATH="/home/llama3-data-repacked/tokenizer.model"
+    # export LLAMA_CACHE_PATH="/home/llama3-data-cache/weights-cache"
     ```
 
-3. **Cache the weights (first-time setup only):**
+4. **Cache the weights (first-time setup only):**
     ```bash
     # Build a full 80 layer model to cache the weights. This will take some time.
     pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-80L]
     ```
 
-4. **Run the demo:**
+5. **Run the demo:**
     ```bash
     # Run the demo using sampling decode
     pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[sampling-tt-70b-80L]
