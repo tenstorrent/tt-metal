@@ -79,3 +79,6 @@ def test_run_average_pool(act_shape, dtype, device):
         print(f"Output PCC = {output_pcc}")
 
         assert passing_pcc
+
+    # Done with the trace, can deallocate the buffers now.
+    ttl.device.ReleaseLastTrace(device)
