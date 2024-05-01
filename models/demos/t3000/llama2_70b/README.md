@@ -22,7 +22,7 @@ If you do not have access to TT-VPN, follow these steps to download the weights 
 
 1. **Download the Llama2-70B weights from Meta (https://llama.meta.com/):**
 
-2. **Repack the weights and copy params.json:**
+2. **Repack the weights:**
     ```bash
     # This concatenates the sharded checkpoints and makes it easier for us to load.
     python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
