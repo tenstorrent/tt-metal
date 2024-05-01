@@ -37,7 +37,7 @@ std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
 
-std::unordered_map<uint64_t, std::vector<DeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
+thread_local std::unordered_map<uint64_t, std::vector<DeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
 
 uint32_t get_noc_unicast_encoding(const CoreCoord &coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end) { return NOC_MULTICAST_ENCODING(start.x, start.y, end.x, end.y); }
@@ -285,7 +285,7 @@ void generate_dispatch_write_packed(
         std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
         std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
 
-    static auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+    thread_local static auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
         uint32_t sub_cmd_sizeB =
             is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
         uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
@@ -293,7 +293,7 @@ void generate_dispatch_write_packed(
             num_packed_cmds * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
         return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
     };
-    static auto get_max_num_packed_cmds = [](uint32_t runtime_args_len, uint32_t max_size, bool is_unicast) {
+    thread_local static auto get_max_num_packed_cmds = [](uint32_t runtime_args_len, uint32_t max_size, bool is_unicast) {
         uint32_t sub_cmd_sizeB =
             is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
         // Approximate calculation due to alignment
@@ -302,7 +302,7 @@ void generate_dispatch_write_packed(
             max_size / (align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
         return max_num_packed_cmds;
     };
-    static auto get_runtime_args_data_offset =
+    thread_local static auto get_runtime_args_data_offset =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
@@ -344,7 +344,7 @@ void generate_dispatch_write_packed(
 // Generate command sequence for unique (unicast) and common (multicast) runtime args
 void EnqueueProgramCommand::assemble_runtime_args_commands() {
     // Maps to enum class RISCV, tt_backend_api_types.h
-    static const std::vector<uint32_t> unique_processor_to_l1_arg_base_addr = {
+    thread_local static const std::vector<uint32_t> unique_processor_to_l1_arg_base_addr = {
         BRISC_L1_ARG_BASE,
         NCRISC_L1_ARG_BASE,
         0,
@@ -1485,7 +1485,7 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
     uint32_t padded_page_increment = (padded_page_size / sizeof(uint32_t));
     uint32_t page_increment = (page_size / sizeof(uint32_t));
 
-    static std::vector<uint32_t> completion_q_data;
+    thread_local static std::vector<uint32_t> completion_q_data;
 
     while (remaining_bytes_to_read != 0) {
         this->manager.completion_queue_wait_front(this->id, this->exit_condition);
@@ -1670,7 +1670,7 @@ void HWCommandQueue::read_completion_queue() {
                         }
                         else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
-                            static std::vector<uint32_t> dispatch_cmd_and_event((sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE) / sizeof(uint32_t));
+                            thread_local static std::vector<uint32_t> dispatch_cmd_and_event((sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE) / sizeof(uint32_t));
                             tt::Cluster::instance().read_sysmem(
                                 dispatch_cmd_and_event.data(), sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE, read_ptr, mmio_device_id, channel);
                             uint32_t event_completed = dispatch_cmd_and_event.at(sizeof(CQDispatchCmd) / sizeof(uint32_t));
