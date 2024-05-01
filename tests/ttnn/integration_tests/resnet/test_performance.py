@@ -24,7 +24,7 @@ from models.perf.perf_utils import prep_perf_report
     [
         [
             20,
-            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi",
+            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi-device_l1_small_size=24576",
             7363,
         ],
     ],
