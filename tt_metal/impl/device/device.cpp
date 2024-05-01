@@ -415,7 +415,7 @@ void Device::compile_command_queue_programs() {
                 dispatch_constants::get(dispatch_core_type).scratch_db_base(),
                 dispatch_constants::get(dispatch_core_type).scratch_db_size(),
                 prefetch_sync_sem,
-                dispatch_constants::PREFETCH_D_BUFFER_PAGES, // prefetch_d only
+                dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // prefetch_d only
                 prefetch_d_upstream_cb_sem, // prefetch_d only
                 prefetch_downstream_cb_sem, // prefetch_d only
                 dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
@@ -558,7 +558,7 @@ void Device::compile_command_queue_programs() {
         constexpr uint32_t dest_endpoint_start_id = 0xbb;
 
         tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_location, 0, dispatch_core_type); // prefetch_sync_sem
-        tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_location, dispatch_constants::PREFETCH_D_BUFFER_PAGES, dispatch_core_type); // prefetch_downstream_cb_sem
+        tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_location, dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), dispatch_core_type); // prefetch_downstream_cb_sem
         tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_location, 0, dispatch_core_type);
 
         tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, mux_location, 0, dispatch_core_type); // unused mux semaphore
@@ -585,7 +585,7 @@ void Device::compile_command_queue_programs() {
         std::vector<uint32_t> prefetch_compile_args = {
             dispatch_constants::DISPATCH_BUFFER_BASE,
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-            dispatch_constants::PREFETCH_D_BUFFER_PAGES,
+            dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(),
             prefetch_downstream_cb_sem,
             mux_upstream_cb_sem,
             issue_queue_start_addr,
@@ -598,7 +598,7 @@ void Device::compile_command_queue_programs() {
             dispatch_constants::get(dispatch_core_type).scratch_db_base(), // unused for prefetch_h
             dispatch_constants::get(dispatch_core_type).scratch_db_size(), // unused for prefetch_h
             prefetch_sync_sem, // unused for prefetch_h
-            dispatch_constants::PREFETCH_D_BUFFER_PAGES, // prefetch_d only
+            dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // prefetch_d only
             prefetch_d_upstream_cb_sem, // prefetch_d only
             prefetch_downstream_cb_sem, // prefetch_d only
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
@@ -632,7 +632,7 @@ void Device::compile_command_queue_programs() {
         log_debug(LogDevice, "run prefetch_h {}", prefetch_location.str());
 
         uint32_t relay_mux_queue_start_addr = dispatch_constants::DISPATCH_BUFFER_BASE;
-        uint32_t relay_mux_queue_size_bytes = dispatch_constants::PREFETCH_D_BUFFER_SIZE;
+        uint32_t relay_mux_queue_size_bytes = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size();
         uint32_t timeout_mcycles = 0;
         std::vector<uint32_t> mux_compile_args =
         {
@@ -1025,7 +1025,7 @@ void Device::compile_command_queue_programs() {
                                 0,
                                 (uint32_t)DispatchRemoteNetworkType::NOC0), // 7: remote_tx_3_info
             (prefetch_d_buffer_base >> 4), // 8: remote_tx_queue_start_addr_words 0
-            dispatch_constants::PREFETCH_D_BUFFER_SIZE >> 4, // 9: remote_tx_queue_size_words 0
+            dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size() >> 4, // 9: remote_tx_queue_size_words 0
             0, // 10: remote_tx_queue_start_addr_words 1
             0, // 11: remote_tx_queue_size_words 1
             0, // 12: remote_tx_queue_start_addr_words 2
@@ -1081,9 +1081,12 @@ void Device::compile_command_queue_programs() {
         }
 
         // prefetch_d
-        uint32_t scratch_db_base = prefetch_d_buffer_base + (((dispatch_constants::PREFETCH_D_BUFFER_PAGES << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
-                                                                  PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
-        TT_ASSERT(scratch_db_base < 1024 * 1024); // L1 size
+        uint32_t scratch_db_base = (prefetch_d_buffer_base + dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size()
+                                    + PCIE_ALIGNMENT - 1) & (~(PCIE_ALIGNMENT - 1));
+        uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
+        const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
+
+        TT_ASSERT(scratch_db_base + scratch_db_size <= l1_size);
 
         std::map<string, string> prefetch_d_defines = {
             {"MY_NOC_X", std::to_string(prefetch_d_physical_core.x)},
@@ -1106,11 +1109,11 @@ void Device::compile_command_queue_programs() {
             dispatch_constants::get(dispatch_core_type).prefetch_q_size(),
             CQ_PREFETCH_Q_RD_PTR,
             prefetch_d_buffer_base, // overridden for split below
-            dispatch_constants::PREFETCH_D_BUFFER_PAGES * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE), // overridden for split below
+            dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size(), // overridden for split below
             scratch_db_base, // scratch_db_base filled in below if used
-            dispatch_constants::get(dispatch_core_type).scratch_db_size(),
+            scratch_db_size,
             prefetch_sync_sem,
-            dispatch_constants::PREFETCH_D_BUFFER_PAGES, // prefetch_d only
+            dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // prefetch_d only
             prefetch_d_upstream_cb_sem, // prefetch_d only my upstream
             demux_downstream_cb_sem, // prefetch_d only upstream
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
