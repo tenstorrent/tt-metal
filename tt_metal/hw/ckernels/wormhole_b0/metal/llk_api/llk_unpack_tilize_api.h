@@ -175,13 +175,8 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     const std::uint32_t block_c_dim = ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM);
 
     // Set face dim
-    if constexpr (zero_srcA) {
-        TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
-        TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
-    } else {
-        TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
-        TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
-    }
+    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim*FACE_C_DIM-1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim*FACE_C_DIM-1, 0x0);
 
     // Override default settings to enable tilize mode
     unpack_config_u config = {0};
