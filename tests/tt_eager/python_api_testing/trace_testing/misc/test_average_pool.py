@@ -22,7 +22,7 @@ def shape_padded(shape):
 @pytest.mark.parametrize(
     "act_shape",
     (
-        pytest.param([1, 7, 7, 2048], marks=pytest.mark.skip),
+        pytest.param([1, 7, 7, 2048]),
         ([1, 1, 32, 64]),
     ),
     ids=["resnet50_unpadded", "tile_divisible"],
@@ -68,6 +68,7 @@ def test_run_average_pool(act_shape, dtype, device):
             out = out.unpad_from_tile(out_shape)
 
         out_pytorch = out.to_torch()
+        out = out.pad_to_tile(0)  # Undo, so next loop unpad_from_tile works again.
 
         ## reference
         act_channels_first = torch.permute(act, (0, 3, 1, 2))  # Torch operates on channels-first tensors
