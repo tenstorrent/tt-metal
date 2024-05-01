@@ -32,7 +32,7 @@ If you do not have access to TT-VPN, follow these steps to download the weights 
 
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
-1. **Install requirements for refernce/llama folder:**
+1. **Install requirements for reference/llama folder:**
     ```bash
     pip install blobfile
     ```
