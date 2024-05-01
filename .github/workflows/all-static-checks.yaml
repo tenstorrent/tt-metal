@@ -17,9 +17,13 @@ jobs:
         with:
           cache: 'pip'
           cache-dependency-path: infra/requirements-infra.txt
+      - uses: actions/cache@v4.0.0
+        id: cache-tox-env
+        with:
+          path: |
+            .tox/post_commit_check_spdx_licenses
       - name: Check SPDX licenses
         run: |
-          pip install tox==4.11.4 
           tox -e post_commit_check_spdx_licenses
   check-metal-kernel-count:
     runs-on: ubuntu-latest
