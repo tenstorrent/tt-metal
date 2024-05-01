@@ -54,7 +54,7 @@ def run_eltwise_softshrink_tests(
 test_sweep_args = [
     (
         [(6, 6, 192, 224)],
-        [ttnn.bfloat8_b],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,

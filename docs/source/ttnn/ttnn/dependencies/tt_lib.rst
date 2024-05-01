@@ -303,6 +303,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.mul
 
+.. autofunction:: tt_lib.tensor.div
+
 .. autofunction:: tt_lib.tensor.add_unary
 
 .. autofunction:: tt_lib.tensor.sub_unary
@@ -793,6 +795,10 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.xlogy
 
+.. autofunction:: tt_lib.tensor.prod
+
+.. autofunction:: tt_lib.tensor.tiled_prod
+
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv
@@ -837,6 +843,8 @@ Other Operations
 
 Backward Operations
 ===================
+
+.. autofunction:: tt_lib.tensor.prod_bw
 
 .. autofunction:: tt_lib.tensor.addalpha_bw
 

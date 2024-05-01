@@ -354,6 +354,120 @@ static Tensor index_all(
     return output;
 }
 
+template<typename T>
+static Tensor fill_first_val_into_tensor(const Tensor& input_tensor, DataType data_type,
+			  const Layout layout , Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const Shape& s_a = input_tensor.get_legacy_shape();
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a)); //ouput
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    vector<T> data_vec;
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    const Shape input_tensor_strides = input_tensor.strides();
+    for(uint32_t i = 0; i < tt_metal::compute_volume(s_a); i++) {
+        owned_buffer[i] = input_buffer[0];
+    }
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+template<typename T>
+static Tensor prod_result_computation_GS(const Tensor& input_tensor, DataType data_type,
+			  const Layout layout , Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const Shape& s_a = input_tensor.get_legacy_shape();
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a)); //ouput
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    vector<T> data_vec;
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    const Shape input_tensor_strides = input_tensor.strides();
+    auto result = static_cast<T>(1.0f);
+    for(uint32_t i = s_a[0]-1; i < s_a[0]; i++) {
+        for(int32_t j = s_a[1]-1; j < s_a[1]; j++) {
+            for(int32_t k = s_a[2]-32; k < s_a[2]; k++) { //access last tile
+                for(int32_t l = s_a[3]-32; l < s_a[3]; l++) {
+                    auto input_index = l + input_tensor_strides[2] * k + input_tensor_strides[1] * j + input_tensor_strides[0] * i;
+                    if(k>=s_a[2]-2 && l>=s_a[3]-32){ //to access 2*32 in TILE layout
+                        result = result * static_cast<T>(input_buffer[input_index]);
+                        owned_buffer[input_index] = static_cast<T>(0.0f);
+                    }else{
+                        owned_buffer[input_index] = static_cast<T>(0.0f);
+                    }
+                }
+            }
+        }
+    }
+    owned_buffer[0] = result; //store the result at the first position of the tensor,and the rest of the values as 0.0f
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+template<typename T>
+static Tensor prod_result_computation_WH_B0(const Tensor& input_tensor, DataType data_type,
+			  const Layout layout , Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const Shape& s_a = input_tensor.get_legacy_shape();
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a)); //ouput
+    auto device_buffer = input_tensor.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    vector<T> data_vec;
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
+    }
+    auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
+    const Shape input_tensor_strides = input_tensor.strides();
+    auto result = static_cast<T>(1.0f);
+    // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
+    for(uint32_t i = s_a[0]-1; i < s_a[0]; i++) {
+        for(int32_t j = s_a[1]-1; j < s_a[1]; j++) {
+            for(int32_t k = s_a[2]-32; k < s_a[2]; k++) { //access last tile
+                for(int32_t l = s_a[3]-32; l < s_a[3]; l++) {
+                    auto input_index = l + input_tensor_strides[2] * k + input_tensor_strides[1] * j + input_tensor_strides[0] * i;
+                    if(k>=s_a[2]-4 && (l==s_a[3]-15 || l==s_a[3]-13 || l==s_a[3]-11 || l==s_a[3]-9 || l==s_a[3]-7 || l==s_a[3]-5 || l==s_a[3]-3 || l==s_a[3]-1)){ //to access 4*16 elements placed alternatively starting from index 17W in TILE layout
+                        result = result * static_cast<T>(input_buffer[input_index]);
+                        owned_buffer[input_index] = static_cast<T>(0.0f);
+                    }else{
+                        owned_buffer[input_index] = static_cast<T>(0.0f);
+                    }
+                }
+            }
+        }
+    }
+    owned_buffer[0] = result; //store the result at the first position of the tensor,and the rest of the values as 0.0f
+    auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+
 template <typename T>
 static Tensor index_channel(
     const Shape& shape,

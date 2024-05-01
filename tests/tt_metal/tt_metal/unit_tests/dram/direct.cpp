@@ -118,7 +118,6 @@ bool writer_only(
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
     auto dram_noc_xy = output_dram_buffer->noc_coordinates();
-    auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =

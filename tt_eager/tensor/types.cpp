@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "tensor/types.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -62,9 +63,7 @@ Padding::PadDimension& Padding::operator[](const std::int64_t index) {
     return this->pad_dimensions_[index];
 }
 
-const Padding::PadDimension& Padding::operator[](const std::int64_t index) const  {
-    return this->pad_dimensions_[index];
-}
+const Padding::PadDimension Padding::operator[](const std::int64_t index) const { return this->pad_dimensions_[index]; }
 
 Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
 
@@ -117,7 +116,7 @@ uint32_t& Shape::operator[](const std::int64_t index) {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
-const uint32_t& Shape::operator[](const std::int64_t index) const {
+const uint32_t Shape::operator[](const std::int64_t index) const {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
@@ -186,6 +185,10 @@ bool MemoryConfig::is_sharded() const {
         default: return false;
     }
 }
+
+bool MemoryConfig::is_l1() const { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
+
+bool MemoryConfig::is_dram() const { return buffer_type == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
     return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout && config_a.shard_spec == config_b.shard_spec;

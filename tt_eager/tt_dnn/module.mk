@@ -16,6 +16,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_overlap.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_sharded.cpp \
+	tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \
@@ -76,6 +77,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op_v2.cpp \
 	tt_eager/tt_dnn/op_library/softmax/multi_core/softmax_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/softmax/softmax_op.cpp \
+	tt_eager/tt_dnn/op_library/sdpa/multi_core/sdpa_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/sdpa/sdpa_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam.cpp \
 	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.cpp \
@@ -108,6 +111,10 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/moreh_sum_nc_impl.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp \
+	tt_eager/tt_dnn/op_library/prod/prod_nc/prod_nc.cpp \
+	tt_eager/tt_dnn/op_library/prod/prod_nc_op.cpp \
+	tt_eager/tt_dnn/op_library/prod/prod_op_all.cpp \
+	tt_eager/tt_dnn/op_library/prod/single_core/prod_op_all_single_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_h/moreh_mean_h.cpp \
 	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_w/moreh_mean_w.cpp \
@@ -164,6 +171,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp \
 	tt_eager/tt_dnn/op_library/operation.cpp \
+	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp \
 	tt_eager/tt_dnn/op_library/run_operation.cpp \
 	tt_eager/tt_dnn/op_library/split/split_tiled.cpp \
 	tt_eager/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \

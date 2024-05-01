@@ -106,22 +106,21 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto &output_grad = input_tensors.at(0);
-        const auto &bias_grad = input_tensors.at(1);
+        const auto &bias_grad = output_tensors.at(0);
 
         Buffer *src_buffer = output_grad.buffer();
         Buffer *dst_buffer = bias_grad.buffer();
         CoreCoord core = {0, 0};
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

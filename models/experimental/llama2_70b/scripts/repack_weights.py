@@ -54,9 +54,13 @@ def repack(in_dir, out_dir, chunk_size):
         if len(value) == 1 or "norm" in key:
             val = value[0]
         else:
-            # cat_dim is index of the smallest dimension in value[0].shape
-            cat_dim = torch.argmin(torch.tensor(value[0].shape))
-            val = torch.cat(value, dim=cat_dim)
+            if (key == "tok_embeddings.weight" or key == "output.weight") and value[0].shape[1] == 8192:
+                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
+                val = torch.cat(value, dim=0)
+            else:
+                # cat_dim is index of the smallest dimension in value[0].shape
+                cat_dim = torch.argmin(torch.tensor(value[0].shape))
+                val = torch.cat(value, dim=cat_dim)
 
         chunk_id = chunk_key(key, chunk_size)
         chunks[chunk_id][key] = val

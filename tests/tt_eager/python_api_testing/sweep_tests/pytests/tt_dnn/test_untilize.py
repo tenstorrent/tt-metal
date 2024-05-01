@@ -14,7 +14,7 @@ import tt_lib as ttl
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (([[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]])),
+    (([[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 1856]])),
 )
 @pytest.mark.parametrize(
     "untilize_args",

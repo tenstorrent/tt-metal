@@ -70,9 +70,7 @@ class upblock_2d:
                 )
 
             if ttnn.is_sharded(hidden_states) and hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
-                hidden_states = ttnn.to_layout(
-                    hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
-                )
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             elif ttnn.is_sharded(hidden_states):
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             if ttnn.is_sharded(on_dev_res_hidden_states) and on_dev_res_hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -80,7 +78,6 @@ class upblock_2d:
                     on_dev_res_hidden_states,
                     ttnn.TILE_LAYOUT,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    use_multicore=True,
                 )
             elif ttnn.is_sharded(on_dev_res_hidden_states):
                 on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -104,7 +101,7 @@ class upblock_2d:
             )
 
         if add_upsample:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, use_multicore=True)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = self.upsample_2d(
                 hidden_states,
                 in_channels,

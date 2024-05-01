@@ -36,19 +36,23 @@ from models.utility_functions import (
 )
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from tqdm import tqdm
 
 
-def load_prompts_file(tokenizer, prefill_length=128):
-    # Load prompts
-    prompts = open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig").read()
-    tokenized = tokenizer.encode(prompts, bos=True, eos=False)
+def load_prompts_file(tokenizer, prefill_length, generation_length=128, gap=64):
+    with open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
+        tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
 
-    token_ids = []
-    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length):
-        window = tokenized[i : i + prefill_length]
-        if len(token_ids) == 32:
-            return token_ids, tokenizer.decode(token_ids)
-        token_ids.append(window)
+    token_windows = []
+    ground_truth_texts = []
+    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
+        token_windows.append(tokenized[i : i + prefill_length])
+        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length + 1])
+        ground_truth_texts.append(ground_truth_text)
+        if len(token_windows) == 32:
+            return token_windows, ground_truth_texts
+
+    return token_windows, ground_truth_texts
 
 
 def post_process(logits, index):
@@ -103,10 +107,6 @@ def run_test_LlamaModel_end_to_end(
     devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
     logger.info(f"Running num_layer: {n_layers}")
 
-    # TODO: Disable for now since program cache is broken
-    # for device in devices:
-    #     device.enable_program_cache()
-
     generator = Llama.build(
         ckpt_dir,
         tokenizer_path,
@@ -153,7 +153,7 @@ def run_test_LlamaModel_end_to_end(
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
     post_processor = partial(post_process)
 
-    for user_id in range(num_users):
+    for user_id in tqdm(range(num_users), desc="Prefill to 2k upto 32 users", colour="blue"):
         logger.info(f"Filling kv cache for user {user_id + 1}")
         if user_id == 0 or user_id == 25:
             profiler.start(f"processing_of_prefill_input_{user_id}")
@@ -299,6 +299,7 @@ def test_Llama_perf_host(
     expected_compile_time,
     expected_inference_time,
     all_devices,
+    use_program_cache,
     n_layers=80,
     n_devices=8,
     emulated=False,
@@ -329,6 +330,7 @@ def test_Llama_perf_host(
     )
 
 
+@pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(

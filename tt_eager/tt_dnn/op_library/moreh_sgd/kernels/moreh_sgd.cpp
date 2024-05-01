@@ -38,13 +38,9 @@ void MAIN {
         uint32_t cb_grad_tmp = cb_grad;
         #if defined(WEIGHT_DECAY)
             // grad += param * weight_decay
-            ACQ();
             mul_tiles_to_cb(cb_param_in, cb_scalar_args, cb_tmp1, 0, weight_decay_tile, /*pop0=*/0, /*pop1=*/0);
-            REL();
 
-            ACQ();
             add_tiles_to_cb(cb_grad, cb_tmp1, cb_tmp2, 0, 0, /*pop0=*/1, /*pop1=*/1);
-            REL();
 
             cb_grad_tmp = cb_tmp2;
         #endif // WEIGHT_DECAY
@@ -53,40 +49,26 @@ void MAIN {
             uint32_t cb_momentum_tmp = cb_grad_tmp;
             #if defined(MOMENTUM_INITIALIZED)
                 // grad * (1 - dampening)
-                ACQ();
                 sub_tiles_to_cb(cb_scalar_args, cb_scalar_args, cb_tmp1, one_tile, dampening_tile, /*pop0=*/0, /*pop0=*/0);
-                REL();
 
-                ACQ();
                 mul_tiles_to_cb(cb_grad_tmp, cb_tmp1, cb_tmp3, 0, 0, /*pop0=*/0, /*pop0=*/1);
-                REL();
 
                 // momentum_v * momentum
-                ACQ();
                 mul_tiles_to_cb(cb_momentum_in, cb_scalar_args, cb_tmp4, 0, momentum_tile, /*pop0=*/1, /*pop0=*/0);
-                REL();
 
-                ACQ();
                 add_tiles_to_cb(cb_tmp3, cb_tmp4, cb_tmp1, 0, 0, /*pop0=*/1, /*pop1=*/1);
-                REL();
 
                 cb_momentum_tmp = cb_tmp1;
             #endif
 
-            ACQ();
             copy_tile_to_cb(cb_momentum_tmp, cb_momentum_out, 0, /*pop=*/0);
-            REL();
 
             #if defined(NESTEROV)
                 // grad = grad + momentum_v * momentum
-                ACQ();
                 uint32_t pop_momentum = (cb_grad_tmp != cb_momentum_tmp);
                 mul_tiles_to_cb(cb_momentum_tmp, cb_scalar_args, cb_tmp3, 0, momentum_tile, /*pop0=*/pop_momentum, /*pop1=*/0);
-                REL();
 
-                ACQ();
                 add_tiles_to_cb(cb_tmp3, cb_grad_tmp, cb_tmp4, 0, 0, /*pop0=*/1, /*pop1=*/1);
-                REL();
 
                 cb_grad_tmp = cb_tmp4;
             #else
@@ -103,13 +85,9 @@ void MAIN {
         #endif // MOMENTUM
 
         // param_out = param_in - lr * grad
-        ACQ();
         mul_tiles_to_cb(cb_scalar_args, cb_grad_tmp, cb_tmp3, lr_tile, 0, /*pop0=*/0, /*pop1=*/1);
-        REL();
 
-        ACQ();
         sub_tiles_to_cb(cb_param_in, cb_tmp3, cb_param_out, 0, 0, /*pop0=*/1, /*pop1=*/1);
-        REL();
     }
 }
 }  // namespace NAMESPACE

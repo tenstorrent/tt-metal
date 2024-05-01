@@ -48,9 +48,15 @@ def calculate_key_values(config, key_value_states, *, parameters):
     head_size = hidden_size // config.encoder_attention_heads
 
     fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
-    fused_qkv = ttnn.to_layout(fused_qkv, ttnn.ROW_MAJOR_LAYOUT)
-    fused_qkv = ttnn.reshape(fused_qkv, shape=(bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
+
+    dtype = fused_qkv.dtype
+    device = fused_qkv.device()
+    fused_qkv = ttnn.to_torch(fused_qkv)
+    fused_qkv = torch.reshape(fused_qkv, (bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
     key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
+
+    key_states = ttnn.from_torch(key_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    value_states = ttnn.from_torch(value_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     key_states = ttnn.permute(key_states, (0, 2, 3, 1))
     value_states = ttnn.permute(value_states, (0, 2, 1, 3))
@@ -125,9 +131,11 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        query_states = ttnn.to_layout(query_states, ttnn.ROW_MAJOR_LAYOUT)
-        query_states = ttnn.reshape(query_states, shape=(bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT)
+        dtype = query_states.dtype
+        device = query_states.device()
+        query_states = ttnn.to_torch(query_states)
+        query_states = torch.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+        query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
     else:

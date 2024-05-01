@@ -33,14 +33,18 @@ def get_device_ids() -> List[int]:
     return list(range(num_devices))
 
 
-def open_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]):
+def open_device_mesh(
+    device_grid: ttnn.DeviceGrid, device_ids: List[int], l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE
+):
     """
     open_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: int) -> ttnn.DeviceMesh:
 
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
     assert len(device_ids) > 0
-    return ttnn._ttnn.multi_device.DeviceMesh(device_grid=device_grid.as_tuple(), device_ids=device_ids)
+    return ttnn._ttnn.multi_device.DeviceMesh(
+        device_grid=device_grid.as_tuple(), device_ids=device_ids, l1_small_size=l1_small_size
+    )
 
 
 def close_device_mesh(device_mesh):
@@ -53,13 +57,15 @@ def close_device_mesh(device_mesh):
 
 
 @contextlib.contextmanager
-def create_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]):
+def create_device_mesh(
+    device_grid: ttnn.DeviceGrid, device_ids: List[int], l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE
+):
     """
     create_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]) -> ttnn.DeviceMesh
 
     Context manager for opening and closing a device.
     """
-    device_mesh = open_device_mesh(device_grid=device_grid, device_ids=device_ids)
+    device_mesh = open_device_mesh(device_grid=device_grid, device_ids=device_ids, l1_small_size=l1_small_size)
     try:
         yield device_mesh
     finally:

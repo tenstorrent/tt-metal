@@ -269,7 +269,10 @@ class CoreRangeSet {
         max_y = std::max ( max_y , cr.end.y );
       }
 
-      bool grid[max_y + 1][max_x + 1];
+      // By overallocating by one x entry, we can avoid needing to check for
+      // boundary conditions when iterating, since there'll always be one
+      // last false entry
+      bool grid[max_y + 1][max_x + 2];
       memset(grid, 0, sizeof(grid));
 
       for (const auto & cr : crs )
@@ -278,49 +281,43 @@ class CoreRangeSet {
             grid[y][x] = true;
 
       crs.clear();
-      for (unsigned y = min_y; y <= max_y; y++){
-        std::set<CoreRange> filter_set, tmp, new_crs;
-        std::vector < CoreRange > ranges;
-        std::optional<unsigned> x_start;
-        for (unsigned x = min_x; x <= max_x; x++){
-          if (grid[y][x] && !x_start.has_value()){
-            // std::cout << "Setting x_start " << x << "," << y << std::endl;
-            x_start = x;
-          }
-          else if ( !grid[y][x] && x_start.has_value()){
-            ranges.push_back( CoreRange( {x_start.value(), y}, {x-1, y} ));
-            // std::cout << "added CR " << ranges.back().str() << std::endl;
-            x_start = std::nullopt;
-          }
-        }
-        if (x_start.has_value()){
-          ranges.push_back( CoreRange( {x_start.value(), y}, {max_x, y} ) );
-          // std::cout << "added CR " << ranges.back().str() << std::endl;
-        }
-        for (const auto & cr : ranges){
-          for ( const auto & prev_cr : crs ){
-              if ( auto merged = cr.merge(prev_cr) ){
-                // std::cout << "merging " << cr.str() << " and " << prev_cr.str() << " with " << merged.value().str() << std::endl;
-                new_crs.insert ( merged.value());
-                filter_set.insert(prev_cr);
-                filter_set.insert(cr);
+      for (unsigned y = min_y; y <= max_y; y++) {
+          std::set<CoreRange> filter_set, tmp, new_crs;
+          std::vector<CoreRange> ranges;
+          for (unsigned x = min_x; x <= max_x + 1; x++) {
+              if (grid[y][x]) {
+                  unsigned x_start = x;
+                  while (grid[y][x]) x++;
+                  ranges.push_back(CoreRange({x_start, y}, {x - 1, y}));
               }
           }
-          crs.insert ( cr );
-        }
-        // Set(A) = Set(A) - Set(B)
-        std::set_difference( std::make_move_iterator( crs.begin() ),
-                            std::make_move_iterator( crs.end() ),
-                            filter_set.begin(), filter_set.end(),
-            std::inserter(tmp, tmp.end()));
-        crs.swap(tmp);
-        crs.insert(new_crs.begin(), new_crs.end());
-      }
 
-      // for ( const auto & cr : crs ){
-      //   std::cout << " final merged CR:" << cr.str() << std::endl;
-      // }
-      return CoreRangeSet(crs);
+          for (const auto &cr : ranges) {
+              for (const auto &prev_cr : crs) {
+                  if (auto merged = cr.merge(prev_cr)) {
+                      // std::cout << "merging " << cr.str() << " and " << prev_cr.str() << " with " <<
+                      // merged.value().str() << std::endl;
+                      new_crs.insert(merged.value());
+                      filter_set.insert(prev_cr);
+                      filter_set.insert(cr);
+                  }
+              }
+              crs.insert(cr);
+          }
+          // Set(A) = Set(A) - Set(B)
+          std::set_difference(
+              std::make_move_iterator(crs.begin()),
+              std::make_move_iterator(crs.end()),
+              filter_set.begin(),
+              filter_set.end(),
+              std::inserter(tmp, tmp.end()));
+          crs.swap(tmp);
+          crs.insert(new_crs.begin(), new_crs.end());
+      }
+          // for ( const auto & cr : crs ){
+          //   std::cout << " final merged CR:" << cr.str() << std::endl;
+          // }
+          return CoreRangeSet(crs);
     }
 
     CoreRangeSet merge ( const CoreRangeSet & s ) const

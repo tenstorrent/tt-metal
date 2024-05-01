@@ -17,30 +17,29 @@ namespace tt::tt_metal {
 
 namespace operation {
 
-template<typename ConcreteOperation>
+template <typename ConcreteOperation>
 auto generic_create_output_tensors(
     const ConcreteOperation& operation,
     const Tensors& input_tensors,
-    const DataType output_dtype,
+    const std::optional<DataType> output_dtype,
     const Layout output_layout,
-    const MemoryConfig& output_mem_config
-) -> ProgramOutputTensors<ConcreteOperation> {
+    const std::optional<MemoryConfig>& output_mem_config) -> ProgramOutputTensors<ConcreteOperation> {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_shapes = operation.compute_output_shapes(input_tensors);
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
 
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     OutputTensors output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(
-            create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
+        output_tensors.emplace_back(create_device_tensor(
+            output_shape,
+            output_dtype.value_or(input_tensors.at(0).get_dtype()),
+            output_layout,
+            input_tensor.device(),
+            output_mem_config.value_or(input_tensors.at(0).memory_config())));
     }
     return output_tensors;
 }
-
-
 
 namespace run_operation_state {
 namespace detail {

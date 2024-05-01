@@ -53,7 +53,7 @@ static std::ostream &operator<<(std::ostream &os, const CoreGrid &core_grid) {
     return os;
 }
 
-}
+}  // namespace types
 
 using namespace types;
 

@@ -18,11 +18,11 @@ namespace transformer {
 
 namespace detail {
 inline std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
-    std::tuple<Tensor, Tensor, Tensor> outputs,
+    const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
     const uint32_t sequence_size_padded,
     const bool transpose_key) {
-    auto &&[query, key, value] = outputs;
+    auto [query, key, value] = outputs;
 
     auto batch_size = query.get_shape()[0];
     auto num_heads = query.get_shape()[1];

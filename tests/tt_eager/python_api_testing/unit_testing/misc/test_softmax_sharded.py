@@ -19,6 +19,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 from models.utility_functions import is_grayskull
 
 
+@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
 @pytest.mark.parametrize(
     "in0_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
@@ -99,6 +100,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     assert allclose, f"FAILED: {output}"
 
 
+@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
 @pytest.mark.parametrize(
     "causal_mask",
     [True, False],
@@ -209,6 +211,7 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     assert allclose, f"FAILED: {output}"
 
 
+@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
 @pytest.mark.parametrize(
     "causal_mask",
     [True, False],
@@ -316,6 +319,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     assert allclose, f"FAILED: {output}"
 
 
+@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
 @pytest.mark.parametrize(
     "shard_orient",
     [ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.ShardOrientation.ROW_MAJOR],

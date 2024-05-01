@@ -125,6 +125,7 @@ def run_perf_resnet(
     assert compile_time < expected_compile_time, f"resnet50 {comments} compilation is too slow"
 
 
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
@@ -155,6 +156,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",

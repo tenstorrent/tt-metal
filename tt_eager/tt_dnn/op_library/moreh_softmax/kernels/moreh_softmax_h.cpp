@@ -29,7 +29,6 @@ void MAIN {
     for (uint32_t n = 0; n < N; ++n) {
         // step 1, compute exp(x)
         for (uint32_t h = 0; h < Ht; ++h) {
-            ACQ();
             if (h == Ht - 1) {
                 #ifdef SOFTMAX
                     exp_tile_and_mask_tile_to_cb(
@@ -57,24 +56,19 @@ void MAIN {
                     rexp_tile_to_cb(cb_in0, cb_exps);
                 #endif
             }
-            REL();
         }
 
         // step 2, compute 1/sum(exp(x))
-        ACQ();
         reduce_tile_and_recip_tile_to_cb(
             REDUCE_OP, REDUCE_DIM, cb_exps, cb_bcast_scaler, cb_recipsumexps, Ht, /*pop0=*/0, /*pop1=*/0);
-        REL();
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; h += onetile) {
-            ACQ();
             #ifdef LOG
                 mul_tiles_bcast_rows_log_to_cb(cb_exps, cb_recipsumexps, cb_out0, h, 0, /*pop0=*/0, /*pop1=*/0);
             #else
                 mul_tiles_bcast_rows_to_cb(cb_exps, cb_recipsumexps, cb_out0, h, 0, /*pop0=*/0, /*pop1=*/0);
             #endif
-            REL();
         }
 
         cb_pop_front(cb_recipsumexps, onetile);

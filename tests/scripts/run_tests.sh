@@ -108,12 +108,17 @@ run_frequent_multi_device_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # Switch to modules only soon
-    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    ./tests/scripts/run_frequent_regressions_multi_device.sh
+    ./tests/scripts/multi_chip/run_frequent_regressions_multi_device.sh
 }
 
 run_models_performance() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
+}
+
+run_models_performance_multi_device() {
     local tt_arch=$1
     local pipeline_type=$2
 
@@ -126,6 +131,14 @@ run_models_performance_bare_metal_pipeline_tests() {
     local dispatch_mode=$3
 
     run_models_performance "$tt_arch" "$pipeline_type"
+}
+
+run_models_performance_bare_metal_multi_device_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    run_models_performance_multi_device "$tt_arch" "$pipeline_type"
 }
 
 run_models_performance_virtual_machine_pipeline_tests() {
@@ -168,9 +181,15 @@ run_post_commit_multi_device_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # Switch to modules only soon
-    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    ./tests/scripts/run_pre_post_commit_regressions_multi_device.sh
+    ./tests/scripts/multi_chip/run_pre_post_commit_regressions_multi_device.sh
+}
+
+run_post_commit_multi_device_unstable_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/multi_chip/run_unstable_multi_device.sh
 }
 
 run_microbenchmarks_pipeline_tests() {
@@ -211,11 +230,15 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == *"models_performance_bare_metal_multi_device" ]]; then
+        run_models_performance_bare_metal_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "post_commit_multi_device" ]]; then
+        run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "post_commit_multi_device_unstable" ]]; then
         run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_multi_device" ]]; then
         run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"

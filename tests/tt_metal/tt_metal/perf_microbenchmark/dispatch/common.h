@@ -96,10 +96,11 @@ inline std::vector<CoreCoord> get_cores_per_bank_id(Device *device, bool is_dram
 inline uint32_t get_min_required_buffer_addr(Device *device, bool is_dram){
 
     int32_t smallest_offset = std::numeric_limits<int32_t>::max();
-    uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
+    BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
+    uint32_t num_banks = device->num_banks(buffer_type);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        int32_t offset = is_dram ? device->dram_bank_offset_from_bank_id(bank_id) : device->l1_bank_offset_from_bank_id(bank_id);
+        int32_t offset = device->bank_offset(buffer_type, bank_id);
         smallest_offset = offset < smallest_offset ? offset : smallest_offset;
     }
 
@@ -228,10 +229,13 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
 
 inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
                                     CQDispatchCmd cmd) {
+    static_assert(sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
+    const size_t num_uint32s = sizeof(CQDispatchCmd) / sizeof(uint32_t);
+    uint32_t buf[num_uint32s];
 
-    uint32_t *ptr = (uint32_t *)&cmd;
-    for (int i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
-        cmds.push_back(*ptr++);
+    memcpy(buf, &cmd, sizeof(cmd));
+    for (size_t i = 0; i < num_uint32s; i++) {
+        cmds.push_back(buf[i]);
     }
 }
 
@@ -539,10 +543,10 @@ inline bool validate_core_data(std::unordered_set<CoreCoord> &validated_cores, D
         if (is_dram) {
             auto channel = device->dram_channel_from_bank_id(bank_id);
             phys_core = device->core_from_dram_channel(channel);
-            bank_offset = device->dram_bank_offset_from_bank_id(bank_id);
+            bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
         } else {
             phys_core = device->physical_core_from_logical_core(core, core_type);
-            bank_offset = device->l1_bank_offset_from_bank_id(bank_id);
+            bank_offset = device->bank_offset(BufferType::L1, bank_id);
         }
 
         log_debug(tt::LogTest, "Paged-{} for bank_id: {} has base_addr: (0x{:x}) and DRAM bank offset: {:x})",

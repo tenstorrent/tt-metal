@@ -265,6 +265,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
@@ -278,6 +279,9 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
 def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     if batch_size == 8:
         pytest.skip("Skipping batch_size=8 until 7599 is resolved.")
+
+    ttnn.CONFIG.enable_logging = True
+    ttnn.CONFIG.enable_detailed_buffer_report = True
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
     enable_memory_reports()
     test_infra.preprocess_torch_input()

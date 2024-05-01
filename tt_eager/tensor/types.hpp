@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -97,7 +98,7 @@ struct Padding {
     }
 
     PadDimension &operator[](const std::int64_t index);
-    const PadDimension &operator[](const std::int64_t index) const;
+    const PadDimension operator[](const std::int64_t index) const;
 
     PadValue pad_value() const;
 
@@ -168,11 +169,20 @@ class Shape {
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
+    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_tile_padding) :
+        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
+        TT_ASSERT(shape.size() == shape_tile_padding.size(), "Shape and shape_tile_padding must have the same size");
+        for (auto index = 0; index < shape.size(); index++) {
+            auto padded_dimension = shape_tile_padding[index];
+            this->dimensions_[index] = padded_dimension;
+            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+        }
+    }
 
     std::size_t rank() const;
 
     uint32_t &operator[](const std::int64_t index);
-    const uint32_t &operator[](const std::int64_t index) const;
+    const uint32_t operator[](const std::int64_t index) const;
 
     const uint32_t *begin() const;
     const uint32_t *end() const;
@@ -214,6 +224,8 @@ struct MemoryConfig {
     BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool is_sharded() const;
+    bool is_l1() const;
+    bool is_dram() const;
 
     static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type", "shard_spec");
     const auto attribute_values() const {
@@ -562,7 +574,7 @@ struct RankedShape {
         return false;
     }
 
-    const auto &operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+    const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
     static constexpr auto attribute_names = std::make_tuple("rank", "value");
     const auto attribute_values() const { return std::make_tuple(std::cref(this->rank), std::cref(this->value)); }
@@ -658,7 +670,9 @@ struct Shape {
         return Shape{this->value().without_padding()} == Shape{other};
     }
 
-    const auto &operator[](std::int64_t index) const {
+    bool operator!=(const Shape &other) const { return not(*this == other); }
+
+    const auto operator[](std::int64_t index) const {
         return std::visit([index](const auto &shape) -> decltype(auto) { return shape[index]; }, this->ranked_shape);
     }
 

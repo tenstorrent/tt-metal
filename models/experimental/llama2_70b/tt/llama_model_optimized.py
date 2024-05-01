@@ -14,7 +14,7 @@ from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDec
 from models.experimental.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.experimental.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
-    generate_rot_emb,
+    freqs_to_rotation_matrix,
     get_weight_cache_path,
     get_rotation_mat,
     precompute_freqs,
@@ -52,6 +52,8 @@ class TtLlamaModel_optimized(nn.Module):
         self.max_seq_len = configuration.max_seq_len
         self.vocab_size = configuration.vocab_size
         self.norm_eps = configuration.norm_eps
+        self.llama3 = self.vocab_size == 128256
+        self.rope_theta = configuration.rope_theta if self.llama3 else 10000.0
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
@@ -77,8 +79,8 @@ class TtLlamaModel_optimized(nn.Module):
         logger.info("Done creating layers")
 
         # Rotary Embedding
-        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)  # for prefill
-        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)  # for decode
+        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for prefill
+        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
             devices,
@@ -117,7 +119,10 @@ class TtLlamaModel_optimized(nn.Module):
                 )
         else:
             H = 8 * 1024
-            PADDED_VOCAB = 32 * 1024
+            if self.llama3:
+                PADDED_VOCAB = 128 * 1024
+            else:
+                PADDED_VOCAB = 32 * 1024
             padded_lm_head = torch.zeros(H, PADDED_VOCAB)
             padded_lm_head[:, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
             padded_lm_head_chunks = torch.chunk(padded_lm_head, self.num_devices, -1)
@@ -167,6 +172,8 @@ class TtLlamaModel_optimized(nn.Module):
 
         cache_name = lambda name: self.cache_path / (f"{name}")
 
+        cache_file_name = lambda name, dtype, layout: f"{cache_name(name)}_dtype_{dtype}_layout_{layout}.bin"
+
         as_tensor = lambda tensor, dtype, layout, name, device_id: ttnn.as_tensor(
             tensor,
             dtype=dtype,
@@ -176,24 +183,29 @@ class TtLlamaModel_optimized(nn.Module):
             cache_file_name=cache_name(name) if name is not None else None,
         )
 
+        if self.model_config["LLM_MODE"] == "decode":
+            inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
+        else:
+            inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
+
         x = [
-            as_tensor(inp_ids.clone(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, None, device_id)
+            ttnn.from_torch(
+                inp_ids.clone(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.devices[device_id],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             for device_id in range(self.num_devices)
         ]
-        xs = self.tt_embd(x)  # [batch, seq, hidden_dim // num_devices]
-        assert len(xs[0].shape) == 3
-        assert xs[0].shape[2] == self.hidden_size // self.num_devices
+
+        xs = self.tt_embd(x)
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
-
-            for i in range(self.num_devices):
-                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
-                xs[i] = ttnn.reshape(xs[i], (batch, 1, seq_len, self.hidden_size // self.num_devices))
-                xs[i] = tt_lib.tensor.typecast(xs[i], ttnn.bfloat8_b)
             assert xs[0].shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
             cos_gathered, sin_gathered = gather_cos_sin(
@@ -252,42 +264,52 @@ class TtLlamaModel_optimized(nn.Module):
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-
-            for i in range(self.num_devices):
-                xs[i] = ttnn.reshape(xs[i], (seq_len, 1, batch, self.hidden_size // self.num_devices))
-                xs[i] = ttnn.to_layout(xs[i], layout=ttnn.TILE_LAYOUT)
             assert xs[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
-            for i in range(self.num_devices):
-                xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-                )
-
-            # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-
-            rot_mats = []
             for device_id in range(self.num_devices):
-                rot_mats.append(
-                    as_tensor(
-                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
-                    )
+                xs[device_id] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[device_id], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
+
+            try:
+                rot_mat_tt = ttnn.load_tensor(cache_file_name(f"rot_mat_decode_{start_pos}", "BFLOAT16", "TILE"))
+                rot_mats = [
+                    ttnn.to_device(rot_mat_tt, self.devices[device_id]) for device_id in range(self.num_devices)
+                ]
+            except (FileNotFoundError, RuntimeError):
+                # Use batch=1 because we assume all users use same rot_mat
+                rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
+                assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+                rot_mats = []
+                for device_id in range(self.num_devices):
+                    rot_mats.append(
+                        as_tensor(
+                            rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
+                        )
+                    )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
-            attn_mask = torch.zeros(*attn_mask_shape)
-            attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-
-            attn_masks = []
-            for device_id in range(self.num_devices):
-                # BFLOAT16_DTYPE currently pushes faster
-                attn_masks.append(
-                    as_tensor(
-                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_decode_{start_pos}", device_id
+            try:
+                attn_mask_tt = ttnn.load_tensor(cache_file_name(f"attn_mask_decode_{start_pos}", "BFLOAT16", "TILE"))
+                attn_masks = [
+                    ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
+                ]
+            except (FileNotFoundError, RuntimeError):
+                attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+                attn_mask = torch.zeros(*attn_mask_shape)
+                attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+                attn_masks = []
+                for device_id in range(self.num_devices):
+                    # BFLOAT16_DTYPE currently pushes faster
+                    attn_masks.append(
+                        as_tensor(
+                            attn_mask.clone(),
+                            ttnn.bfloat16,
+                            ttnn.TILE_LAYOUT,
+                            f"attn_mask_decode_{start_pos}",
+                            device_id,
+                        )
                     )
-                )
 
             repeat_shape = (batch, 1, 1, 1)
             for i in range(self.num_devices):
@@ -380,7 +402,9 @@ class TtLlamaModel_optimized(nn.Module):
                 tt_lib.operations.primary.matmul_1d(
                     norm_out_replicated[i],
                     self.lm_head_list[i],
-                    program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
+                    program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
+                    if self.llama3
+                    else self.model_config["LM_HEAD_MM_PROGCFG"],
                     output_mem_config=self.model_config["DRAM_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],

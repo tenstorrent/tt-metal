@@ -77,6 +77,7 @@ def get_lms_coefficient(order, t, current_order, sigmas):
 
 @skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts, num_inference_steps, image_size, expected_compile_time, expected_inference_time",
     ((1, 2, (512, 512), 3600, 1.8),),
@@ -284,7 +285,7 @@ def test_stable_diffusion_device_perf(expected_perf):
     margin = 0.12
     batch = 1
     iterations = 1
-    command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64]"
+    command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64-device_l1_small_size=32768]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

@@ -4,6 +4,9 @@ source common.sh
 source tools_versioning.sh
 
 install_tt_topology() {
+    # Source rust environment
+    source "$HOME/.cargo/env"
+    
     # Check if tt-kmd directory exists
     if [ -d "$HOME/tt-topology" ]; then
         # If it exists, remove it

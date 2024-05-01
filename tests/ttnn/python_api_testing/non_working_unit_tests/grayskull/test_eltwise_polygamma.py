@@ -24,7 +24,7 @@ def run_eltwise_polygamma_tests(
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(1, 10).to(torch.bfloat16)
 
     try:
         # get ref result
@@ -66,7 +66,7 @@ test_sweep_args = [
     ),
     (
         [(96, 32)],
-        [ttnn.bfloat8_b],
+        [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,

@@ -136,7 +136,10 @@ inline void SetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kerne
 namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
-    std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    std::vector<chip_id_t> device_ids,
+    const uint8_t num_hw_cqs,
+    const size_t l1_small_size,
+    const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
     for (const auto &device_id : device_ids) {
@@ -144,7 +147,7 @@ std::map<chip_id_t, Device *> CreateDevices(
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
             for (const auto &mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
+                Device *dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
                 detail::InitDeviceProfiler(dev);
             }
@@ -191,15 +194,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
         auto device = buffer.device();
 
-        TT_ASSERT(buffer.buffer_type() == BufferType::L1 && "Only L1 Buffers support sharding");
-
+        TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
 
         auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         auto total_pages = buffer.num_pages();
         for(int host_page_id=0; host_page_id<total_pages; host_page_id++){
             auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
             auto data_index = host_page_id * num_entries_per_page;
             std::vector<uint32_t> page;
@@ -244,7 +246,8 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                     tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
                 } break;
-                case BufferType::L1: {
+                case BufferType::L1: // fallthrough
+                case BufferType::L1_SMALL: {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
                     llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
                 } break;
@@ -275,8 +278,9 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM:
-            case BufferType::L1: {
+            case BufferType::DRAM:  // fallthrough
+            case BufferType::L1:    // fallthrough
+            case BufferType::L1_SMALL: {
                 WriteToDevice(buffer, host_buffer);
             } break;
             case BufferType::SYSTEM_MEMORY: {
@@ -305,7 +309,8 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                     tt::Cluster::instance().read_dram_vec(page, page_size, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
                 } break;
-                case BufferType::L1: {
+                case BufferType::L1: // fallthrough
+                case BufferType::L1_SMALL: {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
                     page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
                 } break;
@@ -366,7 +371,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
             if(host_page_id.has_value()) {
                 if(!shard_order){
@@ -405,7 +410,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
         }
         else if(is_sharded(buffer.buffer_layout())){
-            TT_ASSERT(buffer.buffer_type() == BufferType::L1 && "Only L1 Buffers support sharding");
+            TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
             ReadFromDeviceSharded(buffer, host_buffer, shard_order);
         }
         else{
@@ -422,7 +427,8 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         Device *device = buffer.device();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::L1: {
+            case BufferType::L1: // fallthrough
+            case BufferType::L1_SMALL: {
                 if (buffer.buffer_type() == BufferType::DRAM) {
                     tt::Cluster::instance().dram_barrier(device->id());
                 } else {
@@ -460,7 +466,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
             auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
             read_pages_to_host_helper(
                 device,
                 buffer,
@@ -650,9 +656,13 @@ size_t GetNumPCIeDevices() {
 #endif
 }
 
-Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
+Device *CreateDevice(
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs,
+    const size_t l1_small_size,
+    const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
-    Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
+    Device *dev = new Device(device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     detail::InitDeviceProfiler(dev);
     return dev;
@@ -717,7 +727,7 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 }
 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer) {
-    if (buffer.buffer_type() != BufferType::L1) {
+    if (not buffer.is_l1()) {
         TT_FATAL("Only L1 buffers can have an associated circular buffer!");
     }
     detail::GetCircularBuffer(program, cb_handle)->config().set_globally_allocated_address(buffer);

@@ -234,9 +234,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     buffer(buffer),
     dst_page_index(dst_page_index),
     pages_to_write(pages_to_write.has_value() ? pages_to_write.value() : buffer.num_pages()) {
-    TT_ASSERT(
-        buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
-        "Trying to write to an invalid buffer");
+    TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to write to an invalid buffer");
     this->device = device;
     this->event = event;
     this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
@@ -1167,7 +1165,6 @@ void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chi
 }
 
 void HWCommandQueue::read_completion_queue() {
-    tracy::SetThreadName("COMPLETION QUEUE");
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     while (true) {

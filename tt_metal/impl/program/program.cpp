@@ -470,7 +470,8 @@ void Program::validate_circular_buffer_region(const Device *device) const {
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores_.begin());
+    const std::vector<uint32_t>& bank_ids =
+        device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
 
@@ -1012,14 +1013,10 @@ void Program::compile( Device * device )
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
-    // When running in async mode, don't spawn new threads for compile here. This can lead to a deadlock, since all workers share the same
-    // compile thread pool, and this pool gets reused in lower level functions. TODO: Use TT WorkExecutor here instead of Taskflow, to avoid
-    // this deadlock.
-    bool multithreaded_compile = (device->get_worker_mode() != WorkExecutorMode::ASYNCHRONOUS);
 
     for (auto &[core_type, kernels] : kernels_) {
         for (auto &[id, kernel]: kernels) {
-            launch_build_step(multithreaded_compile, [multithreaded_compile, kernel, device, this] {
+            launch_build_step([kernel, device, this] {
                 JitBuildOptions build_options(device->build_env());
                 kernel->set_build_options(build_options);
                 this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
@@ -1028,7 +1025,6 @@ void Program::compile( Device * device )
                 std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                 kernel->set_full_name(kernel_path_suffix);
                 build_options.set_name(kernel_path_suffix);
-                kernel->set_multithreaded_compile(multithreaded_compile);
                 bool cache_hit = true;
                 bool path_exists = std::filesystem::exists(build_options.path);
                 if ( enable_persistent_kernel_cache && path_exists ) {
@@ -1044,15 +1040,15 @@ void Program::compile( Device * device )
             }, events);
         }
     }
-    sync_build_step(multithreaded_compile, events);
+    sync_build_step(events);
 
     for (auto &[core_type, kernels] : kernels_) {
         for (auto &[id, kernel] : kernels) {
-            launch_build_step ( multithreaded_compile, [kernel, device] { kernel->read_binaries(device); }, events);
+            launch_build_step ([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
 
-    sync_build_step(multithreaded_compile, events);
+    sync_build_step(events);
 
     this->construct_core_range_set_for_worker_cores();
 

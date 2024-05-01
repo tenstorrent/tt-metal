@@ -219,35 +219,27 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     auto override_runtime_args_callback = [reader_kernel_id,
                                            writer_kernel_id,
                                            num_cores,
-                                           num_cores_y,
-                                           a_start_tile_id,
-                                           b_start_tile_id,
-                                           output_start_tile_id](
+                                           num_cores_y
+                                            ](
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
-        auto src_dram_buffer_a = input_buffers.at(0);
-        auto src_dram_buffer_b = input_buffers.at(1);
+        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
+        auto src_buffer_a = input_buffers.at(0);
+        auto src_buffer_b = input_buffers.at(1);
 
-        auto dst_dram_buffer = output_buffers.at(0);
-
+        auto dst_buffer = output_buffers.at(0);
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer_a->address();
-                runtime_args[1] = src_dram_buffer_b->address();
-                runtime_args[14] = a_start_tile_id;
-                runtime_args[15] = b_start_tile_id;
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_buffer_a->address();
+                runtime_args[1] = src_buffer_b->address();
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[2] = output_start_tile_id;
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
             }
         }
     };

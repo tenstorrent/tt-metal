@@ -9,7 +9,11 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.experimental.llama2_70b.tt.llama_common import tt_all_gather_torch, get_weight_cache_path
+from models.experimental.llama2_70b.tt.llama_common import (
+    tt_all_gather_torch,
+    get_weight_cache_path,
+    get_weight_cache_path_ttnn,
+)
 
 
 class TtLlamaMLP_optimized(nn.Module):
@@ -51,15 +55,18 @@ class TtLlamaMLP_optimized(nn.Module):
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        self.w1_list = []
-        self.w3_list = []
-        self.w2_list = []
+        w1_dtype = ttnn.bfloat8_b
+        w2_dtype = ttnn.bfloat8_b
+        w3_dtype = ttnn.bfloat8_b
 
         # Test if the all weights have been cached
-        test_cache_path = get_weight_cache_path(self.cache_path, w3_str, self.num_devices - 1, self.num_devices)
-        if test_cache_path.exists():
+        try:
+            self.w1_list = []
+            self.w3_list = []
+            self.w2_list = []
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
+                # tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)
                 self.w1_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
@@ -67,6 +74,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)
+                # tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w2_str, i, self.num_devices, w2_dtype)
                 self.w2_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
@@ -74,12 +82,16 @@ class TtLlamaMLP_optimized(nn.Module):
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
+                # tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)
                 self.w3_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
-        else:
+        except (FileNotFoundError, RuntimeError):
+            self.w1_list = []
+            self.w3_list = []
+            self.w2_list = []
             # Do padding
             H = 8 * 1024
             PADDED_H4 = 32 * 1024
@@ -100,11 +112,11 @@ class TtLlamaMLP_optimized(nn.Module):
                     padded_w1_chunks[i],
                     None,
                     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=self.model_config["BFP8_DTYPE"],
+                    tt_dtype=w1_dtype,
                 )
                 self.w1_list.append(w1_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)),
+                    str(get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)),
                     w1_host,
                 )
 
@@ -112,11 +124,11 @@ class TtLlamaMLP_optimized(nn.Module):
                     padded_w2_chunks[i],
                     None,
                     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=self.model_config["BFP8_DTYPE"],
+                    tt_dtype=w2_dtype,
                 )
                 self.w2_list.append(w2_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)),
+                    str(get_weight_cache_path_ttnn(self.cache_path, w2_str, i, self.num_devices, w2_dtype)),
                     w2_host,
                 )
 
@@ -124,11 +136,11 @@ class TtLlamaMLP_optimized(nn.Module):
                     padded_w3_chunks[i],
                     None,
                     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=self.model_config["BFP8_DTYPE"],
+                    tt_dtype=w3_dtype,
                 )
                 self.w3_list.append(w3_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)),
+                    str(get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)),
                     w3_host,
                 )
 
@@ -175,7 +187,6 @@ class TtLlamaMLP_optimized(nn.Module):
         hidden_states = []
         w1_outs = []
         w3_outs = []
-        # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
 
         seq_tiles = x[0].shape[2] // 32
         cores_y = 8 if seq_tiles % 8 == 0 else 4  # Pick largest possible coregrid for op
@@ -190,10 +201,7 @@ class TtLlamaMLP_optimized(nn.Module):
         )
         block_sharded_memcfg = self.model_config["MLP_BLOCK_SHARDED_MEMCFG_LAMBDA"](x[0].shape[2], cores_y)
         for i in range(len(x)):
-            """
-            x[i] is shape [1,32,128,8192]
-            self.w1_list[i] is shape [1,1,8192,4096]
-            """
+            # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
             w1_outs.append(
                 tt_lib.operations.primary.matmul(
                     x[i],

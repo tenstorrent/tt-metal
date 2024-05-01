@@ -24,6 +24,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 )
 
 
+@pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_1d_systolic, bias, untilize_out, fuse_relu",
     (
@@ -249,6 +250,7 @@ def test_optimized_conv_v2(
     assert passing_pcc
 
 
+@pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 def test_simple(
     device,
     use_program_cache,

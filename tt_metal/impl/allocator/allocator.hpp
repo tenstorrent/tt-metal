@@ -82,13 +82,12 @@ uint32_t dram_channel_from_bank_id(const Allocator &allocator, uint32_t bank_id)
 
 CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
-int32_t l1_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
-
-int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
+int32_t bank_offset(const Allocator &allocator, BufferType buffer_type, uint32_t bank_id);
 
 const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
 
-const std::vector<uint32_t> &bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
+const std::vector<uint32_t> &bank_ids_from_logical_core(
+    const Allocator &allocator, BufferType buffer_type, const CoreCoord &logical_core);
 
 Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type);
 
@@ -112,13 +111,14 @@ struct Allocator {
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
+    allocator::BankManager l1_small_manager;
 
     // TODO: Track lowest l1 addresses!
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;
     std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> logical_core_to_bank_ids;
+    std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids;
 
     AllocatorConfig config;
     // Callbacks to invoke during initialization and allocation
