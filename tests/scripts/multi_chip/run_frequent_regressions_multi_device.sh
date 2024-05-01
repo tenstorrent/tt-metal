@@ -1,3 +1,4 @@
+
 #/bin/bash
 
 set -eo pipefail
@@ -29,3 +30,6 @@ pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py
 pytest models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py
 pytest models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py
 pytest models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py
+
+# Mistral8x7b 8 chip decode full model test (env flags set inside the test)
+pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[10-32-output]
