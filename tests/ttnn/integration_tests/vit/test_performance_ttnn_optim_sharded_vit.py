@@ -16,14 +16,12 @@ from transformers import AutoImageProcessor
 import ttnn
 import tt_lib
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
     skip_for_wormhole_b0,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     torch_random,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -43,8 +41,6 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("sequence_size", [196])  ## padded from 197 to 224
 @pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
 def test_performance_vit_encoder(device, use_program_cache, model_name, batch_size, sequence_size, functional_vit):
-    disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
@@ -100,7 +96,6 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
@@ -132,8 +127,6 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 def test_performance_vit_e2e(
     device, use_program_cache, model_name, batch_size, image_size, sequence_size, functional_vit
 ):
-    disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
@@ -195,6 +188,22 @@ def test_performance_vit_e2e(
     durations = []
     import tracy
 
+    patch_size = 16
+    batch_size, _, img_h, img_w = torch_pixel_values.shape
+    N, H, W, C = batch_size, img_h, img_w // patch_size, 4 * patch_size
+    shard_grid = tt_lib.tensor.CoreRangeSet(
+        {
+            tt_lib.tensor.CoreRange(
+                tt_lib.tensor.CoreCoord(0, 0),
+                tt_lib.tensor.CoreCoord(7, 0),
+            ),
+        }
+    )
+    n_cores = 8
+    shard_spec = tt_lib.tensor.ShardSpec(
+        shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+    )
+
     # tracyProfiler = tracy.Profiler()
     # tracyProfiler.enable()
     for _ in range(10):
@@ -202,32 +211,17 @@ def test_performance_vit_e2e(
         pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
         batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
-        patch_size = 16
         pixel_values = pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
-        N, H, W, C = pixel_values.shape
-        shard_grid = tt_lib.tensor.CoreRangeSet(
-            {
-                tt_lib.tensor.CoreRange(
-                    tt_lib.tensor.CoreCoord(0, 0),
-                    tt_lib.tensor.CoreCoord(7, 0),
-                ),
-            }
-        )
-        n_cores = 8
-        shard_spec = tt_lib.tensor.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
-        )
 
-        pixel_values = torch2tt_tensor(
+        pixel_values = ttnn.from_torch(
             pixel_values,
-            device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=tt_lib.tensor.MemoryConfig(
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             ),
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
         )
-        # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         tt_output = functional_vit.vit(
             config,
@@ -240,7 +234,6 @@ def test_performance_vit_e2e(
         tt_output = ttnn.from_device(tt_output, blocking=False)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     # tracyProfiler.disable()
     inference_and_compile_time, *inference_times = durations
