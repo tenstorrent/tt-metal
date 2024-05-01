@@ -55,6 +55,7 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
 }
+#endif
 
 /**
  * Initialize the tilize operation. To be called once at beginning of a kernel.
@@ -73,7 +74,6 @@ ALWI void tilizeA_B_dot_product_init(uint32_t icb0, uint32_t icb1_scaler, uint32
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
 }
-#endif
 
 /**
  * Re-initialize for the tilize operation. This can be called after a full init.
