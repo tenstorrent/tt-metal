@@ -1874,8 +1874,11 @@ void Device::begin_trace() {
 }
 
 void Device::end_trace() {
-    this->trace_insts_.clear();
+
+    // Currently only supports one trace at a time per CQ, so release last trace
+    // before instantiating new ones.
     this->release_last_trace();
+
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id]->record_end();
         trace_contexts_.at(cq_id)->data = std::move(this->sysmem_manager().get_bypass_data());
@@ -1913,6 +1916,7 @@ void Device::release_last_trace() {
             }
         }
     }
+    this->trace_insts_.clear();
 }
 
 }  // namespace tt_metal
