@@ -115,15 +115,15 @@ void sub_exp_block_bcast_cols_inplace() {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 exp_tile<true>(j);
             }
-            cb_pop_front(in0_cb, dst_tiles);
             tile_regs_commit();
+            cb_pop_front(in0_cb, dst_tiles);
             cb_reserve_back(in0_cb, dst_tiles);
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
-            tile_regs_release();
             cb_push_back(in0_cb, dst_tiles);
+            tile_regs_release();
         }
     }
 }
