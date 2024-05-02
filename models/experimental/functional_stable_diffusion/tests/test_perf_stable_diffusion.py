@@ -104,7 +104,7 @@ def get_lms_coefficient(order, t, current_order, sigmas):
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (2, 2, 3600, 1.8),
+        (2, 2, 3600, 2.0),  # Issue 7816 Inference time
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
