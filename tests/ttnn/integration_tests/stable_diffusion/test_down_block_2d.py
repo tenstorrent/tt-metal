@@ -130,10 +130,11 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
 
     torch_output, torch_output_states = unet_downblock(torch_hidden_states, temb.squeeze(0).squeeze(0))
 
-    ttnn_hidden_states = ttnn.to_layout(
-        ttnn.to_device(ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16), device),
-        layout=ttnn.TILE_LAYOUT,
-    )
+    ttnn_hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
+    ttnn_hidden_states = pre_process_input(device, ttnn_hidden_states)
+    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
+    ttnn_hidden_states = ttnn.to_layout(ttnn_hidden_states, layout=ttnn.TILE_LAYOUT)
+
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     ttnn_temb = ttnn.to_layout(
         ttnn.to_device(ttnn.from_torch(temb, dtype=ttnn.bfloat16), device),
@@ -155,7 +156,6 @@ def test_down_block_2d_512x512(input_shape, temb_shape, device, model_name, rese
     parameters = parameters.down_blocks[3]
     reader_patterns_cache = {}
     model = tt2_ttnn_downblock2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
-    ttnn_hidden_states = pre_process_input(device, ttnn_hidden_states)
     ttnn_out, ttnn_output_states = model(
         temb=ttnn_temb,
         hidden_states=ttnn_hidden_states,

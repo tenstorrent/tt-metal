@@ -219,8 +219,6 @@ def test_transformer_2d_model_512x512(
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 
-    ttnn_hidden_state = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
     encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
     ttnn_encoder_hidden_states = ttnn.from_torch(
         encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
@@ -228,6 +226,7 @@ def test_transformer_2d_model_512x512(
 
     tt1 = False
     if tt1:
+        ttnn_hidden_state = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_transformer = transformer_2d_model(
             hidden_states=ttnn_hidden_state,
             parameters=parameters,
@@ -258,7 +257,9 @@ def test_transformer_2d_model_512x512(
         model = transformer_2d_model_tt2(
             device, parameters, {}, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
         )
+        ttnn_hidden_state = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device)
         ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
+        ttnn_hidden_state = ttnn.to_layout(ttnn_hidden_state, layout=ttnn.TILE_LAYOUT)
         output = model(
             hidden_states=ttnn_hidden_state,
             config=config,

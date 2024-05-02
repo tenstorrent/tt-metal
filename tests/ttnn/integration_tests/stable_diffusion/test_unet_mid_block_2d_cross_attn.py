@@ -203,6 +203,7 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
 
     ttnn_hidden_state = ttnn.from_torch(hidden_states, ttnn.bfloat16)
     ttnn_hidden_state = ttnn.to_device(ttnn_hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn_hidden_state = pre_process_input(device, ttnn_hidden_state)
     ttnn_hidden_state = ttnn.to_layout(ttnn_hidden_state, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
     ttnn_encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
@@ -213,7 +214,6 @@ def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_s
     ttnn_temb = ttnn.from_torch(temb, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_temb = ttnn.to_device(ttnn_temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    ttnn_hidden_state = pre_process_input(device, ttnn_hidden_state)
     ttnn_mid_block = model(
         hidden_states=ttnn_hidden_state,
         temb=ttnn_temb,

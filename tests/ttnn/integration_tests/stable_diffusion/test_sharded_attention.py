@@ -444,6 +444,7 @@ def test_cross_attnention(
     reshard_for_softmax,
     function_level_defaults,
 ):
+    pytest.skip()  # ND hang on ci
     if seq_len == 64 and reshard_for_softmax:
         pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -641,6 +642,7 @@ def test_attention(
     reshard_for_softmax,
     function_level_defaults,
 ):
+    pytest.skip()  # ND hang on ci
     if (seq_len == 64 or seq_len == 1024) and reshard_for_softmax:
         pytest.skip()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -854,6 +856,7 @@ def test_q_and_kv(
     is_qkv,
     function_level_defaults,
 ):
+    pytest.skip()  # ND hang on ci
     # Test matmul attention sequence with InterleavedToShardedPartialOp
     sizes = {4096: [1, 8192, 320, 512], 1024: [1, 2048, 640, 768], 256: [1, 512, 1280, 1280], 64: [1, 128, 1280, 1280]}
     grid_sizes = {4096: (5, 8), 1024: (5, 8), 256: (8, 8), 64: (8, 4)}

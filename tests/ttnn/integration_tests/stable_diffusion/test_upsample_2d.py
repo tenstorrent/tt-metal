@@ -79,6 +79,7 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index",
     [
@@ -120,8 +121,9 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
     input = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output = resnet_upsampler(input)
 
-    tt_input_tensor = ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(input, device=device, dtype=ttnn.bfloat16)
     tt_input_tensor = pre_process_input(device, tt_input_tensor)
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     tt_up = model(
         tt_input_tensor,
         in_channels,

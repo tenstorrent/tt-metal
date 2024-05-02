@@ -133,6 +133,7 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
 
     hidden_state = ttnn.from_torch(hidden_state, ttnn.bfloat16)
     hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    hidden_state = pre_process_input(device, hidden_state)
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
@@ -140,7 +141,6 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
-    hidden_state = pre_process_input(device, hidden_state)
     res_hidden_states_tuple = (weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state))
     op = model(
         hidden_state,
