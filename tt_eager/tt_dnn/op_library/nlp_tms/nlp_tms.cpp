@@ -73,17 +73,18 @@ void NlpCreateHeadsDecode::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
-    TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input shape");
+    TT_FATAL(input_shape[3] % TILE_WIDTH == 0, "Unsupported input shape");
+    TT_FATAL(input_shape[2] == 32, "Unsupported input shape");
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
+    TT_FATAL(input_shape[0] == 1, "Unsupported input shape");
     TT_FATAL(input_tensor.is_sharded(), "Input must be sharded");
     TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1]);
-    TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+    TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     uint32_t num_cores = core_grid.x * core_grid.y;
-    // 1 Head Per Core Max for now
-    TT_FATAL(this->num_q_heads <= num_cores);
-    TT_FATAL(this->num_kv_heads <= num_cores);
+    // 1 User Per Core Max and 32 users for now
+    TT_FATAL(num_cores >= 32, "Need at least 32 cores for decode");
     TT_FATAL(this->num_q_heads >= this->num_kv_heads);
     TT_FATAL(this->num_q_heads % input_tensor.shard_spec().value().num_cores() == 0);
     TT_FATAL(this->num_kv_heads % input_tensor.shard_spec().value().num_cores() == 0);
@@ -95,17 +96,15 @@ std::vector<Shape> NlpCreateHeadsDecode::compute_output_shapes(const std::vector
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
 
-    auto sequence_length = input_shape[2];
+    auto batch = input_shape[2];
     auto head_dim = this->head_dim;
-    if (sequence_length % TILE_HEIGHT != 0) {
-        sequence_length = (sequence_length / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    }
-    if (head_dim % TILE_WIDTH != 0) {
-        head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
-    }
 
-    const Shape q_output_shape = {input_shape[0], this->num_q_heads, sequence_length, head_dim};
-    const Shape v_output_shape = {input_shape[0], this->num_kv_heads, sequence_length, head_dim};
+    // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
+    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+
+    const Shape q_output_shape = {input_shape[0], batch, num_q_heads_padded, head_dim};
+    const Shape v_output_shape = {input_shape[0], batch, num_kv_heads_padded, head_dim};
     const Shape k_output_shape = v_output_shape;
     output_shape_vec = {q_output_shape, k_output_shape, v_output_shape};
 
@@ -114,14 +113,18 @@ std::vector<Shape> NlpCreateHeadsDecode::compute_output_shapes(const std::vector
 
 std::vector<Tensor> NlpCreateHeadsDecode::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_legacy_shape();
+    auto batch = input_shape[2];
+    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     if (this->output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        auto q_shard_grid = num_cores_to_corerange_set(this->num_q_heads, core_grid, true);
-        ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, this->head_dim}};
+        auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
+        ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
         auto q_mem_config = this->output_mem_config;
         q_mem_config.shard_spec = q_shard_spec;
-        auto kv_shard_grid = num_cores_to_corerange_set(this->num_kv_heads, core_grid, true);
-        ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, this->head_dim}};
+        auto kv_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
+        ShardSpec kv_shard_spec{kv_shard_grid, {num_kv_heads_padded, this->head_dim}};
         auto kv_mem_config = this->output_mem_config;
         kv_mem_config.shard_spec = kv_shard_spec;
         auto output_shapes = this->compute_output_shapes(input_tensors);
