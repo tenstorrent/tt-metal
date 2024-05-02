@@ -126,7 +126,6 @@ def test_sharded_tile(
 def test_sharded_rm(
     device, input_shape, shard_size, shard_scheme, shard_orientation, num_cores, function_level_defaults
 ):
-    pytest.skip("#7380: Re-enable this test when fixed")
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
     compute_grid_size = device.compute_with_storage_grid_size()
