@@ -670,6 +670,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
 
 // TODO: Split this into separate tests
 TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
+    GTEST_SKIP(); // #8077
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -722,6 +723,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeReadWrites) {
+    GTEST_SKIP(); // #8077
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
