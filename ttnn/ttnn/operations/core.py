@@ -170,7 +170,6 @@ Example::
 
 reshape = ttnn.register_operation(
     name="ttnn.reshape",
-    is_cpp_function=True,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
@@ -180,9 +179,7 @@ reshape = ttnn.register_operation(
 
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)(
-    ttnn._ttnn.operations.core.unsqueeze_to_4D
-)
+unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
 def squeeze(tensor, dim):
@@ -472,9 +469,7 @@ Example::
     >>> ttnn.deallocate(tensor)
 """
 
-deallocate = ttnn.register_operation(name="ttnn.deallocate", is_cpp_function=True, doc=doc)(
-    ttnn._ttnn.operations.core.deallocate
-)
+deallocate = ttnn.register_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -499,44 +494,16 @@ doc = r"""
         >>> tensor = ttnn.to_memory_config(tensor, memory_config)
     """
 
-to_memory_config = ttnn.register_operation(
-    name="ttnn.to_memory_config", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.core.to_memory_config)
+to_memory_config = ttnn.register_operation(name="ttnn.to_memory_config", golden_function=_golden_function, doc=doc)(
+    ttnn._ttnn.operations.core.to_memory_config
+)
 
 
 def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-    to_layout(tensor: ttnn.Tensor, layout: Layout, dtype: Optional[DataType] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
-
-    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
-    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
-    padded where the width and height become multiples of 32.
-    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
-        * :attr:`dtype`: the optional output data type.
-        * :attr:`memory_config`: the optional output memory configuration.
-
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open_device(device_id=device_id)
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-        >>> print(tensor[0,0,:3])
-        Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
-    """
-
-to_layout = ttnn.register_operation(
-    name="ttnn.to_layout",
-    golden_function=_golden_function,
-    is_cpp_function=True,
-    doc=doc,
-)(ttnn._ttnn.operations.core.to_layout)
+to_layout = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.core.to_layout)
 
 
 def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -585,7 +552,7 @@ def _golden_function(input_tensor):
     return input_tensor
 
 
-reallocate = ttnn.register_operation(name="ttnn.reallocate", is_cpp_function=True, golden_function=_golden_function)(
+reallocate = ttnn.register_operation(name="ttnn.reallocate", golden_function=_golden_function)(
     ttnn._ttnn.operations.core.reallocate
 )
 

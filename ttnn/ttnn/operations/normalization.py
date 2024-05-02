@@ -77,7 +77,7 @@ def _layer_norm_validate_input_tensors(
     )
 
 
-layer_norm = ttnn.register_operation(name="ttnn.layer_norm", is_cpp_function=True, golden_function=_golden_function)(
+layer_norm = ttnn.register_operation(name="ttnn.layer_norm", golden_function=_golden_function)(
     ttnn._ttnn.operations.normalization.layer_norm
 )
 
@@ -127,7 +127,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
-rms_norm = ttnn.register_operation(name="ttnn.rms_norm", is_cpp_function=True, golden_function=_golden_function)(
+rms_norm = ttnn.register_operation(name="ttnn.rms_norm", golden_function=_golden_function)(
     ttnn._ttnn.operations.normalization.rms_norm
 )
 

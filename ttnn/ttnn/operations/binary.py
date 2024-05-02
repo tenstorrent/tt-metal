@@ -90,200 +90,24 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return input_tensor_a + input_tensor_b
 
 
-doc = r"""add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.add(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 3], dtype=bfloat16)
-"""
-
-
-add = ttnn.register_operation(name="ttnn.add", golden_function=_golden_function, is_cpp_function=True, doc=doc)(
-    ttnn._ttnn.operations.binary.add
-)
-
-
-doc = r"""add_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.add_(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 3], dtype=bfloat16)
-"""
-
-
-add_ = ttnn.register_operation(name="ttnn.add_", golden_function=_golden_function, is_cpp_function=True, doc=doc)(
-    ttnn._ttnn.operations.binary.add_
-)
+add = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add)
+add_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add_)
 
 
 def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
-doc = r"""subtract(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a`.
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.subtract(tensor1, tensor2, alpha=2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 0], dtype=bfloat16 )
-"""
-
-subtract = ttnn.register_operation(
-    name="ttnn.subtract", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.subtract)
-
-
-doc = r"""subtract_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-subtract_s :attr:`input_tensor_b` from :attr:`input_tensor_a`.
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.subtract_(tensor1, tensor2, alpha=2)
-    >>> print(output)
-    ttnn.Tensor([ 1, 0], dtype=bfloat16 )
-"""
-
-subtract_ = ttnn.register_operation(
-    name="ttnn.subtract_", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.subtract_)
+subtract = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract)
+subtract_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract_)
 
 
 def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
-doc = r"""multiply(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float, int], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.multiply(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 0, 2], dtype=bfloat16 )
-"""
-
-multiply = ttnn.register_operation(
-    name="ttnn.multiply", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.multiply)
-
-
-doc = r"""multiply_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float, int], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
-
-.. math::
-    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-Supports broadcasting.
-
-Args:
-    * :attr:`input_tensor_a`
-    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
-
-Keyword args:
-    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
-
-Example::
-
-    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.multiply_(tensor1, tensor2)
-    >>> print(output)
-    ttnn.Tensor([ 0, 2], dtype=bfloat16 )
-"""
-
-multiply_ = ttnn.register_operation(
-    name="ttnn.multiply_", golden_function=_golden_function, is_cpp_function=True, doc=doc
-)(ttnn._ttnn.operations.binary.multiply_)
+multiply = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.multiply)
+multiply_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.multiply_)
 
 sub = subtract
 mul = multiply

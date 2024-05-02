@@ -229,9 +229,9 @@ def register_eltwise_unary_cpp_function(name, unary_function):
             >>> output = ttnn.{name}(tensor)
     """
 
-    eltwise_unary_op = ttnn.register_operation(
-        name=f"ttnn.{name}", golden_function=_golden_function, is_cpp_function=True, doc=doc
-    )(unary_function)
+    eltwise_unary_op = ttnn.register_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)(
+        unary_function
+    )
     setattr(THIS_MODULE, name, eltwise_unary_op)
 
 

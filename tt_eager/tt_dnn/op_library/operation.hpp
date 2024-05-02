@@ -451,12 +451,6 @@ struct HostOperation final {
     void (*delete_storage)(storage_t&) = nullptr;
 };
 
-void validate_input_tensors(
-    const std::string& operation_name,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const std::vector<ttnn::TensorSchema>& input_schemas);
-
 template <class OutputTensorsT = Tensors>
 struct DeviceOperation final {
     using storage_t = std::array<std::byte, 1152>;
@@ -578,14 +572,6 @@ struct DeviceOperation final {
                         tt::stl::concepts::always_false_v<T>,
                         "Operation doesn't implement both the validate and the correct create_program methods with the "
                         "optional input tensors");
-                }
-
-                if constexpr (detail::has_input_schemas<T>()) {
-                    validate_input_tensors(
-                        tt::stl::get_type_name(operation),
-                        input_tensors,
-                        optional_input_tensors,
-                        operation.input_schemas);
                 }
 
                 if constexpr (detail::implements_validate<T>()) {

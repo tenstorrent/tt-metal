@@ -18,6 +18,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -47,11 +48,11 @@ struct BinaryProgramConfig {
 };
 
 struct Binary {
-    static inline const std::vector<TensorSchema> input_schemas{
+    static inline const std::array<TensorSchema, 2> input_schemas{
         ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false},
+            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
         ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false}};
+            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false}};
 
     const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
@@ -73,17 +74,25 @@ struct Binary {
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->program_config), std::cref(this->compute_kernel_config));
     }
-};
 
-namespace detail {
-template <BinaryOpType binary_op_type, bool in_place>
-struct MakeBinary {
-    Tensor operator()(
+    template <BinaryOpType binary_op_type, bool in_place>
+    static void validate_execute_arguments(
+        const Tensor &input_tensor_a,
+        const Tensor &input_tensor_b,
+        const std::optional<const MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
+        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_a, Binary::input_schemas[0]);
+        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_b, Binary::input_schemas[1]);
+    };
+
+    template <BinaryOpType binary_op_type, bool in_place>
+    static Tensor execute(
         const Tensor &input_tensor_a,
         const Tensor &input_tensor_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) const {
+        const std::optional<const DataType> &dtype = std::nullopt,
+        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
         std::vector<Tensor> output_tensors = {
             Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
         operation::launch_op(
@@ -127,61 +136,43 @@ struct MakeBinary {
         return output_tensors.at(0);
     }
 
+    template <BinaryOpType binary_op_type, bool in_place>
+    static void validate_execute_arguments(
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
+        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_a, Binary::input_schemas[0]);
+        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), scalar, Binary::input_schemas[1]);
+    };
+
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
-    Tensor operator()(
+    template <BinaryOpType binary_op_type, bool in_place>
+    static Tensor execute(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) const {
-        std::vector<Tensor> output_tensors = {
-            Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+        const std::optional<const DataType> &dtype = std::nullopt,
+        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
         // Cast Float Scalar to a device tensor
         auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
         host_buffer[0] = scalar;
         Tensor scalar_tensor_host = Tensor(
-                                    OwnedStorage{host_buffer},
-                                    ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
-                                    DataType::BFLOAT16,
-                                    Layout::TILE);
+            OwnedStorage{host_buffer},
+            ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
+            DataType::BFLOAT16,
+            Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return this->operator()(
+        return Binary::execute<binary_op_type, in_place>(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
     }
 };
-}  // namespace detail
-
-constexpr auto add = detail::MakeBinary<BinaryOpType::ADD, false>{};
-constexpr auto add_ = detail::MakeBinary<BinaryOpType::ADD, true>{};
-constexpr auto subtract = detail::MakeBinary<BinaryOpType::SUB, false>{};
-constexpr auto subtract_ = detail::MakeBinary<BinaryOpType::SUB, true>{};
-constexpr auto multiply = detail::MakeBinary<BinaryOpType::MUL, false>{};
-constexpr auto multiply_ = detail::MakeBinary<BinaryOpType::MUL, true>{};
-
-template <typename InputBType>
-ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
-    return add(input_tensor_a, scalar);
-}
-
-template <typename InputBType>
-ttnn::Tensor operator-(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
-    return subtract(input_tensor_a, scalar);
-}
-
-template <typename InputBType>
-ttnn::Tensor operator*(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
-    return multiply(input_tensor_a, scalar);
-}
 
 }  // namespace binary
 
 }  // namespace operations
-using operations::binary::add;
-using operations::binary::add_;
-using operations::binary::multiply;
-using operations::binary::multiply_;
-using operations::binary::subtract;
-using operations::binary::subtract_;
+
 }  // namespace ttnn

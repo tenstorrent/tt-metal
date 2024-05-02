@@ -136,8 +136,8 @@ namespace transformer {
 
 struct Softmax : public tt::operations::primary::Softmax {
     static inline const std::vector<TensorSchema> input_schemas{
-        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false},
-        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, true}};
+        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
+        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
 
     void validate(
         const std::vector<Tensor>& input_tensors,
