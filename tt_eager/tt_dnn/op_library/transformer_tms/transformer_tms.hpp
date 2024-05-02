@@ -44,7 +44,7 @@ struct SplitFusedQKVAndSplitHeads {
 inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, const uint32_t num_heads = 16) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [compute_with_storage_grid_size, mem_config, num_heads] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [compute_with_storage_grid_size, mem_config, num_heads] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, input_tensors);
         }, {input_tensor}, output_tensors);
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
@@ -64,7 +64,7 @@ struct ConcatenateHeads {
 inline Tensor concatenate_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [compute_with_storage_grid_size, mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [compute_with_storage_grid_size, mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(ConcatenateHeads{compute_with_storage_grid_size, mem_config}, input_tensors);
         }, {input_tensor}, output_tensors);
     return output_tensors.at(0);
@@ -89,7 +89,7 @@ struct AttnMatmul {
 inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     operation::launch_op(
-        [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
@@ -131,7 +131,7 @@ struct GroupAttnMatmul {
 inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     operation::launch_op(
-        [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [compute_with_storage_grid_size, mem_config, output_dtype, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             bool row_major = false;
@@ -185,7 +185,7 @@ struct SSMEltwiseMul {
 inline Tensor ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     operation::launch_op(
-        [mem_config, output_dtype] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
 
             return operation::run(SSMEltwiseMul{mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, input_tensors);
@@ -207,7 +207,7 @@ struct SSM1DSumReduce {
 inline Tensor ssm_1d_sum_reduce(const Tensor &input_tensor_a, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [mem_config, output_dtype] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             return operation::run(SSM1DSumReduce{mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, input_tensors);
         }, {input_tensor_a}, output_tensors);

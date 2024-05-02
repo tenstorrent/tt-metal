@@ -89,7 +89,7 @@ Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
 Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
     operation::launch_op(
-    [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+    [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         const auto& input = input_tensors.at(0);
         return operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input});
     }, {input}, output_tensors);

@@ -306,7 +306,8 @@ inline auto run(
     ConcreteOperation&& concrete_op,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors={},
-    const OptionalTensors& optional_output_tensors={}
+    const OptionalTensors& optional_output_tensors={},
+    std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt
 ) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_host_operation<ConcreteOperation>()) {
@@ -315,6 +316,9 @@ inline auto run(
         return run<OutputTensors>(operation, input_tensors);
     } else if constexpr (detail::is_device_operation<ConcreteOperation>()) {
         const auto operation = DeviceOperation(concrete_op);
+        if (queue.has_value()) {
+            return run<OutputTensors>(queue.value(), operation, input_tensors, optional_input_tensors, optional_output_tensors);
+        }
         return run<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
         static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
@@ -384,17 +388,19 @@ inline auto run_with_autoformat(
 }
 
 void launch_op(
-    std::function<std::vector<Tensor>(const Tensors&, const OptionalConstTensors&)>&& op_func,
-    const std::vector<Tensor> input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
+    const Tensors input_tensors,
+    Tensors& output_tensors,
+    const OptionalConstTensors optional_input_tensors = {},
+    const OptionalTensors optional_output_tensors = {}
 );
 
 void launch_with_autoformat(
-    std::function<std::vector<Tensor>(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)>&& op_func,
-    const std::vector<Tensor> input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::vector<std::optional<const Tensor>> optional_input_tensors = {}
+    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
+    const Tensors input_tensors,
+    Tensors& output_tensors,
+    const OptionalConstTensors optional_input_tensors = {},
+    const OptionalTensors optional_output_tensors = {}
 );
 
 std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs = {});

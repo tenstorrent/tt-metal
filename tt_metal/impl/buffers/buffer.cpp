@@ -108,13 +108,14 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
 
 Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
                 const TensorMemoryLayout buffer_layout,
-                std::optional< ShardSpecBuffer> shard_parameters
-                )
+                std::optional< ShardSpecBuffer> shard_parameters,
+                bool allocate)
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type), buffer_layout_(buffer_layout), shard_parameters_(shard_parameters) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
-
-    this->allocate();
+    if (allocate) {
+        this->allocate();
+    }
 }
 
 

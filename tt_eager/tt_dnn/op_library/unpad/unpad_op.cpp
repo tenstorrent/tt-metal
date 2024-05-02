@@ -196,7 +196,8 @@ Tensor unpad(
     operation::launch_op(
         [output_tensor_start, output_tensor_end, output_mem_config](
             const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors) mutable -> std::vector<Tensor> {
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto &input_tensor_a = input_tensors.at(0);
             auto input_tensor_shape = input_tensor_a.get_legacy_shape();
             const Shape output_tensor_shape = {

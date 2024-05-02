@@ -106,7 +106,7 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
     // No-op (Will do a tensor copy)
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [output_mem_config, use_multicore, use_pack_untilize] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [output_mem_config, use_multicore, use_pack_untilize] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
                 log_warning("Perf warning: Trying to untilize non-tilized data.");
@@ -121,7 +121,7 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
 
 void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operandsneed to be on device!");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 

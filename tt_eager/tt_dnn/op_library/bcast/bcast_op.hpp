@@ -77,7 +77,7 @@ inline Tensor bcast(
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_with_autoformat(
-        [bcast_op, bcast_dim, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [bcast_op, bcast_dim, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             using tt::constants::TILE_HEIGHT;
             using tt::constants::TILE_WIDTH;
             auto& input_tensor_a = input_tensors.at(0);
