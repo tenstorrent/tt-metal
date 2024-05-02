@@ -8,7 +8,6 @@ from diffusers import StableDiffusionPipeline
 import pytest
 from tqdm.auto import tqdm
 import time
-from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
@@ -211,7 +210,13 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
 
     first_iter = time.time()
-    signpost(header="start")
+    use_signpost = True
+    try:
+        from tracy import signpost
+    except ModuleNotFoundError:
+        use_signpost = False
+    if use_signpost:
+        signpost(header="start")
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -222,8 +227,10 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
-    signpost(header="stop")
+    if use_signpost:
+        signpost(header="stop")
     first_iter = time.time() - first_iter
+    ttnn_output = ttnn_to_torch(ttnn_output)
     print(f"First iteration took {first_iter} seconds")
     # times = []
     # for i in range(50):
@@ -238,6 +245,9 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #         return_dict=return_dict,
     #         config=config,
     #     )
+    #     ttnn_output = ttnn_to_torch(ttnn_output)
+    #     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
+    #     print(output)
     #     end = time.time()
     #     times.append(end - start)
     #     print(f"Current iteration took {end - start} seconds")
@@ -247,7 +257,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #     print(iter)
     # print(f"Time taken for 50 iterations: {total_time}")
     # print(f"Samples per second: {50 / total_time}")
-    ttnn_output = ttnn_to_torch(ttnn_output)
     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)
     assert passing
