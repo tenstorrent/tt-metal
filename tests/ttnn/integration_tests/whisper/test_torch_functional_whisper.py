@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.functional_whisper.reference import torch_functional_whisper
+from models.demos.whisper.reference import torch_functional_whisper
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
@@ -17,7 +17,7 @@ MODEL_NAME = "openai/whisper-tiny.en"
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("use_key_value_states", [False, True])
 def test_whisper_attention(model_name, batch_size, sequence_size, use_key_value_states):
@@ -52,7 +52,7 @@ def test_whisper_attention(model_name, batch_size, sequence_size, use_key_value_
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_encoder_layer(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -77,7 +77,7 @@ def test_encoder_layer(model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("feature_size", [80])
 @pytest.mark.parametrize("sequence_length", [3000])
 def test_encoder(model_name, batch_size, feature_size, sequence_length):
@@ -106,7 +106,7 @@ def test_encoder(model_name, batch_size, feature_size, sequence_length):
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_decoder_layer(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -132,11 +132,11 @@ def test_decoder_layer(model_name, batch_size, sequence_size):
         config, torch_hidden_states, attention_mask, torch_encoder_hidden_states, parameters=parameters
     )
 
-    assert_with_pcc(torch_output[0], output, 0.94)
+    assert_with_pcc(torch_output[0], output, 0.99)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_decoder(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
