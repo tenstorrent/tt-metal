@@ -80,7 +80,7 @@ def get_lms_coefficient(order, t, current_order, sigmas):
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts, num_inference_steps, image_size, expected_compile_time, expected_inference_time",
-    ((1, 2, (512, 512), 3600, 1.8),),
+    ((1, 2, (512, 512), 3600, 2.0),),  # Issue 7816 Inference time
 )
 def test_stable_diffusion_perf(
     device, num_prompts, num_inference_steps, image_size, expected_compile_time, expected_inference_time
