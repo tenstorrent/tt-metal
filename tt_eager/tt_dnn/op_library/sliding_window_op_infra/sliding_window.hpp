@@ -363,6 +363,7 @@ namespace tt::tt_metal {
                                    max_out_nsticks_per_core);
         }
 
+<<<<<<< HEAD
         std::vector<std::vector<uint32_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false) {
             std::vector<std::vector<uint32_t>> sharded_input_top_left_indices;
             for(const auto& item : shard_boundaries) {
@@ -402,5 +403,7 @@ namespace tt::tt_metal {
             return sharded_input_top_left_indices;
         }
 
+=======
+>>>>>>> #0: halo config generation in cpp done, need testing
     } // namespace sliding_window
 } // namespace tt::tt_metal
