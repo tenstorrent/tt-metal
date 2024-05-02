@@ -165,26 +165,36 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
-        Device * device;
+        operation::launch_op(
+        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            Device * device;
 
-        // Get the device
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            device = AutoFormat::GetDefaultDevice();
-            TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-        } else {
-            device = input_tensor.device();
-        }
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-        auto formatted_input_tensor = input_tensor;
-        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
-        }
-        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {formatted_input_tensor}).at(0);
-        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {output_tensor}).at(0);
+            // Get the device
+            if (input_tensor.storage_type() != StorageType::DEVICE) {
+                device = AutoFormat::GetDefaultDevice();
+                TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+            } else {
+                device = input_tensor.device();
+            }
+            auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+            auto formatted_input_tensor = input_tensor;
+            if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+                formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
+            }
+            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {formatted_input_tensor}).at(0);
+            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {output_tensor});
+        }, {input_tensor}, output_tensors);
     } else {
-        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, pad_value).at(0);
+        operation::launch_with_autoformat(
+        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, pad_value);
+        }, {input_tensor}, output_tensors);
     }
+    return output_tensors.at(0);
 }
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     return mean(input_tensor,2,output_mem_config);
