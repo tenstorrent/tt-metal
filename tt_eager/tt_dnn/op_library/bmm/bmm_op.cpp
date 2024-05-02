@@ -284,7 +284,7 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     }
 }
 
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool out_sharded, std::optional<CoreCoord> compute_with_storage_grid_size) {
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool out_sharded, std::optional<CoreCoord> compute_with_storage_grid_size, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] : input_tensor_a.get_legacy_shape()[-2];
@@ -299,29 +299,12 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         per_core_N = N / TILE_WIDTH;
     }
     uint32_t in0_block_w = K / TILE_WIDTH % 2 == 0 ? 2 : 1;
-    // TODO: Replace with get_matmul_subblock_params
-    uint32_t out_subblock_h, out_subblock_w;
-    bool params_found = false;
-    for (auto &subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
-        out_subblock_h = std::get<0>(subblock_hw);
-        out_subblock_w = std::get<1>(subblock_hw);
-        if (out_sharded) {
-            if (!mcast_in0) {
-                if (out_subblock_w != per_core_N || out_subblock_h != 1) {
-                    continue;
-                }
-            } else {
-                if (out_subblock_h != per_core_M || out_subblock_w != 1) {
-                    continue;
-                }
-            }
-        }
-        if (per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0) {
-            params_found = true;
-            break;
-        }
-    }
-    TT_FATAL(params_found, "Matmul parameters could not be determined for given input shapes");
+    bool per_core_N_equals_subblock_w_constraint = out_sharded && !mcast_in0;
+    bool per_core_M_equals_subblock_h_constraint = out_sharded && mcast_in0;
+    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
+    auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, per_core_M_equals_subblock_h_constraint, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
+    auto out_subblock_h = std::get<0>(subblock_hw);
+    auto out_subblock_w = std::get<1>(subblock_hw);
 
     return tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = grid_size,
@@ -336,13 +319,18 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
     };
 }
 
-tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, const uint32_t per_core_N, const bool per_core_M_equals_subblock_h_constraint, bool per_core_N_equals_subblock_w_constraint) {
+tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, const uint32_t per_core_N, const bool per_core_M_equals_subblock_h_constraint, bool per_core_N_equals_subblock_w_constraint, bool fp32_dest_acc_en) {
     TT_FATAL(!(per_core_M_equals_subblock_h_constraint and per_core_N_equals_subblock_w_constraint), "Only one constraint may be true for h or w!");
 
     uint32_t out_subblock_h, out_subblock_w;
     for (auto &subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
         out_subblock_h = std::get<0>(subblock_hw);
         out_subblock_w = std::get<1>(subblock_hw);
+	if (fp32_dest_acc_en) {
+	    if ((out_subblock_h * out_subblock_w) > 4) {
+		continue;  // Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode
+	    }
+	}
         if (per_core_N_equals_subblock_w_constraint) {
             if (out_subblock_w != per_core_N || out_subblock_h != 1) {
                 continue;
@@ -363,10 +351,18 @@ tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, 
 
 
 // TODO: Only supports sharded matmul for now; infer most matmul params from shard spec
-tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation, const bool matmul) {
+tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation, const bool matmul, const std::optional<const CoreCoord> core_coord, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(input_tensor_a.is_sharded());
-    // TODO: Should we check if grid_size is valid against device->compute_with_storage_grid_size()?
+    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    if (core_coord) {
+	auto coord = *core_coord;
+	auto storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+	if (coord.x <= storage_grid_size.x && coord.y <= storage_grid_size.y) {
+	    grid_size.x = coord.x;
+	    grid_size.y = coord.y;
+	}
+    }
 
     // MCAST matmuls only support input_b in INTERLEAVED
     if (matmul) {
@@ -406,7 +402,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Ten
                 TT_FATAL(false, "Input tensor must be WIDTH or HEIGHT sharded for 1D mcast matmul!");
             }
 
-            auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint);
+            auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
             auto out_subblock_h = std::get<0>(subblock_hw);
             auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -446,7 +442,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Ten
             uint32_t per_core_N = N / virtual_x;
             uint32_t in0_block_w = shard_shape[1] / TILE_WIDTH;
 
-            auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint);
+            auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
             auto out_subblock_h = std::get<0>(subblock_hw);
             auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -481,7 +477,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Ten
         uint32_t per_core_N = N;
         uint32_t in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
 
-        auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint);
+        auto subblock_hw = get_matmul_subblock_params(per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
         auto out_subblock_h = std::get<0>(subblock_hw);
         auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -610,7 +606,7 @@ Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &in
         .per_core_M = 12,
         .per_core_N = 12,
     };
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, program_config, mem_config, output_dtype);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, std::nullopt, program_config, mem_config, output_dtype);
 
 }
 
@@ -628,7 +624,7 @@ Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &i
         .per_core_M = 12,
         .per_core_N = 2,
     };
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, program_config, mem_config, output_dtype);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, std::nullopt, program_config, mem_config, output_dtype);
 
 }
 
@@ -658,10 +654,10 @@ Tensor falcon_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_t
 
 Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<bool> packer_l1_acc) {
     CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
-    auto program_config = bmm_op_utils::get_mcast_1d_config(
-        input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
     std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
     auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true, false, packer_l1_acc.value_or(false));
+    auto program_config = bmm_op_utils::get_mcast_1d_config(
+        input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size, compute_kernel_config);
     return operations::primary::matmul_1d(
         input_tensor_a,
         input_tensor_b,
@@ -685,9 +681,9 @@ Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &i
         return operation::run_with_autoformat(tt::operations::primary::Matmul{.program_config=tt::operations::primary::MatmulDefaultProgramConfig{}, .bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a, input_tensor_b}).at(0);
     } else {
         CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
-        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded(), grid_size);
         std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
         auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded(), grid_size, compute_kernel_config);
         return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
     }
 }
@@ -717,9 +713,9 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
                 auto& input_tensor_b = input_tensors.at(1);
                 auto& bias = optional_input_tensors.at(0);
                 CoreCoord grid_size = get_falcon_matmul_grid_size(input_tensor_a.device());
-                auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size);
                 std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
                 auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true /* math_approx_mode */, false /* fp32_dest_acc_en */, true /* packer_l1_acc */);
+                auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded(), grid_size, compute_kernel_config);
                 return {operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype, compute_kernel_config)};
             },
         {input_tensor_a, input_tensor_b}, output_tensors, {bias});
@@ -731,9 +727,9 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
  * Resnet50 matmul with fused batch
  */
 Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, const MathFidelity math_fidelity) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
     std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
     auto compute_kernel_config = init_device_compute_kernel_config(input_a.device()->arch(), config, math_fidelity, true, false, false);
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true /* fuse_batch */, std::nullopt /* fused_activation */, true /* mcast_in0 */, false /* out_sharded */, std::nullopt /* compute_with_storage_grid_size */, compute_kernel_config);
     return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
 }
 
@@ -1133,7 +1129,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
-			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
+			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false /* fuse_batch */, std::nullopt /* fused_activation */, true /* mcast_in0 */, false /* out_sharded */, std::nullopt /* compute_with_storage_grid_size */, compute_kernel_config);
                         TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED!");
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
@@ -1146,7 +1142,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
                         TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED!");
-			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, false, false);
+			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false /* fuse_batch */, std::nullopt /* fused_activation */, false /* mcast_in0 */, false /* out_sharded */, std::nullopt /* compute_with_storage_grid_size */, this->compute_kernel_config);
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
@@ -1246,7 +1242,7 @@ Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             if (!program_config.has_value()) {
-                program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
+                program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false /* fuse_batch */, std::nullopt /* fused_activation */, true /* mcast_in0 */, false /* out_sharded */, std::nullopt /* compute_with_storage_grid_size */, compute_kernel_config);
             }
             auto kernel_config_val = init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config);
             return {operations::primary::matmul(input_tensor_a, input_tensor_b, optional_input_tensors.at(0), program_config.value(), mem_config, output_dtype, kernel_config_val, untilize_out)};
