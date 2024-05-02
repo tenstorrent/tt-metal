@@ -549,17 +549,29 @@ Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tenso
 
 Tensor Tensor::pad_to_tile(float pad_value) const {
     ZoneScoped;
-    uint32_t h = this->get_legacy_shape()[2];
-    uint32_t w = this->get_legacy_shape()[3];
-    uint32_t padded_h = round_up(h, TILE_HEIGHT);
-    uint32_t padded_w = round_up(w, TILE_WIDTH);
+    uint32_t height = this->get_legacy_shape()[-2];
+    uint32_t width = this->get_legacy_shape()[-1];
+    uint32_t padded_height = round_up(height, TILE_HEIGHT);
+    uint32_t padded_width = round_up(width, TILE_WIDTH);
 
-    auto padding = Padding({{0, 0}, {0, 0}, {0, padded_h - h}, {0, padded_w - w}}, Padding::PadValue::Any);
+    std::vector<uint32_t> shape;
+    std::vector<uint32_t> padded_shape;
+    std::vector<uint32_t> input_tensor_start;
 
-    Shape output_tensor_shape = Shape({this->get_legacy_shape()[0], this->get_legacy_shape()[1], padded_h, padded_w}, padding);
-    Shape input_tensor_start = {0, 0, 0, 0};
+    for (auto index = 0; index < this->get_legacy_shape().rank() - 2; index++) {
+        shape.push_back(this->get_legacy_shape().without_padding()[index]);
+        padded_shape.push_back(this->get_legacy_shape()[index]);
+        input_tensor_start.push_back(0);
+    }
 
-    return this->pad(output_tensor_shape, input_tensor_start, pad_value);
+    shape.push_back(height);
+    shape.push_back(width);
+    padded_shape.push_back(padded_height);
+    padded_shape.push_back(padded_width);
+    input_tensor_start.push_back(0);
+    input_tensor_start.push_back(0);
+
+    return this->pad(Shape(shape, padded_shape), Shape{input_tensor_start}, pad_value);
 }
 
 Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
