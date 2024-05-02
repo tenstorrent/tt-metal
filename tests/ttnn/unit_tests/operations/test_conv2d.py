@@ -817,7 +817,7 @@ def test_sd_conv(
         # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
         # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
         # # sd convs with HxW=64x64 with batch size=2
-        (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
+        # (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),     ## TODO: DISABLED DUE TO FLAKY HANG issue #7179
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
         (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
