@@ -32,4 +32,8 @@ namespace tt::tt_metal::detail{
         program.validate_circular_buffer_region(device);
     }
 
+    inline void AddConfigTensor(Program &program, const Tensor& config_tensor) {
+        program.add_config_tensor(config_tensor);
+    }
+
 }  // namespace tt::tt_metal::detail

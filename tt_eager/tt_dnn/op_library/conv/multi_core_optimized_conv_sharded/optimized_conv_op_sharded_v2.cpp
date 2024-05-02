@@ -16,6 +16,7 @@
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
@@ -1313,29 +1314,31 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    const SlidingWindowConfig& sliding_window_config,
-    const ParallelConfig& parallel_config,
+    vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0,
-    std::optional<MemoryConfig> output_mem_config,
-    std::optional<DataType> output_dtype,
-    std::optional<std::array<std::uint32_t, 4>> input_tensor_shape,
+    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
+    DataType output_dtype,
+    std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    DeviceComputeKernelConfig compute_kernel_config,
     Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
-    std::vector<int> conv_params = {
-        (int) sliding_window_config.window_hw_.first,
-        (int) sliding_window_config.window_hw_.second,
-        (int) sliding_window_config.stride_hw_.first,
-        (int) sliding_window_config.stride_hw_.second,
-        (int) sliding_window_config.pad_hw_.first,
-        (int) sliding_window_config.pad_hw_.second,
-    };
-
+    ParallelConfig parallel_config;
+    parallel_config.grid = a.shard_spec().value().grid;
+    parallel_config.shard_scheme = a.memory_config().memory_layout;
+    parallel_config.shard_orientation = a.shard_spec().value().orientation;
+    // TODO: pass sliding window config to the function instead of conv params
+    uint32_t weight_size_h = (uint32_t) conv_params[0]; // filter_h
+    uint32_t weight_size_w = (uint32_t) conv_params[1]; // filter_W
+    uint32_t stride_h = (uint32_t) conv_params[2];
+    uint32_t stride_w = (uint32_t) conv_params[3];
+    uint32_t pad_h = (uint32_t) conv_params[4];
+    uint32_t pad_w = (uint32_t) conv_params[5];
+    SlidingWindowConfig sliding_window_config = SlidingWindowConfig(input_tensor_shape[0], input_tensor_shape[1], input_tensor_shape[2], weight_size_h, weight_size_w, stride_h, stride_w,
+        pad_h, pad_w, 1, 1, parallelization_config.num_cores_nhw, parallel_config.grid);
 
     // create conv config tensors
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
@@ -1363,44 +1366,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
         }
     }
 
-    Tensor conv_reader_indices_tensor = Tensor()
+    auto conv_reader_indices_tensor = sliding_window::construct_on_device_config_tensor(conv_sharded_input_top_left_indices, sliding_window_config, parallel_config, a.device());
 
-
-            // # Create sharded tensor on device for conv_reader_indices
-            // conv_reader_indices_torch_tensor = torch.tensor(
-            //     [[sliding_window_op_sharded_input_top_left_indices]], dtype=indices_torch_dtype
-            // )
-
-            // conv_reader_indices_tt_tensor = ttl.tensor.Tensor(
-            //     conv_reader_indices_torch_tensor,
-            //     indices_tt_dtype,
-            // )
-            // shard_grid = ttl.tensor.CoreRangeSet(
-            //     {
-            //         ttl.tensor.CoreRange(
-            //             ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-            //         )
-            //     }
-            // )
-            // shard_orientation = (
-            //     ttl.tensor.ShardOrientation.ROW_MAJOR if self.transpose_mcast else ttl.tensor.ShardOrientation.COL_MAJOR
-            // )
-            // shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, False)
-            // mem_config = ttl.tensor.MemoryConfig(
-            //     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1_SMALL, shard_spec
-            // )
-            // conv_reader_indices_sharded_tensor = (
-            //     conv_reader_indices_tt_tensor.to(device, mem_config)
-            //     if move_weights_to_device
-            //     else conv_reader_indices_tt_tensor
-            // )
-
-    // move to device
-
-    // add to program
-    // call config generation functions and add to program
-    program.add_tensor()
-    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, ashape, conv_reader_indices, )
+    // add config tensor to program
+    tt::tt_metal::detail::AddConfigTensor(program, conv_reader_indices_tensor);
+    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, Shape(input_tensor_shape), bias, conv_reader_indices_tensor, conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, use_shallow_conv_variant, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, output, compute_kernel_config);
 }
 }  // namespace tt_metal
 
