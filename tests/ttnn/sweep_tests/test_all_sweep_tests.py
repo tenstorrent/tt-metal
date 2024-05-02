@@ -17,9 +17,10 @@ import os
 class SweepTest:
     file_name: str
     sweep_test_index: int
+    parameter_list: dict
 
     def __str__(self):
-        return f"{os.path.basename(self.file_name)}-{self.sweep_test_index}"
+        return f"{os.path.basename(self.file_name)}-{self.sweep_test_index}-{self.parameter_list}"
 
 
 sweep_tests = []
@@ -34,7 +35,7 @@ def create_test_function(file_name):
     base_name = base_name + ".csv"
     sweep_tests = []
     for sweep_test_index, parameter_list in enumerate(permutations(sweep_module.parameters)):
-        sweep_tests.append(SweepTest(file_name, sweep_test_index))
+        sweep_tests.append(SweepTest(file_name, sweep_test_index, parameter_list))
 
     @pytest.mark.parametrize("sweep_test", sweep_tests, ids=str)
     def test_sweep(device, sweep_test):

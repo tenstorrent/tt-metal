@@ -66,13 +66,20 @@ def get_sliding_window_op_output_shard_nhw_size(
     return output_shard_nhw_size
 
 
-def calculate_shard_grid(grid_size, num_cores_nhw):
+def calculate_shard_grid(grid_size, num_cores_nhw, transpose_mcast=True):
     num_cores_w, num_cores_h = grid_size
-    shard_layout = (
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-        if (num_cores_nhw == num_cores_w and num_cores_h > 1)
-        else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    )
+    if transpose_mcast:
+        shard_layout = (
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            if (num_cores_nhw == num_cores_w and num_cores_h > 1)
+            else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        )
+    else:
+        shard_layout = (
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            if (num_cores_nhw == num_cores_h and num_cores_w > 1)
+            else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        )
 
     if shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
         core_range = ttl.tensor.CoreRange(
@@ -107,7 +114,9 @@ def calculate_shard_grid(grid_size, num_cores_nhw):
     return shard_grid, shard_layout
 
 
-def calculate_memory_config(sliding_window_op_params, is_1d_systolic, padded_channels, calc_input=False, tile_size=1):
+def calculate_memory_config(
+    sliding_window_op_params, is_1d_systolic, padded_channels, calc_input=False, tile_size=1, transpose_mcast=True
+):
     tensor_shape = (
         get_sliding_window_op_input_nhw_shape(sliding_window_op_params)
         if calc_input
@@ -123,32 +132,49 @@ def calculate_memory_config(sliding_window_op_params, is_1d_systolic, padded_cha
             num_cores_w = min(sliding_window_op_params.num_cores_w, num_cores_nhw)
             num_cores_h = (num_cores_nhw + num_cores_w - 1) // num_cores_w
         else:
-            num_cores_w = num_cores_nhw
-            num_cores_h = sliding_window_op_params.num_cores_h
+            if transpose_mcast:
+                num_cores_w = num_cores_nhw
+                num_cores_h = sliding_window_op_params.num_cores_h
+            else:
+                num_cores_w = sliding_window_op_params.num_cores_h
+                num_cores_h = num_cores_nhw
     else:
         num_cores_nhw = sliding_window_op_params.num_cores_nhw
         num_cores_w = sliding_window_op_params.num_cores_w
         num_cores_h = sliding_window_op_params.num_cores_h
 
+    logical_grid_size = None
+    grid_size = None
     if is_1d_systolic:
         logical_grid_size = (num_cores_nhw, 1)
+        grid_size = (num_cores_w, num_cores_h)
     else:
-        logical_grid_size = (num_cores_w, num_cores_h)
+        if transpose_mcast:
+            logical_grid_size = (num_cores_w, num_cores_h)
+            grid_size = (num_cores_w, num_cores_h)
+        else:
+            logical_grid_size = (num_cores_w, num_cores_h)
+            grid_size = (num_cores_w, num_cores_h)
 
-    shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
+    shard_grid, shard_layout = calculate_shard_grid(grid_size, num_cores_nhw, transpose_mcast=transpose_mcast)
     nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2]
     nhw_padded = roundup(nhw_shape, num_cores_nhw * tile_size)
     # if (nhw_padded - nhw_shape) > 32:
     #     breakpoint()
     # assert (nhw_padded - nhw_shape) <= 32
     nhw_shard = nhw_padded // num_cores_nhw
-    assert padded_channels % logical_grid_size[1] == 0
-    shard_shape = [nhw_shard, padded_channels // logical_grid_size[1]]
+    if is_1d_systolic or (not is_1d_systolic and transpose_mcast):
+        assert padded_channels % logical_grid_size[1] == 0
+        shard_shape = [nhw_shard, padded_channels // logical_grid_size[1]]
+    else:
+        assert padded_channels % logical_grid_size[0] == 0
+        shard_shape = [nhw_shard, padded_channels // logical_grid_size[0]]
     shard_orientation = (
-        ttl.tensor.ShardOrientation.ROW_MAJOR if is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
+        ttl.tensor.ShardOrientation.ROW_MAJOR
+        if is_1d_systolic
+        else (ttl.tensor.ShardOrientation.COL_MAJOR if transpose_mcast else ttl.tensor.ShardOrientation.ROW_MAJOR)
     )
-    shard_halo = False
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     shard_scheme = (
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if is_1d_systolic else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
     )

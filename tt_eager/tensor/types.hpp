@@ -256,17 +256,26 @@ static_assert(
     "The data types supported in OwnedBuffer must match those in HostDataType.");
 struct OwnedStorage {
     OwnedBuffer buffer;
-
     OwnedStorage() = default;
+
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
+
+    inline void insert_buffer(OwnedBuffer buffer_) {
+        this->buffer = buffer_;
+    }
+
+    inline OwnedBuffer get_buffer() const {
+        return this->buffer;
+    }
+
 };
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
-
     DeviceStorage() = default;
+
     const MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
@@ -282,6 +291,13 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
+    inline void insert_buffer(DeviceBuffer buffer_) {
+        this->buffer = buffer_;
+    }
+
+    inline DeviceBuffer get_buffer() const {
+        return this->buffer;
+    }
     static constexpr auto attribute_names = std::make_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };

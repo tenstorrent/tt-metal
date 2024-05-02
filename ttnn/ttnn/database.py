@@ -291,7 +291,7 @@ def insert_tensor(report_path, tensor):
     if query_tensor_by_id(report_path, tensor.tensor_id) is not None:
         return
 
-    if ttnn.is_tensor_storage_on_device(tensor) and tensor.is_allocated():
+    if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
         address = tensor.buffer_address()
         device_id = tensor.device().id()
         memory_config = ttnn.get_memory_config(tensor)

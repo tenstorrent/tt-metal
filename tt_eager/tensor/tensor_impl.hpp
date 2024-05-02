@@ -910,7 +910,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             layout);
     }
 
-    if (is_tensor_on_device_or_multidevice(tensor)) {
+    if (is_tensor_on_device(tensor)) {
         return to_string<T>(to_host<T>(tensor));
     }
 
@@ -948,7 +948,15 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
+                auto devices = get_devices(tensor);
+                auto host_tensor = to_host<T>(tensor);
+                auto device_index = 0;
+                std::stringstream ss;
+                apply(host_tensor, [&](const Tensor& device_tensor) {
+                    ss << "device_id:" << devices.at(device_index++)->id() << std::endl;
+                    ss << to_string<T>(device_tensor) << std::endl;
+                });
+                return ss.str();
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::stringstream ss;
                 apply(tensor, [&](const Tensor& device_tensor) { ss << to_string<T>(device_tensor) << std::endl;});

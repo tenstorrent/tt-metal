@@ -361,15 +361,15 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device) {
 
 void insert_buffer_and_shape_for_device(Device* target_device, const Tensor& shard, Tensor& tensor_to_modify) {
     if (std::holds_alternative<MultiDeviceHostStorage>(tensor_to_modify.tensor_attributes->storage)) {
-        std::get<MultiDeviceHostStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer_and_shape_for_device(target_device, std::get<OwnedStorage>(shard.get_storage()).buffer, shard.get_legacy_shape());
+        std::get<MultiDeviceHostStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer_and_shape_for_device(target_device, std::get<OwnedStorage>(shard.get_storage()).get_buffer(), shard.get_legacy_shape());
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor_to_modify.tensor_attributes->storage)) {
-        std::get<MultiDeviceStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer_and_shape_for_device(target_device, std::get<DeviceStorage>(shard.get_storage()).buffer, shard.get_legacy_shape());
+        std::get<MultiDeviceStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer_and_shape_for_device(target_device, std::get<DeviceStorage>(shard.get_storage()).get_buffer(), shard.get_legacy_shape());
     } else if (std::holds_alternative<OwnedStorage>(tensor_to_modify.tensor_attributes->storage)) {
-        std::get<OwnedStorage>(tensor_to_modify.tensor_attributes->storage).buffer = std::get<OwnedStorage>(shard.get_storage()).buffer;
+        std::get<OwnedStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer(std::get<OwnedStorage>(shard.get_storage()).get_buffer());
     } else if (std::holds_alternative<DeviceStorage>(tensor_to_modify.tensor_attributes->storage)) {
-        std::get<DeviceStorage>(tensor_to_modify.tensor_attributes->storage).buffer = std::get<DeviceStorage>(shard.get_storage()).buffer;
+        std::get<DeviceStorage>(tensor_to_modify.tensor_attributes->storage).insert_buffer(std::get<DeviceStorage>(shard.get_storage()).get_buffer());
     } else {
-        TT_FATAL(false, "Unsopported storage in insert_buffer_and_shape_for_device");
+        TT_FATAL(false, "Unsupported storage in insert_buffer_and_shape_for_device");
     }
 }
 

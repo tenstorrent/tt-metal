@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 

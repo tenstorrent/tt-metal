@@ -57,12 +57,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
-    if (fast_and_approx) {
-        MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<true>() ));
-    } else {
-        MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<false>() ));
-    }
+template <bool fast_and_approx = true>
+ALWI void rsqrt_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<fast_and_approx>() ));
 }
 
 /**
@@ -78,12 +75,9 @@ ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
-ALWI void rsqrt_tile(uint32_t idst, bool fast_and_approx=true) {
-  if (fast_and_approx) {
-    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<true>(idst) ));
-  } else {
-    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<false>(idst) ));
-  }
+template <bool fast_and_approx = true>
+ALWI void rsqrt_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<fast_and_approx>(idst) ));
 }
 
 

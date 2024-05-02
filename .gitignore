@@ -19,6 +19,7 @@ coremodel/model/release/
 
 pipegen.yaml
 device_desc.yaml
+.umd/
 /clean
 *coverage.txt
 blobgen_cmd_log
@@ -70,6 +71,7 @@ infra/machine_setup/inventory/
 
 # exclude MNIST etc model downloads
 data/
+hf_data/
 
 # exclude venv
 venv/
