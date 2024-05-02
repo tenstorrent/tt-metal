@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -161,10 +162,87 @@ struct RMSNorm : tt::operations::primary::LayerNorm {
     }
 };
 
+
+struct GroupNorm {
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return std::make_tuple(input_tensor);
+    }
+
+    static inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
+        return {
+            ttnn::TensorSchema{
+                2,
+                4,
+                {ttnn::bfloat16},
+                {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT},
+                true,
+                false,
+                false,
+                false}
+            };
+    }
+
+    static inline ttnn::Tensor execute(
+        const ttnn::Tensor& input_tensor,
+        const int num_groups,
+        const float epsilon,
+        const std::optional<ttnn::Tensor> & input_mask = std::nullopt,
+        const std::optional<ttnn::Tensor> & weight = std::nullopt,
+        const std::optional<ttnn::Tensor> & bias = std::nullopt,
+        const std::optional<MemoryConfig> & memory_config = std::nullopt,
+        const std::optional<ttnn::DataType> dtype = std::nullopt,
+        std::optional<CoreGrid> core_grid = std::nullopt,
+        std::optional<bool> inplace = std::nullopt
+    ) {
+
+        TT_FATAL(core_grid.has_value(), "Automatic determination of grid size not supported");
+
+        TT_FATAL(input_tensor.is_sharded(), "Only sharded input tensors supported");
+
+        TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Input tensor cannot be width sharded");
+
+        TT_FATAL(input_tensor.get_shape().rank() == 4, "Input tensor must be rank 4");
+
+        TT_FATAL(input_tensor.get_shape()[-1] % num_groups == 0, "Number of channels must be divisible by number of groups");
+
+        const auto& ts = input_tensor.get_shape();
+        TT_FATAL((ts[0] * ts[1] * ts[2]) % ttnn::types::TILE_SIZE == 0, "Input tensor dim NHW must be divisible by tile size");
+
+        const auto output_dtype = dtype.value_or(input_tensor.get_dtype());
+
+        const std::optional<ttnn::Tensor> & gamma = weight.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(weight.value())) : std::nullopt;
+        const std::optional<ttnn::Tensor> & beta =  bias.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(bias.value())) : std::nullopt;
+
+        const MemoryConfig& dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
+        const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
+
+        const tt::operations::primary::GroupNormShardedMultiCoreProgramConfig& program_config = {
+            .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
+            .math_fidelity = MathFidelity::HiFi4,
+            .im_data_format = DataType::BFLOAT16,
+            .out_data_format = DataType::BFLOAT16,
+            .inplace = inplace.value_or(false)
+        };
+
+        return tt::operations::primary::groupnorm(
+            input_tensor,
+            num_groups,
+            epsilon,
+            gamma,
+            beta,
+            input_mask,
+            output_mem_config,
+            program_config
+        );
+    }
+};
+
 } // namespace normalization
 } // namespace operations
 
 constexpr auto softmax = ttnn::register_operation<ttnn::operations::normalization::Softmax<false>>("ttnn::softmax");
 constexpr auto layer_norm = ttnn::register_operation<ttnn::operations::normalization::LayerNorm>("ttnn::layer_norm");
 constexpr auto rms_norm = ttnn::register_operation<ttnn::operations::normalization::RMSNorm>("ttnn::rms_norm");
+constexpr auto group_norm = ttnn::register_operation<ttnn::operations::normalization::GroupNorm>("ttnn::group_norm");
 } // namespace ttnn

@@ -47,6 +47,9 @@ struct CoreGrid {
     std::size_t y;
 
     CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
+    CoreCoord to_CoreCoord(){
+        return CoreCoord(int(x), int(y));
+    }
 };
 
 // This buffer class is compatible with multithreaded runtime (which lives in tt_eager)
