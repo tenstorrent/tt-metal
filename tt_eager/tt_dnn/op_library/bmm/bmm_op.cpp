@@ -1117,8 +1117,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
 		MatmulMultiCoreReuseMultiCast1DProgramConfig config{};
                 switch (parallelization_strategy){
                     case MatmulParallelizationStrategy::MULTI_CORE:
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE!");
                         return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE:
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE!");
                         return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED:
                         return matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1133,6 +1135,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
 			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED!");
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
@@ -1143,6 +1146,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED!");
 			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, false, false);
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
@@ -1154,13 +1158,16 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING!");
                         return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::SINGLE_CORE:
                     default:
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::SINGLE_CORE!");
                         return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                 }
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+                TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig!");
                 return bmm_multi_core_reuse_optimized(
                     input_tensor_a, input_tensor_b, output_tensor,
                     broadcast_batch,
