@@ -54,5 +54,4 @@ jobs:
         timeout-minutes: 15
         run: |
           export TT_METAL_HOME=$(pwd)
-          export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/tt-eager
           VENV_DIR=${{ github.workspace }}/python_env TT_ARCH=$ARCH_NAME tox -e post_commit_sd
