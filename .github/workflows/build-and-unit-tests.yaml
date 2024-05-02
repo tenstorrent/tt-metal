@@ -37,14 +37,14 @@ jobs:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}
-      - name: See what is downloaded
-        run: ls *
+      #- uses: actions/download-artifact@v4
+      #  with:
+      #    name: eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}
+      #- name: See what is downloaded
+      #  run: ls *
+      #- name: Extract files
+      #  run: unzip eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}
       - uses: ./.github/actions/install-tox-env
-      - name: Extract files
-        run: unzip eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}
         with:
           tox-env: post_commit_sd
           cache-dependency-path: |

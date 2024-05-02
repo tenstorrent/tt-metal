@@ -14,8 +14,6 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0
-
 
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
@@ -30,7 +28,9 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 
 def void_for_whb0(x):
-    return (not is_wormhole_b0()) and x or None
+    is_wormhole_b0 = os.environ["ARCH_NAME"] == "wormhole_b0"
+
+    return (not is_wormhole_b0) and x or None
 
 
 def filter_empty(fn):

@@ -14,11 +14,11 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   sd-unit-tests:
-    needs: eager-package-main
+    needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
   fd-unit-tests:
-    needs: eager-package-main
+    needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
   profiler-regression:
