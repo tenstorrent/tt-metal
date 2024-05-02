@@ -183,6 +183,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/repeat/repeat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
+	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_decode.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_concat_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
