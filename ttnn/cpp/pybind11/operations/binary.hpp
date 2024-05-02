@@ -20,7 +20,7 @@ namespace binary {
 namespace detail {
 
 template <typename binary_operation_t>
-void bind_registered_binary_operation(py::module& module, const binary_operation_t& operation, const char* doc) {
+void bind_binary(py::module& module, const binary_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -50,10 +50,11 @@ void bind_registered_binary_operation(py::module& module, const binary_operation
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt});
 }
+
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::add,
         R"doc(add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -80,7 +81,7 @@ void py_module(py::module& module) {
             >>> print(output)
             ttnn.Tensor([ 1, 3], dtype=bfloat16))doc");
 
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::add_,
         R"doc(add_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -107,7 +108,7 @@ Example::
     >>> output = ttnn.add_(tensor1, tensor2)
     >>> print(output)
     ttnn.Tensor([ 1, 3], dtype=bfloat16))doc");
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::subtract,
         R"doc(subtract(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -131,7 +132,7 @@ Example::
                 >>> output = ttnn.subtract(tensor1, tensor2)
                 >>> print(output)
                 ttnn.Tensor([ 1, 1], dtype=bfloat16))doc");
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::subtract_,
         R"doc(subtract_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -156,7 +157,7 @@ Example::
             >>> output = ttnn.subtract_(tensor1, tensor2)
             >>> print(output)
             ttnn.Tensor([ 1, 1], dtype=bfloat16))doc");
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::multiply,
         R"doc(multiply(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
@@ -180,7 +181,7 @@ Example::
                 >>> output = ttnn.multiply(tensor1, tensor2)
                 >>> print(output)
                 ttnn.Tensor([ 0, 2], dtype=bfloat16))doc");
-    detail::bind_registered_binary_operation(
+    detail::bind_binary(
         module,
         ttnn::multiply_,
         R"doc(multiply_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor

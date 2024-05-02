@@ -25,21 +25,22 @@ namespace operations {
 namespace core {
 
 struct ToLayout {
-    static inline const std::vector<TensorSchema> input_schemas{ttnn::TensorSchema{
-        1,
-        4,
-        {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::float32, ttnn::uint16, ttnn::uint32, ttnn::int32},
-        {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
-        true,
-        true,
-        false,
-        false}};
+    static inline const std::vector<TensorSchema> input_tensor_schemas() {
+        return {ttnn::TensorSchema{
+            1,
+            4,
+            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::float32, ttnn::uint16, ttnn::uint32, ttnn::int32},
+            {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
+            true,
+            true,
+            false,
+            false}};
+    }
 
-    static void validate_execute_arguments(
-        const ttnn::Tensor& tensor_arg,
-        const ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
+        return std::make_tuple(tensor_arg);
+    };
 
     static Tensor execute(
         const ttnn::Tensor& tensor_arg,

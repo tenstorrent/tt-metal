@@ -257,17 +257,6 @@ constexpr bool implements_validate_with_optional_input_tensors() {
         is_detected_v<has_validate_t, T, const Tensors&, const std::vector<std::optional<const Tensor>>&>;
 }
 
-template <typename T, typename = void>
-struct has_input_schemas_t : std::false_type {};
-
-template <typename T>
-struct has_input_schemas_t<T, decltype(std::declval<T>().input_schemas, void())> : std::true_type {};
-
-template <class T>
-constexpr bool has_input_schemas() {
-    return has_input_schemas_t<T>::value;
-}
-
 template <class T, class... Args>
 using has_validate_with_output_tensors_t =
     decltype(std::declval<T>().validate_with_output_tensors(std::declval<Args>()...));
