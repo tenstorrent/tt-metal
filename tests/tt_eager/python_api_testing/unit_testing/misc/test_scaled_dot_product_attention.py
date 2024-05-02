@@ -52,7 +52,6 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@skip_for_wormhole_b0("ND behavior, see issue#7994")
 @pytest.mark.parametrize(
     "dtype", [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16], ids=["bfp8", "bf16"]
 )
@@ -78,7 +77,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@skip_for_wormhole_b0("ND behavior, see issue#7994")
 @pytest.mark.parametrize(
     "dtype", [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16], ids=["bfp8", "bf16"]
 )
