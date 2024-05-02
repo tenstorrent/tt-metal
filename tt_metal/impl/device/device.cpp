@@ -391,6 +391,7 @@ void Device::compile_command_queue_programs() {
 
 
             std::map<string, string> prefetch_defines = {
+                {"DISPATCH_KERNEL", "1"},
                 {"MY_NOC_X", std::to_string(prefetch_physical_core.x)},
                 {"MY_NOC_Y", std::to_string(prefetch_physical_core.y)},
                 {"UPSTREAM_NOC_X", std::to_string(0)},
@@ -448,6 +449,7 @@ void Device::compile_command_queue_programs() {
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_location, 0, dispatch_core_type);
 
             std::map<string, string> dispatch_defines = {
+                {"DISPATCH_KERNEL", "1"},
                 {"MY_NOC_X", std::to_string(dispatch_physical_core.x)},
                 {"MY_NOC_Y", std::to_string(dispatch_physical_core.y)},
                 {"UPSTREAM_NOC_X", std::to_string(prefetch_physical_core.x)},
@@ -574,6 +576,7 @@ void Device::compile_command_queue_programs() {
         tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, dispatch_location, 0, dispatch_core_type);
 
         std::map<string, string> prefetch_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"MY_NOC_X", std::to_string(prefetch_physical_core.x)},
             {"MY_NOC_Y", std::to_string(prefetch_physical_core.y)},
             {"UPSTREAM_NOC_X", std::to_string(0)},
@@ -852,6 +855,7 @@ void Device::compile_command_queue_programs() {
         };
 
         std::map<string, string> dispatch_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"MY_NOC_X", std::to_string(dispatch_physical_core.x)},
             {"MY_NOC_Y", std::to_string(dispatch_physical_core.y)},
             {"UPSTREAM_NOC_X", std::to_string(demux_physical_core.x)},
@@ -1089,6 +1093,7 @@ void Device::compile_command_queue_programs() {
         TT_ASSERT(scratch_db_base + scratch_db_size <= l1_size);
 
         std::map<string, string> prefetch_d_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"MY_NOC_X", std::to_string(prefetch_d_physical_core.x)},
             {"MY_NOC_Y", std::to_string(prefetch_d_physical_core.y)},
             {"UPSTREAM_NOC_X", std::to_string(demux_d_physical_core.x)},
@@ -1151,6 +1156,7 @@ void Device::compile_command_queue_programs() {
 
 
         std::map<string, string> dispatch_d_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"MY_NOC_X", std::to_string(dispatch_physical_core.x)},
             {"MY_NOC_Y", std::to_string(dispatch_physical_core.y)},
             {"UPSTREAM_NOC_X", std::to_string(prefetch_d_physical_core.x)},
