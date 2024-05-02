@@ -102,7 +102,8 @@ struct Binary {
         operation::launch_op(
             [activations, memory_config, dtype](
                 const std::vector<Tensor> &input_tensors,
-                const std::vector<std::optional<const Tensor>> &optional_input_tensors) mutable -> std::vector<Tensor> {
+                const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
                                                              const auto &input_tensor_b_arg) {
                     // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b

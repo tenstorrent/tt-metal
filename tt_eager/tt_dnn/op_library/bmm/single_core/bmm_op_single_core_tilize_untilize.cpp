@@ -31,7 +31,7 @@ Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias,
         [out_dt, a_height_nblocks, a_width_nblocks, b_width_nblocks,
          a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
          out_subblock_height_ntiles, out_subblock_width_ntiles, tilize_in0, untilize_out, has_bias, compute_kernel_config]
-         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable {
+         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable {
             const auto& a = input_tensors.at(0);
             const auto& b = input_tensors.at(1);
             // bias not provided, give it a dummy device handle

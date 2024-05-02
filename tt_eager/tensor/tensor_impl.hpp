@@ -210,7 +210,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 //                                      Validators
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout);
-
+void validate_sharded_buffer_allocation(const Shape& shape, Layout layout, std::optional<ShardSpecBuffer> shard_params, const MemoryConfig& memory_config);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -220,6 +220,9 @@ void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, Dat
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
+
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const Shape& shape);
+
 DeviceBuffer allocate_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device* device,

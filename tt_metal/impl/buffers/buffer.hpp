@@ -165,7 +165,8 @@ class Buffer {
 
     Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout=TensorMemoryLayout::INTERLEAVED,
-        std::optional<ShardSpecBuffer> shard_parameter = std::nullopt);
+        std::optional<ShardSpecBuffer> shard_parameter = std::nullopt,
+        bool allocate = true);
 
     Buffer(const Buffer &other);
     Buffer& operator=(const Buffer &other);
@@ -178,6 +179,7 @@ class Buffer {
 
     uint32_t size() const { return static_cast<uint32_t>(size_); }
 
+    void set_size(uint64_t size) { size_ = size; }
     // Returns address of buffer in the first bank
     uint32_t address() const { return static_cast<uint32_t>(address_); }
 
@@ -235,9 +237,9 @@ class Buffer {
     }
 
    private:
-    void allocate();
+    virtual void allocate();
 
-    void deallocate();
+    virtual void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
 
     uint64_t translate_page_address(uint64_t offset, uint32_t bank_id) const;

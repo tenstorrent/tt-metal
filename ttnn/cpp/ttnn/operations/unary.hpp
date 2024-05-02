@@ -44,7 +44,8 @@ inline Tensor execute(
     operation::launch_op(
         [op_chain, memory_config](
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             bool fp32_dest_acc_en =
                 input_tensor.get_dtype() == DataType::UINT32 or

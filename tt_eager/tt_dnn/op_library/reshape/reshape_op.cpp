@@ -344,7 +344,7 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [N, C, H, W, output_mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [N, C, H, W, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, input_tensors);
         }, {input_tensor_a}, output_tensors);
     return output_tensors.at(0);

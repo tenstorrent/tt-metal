@@ -594,7 +594,7 @@ tt::stl::reflection::Attributes Pad::attributes() const {
 Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             if (input_tensor.get_legacy_shape() == output_tensor_shape) {
                 return {AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config)};

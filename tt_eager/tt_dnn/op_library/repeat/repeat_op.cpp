@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks Repeat::create_program(
 Tensor repeat(const Tensor &input_tensor, const Shape &shape, const MemoryConfig &output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [shape, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> std::vector<Tensor> {
+        [shape, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             uint32_t input_rank = input_tensor.get_legacy_shape().rank();
             TT_FATAL(shape.rank() == input_rank, "Number of repeat dims must be equal to number of tensor dims");

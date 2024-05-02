@@ -2108,7 +2108,6 @@ void EnqueueRecordEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
-
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT,

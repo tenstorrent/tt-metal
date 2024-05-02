@@ -21,6 +21,7 @@ jobs:
         test-group: [
           {name: ttnn group 1, cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -v --splits 2 --group 1},
           {name: ttnn group 2, cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -v --splits 2 --group 2},
+          # {name: ttnn cpp tests, cmd: ./build/test/ttnn/unit_tests},
 
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
