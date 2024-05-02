@@ -105,7 +105,6 @@ split_doc_string = r"""
 split_query_key_value_and_split_heads = ttnn.register_operation(
     name="ttnn.transformer.split_query_key_value_and_split_heads",
     golden_function=_golden_function,
-    is_cpp_function=True,
     doc=split_doc_string,
 )(ttnn._ttnn.operations.transformer.split_query_key_value_and_split_heads)
 
@@ -209,7 +208,6 @@ Args:
 attention_softmax_ = ttnn.register_operation(
     name="ttnn.transformer.attention_softmax_",
     golden_function=_golden_function,
-    is_cpp_function=True,
     doc=doc,
 )(ttnn._ttnn.operations.transformer.attention_softmax_)
 
@@ -237,7 +235,7 @@ Args:
 """
 
 concatenate_heads = ttnn.register_operation(
-    name="ttnn.transformer.concatenate_heads", golden_function=_golden_function, is_cpp_function=True, doc=doc
+    name="ttnn.transformer.concatenate_heads", golden_function=_golden_function, doc=doc
 )(ttnn._ttnn.operations.transformer.concatenate_heads)
 
 
