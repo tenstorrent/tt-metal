@@ -42,6 +42,8 @@ jobs:
           name: eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}
       - name: Extract files
         run: unzip eager-dist-ubuntu-20.04-${{ matrix.runner-info.arch }}.zip
+      - name: See what is downloaded
+        run: ls *
       - uses: ./.github/actions/install-tox-env
         with:
           tox-env: post_commit_sd
