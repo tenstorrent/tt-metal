@@ -127,6 +127,8 @@ void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector
 
 void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
 
+    program = tt_metal::CreateProgram();
+
     std::map<string, string> pad_defines = {
         {"KERNEL_BYTES", std::to_string(kernel_size_g)}
     };
