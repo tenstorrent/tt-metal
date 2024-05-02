@@ -1152,6 +1152,121 @@ def test_unet_conv_wh(
     )
 
 
+#########
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        # unet convs with batch size 2
+        # unique convs in unet (complete list)
+        (2, 16, 3, 528, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 16, 16, 528, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 16, 16, 264, 80, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 16, 132, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 32, 132, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 32, 66, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 64, 32, 33, 10, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 64, 64, 33, 10, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 96, 66, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 32, 66, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 64, 132, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 32, 32, 132, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        (
+            2,
+            16,
+            48,
+            264,
+            80,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            True,
+            None,
+            False,
+        ),  # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
+        (2, 16, 16, 264, 80, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 16, 32, 528, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 16, 16, 528, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 1, 16, 528, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+    ),
+)
+
+
+# FAILED tests/ttnn/unit_tests/operations/test_conv2d.py::test_unet_conv_wh_528_160[output_layout=Layout.TILE-math_fidelity=MathFidelity.LoFi-activations_dtype=DataType.BFLOAT8_B-weights_dtype=DataType.BFLOAT8_B-batch_size=2-output_channels=32-input_channels=96-input_height=66-input_width=20-filter_height=3-filter_width=3-stride_h=1-stride_w=1-pad_h=1-pad_w=1-use_1d_systolic_array=True-config_override=None-use_shallow_conv_variant=False-device_l1_small_size=16384]
+
+
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],  # ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],  # ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_unet_conv_wh_528_160(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
+        pytest.skip("OOM")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
+        padded_input_channels=None,
+        output_layout=output_layout,
+    )
+
+
+########
+
+
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
