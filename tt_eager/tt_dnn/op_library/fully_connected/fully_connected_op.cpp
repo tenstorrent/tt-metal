@@ -13,7 +13,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor fully_connected_(const Tensor& act, const Tensor& weights, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& output_mem_config) {
-    Tensor mm_output = matmul(act, weights, output_mem_config);
+    Tensor mm_output = tt::operations::primary::matmul(act, weights, std::nullopt, tt::operations::primary::MatmulDefaultProgramConfig{}, output_mem_config);
     if (bias) {
         return bcast(mm_output, bias.value(), BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
     }

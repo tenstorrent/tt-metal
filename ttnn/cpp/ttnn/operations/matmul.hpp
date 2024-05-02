@@ -7,6 +7,7 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace ttnn {
@@ -47,10 +48,11 @@ static inline const std::array<ttnn::TensorSchema, 3> input_schemas{
 inline ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
-    const MatmulProgramConfig& program_config,
+    const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
     const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
 
@@ -69,48 +71,12 @@ inline ttnn::Tensor matmul(
     const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
+    std::optional<CoreCoord> core_coord;
+    if (core_grid) {
+	core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, program_config, memory_config, dtype, compute_kernel_config);
-
-    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }
-    return output_tensor;
-}
-
-inline ttnn::Tensor matmul(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
-
-    const auto input_tensor_a_shape = input_tensor_a.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b.get_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
-    }
-
-    auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
-
-    const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
-    auto compute_interlevead = [&]() {
-        if (input_b_is_batched) {
-            return tt::tt_metal::bmm(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
-        } else {
-            return tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
-        }
-    };
-
-    auto output_tensor = compute_interlevead();
+        input_tensor_a_4d, input_tensor_b_4d, std::nullopt /*bias*/, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/,  core_coord, input_b_is_batched);
     while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
@@ -121,52 +87,12 @@ inline ttnn::Tensor linear(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const MatmulProgramConfig& program_config,
-    const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
-    ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_schemas[0]);
-    ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
-    ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
-
-    const auto input_tensor_a_shape = input_tensor_a.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b.get_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
-    }
-
-    auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
-    TT_ASSERT(input_b_is_batched == false, "Batched input not supported");
-
-    const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
-    std::optional<Tensor> bias_4d = std::nullopt;
-    if (bias.has_value()) {
-        bias_4d = ttnn::unsqueeze_to_4D(bias.value());
-    }
-
-    auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, bias_4d, program_config, memory_config, dtype, compute_kernel_config);
-
-    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }
-    return output_tensor;
-}
-
-inline ttnn::Tensor linear(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<const ttnn::Tensor>& bias,
+    const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
@@ -191,9 +117,15 @@ inline ttnn::Tensor linear(
     if (width_a != height_b) {
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
+    std::optional<CoreCoord> core_coord;
+    if (core_grid) {
+	core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
 
-    auto output_tensor = tt::tt_metal::matmul(input_tensor_a_4d, input_tensor_b_4d, memory_config, compute_kernel_config);
-    if (bias_4d.has_value()) {
+    auto output_tensor = tt::operations::primary::matmul(
+        input_tensor_a_4d, input_tensor_b_4d, bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, core_coord);
+
+    if (bias_4d.has_value() && tt::operations::primary::is_program_config_default(program_config)) {
         output_tensor = tt::tt_metal::bcast(
             output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }

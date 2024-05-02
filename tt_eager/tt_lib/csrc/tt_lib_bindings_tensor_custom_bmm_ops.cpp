@@ -47,8 +47,8 @@ namespace tt::tt_metal::detail
             +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
         )doc");
         // *** matrix multiplication ***
-        m_tensor.def("matmul", &matmul,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false, R"doc(
+        m_tensor.def("matmul", &tt::operations::primary::matmul,
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("program_config"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false, py::arg("core_coord").noconvert() = std::nullopt, py::arg("input_b_is_batched").noconvert() = false, R"doc(
             Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.
 
             Both input tensors must have BFLOAT16 data type.
@@ -63,8 +63,8 @@ namespace tt::tt_metal::detail
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("bmm", &bmm,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false,  R"doc(
+        m_tensor.def("bmm", &tt::operations::primary::matmul,
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("program_config"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false, py::arg("core_coord").noconvert() = std::nullopt, py::arg("input_b_is_batched").noconvert() = true, R"doc(
             Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 
             Both input tensors must have BFLOAT16 data type.
