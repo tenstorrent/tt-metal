@@ -304,7 +304,7 @@ class cross_attention:
                     per_core_M=tiles_per_shard,
                     per_core_N=seq_len // 32,
                     out_subblock_h=1,
-                    out_subblock_w=8,
+                    out_subblock_w=4,
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=False,
