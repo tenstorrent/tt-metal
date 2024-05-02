@@ -41,7 +41,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_ASSERT(storage.buffer->device() != nullptr);
                 workers = {storage.buffer->device()};
-                tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(), dtype, layout);
+                tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(), shape.value(), dtype, layout);
                 // Increment main thread ref count for all tensors on device
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 this->tensor_attributes->tensor_populated = {true};
@@ -54,7 +54,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                     auto [device_id, buffer] = device_buf_pair;
                     TT_ASSERT(buffer->device() != nullptr);
                     TT_ASSERT(buffer->device()->id() == device_id);
-                    tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), dtype, layout);
+                    tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value(), dtype, layout);
                     workers.push_back(buffer->device());
                 }
                 // Increment main thread ref count for all tensors on cluster
@@ -354,7 +354,7 @@ Tensor Tensor::to(CommandQueue & queue, const MemoryConfig & mem_config) const {
             device_tensor.populate_buffers_and_metadata(async_safe_tensor);
         }
         else {
-            tensor_impl::validate_on_device_dtype_and_layout(target_device, async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
+            tensor_impl::validate_on_device_dtype_and_layout(target_device, async_safe_tensor.get_legacy_shape(), async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
             auto local_tensor = tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config);
             // Populate device tensor
             device_tensor.populate_buffers_and_metadata(local_tensor);
@@ -383,7 +383,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
             device_tensor.populate_buffers_and_metadata(async_safe_tensor);
         }
         else {
-            tensor_impl::validate_on_device_dtype_and_layout(target_device, async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
+            tensor_impl::validate_on_device_dtype_and_layout(target_device, async_safe_tensor.get_legacy_shape(), async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
             auto local_tensor = tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config);
             // Populate device tensor
             device_tensor.populate_buffers_and_metadata(local_tensor);

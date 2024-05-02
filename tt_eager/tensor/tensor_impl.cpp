@@ -191,28 +191,40 @@ DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, Device *devic
     }
 }
 
-void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(Device *device, const Shape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
-            (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::UINT16) &&
-            "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32 or UINT16 is supported on device!"
+            (
+                dtype == DataType::UINT32 ||
+                dtype == DataType::INT32 ||
+                dtype == DataType::FLOAT32 ||
+                dtype == DataType::UINT16 ||
+                dtype == DataType::BFLOAT16 ||
+                dtype == DataType::BFLOAT8_B ||
+                dtype == DataType::BFLOAT4_B
+            ),
+            "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!"
         );
     };
-    auto supported_layout = [&dtype, &layout]() {
+    auto supported_layout = [&shape, &dtype, &layout]() {
         switch (dtype) {
-            case DataType::INT32:
             case DataType::UINT32:
-            case DataType::UINT16:
-            case DataType::BFLOAT16:
+            case DataType::INT32:
             case DataType::FLOAT32:
                 break;
-            case DataType::BFLOAT4_B:
+            case DataType::UINT16:
+            case DataType::BFLOAT16:
+                if (layout == Layout::ROW_MAJOR) {
+                    TT_ASSERT(shape[-1] % 2 == 0, "For ROW_MAJOR layout tensors with dtype BFLOAT16 or UINT16, tensor width must be divisible by 2 since data is packed as uint32_t when creating buffers on device!");
+                }
+                break;
             case DataType::BFLOAT8_B:
-                TT_ASSERT(layout == Layout::TILE && "Only TILE layout is supported for BFLOAT8_B dtype!");
+            case DataType::BFLOAT4_B:
+                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             default:
-                TT_ASSERT(false && "Only BFLOAT16, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, or UINT16 is supported on device!");
+                TT_ASSERT(false, "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!");
                 break;
             }
     };
