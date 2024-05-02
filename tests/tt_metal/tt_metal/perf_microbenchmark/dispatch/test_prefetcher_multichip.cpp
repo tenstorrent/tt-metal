@@ -816,7 +816,7 @@ void gen_rnd_inline_cmd(Device *device,
             if (debug_g) {
                 cmd_size_bytes += sizeof(CQDispatchCmd);
             }
-            uint32_t max_size = big_g ? DEFAULT_MAX_PREFETCH_COMMAND_SIZE : DEFAULT_MAX_PREFETCH_COMMAND_SIZE / 16;
+            uint32_t max_size = big_g ? max_prefetch_command_size_g : max_prefetch_command_size_g / 16;
             uint32_t max_xfer_size_16b = (max_size - cmd_size_bytes) >> 4;
             uint32_t xfer_size_16B = (std::rand() & (max_xfer_size_16b - 1));
             // Note: this may overflow the WORKER_DATA_SIZE, but by little enough that it won't overflow L1
