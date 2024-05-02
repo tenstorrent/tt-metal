@@ -841,7 +841,7 @@ bool process_cmd(uint32_t& cmd_ptr,
         break;
 
     case CQ_PREFETCH_CMD_TERMINATE:
-        DPRINT << "terminating\n";
+        DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
         ASSERT(!exec_buf);
         done = true;
         break;
@@ -976,15 +976,15 @@ void kernel_main_h() {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+        uint32_t cmd_id = cmd->base.cmd_id;
         cmd_ptr = process_relay_inline_all(cmd_ptr, fence);
-
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
-        if (cmd->base.cmd_id == CQ_PREFETCH_CMD_EXEC_BUF) {
+        if (cmd_id == CQ_PREFETCH_CMD_EXEC_BUF) {
             DPRINT << "exec buf\n";
             process_exec_buf_cmd_h();
-        } else if (cmd->base.cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
-            DPRINT << "terminating\n";
+        } else if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
+            DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
             done = true;
         }
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -1025,6 +1025,11 @@ void kernel_main_d() {
             if (cmd_ptr + stride >= cmddat_q_end) {
                 stride -= cmddat_q_end - cmd_ptr;
                 cmd_ptr = cmddat_q_base;
+                if (fence == cmddat_q_end) {
+                    // We hit the nail on the head, wrap the fence
+                    ASSERT(stride == 0);
+                    fence = cmddat_q_base;
+                }
             }
             cmd_ptr += stride;
         }
