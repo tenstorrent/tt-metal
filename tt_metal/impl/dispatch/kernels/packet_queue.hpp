@@ -67,7 +67,7 @@ class packet_queue_state_t {
 protected:
 
     bool cb_mode;
-    uint16_t cb_mode_page_size_words;
+    uint32_t cb_mode_page_size_words;
     uint8_t cb_mode_local_sem_id;
     uint8_t cb_mode_remote_sem_id;
 
@@ -75,7 +75,7 @@ public:
 
     uint8_t queue_id;
     uint32_t queue_start_addr_words;
-    uint16_t queue_size_words;
+    uint32_t queue_size_words;
     uint32_t ptr_offset_mask;
     uint32_t queue_size_mask;
 
@@ -87,7 +87,7 @@ public:
 
     void init(uint8_t queue_id,
               uint32_t queue_start_addr_words,
-              uint16_t queue_size_words,
+              uint32_t queue_size_words,
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
@@ -409,8 +409,8 @@ protected:
     tt_l1_ptr dispatch_packet_header_t* curr_packet_header_ptr;
     uint16_t curr_packet_src;
     uint16_t curr_packet_dest;
-    uint16_t curr_packet_size_words;
-    uint16_t curr_packet_words_sent;
+    uint32_t curr_packet_size_words;
+    uint32_t curr_packet_words_sent;
     uint32_t curr_packet_tag;
     uint16_t curr_packet_flags;
 
@@ -449,7 +449,7 @@ public:
 
     void init(uint8_t queue_id,
               uint32_t queue_start_addr_words,
-              uint16_t queue_size_words,
+              uint32_t queue_size_words,
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
@@ -728,7 +728,7 @@ public:
 
     void init(uint8_t queue_id,
               uint32_t queue_start_addr_words,
-              uint16_t queue_size_words,
+              uint32_t queue_size_words,
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
