@@ -197,7 +197,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
