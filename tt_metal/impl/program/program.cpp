@@ -839,6 +839,11 @@ void Program::compile( Device * device )
     compile_needed_[device->id()] = false;
 }
 
+void Program::add_config_tensor(const Tensor& config_tensor) {
+    config_tensors_.emplace_back(config_tensor);
+    // TODO: what else is needed here? ...
+}
+
 Program::~Program() {
 }
 }  // namespace tt::tt_metal
