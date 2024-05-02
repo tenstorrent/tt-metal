@@ -15,14 +15,6 @@ namespace operations {
 
 namespace core {
 
-/* static*/ void ToLayout::validate_execute_arguments(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
-    ttnn::validate_input_tensor("ttnn::to_layout", tensor_arg, input_schemas[0]);
-}
-
 /* static */ Tensor ToLayout::execute(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,

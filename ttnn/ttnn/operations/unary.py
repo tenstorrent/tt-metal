@@ -19,7 +19,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
         import torch
 
         name_to_golden_function_function = {
-            "exp": torch.exp,
             "tanh": torch.tanh,
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
@@ -98,7 +97,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
 
 TTL_UNARY_FUNCTIONS = [
-    ("exp", ttl.tensor.exp),
     ("tanh", ttl.tensor.tanh),
     ("gelu", ttl.tensor.gelu),
     ("relu", ttl.tensor.relu),
@@ -203,43 +201,27 @@ for unary_function_name, ttl_unary_function, name, param in TTL_UNARY_FUNCTIONS_
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, name, param)
 
 
-def register_eltwise_unary_cpp_function(name, unary_function):
+def register_eltwise_unary_cpp_function(unary_function):
     def _golden_function(input_tensor: ttnn.Tensor, **_):
         import torch
 
-        name_to_golden_function_function = {
-            "silu": torch.nn.functional.silu,
+        ttnn_function_to_golden_function = {
+            ttnn._ttnn.operations.unary.exp: torch.exp,
+            ttnn._ttnn.operations.unary.silu: torch.nn.functional.silu,
         }
-        torch_function = name_to_golden_function_function[name]
+        torch_function = ttnn_function_to_golden_function[unary_function]
         return torch_function(input_tensor)
 
-    doc = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-        Applies {name} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
-
-        Args:
-            * :attr:`input_tensor`
-
-        Example::
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{name}(tensor)
-    """
-
-    eltwise_unary_op = ttnn.register_operation(name=f"ttnn.{name}", golden_function=_golden_function, doc=doc)(
-        unary_function
-    )
-    setattr(THIS_MODULE, name, eltwise_unary_op)
+    operation = ttnn.register_operation(golden_function=_golden_function)(unary_function)
+    setattr(THIS_MODULE, unary_function.name, operation)
 
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
-    ("silu", ttnn._ttnn.operations.unary.silu),
+    ttnn._ttnn.operations.unary.exp,
+    ttnn._ttnn.operations.unary.silu,
 ]
-for unary_function_name, unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
-    register_eltwise_unary_cpp_function(unary_function_name, unary_function)
+for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
+    register_eltwise_unary_cpp_function(unary_function)
 
 
 __all__ = []
