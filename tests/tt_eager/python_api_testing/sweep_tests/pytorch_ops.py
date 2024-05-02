@@ -10,7 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
 
-from ttnn.tracer import trace, visualize
 import random
 import transformers
 
