@@ -105,7 +105,7 @@ std::vector<Tensor> all_gather_impl(const std::vector<Tensor>& input_tensors, co
         // Package output in vector, to populate it with launch_op
         std::vector<Tensor> output_for_curr_device = {output_tensors[i]};
         operation::launch_op(
-            [is_ring, dim, num_links, i, num_inputs, output_mem_config, topology] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [is_ring, dim, num_links, i, num_inputs, output_mem_config, topology] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (num_inputs - 1);
                 bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
 
@@ -144,7 +144,8 @@ Tensor all_gather(
     operation::launch_op(
         [dim, num_links, memory_config, devices](
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
             const auto& input_tensor = input_tensors.at(0);
             uint32_t num_devices = devices.size();

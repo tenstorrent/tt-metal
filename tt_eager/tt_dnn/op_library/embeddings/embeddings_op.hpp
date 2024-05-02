@@ -43,7 +43,7 @@ inline Tensor embeddings(
     std::optional<const DataType> output_dtype = std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, weights}))};
     operation::launch_op(
-        [tilized, embeddings_type, pad_token, mem_config, output_dtype] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [tilized, embeddings_type, pad_token, mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& weights = input_tensors.at(1);
             return operation::run_without_autoformat(

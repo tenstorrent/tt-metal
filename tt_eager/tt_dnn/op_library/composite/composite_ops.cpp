@@ -239,7 +239,7 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
 Tensor _mish(const Tensor& x, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({x}))};
     operation::launch_op(
-        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& x = input_tensors.at(0);
             Tensor sp_x = softplus(x, 1.0f, 20.0f, output_mem_config);
             Tensor tanh_x = tanh(sp_x, output_mem_config);
@@ -1569,7 +1569,7 @@ Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_c
 Tensor _argmax(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_a}))};
     operation::launch_with_autoformat(
-        [_dim, all, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [_dim, all, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_a = input_tensors.at(0);
             auto& input_shape = input_a.get_legacy_shape();
             TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");

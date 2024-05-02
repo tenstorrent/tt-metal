@@ -134,7 +134,8 @@ inline std::vector<Tensor> nlp_create_qkv_heads_falcon7b(const Tensor& input_ten
     operation::launch_op(
         [mem_config](
             std::vector<Tensor> input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(NlpCreateHeadsFalcon7B{mem_config}, input_tensors);
         },
         {input_tensor_a},
@@ -165,7 +166,7 @@ inline std::vector<Tensor> nlp_create_qkv_heads(
                                           Tensor(operation::get_workers_for_op_output({input_tensor}, {input_tensor_kv})),
                                           Tensor(operation::get_workers_for_op_output({input_tensor}, {input_tensor_kv}))};
     operation::launch_op(
-        [num_heads, num_kv_heads, transpose_k_heads, mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [num_heads, num_kv_heads, transpose_k_heads, mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& input_tensor_kv = optional_input_tensors.at(0);
             const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
@@ -187,7 +188,7 @@ inline std::vector<Tensor> nlp_create_qkv_heads(
 inline Tensor nlp_concat_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [mem_config] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(NlpConcatHeads{mem_config}, input_tensors);
         }, {input_tensor_a}, output_tensors);
     return output_tensors.at(0);
@@ -195,7 +196,7 @@ inline Tensor nlp_concat_heads(const Tensor &input_tensor_a, const MemoryConfig&
 inline Tensor nlp_concat_heads_decode(const Tensor &input_tensor_a, const uint32_t num_heads) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [num_heads] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [num_heads] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(NlpConcatHeadsDecode{num_heads}, input_tensors);
         }, {input_tensor_a}, output_tensors);
     return output_tensors.at(0);

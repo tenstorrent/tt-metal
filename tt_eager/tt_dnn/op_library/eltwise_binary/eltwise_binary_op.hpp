@@ -114,7 +114,7 @@ struct make_eltwise_binary {
         std::optional<const DataType> output_dtype = std::nullopt) const {
         std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
         operation::launch_with_autoformat(
-            [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [fused_activations, output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 Tensor in_a = input_tensors.at(0);
                 Tensor in_b = input_tensors.at(1);
                 Shape shape_a = in_a.get_legacy_shape();
@@ -188,7 +188,7 @@ inline Tensor add(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
 
     operation::launch_op(
-        [fused_activations, output_mem_config, output_dtype, in_place] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [fused_activations, output_mem_config, output_dtype, in_place] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor_a = input_tensors.at(0);
             auto& input_tensor_b = input_tensors.at(1);
 

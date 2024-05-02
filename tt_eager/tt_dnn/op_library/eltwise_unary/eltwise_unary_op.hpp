@@ -197,14 +197,14 @@ inline Tensor run_eltwise_unary(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if(output_mem_config.is_sharded()){
         operation::launch_op(
-            [ops_chain, output_mem_config, fp32_dest_acc_en] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [ops_chain, output_mem_config, fp32_dest_acc_en] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 return operation::run_without_autoformat(
                     EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}, input_tensors);
             }, {input_tensor}, output_tensors);
     }
     else {
         operation::launch_with_autoformat(
-            [ops_chain, output_mem_config,fp32_dest_acc_en] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            [ops_chain, output_mem_config,fp32_dest_acc_en] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 Tensor input_tensor = input_tensors.at(0);
                 Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                 FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
@@ -519,7 +519,7 @@ inline Tensor relu(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;       // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
             return operation::run(

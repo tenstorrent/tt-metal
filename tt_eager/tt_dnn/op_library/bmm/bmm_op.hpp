@@ -283,9 +283,9 @@ inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &inpu
         [](const auto& program_config) -> bool {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-		return true;
+		        return true;
             }
-	    return false;
+	        return false;
         },
         matmul_program_config
     );
@@ -392,7 +392,7 @@ inline Tensor matmul(
 
     if (!needs_autoformat) {
 	operation::launch_op(
-		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.device()->arch();
@@ -410,7 +410,7 @@ inline Tensor matmul(
 	{input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
     } else {
 	operation::launch_with_autoformat(
-		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
 	          auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
