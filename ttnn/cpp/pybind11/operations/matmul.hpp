@@ -25,7 +25,7 @@ void py_module(py::module& module) {
            const std::optional<const DataType> dtype = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::matmul(
-                input_tensor_a, input_tensor_b, memory_config, dtype, compute_kernel_config);
+                input_tensor_a, input_tensor_b, MatmulDefaultProgramConfig{}, memory_config, dtype, compute_kernel_config);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -71,6 +71,7 @@ void py_module(py::module& module) {
                 input_tensor_a,
                 input_tensor_b,
                 bias,
+                ttnn::MatmulDefaultProgramConfig{},
                 memory_config,
                 dtype,
                 activation,
@@ -101,7 +102,9 @@ void py_module(py::module& module) {
                 program_config,
                 memory_config,
                 dtype,
-                compute_kernel_config);
+		std::nullopt /*activation*/,
+                compute_kernel_config,
+		std::nullopt);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),

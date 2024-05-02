@@ -132,7 +132,8 @@ void py_module(py::module& m_primary) {
         py::arg("fused_activation") = std::nullopt,
         py::arg("mcast_in0").noconvert() = true,
         py::arg("out_sharded").noconvert() = false,
-        py::arg("compute_with_storage_grid_size") = std::nullopt);
+        py::arg("compute_with_storage_grid_size") = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt);
 
     // TODO(arakhmati):
     // delete
@@ -161,7 +162,7 @@ void py_module(py::module& m_primary) {
            std::optional<DeviceComputeKernelConfig> compute_kernel_config,
            const bool untilize_out
            ) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
+            return matmul(input_tensor_a, input_tensor_b, std::nullopt /*bias*/, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -194,7 +195,7 @@ void py_module(py::module& m_primary) {
            std::optional<DeviceComputeKernelConfig> compute_kernel_config,
            const bool untilize_out
            ) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
+            return matmul(input_tensor_a, input_tensor_b, std::nullopt /*bias*/, program_config, out_mem_config, output_dtype, compute_kernel_config, untilize_out);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
