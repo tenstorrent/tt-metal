@@ -26,4 +26,4 @@ def test_deallocate(device, h, w):
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
-    assert "MemoryConfig can only be obtained if the buffer is not null" in str(exception.value)
+    assert "Tensor must be allocated!" in str(exception.value)

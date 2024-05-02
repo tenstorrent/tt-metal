@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "../decorators.hpp"
 #include "ttnn/operations/binary.hpp"
 #include "ttnn/types.hpp"
 
@@ -16,174 +17,194 @@ namespace ttnn {
 namespace operations {
 namespace binary {
 
+namespace detail {
+
+template <typename binary_operation_t>
+void bind_registered_binary_operation(py::module& module, const binary_operation_t& operation, const char* doc) {
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const ttnn::Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType>& dtype) -> ttnn::Tensor {
+                return self(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt},
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType>& dtype) -> ttnn::Tensor {
+                return self(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt});
+}
+}  // namespace detail
+
 void py_module(py::module& module) {
-    module.def(
-        "add",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::add(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::add,
+        R"doc(add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
 
-    module.def(
-        "add",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::add(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+        Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
-    module.def(
-        "add_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::add_(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+        .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i
 
-    module.def(
-        "add_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::add_(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+        Supports broadcasting.
 
-    module.def(
-        "subtract",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::subtract(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
-    module.def(
-        "subtract",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::subtract(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+        Keyword args:
+            * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+            * :attr:`dtype` (ttnn.DataType): data type for the output tensor
 
-    module.def(
-        "subtract_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::subtract_(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+        Example::
 
-    module.def(
-        "subtract_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::subtract_(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.add(tensor1, tensor2)
+            >>> print(output)
+            ttnn.Tensor([ 1, 3], dtype=bfloat16))doc");
 
-    module.def(
-        "multiply",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::multiply(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::add_,
+        R"doc(add_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
 
-    module.def(
-        "multiply",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::multiply(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
 
-    module.def(
-        "multiply_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const float scalar,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::multiply_(input_tensor_a, scalar, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,  // TODO(arakhmati): set to std::nullopt
-        py::arg("dtype") = std::nullopt);
+.. math::
+    \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
 
-    module.def(
-        "multiply_",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<ttnn::MemoryConfig>& memory_config,
-           const std::optional<const DataType> dtype) -> ttnn::Tensor {
-            return ttnn::multiply_(input_tensor_a, input_tensor_b, memory_config, dtype, std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        py::arg("dtype") = std::nullopt);
+Supports broadcasting.
+
+Args:
+    * :attr:`input_tensor_a`
+    * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+
+Keyword args:
+    * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+    * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+
+Example::
+
+    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+    >>> output = ttnn.add_(tensor1, tensor2)
+    >>> print(output)
+    ttnn.Tensor([ 1, 3], dtype=bfloat16))doc");
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::subtract,
+        R"doc(subtract(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+        Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
+
+        .. math:: \mathrm{{ input\_tensor\_a }}_i - \mathrm{{ input\_tensor\_b }}_i
+
+        Supports broadcasting.
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
+            * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+            * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+
+        Example::
+
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+                >>> output = ttnn.subtract(tensor1, tensor2)
+                >>> print(output)
+                ttnn.Tensor([ 1, 1], dtype=bfloat16))doc");
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::subtract_,
+        R"doc(subtract_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i
+
+    Supports broadcasting.
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
+        * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+        * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+
+    Example::
+
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.subtract_(tensor1, tensor2)
+            >>> print(output)
+            ttnn.Tensor([ 1, 1], dtype=bfloat16))doc");
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::multiply,
+        R"doc(multiply(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+        Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+
+        .. math:: \mathrm{{ input\_tensor\_a }}_i \times \mathrm{{ input\_tensor\_b }}_i
+
+        Supports broadcasting.
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply by :attr:`input_tensor_a`.
+            * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+            * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+
+        Example::
+
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+                >>> output = ttnn.multiply(tensor1, tensor2)
+                >>> print(output)
+                ttnn.Tensor([ 0, 2], dtype=bfloat16))doc");
+    detail::bind_registered_binary_operation(
+        module,
+        ttnn::multiply_,
+        R"doc(multiply_(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i
+
+    Supports broadcasting.
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply by :attr:`input_tensor_a`.
+        * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+        * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+
+    Example::
+
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.multiply_(tensor1, tensor2)
+            >>> print(output)
+            ttnn.Tensor([ 0, 2], dtype=bfloat16))doc");
 }
 
 }  // namespace binary

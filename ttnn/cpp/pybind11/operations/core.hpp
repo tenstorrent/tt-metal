@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "../decorators.hpp"
 #include "ttnn/operations/core.hpp"
 
 namespace py = pybind11;
@@ -106,22 +107,34 @@ Args:
     * :attr:`input_tensor`: Input Tensor
     )doc");
 
-    module.def(
-        "to_layout",
-        &to_layout,
-        py::arg("tensor"),
-        py::arg("layout") = std::nullopt,
-        py::arg("dtype") = std::nullopt,
-        py::arg("memory_config") = std::nullopt,
-        R"doc(
-Changes the layout of the tensor. Optionally, changes dtype and memory config.
+    bind_registered_operation(
+        module,
+        ttnn::to_layout,
+        R"doc(to_layout(tensor: ttnn.Tensor, layout: Layout, dtype: Optional[DataType] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
 
-Args:
-    * :attr:`tensor`: Input Tensor
-    * :attr:`layout`: Layout to change to
-    * :attr:`dtype`: Data type to change to
-    * :attr:`memory_config`: Memory config to change to
-    )doc");
+    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
+    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
+    padded where the width and height become multiples of 32.
+    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
+
+    Args:
+        * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
+        * :attr:`dtype`: the optional output data type.
+        * :attr:`memory_config`: the optional output memory configuration.
+
+    Example::
+        >>> device_id = 0
+        >>> device = ttnn.open_device(device_id=device_id)
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+        >>> print(tensor[0,0,:3])
+        Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 ))doc",
+        ttnn::pybind_arguments_t{
+            py::arg("tensor"),
+            py::arg("layout"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace core

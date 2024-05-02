@@ -12,6 +12,12 @@ from typing import Optional
 
 from loguru import logger
 
+import tt_lib as _tt_lib
+import ttnn._ttnn
+
+
+CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
+
 
 @dataclasses.dataclass
 class Config:
@@ -41,6 +47,9 @@ class Config:
 
     def __setattr__(self, name: str, value) -> None:
         object.__setattr__(self, name, value)
+        if isinstance(value, pathlib.Path):
+            value = str(value)
+        setattr(CPP_CONFIG, name, value)
         self.validate(name)
 
     def validate(self, name):
@@ -136,9 +145,6 @@ def manage_config(name, value):
     setattr(CONFIG, name, original_value)
     logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
-
-import tt_lib as _tt_lib
-import ttnn._ttnn
 
 from ttnn._ttnn.multi_device import get_device_tensors, aggregate_as_tensor
 

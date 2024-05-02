@@ -24,17 +24,6 @@ namespace operations {
 
 namespace core {
 
-struct ToLayoutProgramConfig {
-    const Layout layout;
-    const MemoryConfig memory_config;
-    const DataType dtype;
-
-    static constexpr auto attribute_names = std::make_tuple("layout", "memory_config", "dtype");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->layout), std::cref(this->memory_config), std::cref(this->dtype));
-    }
-};
-
 struct ToLayout {
     static inline const std::vector<TensorSchema> input_schemas{ttnn::TensorSchema{
         1,
@@ -42,31 +31,23 @@ struct ToLayout {
         {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::float32, ttnn::uint16, ttnn::uint32, ttnn::int32},
         {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
         true,
+        true,
         false,
         false}};
 
-    const ToLayoutProgramConfig program_config;
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+    static void validate_execute_arguments(
+        const ttnn::Tensor& tensor_arg,
+        const ttnn::Layout layout,
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::make_tuple("program_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->program_config), std::cref(this->compute_kernel_config));
-    }
+    static Tensor execute(
+        const ttnn::Tensor& tensor_arg,
+        const ttnn::Layout layout,
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
-Tensor to_layout(
-    const Tensor &input_tensor,
-    const Layout layout,
-    const std::optional<const DataType> &dtype = std::nullopt,
-    const std::optional<MemoryConfig> &memory_config = std::nullopt);
-
 }  // namespace core
-
 }  // namespace operations
 }  // namespace ttnn

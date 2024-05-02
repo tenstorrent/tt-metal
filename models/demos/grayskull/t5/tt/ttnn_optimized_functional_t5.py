@@ -435,7 +435,7 @@ def t5_for_conditional_generation(
     if config.tie_word_embeddings:
         sequence_output = ttnn.mul(sequence_output, config.d_model**-0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    lm_logits = ttnn.linear(sequence_output, parameters.lm_head.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    lm_logits = ttnn.linear(sequence_output, parameters.lm_head.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     return lm_logits, encoder_last_hidden_state
 
