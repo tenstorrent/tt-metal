@@ -114,7 +114,7 @@ class UNet2DConditionModel:
         out_channels = parameters.conv_in.weight.shape[0]
         in_channels = parameters.conv_in.weight.shape[1]
 
-        print(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        logger.info(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
         self.conv_in = ttnn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -140,7 +140,7 @@ class UNet2DConditionModel:
         self.down_blocks = []
         input_height = self.conv_in.output_height
         input_width = self.conv_in.output_height
-        print(f"D-1: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        logger.info(f"D-1: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
         self.down_block_types = down_block_types
         for i, down_block_type in enumerate(down_block_types):
             if down_block_type == "CrossAttnDownBlock2D":
@@ -169,7 +169,7 @@ class UNet2DConditionModel:
             self.down_blocks.append(down_block)
             input_height = down_block.output_height
             input_width = down_block.output_width
-            print(f"D{i}:  height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+            logger.info(f"D{i}:  height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         assert mid_block_type == "UNetMidBlock2DCrossAttn"
         self.mid_block = unet_mid_block_2d_cross_attn(
@@ -183,7 +183,7 @@ class UNet2DConditionModel:
         )
         input_height = self.mid_block.output_height
         input_width = self.mid_block.output_width
-        print(f"MID: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        logger.info(f"MID: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         self.up_blocks = []
         self.up_block_types = up_block_types
@@ -214,7 +214,7 @@ class UNet2DConditionModel:
             self.up_blocks.append(up_block)
             input_height = up_block.output_height
             input_width = up_block.output_width
-            print(f"UP{i}: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+            logger.info(f"UP{i}: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         parameters.conv_out.weight, parameters.conv_out.bias = permute_conv_weights(
             parameters.conv_out.weight, parameters.conv_out.bias
@@ -227,7 +227,7 @@ class UNet2DConditionModel:
         out_channels = parameters.conv_out.weight.shape[0]
         in_channels = parameters.conv_out.weight.shape[1]
 
-        print(f"COU: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        logger.info(f"COU: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
         self.conv_out = ttnn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -432,7 +432,7 @@ class UNet2DConditionModel:
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
             ttl.device.DumpDeviceProfiler(self.device)
-            print(f"Down block {i}")
+            logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
@@ -486,7 +486,7 @@ class UNet2DConditionModel:
             down_block_res_samples += res_samples
 
         # 4.mid
-        print("Mid block")
+        logger.info("Mid block")
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -517,7 +517,7 @@ class UNet2DConditionModel:
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
             ttl.device.DumpDeviceProfiler(self.device)
-            print(f"Up block {i}")
+            logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
             prev_output_channel = output_channel
@@ -591,8 +591,6 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
-        # print(sample.shape)
-        # print(sample.memory_config())
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups

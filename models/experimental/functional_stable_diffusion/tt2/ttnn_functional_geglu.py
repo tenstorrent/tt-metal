@@ -8,6 +8,7 @@ import math
 import tt_lib as ttl
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
+    determine_blocking,
 )
 
 
@@ -95,11 +96,13 @@ class geglu:
                 ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
-        in0_block_h = M // grid_size[1] // 32
-        in0_block_w = K // grid_size[0] // 32
-        out_block_h = math.ceil(M / grid_size[1] / 32)
-        out_block_w = math.ceil(N / grid_size[0] / 32)
-        out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
+        in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
+            M, K, N, grid_size
+        )
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/7560
+        if size == 512:
+            out_subblock_h = 1
+            out_subblock_w = 1
         program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,

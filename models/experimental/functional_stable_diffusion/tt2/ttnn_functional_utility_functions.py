@@ -233,4 +233,11 @@ def determine_blocking(M, K, N, grid_size, transpose_mcast=False):
     out_block_h = math.ceil(M / logical_grid_size[1] / 32)
     out_block_w = math.ceil(N / logical_grid_size[0] / 32)
     out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
+    # TODO: https://github.com/tenstorrent/tt-metal/issues/7560
+    # There's a bug that causes an ND hang, until it's solved reduce subblock sizes to 1, if we're not
+    import os
+
+    if os.environ.get("SLOW_MATMULS", "0") == "1":
+        out_subblock_h = 1
+        out_subblock_w = 1
     return in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w

@@ -58,7 +58,6 @@ class feedforward:
     def __call__(self, config, hidden_states):
         hidden_states = self.geglu(config, hidden_states)
 
-        # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
         interleaved_output = False
         size = hidden_states.shape[-2]
         grid_size = self.grid_sizes[size]
@@ -68,6 +67,10 @@ class feedforward:
         out_block_h = math.ceil(M / grid_size[1] / 32)
         out_block_w = math.ceil(N / grid_size[0] / 32)
         out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/7560
+        if size == 512:
+            out_subblock_h = 1
+            out_subblock_w = 1
         program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
