@@ -132,8 +132,8 @@ def run_perf_resnet(
     (
         (1, 0.015, 25),
         (2, 0.015, 25),
-        (16, 0.015, 25),
-        (20, 0.0185, 25),
+        (16, 0.0135, 25),  # Issue 7816 Inference time
+        (20, 0.0135, 25),  # Issue 7816 Inference time
     ),
 )
 def test_perf_bare_metal(
