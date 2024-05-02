@@ -8,6 +8,7 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/operations/core.hpp"
+#include "ttnn/cpp/ttnn/operations/matmul.hpp"
 #include "ttnn/types.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -16,6 +17,7 @@
 #include "tt_eager/tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -33,12 +35,14 @@ struct ConvConfig {
     string activation = "";
     uint32_t input_channels_alignment = 32;
     bool deallocate_activation = false;
+    bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     bool height_sharding = true; // used only if override_sharding_config is true
     CoreRangeSet core_grid = {{}}; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
+    Layout output_layout = Layout::TILE;
     static constexpr auto attribute_names = std::make_tuple(
         "math_fidelity",
         "dtype",
@@ -49,12 +53,14 @@ struct ConvConfig {
         "activation",
         "input_channels_alignment",
         "deallocate_activation",
+        "reallocate_halo_output",
         "act_block_h_override",
         "reshard_if_not_optimal",
         "override_sharding_config",
         "height_sharding",
         "core_grid",
-        "transpose_shards");
+        "transpose_shards",
+        "output_layout");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->math_fidelity),
@@ -66,12 +72,14 @@ struct ConvConfig {
             std::cref(this->activation),
             std::cref(this->input_channels_alignment),
             std::cref(this->deallocate_activation),
+            std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
             std::cref(this->height_sharding),
             std::cref(this->core_grid),
-            std::cref(this->transpose_shards));
+            std::cref(this->transpose_shards),
+            std::cref(this->output_layout));
     }
 };
 
@@ -312,7 +320,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     };
 }
 
-std::pair<ttnn::Tensor, ParallelConfig>  shard_or_reshard_tensor_if_required(const Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
+std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(const Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
     ttnn::Tensor input_tensor = input_tensor_; // tensor to return
     const auto& input_memory_config = input_tensor_.memory_config();
     bool needs_shard_or_reshard = false;
@@ -404,7 +412,7 @@ std::pair<ttnn::Tensor, ParallelConfig>  shard_or_reshard_tensor_if_required(con
             input_tensor = ttnn::operations::core::to_device(input_tensor, const_cast<Device*>(&device), input_tensor_sharded_memory_config);
         }
     }
-    return {input_tensor, parallel_config};
+    return {input_tensor, parallel_config, needs_shard_or_reshard};
 }
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
@@ -495,7 +503,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
-inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, ttnn::Tensor> conv2d(
+inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     ttnn::Device device,
@@ -510,7 +518,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, ttnn::Tensor> 
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-    std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
+    const std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
     if(bias_tensor.has_value()) {
@@ -520,7 +528,14 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, ttnn::Tensor> 
     const auto& input_memory_config = input_tensor.memory_config();
     uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;
-    auto [input_tensor_post_tm, parallel_config] = shard_or_reshard_tensor_if_required(device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
+    auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
+    if (tensor_manipulated) {
+        if (conv_config.deallocate_activation) {
+            ttnn::Tensor input_tensor_ = input_tensor; // TODO: allow in place modification of inputs to the op
+            input_tensor_.deallocate();
+        }
+        conv_config.deallocate_activation = true;
+    }
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(Shape({1, 1, batch_size * output_height * output_width, round_up(out_channels, 32)}), parallel_config, 32);
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config));
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(parallel_config, opt_conv_op_parallel_config, round_up(in_channels, conv_config.input_channels_alignment), conv_config.act_block_h_override, kernel_size[1], conv_config.fp32_dest_acc_enabled, conv_config.input_channels_alignment == 16);
@@ -532,7 +547,43 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, ttnn::Tensor> 
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, conv_config.input_channels_alignment, conv_config.weights_dtype, opt_conv_op_block_config.act_block_w_ntiles, opt_conv_op_block_config.out_subblock_w_ntiles, parallel_config, device);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
+    bool is_1x1_s1_p0_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 1 && stride[1] == 1 && padding[0] == 1 && padding[1] == 1 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
+    if (is_1x1_s1_p0_conv) {
+        input_tensor_post_tm = ttnn::operations::core::to_layout(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config());
+    }
     // call optimized conv op or matmul micro op
+    bool input_is_on_device = ttnn::has_storage_type_of(input_tensor_post_tm, ttnn::DEVICE_STORAGE_TYPE);
+    TT_ASSERT(input_is_on_device);
+    DeviceComputeKernelConfig compute_kernel_config;
+    if (device.arch() == ARCH::WORMHOLE_B0) {
+        compute_kernel_config = WormholeComputeKernelConfig({.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled, .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled, .packer_l1_acc = conv_config.packer_l1_accum_enabled});
+    } else {
+        TT_ASSERT(device.arch() == ARCH::GRAYSKULL);
+        compute_kernel_config = GrayskullComputeKernelConfig({.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled});
+    }
+    if (!is_1x1_s1_p0_conv) {
+        // call halo op
+        SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid);
+        auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate();
+        }
+        if (conv_config.reallocate_halo_output) {
+            halo_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
+        }
+        // call conv micro op
+        std::vector<int> conv_params = {(int) kernel_size[0], (int) kernel_size[1], (int) stride[0], (int) stride[1], (int) padding[0], (int) padding[1]};
+        auto conv_output = tt::tt_metal::optimized_conv_new(halo_output, weight_tensor_on_device, bias_tensor_on_device, conv_params, out_channels, conv_config.output_layout == Layout::ROW_MAJOR, conv_config.activation == "relu", conv_config.math_fidelity,
+            opt_conv_op_parallel_config, opt_conv_op_block_config, 0, conv_out_memory_config, conv_config.dtype, {batch_size, input_height, input_width, in_channels}, conv_config.input_channels_alignment == 16, compute_kernel_config);
+        halo_output.deallocate();
+        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    } else {
+        // run conv as matmul
+        auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate();
+        }
+    }
 }
 
 
