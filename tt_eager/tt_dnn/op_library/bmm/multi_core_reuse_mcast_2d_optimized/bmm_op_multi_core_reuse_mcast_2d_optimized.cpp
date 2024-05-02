@@ -21,43 +21,6 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
-bool _get_use_same_noc(const Tensor& input_tensor_a, const Tensor& input_tensor_b, MathFidelity math_fidelity) {
-    const auto& in_a_shape = input_tensor_a.get_legacy_shape();
-    const auto& in_b_shape = input_tensor_b.get_legacy_shape();
-
-    uint32_t M = in_a_shape[0] * in_a_shape[2];
-    uint32_t K = in_a_shape[3];
-    uint32_t N = in_b_shape[3];
-
-    auto in_a_dtype = input_tensor_a.get_dtype();
-    auto in_b_dtype = input_tensor_b.get_dtype();
-
-    bool use_same_noc = false;
-
-    std::vector<std::vector<int> > bfp8_bfp8_lofi_threshold = { {512, 8192, 1024} };
-    std::vector<std::vector<int> > fp16_fp16_hifi2_threshold = { {256, 8192, 1024}, {512, 256, 4096}, {512, 512, 2048}, {512, 2048, 1024}, {512, 4096, 2048}, {512, 8192, 1024}};
-    std::vector<std::vector<int> > fp16_bfp8_lofi_threshold = { {512, 8192, 2048} };
-
-    auto check_thresholds = [&](const std::vector<std::vector<int>>& thresholds) {
-        return std::any_of(thresholds.begin(), thresholds.end(), [&](const std::vector<int>& threshold) {
-            auto [m_thresh, k_thresh, n_thresh] = std::tie(threshold[0], threshold[1], threshold[2]);
-            return M <= m_thresh && K <= k_thresh && N >= n_thresh;
-        });
-    };
-
-    if (in_a_dtype == DataType::BFLOAT8_B && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
-        use_same_noc = check_thresholds(bfp8_bfp8_lofi_threshold);
-    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT16 && math_fidelity == MathFidelity::HiFi2) {
-        use_same_noc = check_thresholds(fp16_fp16_hifi2_threshold);
-    } else if (in_a_dtype == DataType::BFLOAT16 && in_b_dtype == DataType::BFLOAT8_B && math_fidelity == MathFidelity::LoFi) {
-        use_same_noc = check_thresholds(fp16_bfp8_lofi_threshold);
-    }
-
-    tt::log_debug("M: {}, K: {}, N: {}, a_df: {}, b_df: {}, mf: {}, Use same noc: {}", M, K, N, in_a_dtype, in_b_dtype, math_fidelity, use_same_noc);
-
-    return use_same_noc;
-}
-
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
     MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc,
@@ -71,8 +34,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
-    bool untilize_out,
-    bool mcast_use_same_noc, bool use_noc_vc
+    bool untilize_out
 ) {
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     tt_metal::Program program{};
@@ -93,7 +55,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
-    uint32_t bfp8_b_single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Bfp8_b);
 
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -172,10 +133,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
 
     CoreRange in0_sender = left_column;
-    CoreRange in0_receiver = all_except_left_column;
     CoreRange in0_sender_in1_receiver = left_column_except_corner;
     CoreRange in1_sender = top_row;
-    CoreRange in1_receiver = all_except_top_row;
     CoreRange in0_receiver_in1_sender = top_row_except_corner;
 
     uint32_t in0_end = num_cores_r - 1;
@@ -188,7 +147,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::NOC in1_split_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     if (transpose_mcast) {
         std::swap(in0_sender, in1_sender);
-        std::swap(in0_receiver, in1_receiver);
         std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
         std::swap(in0_end, in1_end);
     }
@@ -261,18 +219,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  (in0_shard_height_in_tiles),
             (std::uint32_t)  (in0_block_w),
             // batch args
-            (std::uint32_t)  B, // batch
-            // // in1
-            // (std::uint32_t)  in1_mcast_receiver_semaphore,
-            // (std::uint32_t)  per_core_N * in0_block_w, // in1_block_num_tiles
-            // (std::uint32_t)  per_core_N * in0_block_w * in1_single_tile_size // in1_block_size_bytes
+            (std::uint32_t)  B // batch
         };
-        if (mcast_use_same_noc) {
-            in0_sender_compile_time_args.push_back(in1_mcast_receiver_semaphore);
-            in0_sender_compile_time_args.push_back(per_core_N * in0_block_w); // in1_block_num_tiles
-            in0_sender_compile_time_args.push_back(per_core_N * in0_block_w * in1_single_tile_size); // in1_block_size_bytes
-            in0_sender_compile_time_args.push_back(in0_end); // in1_mcast_num_cores
-        }
     } else {
         in0_sender_compile_time_args = {
             // interleaved accessor args
@@ -384,49 +332,35 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  per_core_N);
     }
 
-    std::map<string, string> mm_kernel_compute_in1_receiver_defines;
-    std::map<string, string> mm_kernel_compute_in1_sender_defines;
+    std::map<string, string> mm_kernel_defines;
     std::map<string, string> mm_kernel_in0_sender_defines;
     std::map<string, string> mm_kernel_in1_sender_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_defines;
     std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
     if (bias_buffer != nullptr) {
-        mm_kernel_compute_in1_receiver_defines["FUSE_BIAS"] = "1";
-        mm_kernel_compute_in1_sender_defines["FUSE_BIAS"] = "1";
+        mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
-            mm_kernel_compute_in1_receiver_defines["PACK_RELU"] = "1";
-            mm_kernel_compute_in1_sender_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            mm_kernel_compute_in1_receiver_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
-            mm_kernel_compute_in1_sender_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {
-        mm_kernel_compute_in1_receiver_defines["PACKER_L1_ACC"] = "1";
-        mm_kernel_compute_in1_sender_defines["PACKER_L1_ACC"] = "1";
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
-        mm_kernel_compute_in1_receiver_defines["FP32_DEST_ACC_EN"] = "1";
-        mm_kernel_compute_in1_sender_defines["FP32_DEST_ACC_EN"] = "1";
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (in0_height_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     }
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
-    }
-    if (mcast_use_same_noc) {
-        mm_kernel_in1_sender_writer_defines["USE_SAME_NOC"] = "1";
-        mm_kernel_compute_in1_sender_defines["USE_SAME_NOC"] = "1";
-        mm_kernel_in0_sender_defines["USE_SAME_NOC"] = "1";
-    }
-    if (use_noc_vc) {
-        mm_kernel_in1_sender_writer_defines["USE_NOC_VC"] = "1";
     }
 
     // if (in0_is_sharded) {
@@ -519,17 +453,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel_compute_in1_receiver = tt_metal::CreateKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        in1_receiver,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_compute_in1_receiver_defines}
-    );
-    auto mm_kernel_compute_in1_sender = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        in1_sender,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_compute_in1_sender_defines}
+        all_cores,
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
 
     // Create circular buffers
@@ -543,20 +471,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src0_cb_index, in0_single_tile_size, in0_CB_size / in0_single_tile_size, in0_CB_size);
 
     uint32_t src1_cb_index = 1;
-    uint32_t src1_cb_index_inplace = 6;
-    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(0, {{src1_cb_index, in1_data_format}});
-    if (mcast_use_same_noc) {
-        std::map<uint8_t, tt::DataFormat> src1_cb_data_format_spec {
-            {src1_cb_index, in1_data_format},
-            {src1_cb_index_inplace, in1_data_format}
-        };
-        src1_cb_config = tt_metal::CircularBufferConfig(in1_CB_size, src1_cb_data_format_spec)
-            .set_page_size(src1_cb_index, in1_single_tile_size)
-            .set_page_size(src1_cb_index_inplace, in1_single_tile_size);
-    } else {
-        src1_cb_config = tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-	    	.set_page_size(src1_cb_index, in1_single_tile_size);
-    }
+    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+		.set_page_size(src1_cb_index, in1_single_tile_size);
     if (in1_is_sharded) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
@@ -623,13 +539,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 		    .set_page_size(src3_cb_index, bias_single_tile_size);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(LogOp, "CB {} :: PS = {}, NP = {}, TOTAL = {}", src3_cb_index, bias_single_tile_size, in3_CB_size / bias_single_tile_size, in3_CB_size);
-    }
-
-    if (mcast_use_same_noc) {
-        uint32_t sync_cb_index = 7;
-        tt_metal::CircularBufferConfig sync_cb_config = tt_metal::CircularBufferConfig(bfp8_b_single_tile_size, {{sync_cb_index, tt::DataFormat::Bfp8_b}})
-            .set_page_size(sync_cb_index, bfp8_b_single_tile_size);
-        auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
     }
 
     // Parameters for last row, col, or block
@@ -718,62 +627,24 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             if (in0_block_sharded) {
                 uint32_t worker_shard_same_coord;
                 std::vector<uint32_t> mm_in0_sender_args;
-                if (mcast_use_same_noc) {
-                    if (transpose_mcast) {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
-                        mm_in0_sender_args.push_back(core_idx_y);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_start_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_end_coord);
-
-                        // in1 mcast args
-                        mm_in0_sender_args.push_back(in1_mcast_start.x); // in1_mcast_dest_noc_start_x
-                        mm_in0_sender_args.push_back(in1_mcast_start.y); // in1_mcast_dest_noc_start_y
-                        mm_in0_sender_args.push_back(in1_mcast_end.x); // in1_mcast_dest_noc_end_x
-                        mm_in0_sender_args.push_back(in1_mcast_end.y); // in1_mcast_dest_noc_end_y
-                        mm_in0_sender_args.push_back(core_idx_x == 0); // is_in1_sender
-
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-                    } else {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
-                        mm_in0_sender_args.push_back(core_idx_x);
-                        mm_in0_sender_args.push_back(diff_start_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_end_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-
-                        // in1 mcast args
-                        mm_in0_sender_args.push_back(in1_mcast_start.x); // in1_mcast_dest_noc_start_x
-                        mm_in0_sender_args.push_back(in1_mcast_start.y); // in1_mcast_dest_noc_start_y
-                        mm_in0_sender_args.push_back(in1_mcast_end.x); // in1_mcast_dest_noc_end_x
-                        mm_in0_sender_args.push_back(in1_mcast_end.y); // in1_mcast_dest_noc_end_y
-                        mm_in0_sender_args.push_back(core_idx_y == 0); // is_in1_sender
-
-                        mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                    }
+                if (transpose_mcast) {
+                    worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
+                    mm_in0_sender_args.push_back(core_idx_y);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_start_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_end_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
                 } else {
-                    if (transpose_mcast) {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
-                        mm_in0_sender_args.push_back(core_idx_y);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_start_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_end_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-                    } else {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
-                        mm_in0_sender_args.push_back(core_idx_x);
-                        mm_in0_sender_args.push_back(diff_start_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.push_back(diff_end_coord);
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                        mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                        mm_in0_sender_args.push_back(worker_shard_same_coord);
-                    }
+                    worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
+                    mm_in0_sender_args.push_back(core_idx_x);
+                    mm_in0_sender_args.push_back(diff_start_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_end_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
                 }
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
@@ -1025,7 +896,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool use_noc_vc) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out) {
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1052,12 +923,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
-
-    TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
-    if (in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        log_debug("block shard orientation: {}", a.shard_spec().value().orientation);
-    }
-
     if (bcast_batch)
         TT_FATAL(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -1101,13 +966,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
 
     if (fp32_dest_acc_en) {
         TT_FATAL(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
-    }
-
-    bool mcast_use_same_noc = reuse_mcast_optimized_helpers::_get_use_same_noc(a, b, math_fidelity);
-    bool in0_is_sharded = a.shard_spec().has_value();
-    bool in1_is_sharded = b.shard_spec().has_value();
-    if (not in0_is_sharded or in1_is_sharded) {
-        mcast_use_same_noc = false;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1170,8 +1028,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
-            untilize_out,
-            mcast_use_same_noc, use_noc_vc
+            untilize_out
         );
     } else if (core_range.x > 1 or core_range.y > 1) {
         // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
@@ -1183,8 +1040,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool use_noc_vc) {
-     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation, untilize_out, use_noc_vc);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out) {
+     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation, untilize_out);
 }
 
 }  // namespace tt_metal
