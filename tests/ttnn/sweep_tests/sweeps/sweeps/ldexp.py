@@ -16,17 +16,26 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [32, 384, 1024],
     "width": [32, 1024, 4096],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat16],
-    "input_a_layout": [ttnn.TILE_LAYOUT],
-    "input_b_layout": [ttnn.TILE_LAYOUT],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_dtype,
+    input_layout,
+    input_b_memory_config,
+    input_a_memory_config,
+    output_memory_config,
+) -> Tuple[bool, Optional[str]]:
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT or input_dtype == ttnn.bfloat8_b:
+        return True, "Not Supported"
     return False, None
 
 
@@ -38,10 +47,8 @@ def run(
     batch_sizes,
     height,
     width,
-    input_a_dtype,
-    input_b_dtype,
-    input_a_layout,
-    input_b_layout,
+    input_dtype,
+    input_layout,
     input_b_memory_config,
     input_a_memory_config,
     output_memory_config,
@@ -59,16 +66,16 @@ def run(
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
-        dtype=input_a_dtype,
+        dtype=input_dtype,
         device=device,
-        layout=input_a_layout,
+        layout=input_layout,
         memory_config=input_a_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
-        dtype=input_b_dtype,
+        dtype=input_dtype,
         device=device,
-        layout=input_b_layout,
+        layout=input_layout,
         memory_config=input_b_memory_config,
     )
     output_tensor = ttnn.ldexp(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

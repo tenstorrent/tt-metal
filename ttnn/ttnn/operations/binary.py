@@ -159,11 +159,15 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         return torch_function(input_tensor_a, input_tensor_b)
 
     def _elt_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+        if operation_name == "ttnn.ldexp":
+            supported_dtypes = (ttnn.bfloat16,)
+        else:
+            supported_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b)
         ttnn.validate_input_tensor(
             operation_name,
             input_tensor_a,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            dtypes=supported_dtypes,
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -172,7 +176,7 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             operation_name,
             input_tensor_b,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            dtypes=supported_dtypes,
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
@@ -225,6 +229,9 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
                 >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
                 >>> output = ttnn.{name}(tensor1, tensor2)
+
+            {elt_binary_function.__doc__}
+
             """
 
     setattr(THIS_MODULE, name, elt_binary_function)
