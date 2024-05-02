@@ -763,19 +763,20 @@ Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, co
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     const float eps = input_a.device()->sfpu_eps();
+    Tensor t_eps = full(input_a.get_legacy_shape(), eps, DataType::BFLOAT16, input_a.get_layout(), input_a.device());
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);
         {
             eps_gt = where(
                 gt(input_a, input_b, std::nullopt, output_mem_config),
-                add_unary(input_a, eps, output_mem_config),
+                add(input_a, t_eps, std::nullopt, output_mem_config),
                 input_a,
                 output_mem_config);
         }
         result = where(
             lt(input_a, input_b, std::nullopt, output_mem_config),
-            sub_unary(input_a, eps, output_mem_config),
+            sub(input_a, t_eps, std::nullopt, output_mem_config),
             eps_gt,
             output_mem_config);
     }
