@@ -35,5 +35,8 @@ def all_gather(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ):
     device_tensors = [device_tensor for device_tensor in ttnn.get_device_tensors(multidevice_tensor)]
+    if len(device_tensors) == 8:
+        hamiltonian_ring_indices = [0, 7, 6, 1, 2, 5, 4, 3]
+        device_tensors = [device_tensors[i] for i in hamiltonian_ring_indices]
     all_gather_tensor = ttl.tensor.all_gather(device_tensors, dim, num_links, output_mem_config=memory_config)
     return ttnn.aggregate_as_tensor(all_gather_tensor)
