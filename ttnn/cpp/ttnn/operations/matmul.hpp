@@ -37,13 +37,15 @@ inline bool is_input_batched(const ttnn::Shape& shape) {
 
 }  // namespace detail
 
-static inline const std::array<ttnn::TensorSchema, 3> input_schemas{
-    ttnn::TensorSchema{
-        2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
-    ttnn::TensorSchema{
-        2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
-    ttnn::TensorSchema{
-        2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, true}};
+static inline const std::array<ttnn::TensorSchema, 3> input_tensor_schemas() {
+    return {
+        ttnn::TensorSchema{
+            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
+        ttnn::TensorSchema{
+            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false},
+        ttnn::TensorSchema{
+            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, true}};
+}
 
 inline ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
@@ -53,8 +55,8 @@ inline ttnn::Tensor matmul(
     const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_schemas[0]);
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_schemas[1]);
+    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_tensor_schemas()[0]);
+    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_tensor_schemas()[1]);
 
     const auto input_tensor_a_shape = input_tensor_a.get_shape();
     const auto input_tensor_b_shape = input_tensor_b.get_shape();
@@ -93,9 +95,9 @@ inline ttnn::Tensor linear(
     const std::optional<const std::string>& activation = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
-    ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_schemas[0]);
-    ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_schemas[1]);
-    ttnn::validate_input_tensor("ttnn.linear", bias, input_schemas[2]);
+    ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_tensor_schemas()[0]);
+    ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_tensor_schemas()[1]);
+    ttnn::validate_input_tensor("ttnn.linear", bias, input_tensor_schemas()[2]);
 
     const auto input_tensor_a_shape = input_tensor_a.get_shape();
     const auto input_tensor_b_shape = input_tensor_b.get_shape();

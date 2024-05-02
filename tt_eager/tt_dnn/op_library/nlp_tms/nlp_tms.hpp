@@ -157,8 +157,10 @@ namespace operations {
 namespace transformer {
 
 struct ConcatenateHeads : public NlpConcatHeads {
-    static inline const std::vector<TensorSchema> input_schemas{
-        ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
+        return {ttnn::TensorSchema{
+            4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
+    }
 
     void validate(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);

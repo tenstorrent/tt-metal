@@ -241,7 +241,8 @@ std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optiona
    return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
 }
 
-std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_chain, std::string block_id, std::string idst) {
+std::map<string, string> get_block_defines(
+    const std::vector<UnaryWithParam>& op_chain, std::string block_id, std::string idst) {
     std::vector<std::pair<string, string>> op_init_and_name;
     std::map<string, string> block_defines;
     std::string block_define = "";
@@ -254,7 +255,6 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
 }
-
 
 } // namespace eltwise_unary_op_utils
 

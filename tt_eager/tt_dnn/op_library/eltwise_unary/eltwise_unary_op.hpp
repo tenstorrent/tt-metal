@@ -9,6 +9,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -143,8 +144,6 @@ struct EltwiseUnary {
     const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-Tensor eltwise_unary(const EltwiseUnary& op, const Tensor& input_tensor);
-
 operation::ProgramWithCallbacks eltwise_unary_sharded(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
@@ -154,7 +153,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(
 
 inline Tensor run_eltwise_unary(
     const Tensor& input_tensor,
-    std::vector<UnaryWithParam> ops_chain,
+    const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;       // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
@@ -182,11 +181,9 @@ inline Tensor run_eltwise_unary(
 inline Tensor run_eltwise_unary(
     CommandQueue& queue,
     const Tensor& input_tensor,
-    std::vector<UnaryWithParam> ops_chain,
+    const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-    FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;       // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
                queue,
@@ -509,5 +506,5 @@ std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optiona
 std::map<string, string> get_defines(
     UnaryOpType op_type, std::optional<float> param = {}, string id = "0", string idst = "0");
 std::map<string, string> get_block_defines(
-    const std::vector<UnaryWithParam> op_chain, string block_id = "0", string idst = "0");
+    const std::vector<UnaryWithParam>& op_chain, string block_id = "0", string idst = "0");
 }  // namespace eltwise_unary_op_utils

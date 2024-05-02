@@ -48,12 +48,6 @@ struct BinaryProgramConfig {
 };
 
 struct Binary {
-    static inline const std::array<TensorSchema, 2> input_schemas{
-        ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-        ttnn::TensorSchema{
-            2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, false}};
-
     const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
@@ -76,14 +70,31 @@ struct Binary {
     }
 
     template <BinaryOpType binary_op_type, bool in_place>
-    static void validate_execute_arguments(
-        const Tensor &input_tensor_a,
-        const Tensor &input_tensor_b,
-        const std::optional<const MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<const DataType> &dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
-        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_a, Binary::input_schemas[0]);
-        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_b, Binary::input_schemas[1]);
+    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
+        return {
+            ttnn::TensorSchema{
+                2,
+                4,
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::TILE_LAYOUT},
+                true,
+                false,
+                false,
+                false},
+            ttnn::TensorSchema{
+                2,
+                4,
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::TILE_LAYOUT},
+                true,
+                false,
+                true,
+                false}};
+    }
+
+    template <BinaryOpType binary_op_type, bool in_place, typename... Args>
+    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
+        return std::make_tuple(input_tensor_a, input_tensor_b);
     };
 
     template <BinaryOpType binary_op_type, bool in_place>
@@ -136,15 +147,9 @@ struct Binary {
         return output_tensors.at(0);
     }
 
-    template <BinaryOpType binary_op_type, bool in_place>
-    static void validate_execute_arguments(
-        const ttnn::Tensor &input_tensor_a,
-        const float scalar,
-        const std::optional<const MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<const DataType> &dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
-        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), input_tensor_a, Binary::input_schemas[0]);
-        ttnn::validate_input_tensor(tt::stl::get_type_name<Binary>(), scalar, Binary::input_schemas[1]);
+    template <BinaryOpType binary_op_type, bool in_place, typename... Args>
+    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
+        return std::make_tuple(input_tensor_a, input_tensor_b);
     };
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
