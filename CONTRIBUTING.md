@@ -3,37 +3,38 @@
 Table of Contents
 =================
 
-* [Table of Contents](#table-of-contents)
-   * [Contributing to tt-metal](#contributing-to-tt-metal)
-   * [Machine setup](#machine-setup)
-      * [Hugepages setup](#hugepages-setup)
-   * [Developing tt-metal](#developing-tt-metal)
-      * [Setting up Git](#setting-up-git)
-      * [Setting logger level](#setting-logger-level)
-      * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
-      * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
-   * [Tests in tt-metal](#running-tests-on-tt-metal)
-      * [Running post-commit regressions](#running-post-commit-regressions)
-      * [Adding post-commit tests](#adding-post-commit-tests)
-      * [Running model performance tests](#running-model-performance-tests)
-      * [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
-      * [Running Googlegtest (gtest) C++ tests](#running-googletest-gtest-c-tests)
-      * [Running Python integration tests](#running-python-integration-tests)
-   * [Debugging tips](#debugging-tips)
-   * [Contribution standards](#contribution-standards)
-      * [File structure and formats](#file-structure-and-formats)
-      * [CI/CD Principles](#cicd-principles)
-      * [Using CI/CD for development](#using-cicd-for-development)
-      * [Documentation](#documentation)
-      * [Git rules and guidelines](#git-rules-and-guidelines)
-      * [Code reviews](#code-reviews)
-      * [New feature and design specifications](#new-feature-and-design-specifications)
-      * [Release flows](#release-flows)
-      * [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
-   * [Hardware troubleshooting](#hardware-troubleshooting)
-      * [Resetting an accelerator board](#resetting-an-accelerator-board)
+- [Table of Contents](#table-of-contents)
+  - [Contributing to tt-metal](#contributing-to-tt-metal)
+  - [Machine setup](#machine-setup)
+    - [Hugepages setup](#hugepages-setup)
+  - [Developing tt-metal](#developing-tt-metal)
+    - [Setting up Git](#setting-up-git)
+    - [Setting logger level](#setting-logger-level)
+    - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
+    - [Cleaning the dev environment with `make nuke`](#cleaning-the-dev-environment-with-make-nuke)
+  - [Tests in tt-metal](#tests-in-tt-metal)
+    - [Running post-commit regressions](#running-post-commit-regressions)
+    - [Adding post-commit tests](#adding-post-commit-tests)
+    - [Running model performance tests](#running-model-performance-tests)
+    - [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
+    - [Running Googletest (gtest) C++ tests](#running-googletest-gtest-c-tests)
+    - [Running Python integration tests](#running-python-integration-tests)
+  - [Debugging tips](#debugging-tips)
+    - [Tips for debugging hangs with watcher](#tips-for-debugging-hangs-with-watcher)
+  - [Contribution standards](#contribution-standards)
+    - [File structure and formats](#file-structure-and-formats)
+    - [CI/CD Principles](#cicd-principles)
+    - [Using CI/CD for development](#using-cicd-for-development)
+    - [Documentation](#documentation)
+    - [Git rules and guidelines](#git-rules-and-guidelines)
+    - [Code reviews](#code-reviews)
+    - [New feature and design specifications](#new-feature-and-design-specifications)
+    - [Release flows](#release-flows)
+    - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+  - [Hardware troubleshooting](#hardware-troubleshooting)
+    - [Resetting an accelerator board](#resetting-an-accelerator-board)
 
-<!-- Created by https://github.com/ekalinin/github-markdown-toc -->
+<!-- Created by https://luciopaiva.com/markdown-toc/ -->
 
 <!-- tocstop -->
 
@@ -319,6 +320,18 @@ running such tests.
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
   - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`
+
+### Tips for debugging hangs with watcher
+
+1. Develop with watcher enabled, always. Set `TT_METAL_WATCHER` to update every 10 seconds or shorter. Watcher will flag illegal noc transactions that may seem to run ok without watcher. This is expected (eg, 0 length transactions are not considered safe but seem safe in practice). At this time there are no known bugs in what watcher flags.
+2. Disable watcher for performance testing once changes have been “proven”.
+3. NOC sanitization is the most timing invasive portion of watcher.  If you run your new code and watcher doesn’t flag a NOC error and you are looking for a timing sensitive hang, then disable NOC sanitization with `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1` and re-run.
+4. If you still cannot reproduce the hang with the above, disable debug status w/ `TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1`. This will reduce visibility into the hang, but is better than nothing.
+5. You can disable assertions with `TT_METAL_WATCHER_DISABLE_ASSERT=1`. You could flip 4,5, but assertions are unlikely to perturb timing enough to matter
+
+If you reproduce the hang at this point, make sure watcher has printed `watcher checking device <n>`, then kill your program and open the watcher log file, go to the end and dump the last iteration of information. This should include each device and the `k_id` legend (the mapping from id to file).
+
+Sometimes signatures will point directly to the issue (eg, dispatch), though sometimes not. In any case, the watcher log and information from the above will be critical to help debugging hangs.
 
 ## Contribution standards
 
