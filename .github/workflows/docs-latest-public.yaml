@@ -1,15 +1,7 @@
-name: Docs - Build latest docs and deploy to GitHub pages on main
+name: Internal - Docs Build latest docs and deploy to GitHub pages on main
 
 on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  actions: read
-  contents: read
-  pages: write
-  id-token: write
+  workflow_call:
 
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
@@ -31,32 +23,34 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       DOCS_VERSION: latest
       ARCH_NAME: ${{ matrix.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ubuntu-20.04
+    runs-on: ${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ubuntu-20.04
-      - uses: ./.github/actions/install-metal-dev-deps
-        with:
-          os: ubuntu-20.04
-      - name: Build tt-metal
+      - name: Set up dynamic env vars for build
         run: |
-          export TT_METAL_HOME=$(pwd)
-          make build
-      - name: Activate docs environment and build docs
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Build Docs
+        timeout-minutes: 15
         run: |
-          export PYTHONPATH=$(pwd)
-          source build/python_env/bin/activate
-          cd docs/
-          make html
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_build_docs.sh
       - name: Build additional ttnn sweeps docs
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           export PYTHONPATH=$(pwd)
-          source build/python_env/bin/activate
+          source ${{ github.workspace }}/python_env/bin/activate
           cd docs/
           make ttnn_sweeps/check_directory
           make ttnn_sweeps
