@@ -141,8 +141,8 @@ struct UntilizeWithHaloV2 {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple(
         "pad_val_", "ncores_nhw_", "max_out_nsticks_per_core_", "out_mem_config_", "remote_read_", "transpose_mcast_");
@@ -156,6 +156,20 @@ struct UntilizeWithHaloV2 {
             std::cref(transpose_mcast_));
     }
 };
+
+operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
+    Program &program,
+    const Tensor& input_tensor,
+    const uint32_t pad_val,
+    const uint32_t ncores_nhw,
+    const uint32_t max_out_nsticks_per_core,
+    const Tensor& padding_config,
+    const Tensor& local_config,
+    const Tensor& remote_config,
+    const bool remote_read,
+    const bool transpose_mcast,
+    Tensor& output_tensor);
+
 Tensor untilize_with_halo_v2(
     const Tensor &input_tensor,
     const Tensor &padding_config,
