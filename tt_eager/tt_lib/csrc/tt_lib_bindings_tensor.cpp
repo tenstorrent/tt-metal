@@ -159,21 +159,12 @@ void TensorModule(py::module &m_tensor) {
         .def(
             py::init(
                 [](const std::vector<uint32_t>& shape,
-                   const std::optional<std::vector<uint32_t>>& padded_shape_arg) -> Shape {
-                    auto rank = shape.size();
-                    std::vector<Padding::PadDimension> padding;
-                    auto padded_shape = Shape{shape};
-                    if (padded_shape_arg.has_value()) {
-                        padded_shape = padded_shape_arg.value();
-                        TT_ASSERT(shape.size() == padded_shape.rank());
-                        for (auto index = 0; index < rank; index++) {
-                            padding.push_back({.front = 0, .back = padded_shape[index] - shape[index]});
-                        }
+                   const std::optional<std::vector<uint32_t>>& padded_shape) -> Shape {
+                    if (padded_shape.has_value()) {
+                        return Shape{shape, padded_shape.value()};
                     } else {
-                        padding = std::vector<Padding::PadDimension>(rank, {.front = 0, .back = 0});
+                        return Shape{shape};
                     }
-                    auto output = Shape{padded_shape, Padding{padding, Padding::PadValue::Any}};
-                    return output;
                 }),
             py::arg("shape"),
             py::arg("padded_shape") = std::nullopt)
