@@ -60,6 +60,45 @@ bool test_5d_tensor(Device *device) {
     return pass;
 }
 
+bool test_6d_tensor(Device *device) {
+    bool pass = true;
+
+    Shape shape = {2, 2, 2, 3, 30, 30};
+    Tensor tensor = tt::numpy::random::random(shape);
+    tensor = tensor.pad_to_tile(0.0f);
+    tensor = tensor.to(Layout::TILE);
+    tensor = tensor.to(device);
+    pass &= tensor.get_shape().rank() == 5;
+
+    return pass;
+}
+
+bool test_7d_tensor(Device *device) {
+    bool pass = true;
+
+    Shape shape = {2, 2, 2, 2, 3, 30, 30};
+    Tensor tensor = tt::numpy::random::random(shape);
+    tensor = tensor.pad_to_tile(0.0f);
+    tensor = tensor.to(Layout::TILE);
+    tensor = tensor.to(device);
+    pass &= tensor.get_shape().rank() == 5;
+
+    return pass;
+}
+
+bool test_8d_tensor(Device *device) {
+    bool pass = true;
+
+    Shape shape = {2, 2, 2, 2, 2, 3, 30, 30};
+    Tensor tensor = tt::numpy::random::random(shape);
+    tensor = tensor.pad_to_tile(0.0f);
+    tensor = tensor.to(Layout::TILE);
+    tensor = tensor.to(device);
+    pass &= tensor.get_shape().rank() == 5;
+
+    return pass;
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
