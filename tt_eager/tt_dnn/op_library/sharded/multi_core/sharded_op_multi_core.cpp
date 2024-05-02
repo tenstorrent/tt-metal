@@ -558,33 +558,78 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
-    Buffer* input_buffer, Buffer* output_buffer) {
 
-    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
+uint32_t get_greatest_common_factor(uint32_t n1, uint32_t n2) {
+  if ( n2 > n1) {
+    int temp = n2;
+    n2 = n1;
+    n1 = temp;
+  }
+  uint32_t hcf = 1;
+  for (int i = 1; i <=  n2; ++i) {
+    if (n1 % i == 0 && n2 % i ==0) {
+      hcf = i;
+    }
+  }
+  return hcf;
+}
+
+inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStride>> > get_core_page_ranges(
+    const Tensor& input, Tensor& output) {
+
+    auto input_buffer = input.buffer();
+    auto output_buffer = output.buffer();
+    std::optional<std::array<std::array<uint32_t, 2>, 2 > > tensor2d_shape_page_shape_override = std::nullopt;
+    uint32_t page_width = TILE_WIDTH;
+    auto input_shard_spec = input_buffer->shard_spec();
+    auto output_shard_spec = output_buffer->shard_spec();
+    uint32_t input_num_host_pages_multiplier = 1;
+    if(input.get_layout() == Layout::ROW_MAJOR) {
+        page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
+        std::array<uint32_t, 2> page_shape = {1, page_width};
+
+        auto shape = input.get_legacy_shape();
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
+        std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+        tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
+        input_shard_spec = ShardSpecBuffer(input_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        output_shard_spec = ShardSpecBuffer(output_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        input_num_host_pages_multiplier = input_buffer->shard_spec().page_shape[1] / page_width;
+    }
+
+    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer, tensor2d_shape_page_shape_override);
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer, tensor2d_shape_page_shape_override);
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
     const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
 
-    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_dev_pages());
+
+    auto input_num_host_pages = input_buffer->num_pages() * input_num_host_pages_multiplier;
+
+    auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_num_host_pages);
 
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
-    std::unordered_map<CoreCoord, std::vector<std::pair<CoreCoord, uint32_t>>> output_core_to_vector_input_core_page;
+    std::unordered_map<CoreCoord, std::vector< std::optional<std::pair<CoreCoord, uint32_t> >>> output_core_to_vector_input_core_page;
 
     for (uint32_t output_page_id = 0; output_page_id < num_pages; output_page_id++) {
         auto output_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id]];
         auto host_page = output_shard_to_host_mapping[output_page_id];
+        std::optional<std::pair<CoreCoord, uint32_t> > mapped_page = std::nullopt;
         if(host_page.has_value()) {
             auto input_page = host_page_to_input_page_mapping[host_page.value()];
             auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
             auto input_core = input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
-            if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
-                output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
-            } else {
-                output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
-            }
+            mapped_page = std::make_optional<std::pair<CoreCoord, uint32_t> > ({input_core, local_input_page});
+        }
+        if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
+            output_core_to_vector_input_core_page[output_core] = {mapped_page};
+        } else {
+            output_core_to_vector_input_core_page[output_core].push_back(mapped_page);
         }
     }
 
@@ -608,129 +653,162 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
 
         while (it != end) {
-            const auto start_core = it->first;
-            const auto start_page = it->second;
-            auto expected_next_page = start_page + 1;
-            Stride stride = Stride{.core = {0,0} , .data = 0};
-            if ((it + 1) == end) {
-                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=1, .stride=stride, .num_strides=1});
-                it = end;
-            }
-            else {
-                //first get a single stride, go through the number of consecutive pages in the same core
+            //hit padding, will see how many consecutive pages has padding to make a padded range
+            if(!it->has_value()) {
                 auto consecutive_it = it+1;
                 auto last_it_consec = it;
                 while(consecutive_it != end) {
-                    auto next_input_page = *(consecutive_it);
-                    auto curr_input_page = *(last_it_consec);
-                    // diff core , not consecutive
-                    if(curr_input_page.first != next_input_page.first) {
+                    if(consecutive_it->has_value()) {
                         break;
                     }
-                    //not consecutive
-                    else if ((curr_input_page.second + 1) != next_input_page.second) {
-                        break;
-                    }
-                    last_it_consec = consecutive_it;
-                    consecutive_it = consecutive_it+1;
                 }
                 uint32_t stride_size = std::distance(it, last_it_consec) + 1;
-                auto stride_it = it + stride_size;
-                auto last_it_stride = stride_it - 1;
-
-                // if stride_range is within same core
-                // the jump in data is end of curr - end last stride
-                // if stride range is in diff core
-                // jump in data is curr - beginning of last stride
-                uint32_t data_stride;
-                if((stride_it != end) and (stride_it != it)){
-                    // data stride within core
-                    if(stride_it->first == last_it_stride->first and (stride_it->second > last_it_stride->second) ) {
-                        auto next_input_page = *(stride_it);
-                        auto prev_input_page = *(last_it_stride);
-                        data_stride = next_input_page.second - prev_input_page.second - 1;
-                        stride = Stride{.core = {next_input_page.first.x - prev_input_page.first.x, next_input_page.first.y - prev_input_page.first.y},
-                                        .data = data_stride};
-                    }
-                    // strided core but same data
-                    // currently only handling increasing cores within same stride
-                    // TODO : negative strides for cores
-                    else if((stride_it->first != last_it_stride->first) and (stride_it->first.x >= it->first.x and stride_it->first.y >= it->first.y) and (stride_it->second == it->second)) {
-                    //else {
-                        auto next_input_page = *(stride_it);
-                        auto prev_input_page = *it;
-                        data_stride = 0;
-                        stride = Stride{.core = {next_input_page.first.x - prev_input_page.first.x, next_input_page.first.y - prev_input_page.first.y},
-                                        .data = data_stride};
-                    }
-                    // diff data and diff core, not handled yet
-                    else {
-                        ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=1});
-                        it = stride_it;
-                        continue;
-                    }
-                    //TODO add stride of data and core
+                ret_map[output_core].push_back(PageStride{.start_core = output_core, .start_data=0,  .stride_size=stride_size, .stride=Stride{.core = {0,0} , .data = 0}, .num_strides=1, .skip=true});
+            }
+            else {
+                const auto start_core = it->value().first;
+                const auto start_page = it->value().second;
+                auto expected_next_page = start_page + 1;
+                Stride stride = Stride{.core = {0,0} , .data = 0};
+                if ((it + 1) == end) {
+                    ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->value().second,  .stride_size=1, .stride=stride, .num_strides=1, .skip=false});
+                    it = end;
                 }
-                // only single stride
                 else {
-                    data_stride = 0;
-                }
+                    //first get a single stride, go through the number of consecutive pages in the same core
+                    auto consecutive_it = it+1;
+                    auto last_it_consec = it;
+                    while(consecutive_it != end) {
+                        //hit padding
+                        if(!consecutive_it->has_value()) {
+                            break;
+                        } else{
+                            auto next_input_page = *(consecutive_it);
+                            auto curr_input_page = *(last_it_consec);
+                            // diff core , not consecutive
+                            if(curr_input_page.value().first != next_input_page.value().first) {
+                                break;
+                            }
+                            //not consecutive
+                            else if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
+                                break;
+                            }
+                        }
+                        last_it_consec = consecutive_it;
+                        consecutive_it = consecutive_it+1;
+                    }
+                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
+                    auto stride_it = it + stride_size;
+                    auto last_it_stride = stride_it - 1;
 
-                TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
-                TT_ASSERT(data_stride < output_buffer->num_pages());
-                auto stride_start = stride_it;
-                uint32_t num_strides = 1;
-                while(stride_it != end) {
-                    bool stride_not_complete = false;
-                    auto stride_it_inner = stride_it + 1;
-                    auto last_it_stride_inner = stride_it;
-                    for(uint32_t i=0; i<stride_size - 1; i++) {
-                        auto next_input_page = *(stride_it_inner);
-                        auto curr_input_page = *(last_it_stride_inner);
-                        int increment = 1;
-                        if(
-                            (next_input_page.first != curr_input_page.first) or
-                            ((int)next_input_page.second != (int)(curr_input_page.second) + (int)increment))
+
+                    TT_ASSERT((stride_it == end) or stride_it->has_value());
+                    TT_ASSERT(last_it_stride->has_value());
+                    // if stride_range is within same core
+                    // the jump in data is end of curr - end last stride
+                    // if stride range is in diff core
+                    // jump in data is curr - beginning of last stride
+                    uint32_t data_stride;
+                    if((stride_it != end) and (stride_it != it)){
+                        // data stride within core
+                        if(stride_it->has_value() and
+                            stride_it->value().first == last_it_stride->value().first and
+                            (stride_it->value().second > last_it_stride->value().second) )
                         {
-                            stride_not_complete = true;
+                            auto next_input_page = *(stride_it);
+                            auto prev_input_page = *(last_it_stride);
+                            data_stride = next_input_page.value().second - prev_input_page.value().second - 1;
+                            stride = Stride{.core = {next_input_page.value().first.x - prev_input_page.value().first.x, next_input_page.value().first.y - prev_input_page.value().first.y},
+                                            .data = data_stride};
+                        }
+                        //// strided core but same data
+                        //// currently only handling increasing cores within same stride
+                        //// TODO : negative strides for cores
+                        else if(stride_it->has_value() and
+                                (stride_it->value().first != last_it_stride->value().first) and
+                                (stride_it->value().first.x >= it->value().first.x and
+                                stride_it->value().first.y >= it->value().first.y) and
+                                (stride_it->value().second == it->value().second)) {
+                            auto next_input_page = *(stride_it);
+                            auto prev_input_page = *it;
+                            data_stride = 0;
+                            stride = Stride{.core = {next_input_page.value().first.x - prev_input_page.value().first.x, next_input_page.value().first.y - prev_input_page.value().first.y},
+                                            .data = data_stride};
+                        }
+                        // diff data and diff core, not handled yet
+                        else {
+                            ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->value().second,  .stride_size=stride_size, .stride=stride, .num_strides=1, .skip=false});
+                            it = stride_it;
+                            continue;
+                        }
+                        //TODO add stride of data and core
+                    }
+                    // only single stride
+                    else {
+                        data_stride = 0;
+                    }
+
+                    TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
+                    TT_ASSERT(data_stride < output_buffer->num_pages());
+                    auto stride_start = stride_it;
+                    uint32_t num_strides = 1;
+                    while(stride_it != end) {
+                        bool stride_not_complete = false;
+                        auto stride_it_inner = stride_it + 1;
+                        auto last_it_stride_inner = stride_it;
+                        for(uint32_t i=0; i<stride_size - 1; i++) {
+                            auto next_input_page = *(stride_it_inner);
+                            auto curr_input_page = *(last_it_stride_inner);
+                            int increment = 1;
+                            if(
+                                !(next_input_page.has_value()) or
+                                (next_input_page.value().first != curr_input_page.value().first) or
+                                ((int)next_input_page.value().second != (int)(curr_input_page.value().second) + (int)increment))
+                            {
+                                stride_not_complete = true;
+                                break;
+                            }
+                            last_it_stride_inner = stride_it_inner;
+                            stride_it_inner = stride_it_inner+1;
+                        }
+                        if(stride_not_complete) {
                             break;
                         }
-                        last_it_stride_inner = stride_it_inner;
-                        stride_it_inner = stride_it_inner+1;
-                    }
-                    if(stride_not_complete) {
-                        break;
-                    }
-                    num_strides++;
-                    last_it_stride = stride_it_inner - 1;
-                    stride_it = stride_it_inner;
-                    if(stride_it == end) {
-                        break;
-                    }
-                    auto next_input_page = *(stride_it);
-                    auto curr_input_page = *(last_it_stride);
-                    bool core_stride = ((stride.core.x != 0) or (stride.core.y != 0));
+                        num_strides++;
+                        last_it_stride = stride_it_inner - 1;
+                        stride_it = stride_it_inner;
+                        if(stride_it == end) {
+                            break;
+                        }
+                        auto next_input_page = *(stride_it);
+                        auto curr_input_page = *(last_it_stride);
+                        bool core_stride = ((stride.core.x != 0) or (stride.core.y != 0));
 
-                    if((next_input_page.first.x - curr_input_page.first.x != stride.core.x) or
-                        (next_input_page.first.y - curr_input_page.first.y != stride.core.y) or
-                        (abs((int)next_input_page.second - (int)curr_input_page.second) != (int)stride.data))
-                    {
-                        break;
+                        if( !next_input_page.has_value() or
+                            (next_input_page.value().first.x - curr_input_page.value().first.x != stride.core.x) or
+                            (next_input_page.value().first.y - curr_input_page.value().first.y != stride.core.y) or
+                            (abs((int)next_input_page.value().second - (int)curr_input_page.value().second) != (int)stride.data) or
+                            num_strides == MAX_NUM_STRIDES)
+                        {
+                            break;
+                        }
                     }
+                    ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->value().second,  .stride_size=stride_size, .stride=stride, .num_strides=num_strides, .skip=false});
+                    it = stride_it;
                 }
-                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=num_strides});
-                it = stride_it;
             }
         }
     }
 
-    return ret_map;
+    return std::make_tuple(page_width, ret_map);
 }
 
 
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
 
-std::vector<uint32_t> get_runtime_args_for_given_ranges(const std::vector<uint32_t> & physical_core_coords,
+std::vector<uint32_t> get_runtime_args_for_given_ranges(
+                                CoreCoord core,
+                                const std::vector<uint32_t> & physical_core_coords,
                                 const std::vector<PageStride> & page_stride_vector,
                                 const uint32_t output_page_offset,
                                 const uint32_t & input_addr,
@@ -778,7 +856,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(const std::vector<uint32
             runtime_args.push_back((uint32_t)core_start_stride); //start_x
             uint32_t stride_data_start = (ps.stride.data << 16) | (start_data);
             runtime_args.push_back((uint32_t)stride_data_start); //stride_data
-            uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides);
+            uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides << 8) | ((uint32_t)ps.skip);
             runtime_args.push_back((uint32_t)stride_size_num_strides);  // stride_size
             num_output_pages += ps.stride_size * num_strides;
         }
@@ -789,7 +867,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(const std::vector<uint32
 
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output) {
     auto device = input.device();
-    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+    auto [page_width, output_core_to_page_range_pair] = get_core_page_ranges(input, output);
 
     tt_metal::Program program{};
 
@@ -801,17 +879,15 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
     uint32_t dst_cb_index = 16;
     auto cores = corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t total_size, page_size, unit_size;
+    uint32_t total_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     if (input.get_layout() == Layout::TILE) {
-        page_size = tt_metal::detail::TileSize(data_format);
-        unit_size = page_size;
+        unit_size = tt_metal::detail::TileSize(data_format);
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
-        unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_legacy_shape()[-1] * output.element_size();
+        unit_size = page_width * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
 
@@ -819,13 +895,13 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, unit_size}));
 
     tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, unit_size}));
 
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(
@@ -851,10 +927,10 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         auto page_stride_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_stride_vector.size();
         std::vector<uint32_t> runtime_args = physical_core_coords;
-        auto runtime_args_0 = get_runtime_args_for_given_ranges(physical_core_coords, page_stride_vector, 0, input.buffer()->address(), 0, div_up(page_stride_vector.size(),2));
+        auto runtime_args_0 = get_runtime_args_for_given_ranges(core, physical_core_coords, page_stride_vector, 0, input.buffer()->address(), 0, div_up(page_stride_vector.size(),2));
         auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1]; //offset is equivalent to number of pages output in previous risc core
         tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
-        auto runtime_args_1 = get_runtime_args_for_given_ranges(physical_core_coords, page_stride_vector, output_page_offset, input.buffer()->address(), div_up(page_stride_vector.size(),2), page_stride_vector.size());
+        auto runtime_args_1 = get_runtime_args_for_given_ranges(core, physical_core_coords, page_stride_vector, output_page_offset, input.buffer()->address(), div_up(page_stride_vector.size(),2), page_stride_vector.size());
         tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
     }
 

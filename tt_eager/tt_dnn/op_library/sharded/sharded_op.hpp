@@ -120,6 +120,7 @@ struct PageStride {
     uint32_t stride_size; //number of pages per stride
     Stride stride;
     uint32_t num_strides;
+    bool skip;
 };
 
 struct CorePageRange {
@@ -133,6 +134,7 @@ struct CorePageStride {
 };
 
 
+#define MAX_NUM_STRIDES 255
 // TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
     const MemoryConfig output_mem_config;

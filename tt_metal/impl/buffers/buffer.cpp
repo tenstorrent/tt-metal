@@ -115,20 +115,30 @@ Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferTy
                 )
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type), buffer_layout_(buffer_layout), shard_parameters_(shard_parameters) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
-    validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
-
+    if(is_sharded(buffer_layout)){
+        validate_buffer_size_and_page_size(shard_parameters.value().tensor_shard_spec.num_cores() * shard_parameters.value().size() * page_size, page_size, buffer_type, buffer_layout, shard_parameters);
+    }
+    else {
+        validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
+    }
     this->allocate();
 }
 
 
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
+BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::optional<std::array <std::array<uint32_t, 2>, 2> > tensor2d_shape_page_shape_override){
 
+    auto shard_spec = buffer.shard_spec();
+    uint32_t num_pages_multiplier = 1;
+    if(tensor2d_shape_page_shape_override.has_value()) {
+        shard_spec = ShardSpecBuffer(shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        num_pages_multiplier = buffer.shard_spec().page_shape[1] / shard_spec.page_shape[1];
+    }
     BufferPageMapping buffer_page_mapping;
-    auto row_major = buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR;
+    auto row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
     uint32_t num_cores = buffer.num_cores();
 
-    buffer_page_mapping.all_cores_ = corerange_to_cores(buffer.shard_spec().grid(), num_cores, row_major);
+    buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
     TT_ASSERT(num_cores == buffer_page_mapping.all_cores_.size());
     uint32_t core_id = 0;
     for(auto core: buffer_page_mapping.all_cores_){
@@ -136,10 +146,11 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
         core_id++;
     }
 
-    uint32_t num_dev_pages = buffer.shard_spec().size() *  num_cores;
-    auto [core_host_page_indices, shard_shape] = core_to_host_pages(num_dev_pages, buffer.shard_spec().size(), num_cores, buffer.buffer_layout(), buffer.shard_spec().page_shape, buffer.shard_spec().shape(), buffer.shard_spec().tensor2d_shape);
+    uint32_t num_dev_pages = shard_spec.size() * num_cores;
+    uint32_t num_host_pages = buffer.num_pages() * num_pages_multiplier;
+    auto [core_host_page_indices, shard_shape] = core_to_host_pages(num_dev_pages, shard_spec.size(), num_cores, buffer.buffer_layout(), shard_spec.page_shape, shard_spec.shape(), shard_spec.tensor2d_shape);
     bool width_block_shard_with_padding = ((buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) and
-            buffer.num_dev_pages() != buffer.num_pages());
+            num_dev_pages != num_host_pages);
 
 
     buffer_page_mapping.core_host_page_indices_ = std::vector< std::vector<uint32_t>>(num_cores);
@@ -148,27 +159,27 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
         buffer_page_mapping.dev_page_to_core_mapping_.reserve(num_dev_pages);
     }
     else {
-        buffer_page_mapping.dev_page_to_host_page_mapping_ = std::vector<std::optional<uint32_t>>(buffer.num_pages());
-        buffer_page_mapping.dev_page_to_core_mapping_ = std::vector<uint32_t>(buffer.num_pages());
+        buffer_page_mapping.dev_page_to_host_page_mapping_ = std::vector<std::optional<uint32_t>>(num_host_pages);
+        buffer_page_mapping.dev_page_to_core_mapping_ = std::vector<uint32_t>(num_host_pages);
     }
-    buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(buffer.num_pages());
-    buffer_page_mapping.host_page_to_dev_page_mapping_= std::vector<uint32_t>(buffer.num_pages());
+    buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(num_host_pages);
+    buffer_page_mapping.host_page_to_dev_page_mapping_= std::vector<uint32_t>(num_host_pages);
     buffer_page_mapping.core_shard_shape_ = shard_shape;
     int dev_page_index = 0;
 
-    auto shape_in_pages = buffer.shard_spec().shape_in_pages();
+    auto shape_in_pages = shard_spec.shape_in_pages();
     for(uint32_t core_index = 0; core_index < core_host_page_indices.size() ; core_index++){
         uint32_t valid_shard_page = 0;
         if(width_block_shard_with_padding) {
             for(uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0] ; shard_page_x++){
                 for(uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                     uint32_t shard_page_id = shard_page_x * shape_in_pages[1] + shard_page_y;
-                    buffer_page_mapping.core_host_page_indices_[core_index].reserve(buffer.shard_spec().size());
+                    buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.size());
                     buffer_page_mapping.dev_page_to_core_mapping_.push_back(core_index);
                     std::optional<uint32_t> host_page_opt = std::nullopt;
                     if(shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
                         auto host_page = core_host_page_indices[core_index][valid_shard_page];
-                        if(host_page < buffer.num_pages()) {
+                        if(host_page < num_host_pages) {
                             host_page_opt = host_page;
                             buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
                             buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
@@ -184,7 +195,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
         else {
             for(uint32_t shard_page_id = 0; shard_page_id < core_host_page_indices[core_index].size() ; shard_page_id++){
                 auto host_page = core_host_page_indices[core_index][shard_page_id];
-                if(host_page < buffer.num_pages()) {
+                if(host_page < num_host_pages) {
                     buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
                     buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index] = core_index;
                     buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_index] = host_page;
