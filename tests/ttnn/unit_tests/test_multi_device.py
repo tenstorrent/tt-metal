@@ -334,3 +334,18 @@ def test_multi_device_permute(device_mesh, layout, memory_config, dtype):
     torch_loop_back_tensor = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=2))
 
     assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
+
+
+def test_max(device_mesh):
+    from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+
+    gate_logits_1SB8 = ttnn.from_torch(
+        torch.randn(1, 1, 32, 8),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    gate_logits_1SB8 = ttnn.to_device(gate_logits_1SB8, device_mesh)
+    weights_ex0_1SB1 = ttnn.max(gate_logits_1SB8, dim=3)
+    print(weights_ex0_1SB1)
