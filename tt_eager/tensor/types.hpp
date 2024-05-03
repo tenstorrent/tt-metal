@@ -402,22 +402,22 @@ struct MultiDeviceHostStorage {
 
         // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
         // preinitialize empty tensor handles and use/populate them in the worker threads.
-        void insert_buffer_and_shape_for_device(Device* device, const OwnedBuffer buffer, const Shape shape) {
+        void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer buffer, const Shape shape) {
             std::lock_guard<std::mutex> lock(mtx);
-            buffers[device->id()] = buffer;
-            shapes[device->id()] = shape;
+            buffers[buffer_index] = buffer;
+            shapes[buffer_index] = shape;
         }
 
-        OwnedBuffer get_buffer_for_device(Device* device) {
+        OwnedBuffer get_buffer(int buffer_index) {
             std::lock_guard<std::mutex> lock(mtx);
-            TT_FATAL(device->id() < buffers.size(), "Buffer not found for device " + std::to_string(device->id()));
-            return buffers[device->id()];;
+            TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index " + std::to_string(buffer_index));
+            return buffers[buffer_index];;
         }
 
-        Shape get_tensor_shape_for_device(Device* device) {
+        Shape get_tensor_shape(int shape_index) {
             std::lock_guard<std::mutex> lock(mtx);
-            TT_FATAL(device->id() < shapes.size(), "Buffer not found for device " + std::to_string(device->id()));
-            return shapes[device->id()];
+            TT_FATAL(shape_index < shapes.size(), "Buffer not found for device " + std::to_string(shape_index));
+            return shapes[shape_index];
         }
 
         uint32_t num_buffers() {
@@ -428,23 +428,33 @@ struct MultiDeviceHostStorage {
 
     struct MultiDeviceStorage {
         DistributedTensorConfig strategy;
+        std::vector<int> ordered_device_ids;
         std::unordered_map<int, DeviceBuffer> buffers;
         std::unordered_map<int, Shape> shapes;
         mutable std::mutex mtx;
         MultiDeviceStorage() = default;
-        MultiDeviceStorage(DistributedTensorConfig strategy_, std::unordered_map<int, DeviceBuffer> buffers_, std::unordered_map<int, Shape> shapes_) : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
+
+        MultiDeviceStorage(
+            DistributedTensorConfig strategy_,
+            std::vector<int> ordered_device_ids_,
+            std::unordered_map<int, DeviceBuffer> buffers_,
+            std::unordered_map<int, Shape> shapes_) : strategy(strategy_), ordered_device_ids(ordered_device_ids_), buffers(buffers_), shapes(shapes_) {}
+
         MultiDeviceStorage(MultiDeviceStorage &&other) {
+            ordered_device_ids = other.ordered_device_ids;
             strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
         MultiDeviceStorage(const MultiDeviceStorage &other) {
+            ordered_device_ids = other.ordered_device_ids;
             strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
 
         MultiDeviceStorage &operator=(const MultiDeviceStorage &other) {
+            ordered_device_ids = other.ordered_device_ids;
             strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
@@ -452,6 +462,7 @@ struct MultiDeviceHostStorage {
         }
 
         MultiDeviceStorage &operator=( MultiDeviceStorage &&other) {
+            ordered_device_ids = other.ordered_device_ids;
             strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
@@ -459,7 +470,7 @@ struct MultiDeviceHostStorage {
         }
 
         bool operator == (const MultiDeviceStorage& other) {
-            return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
+            return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
         }
 
         const MemoryConfig memory_config() const {
