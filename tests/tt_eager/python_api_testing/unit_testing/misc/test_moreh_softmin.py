@@ -9,8 +9,6 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 import torch.nn.functional as F
-
-import ttnn
 from models.utility_functions import is_wormhole_b0
 
 compute_kernel_options = [
@@ -26,16 +24,16 @@ def get_compute_kernel_options(compute_kernel_options):
     if is_wormhole_b0():
         fp32_dest_acc_en = compute_kernel_options
         packer_l1_acc = False
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
         )
     else:
         # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
             math_approx_mode=True,
         )
     return compute_kernel_config
