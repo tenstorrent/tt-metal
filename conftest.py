@@ -310,7 +310,6 @@ def all_devices(request):
     import tt_lib as ttl
 
     num_devices = ttl.device.GetNumAvailableDevices()
-    print(num_devices)
 
     # Get only physical devices
     devices = ttl.device.CreateDevices([i for i in range(num_devices)])
