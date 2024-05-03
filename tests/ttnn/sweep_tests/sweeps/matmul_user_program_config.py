@@ -41,7 +41,7 @@ parameters = {
             ttnn.L1_MEMORY_CONFIG,
             ttnn.L1_MEMORY_CONFIG,
         ),
-        # BMM no mcast
+        # BMM no mcast: per_core_M > M
         (
             (2, 16),
             (384, 64, 128),
@@ -74,6 +74,32 @@ parameters = {
                     False,
                 ),
             ),
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ),
+        # BMM no mcast: per_core_M < M
+        (
+            (4, 1),
+            (1024, 64, 1024),
+            True,
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=2,  # K // 32
+                out_subblock_h=1,
+                out_subblock_w=4,
+                per_core_M=4,  #  B * H * M // num_cores(32) // 32
+                per_core_N=32,  # N // 32
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+                    (128, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+            ttnn.L1_MEMORY_CONFIG,
             ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         ),
         # Matmul 1D mcast in1 with height padding

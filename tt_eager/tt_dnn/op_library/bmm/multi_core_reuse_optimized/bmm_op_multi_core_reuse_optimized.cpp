@@ -34,11 +34,12 @@ operation::ProgramWithCallbacks create_program(
 
 ) {
     tt_metal::Program program{};
-    uint32_t batch_scale_factor = per_core_M / M;
-    uint32_t num_blocks = (K/in0_block_w);
 
-    uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles;
+    // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *= batch_scale_factor
+    uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
+    uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
+
+    uint32_t num_blocks = (K/in0_block_w);
 
     //Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
     //unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -60,14 +61,16 @@ operation::ProgramWithCallbacks create_program(
     bool in1_is_sharded = in1.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
+    uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
+    uint32_t in0_CB_tiles = in0_block_num_tiles;
     if (in0_is_sharded) {
-        in0_CB_tiles *= num_blocks;
+        in0_CB_tiles = per_core_M * K;
     } else {
         in0_CB_tiles *= 2; // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-    uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_tiles = in1_block_tiles;
+    uint32_t in1_block_num_tiles = per_core_N * in0_block_w;
+    uint32_t in1_CB_tiles = in1_block_num_tiles;
     if (in1_is_sharded) {
         in1_CB_tiles *= num_blocks * batch_scale_factor;
     } else {
@@ -81,20 +84,20 @@ operation::ProgramWithCallbacks create_program(
 
 
     // Compute kernel compile time args
-    uint32_t in0_num_subblocks = (M/out_subblock_h);
-    uint32_t in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;
+    uint32_t in0_num_subblocks = (per_core_M_per_batch/out_subblock_h);
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
     uint32_t in1_num_subblocks = (per_core_N/out_subblock_w);
-    uint32_t in1_block_num_tiles = out_subblock_w*in0_block_w*in1_num_subblocks;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
 
     uint32_t out_subblock_num_tiles = out_subblock_h*out_subblock_w;
+    uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
+    uint32_t out_num_subblocks_w = in1_num_subblocks;
 
 
-    uint32_t num_tiles_per_block_in0 = M * K;
+    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * K;
     uint32_t num_tiles_per_block_in1 = K * per_core_N;
-    uint32_t num_tiles_per_block_out = M * per_core_N;
+    uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
     std::optional<ShardSpec> shard_spec = std::nullopt;
     if (in0_is_sharded) {
@@ -298,7 +301,7 @@ operation::ProgramWithCallbacks create_program(
 
     // Write runtime args to device
     std::vector<uint32_t> mm_reader_args = {
-        (std::uint32_t)  K / in0_block_w, // num_blocks
+        (std::uint32_t)  num_blocks, // num_blocks
 
         (std::uint32_t)  0, // batch placeholder
         (std::uint32_t)  bcast_batch, // bcast_B
@@ -311,12 +314,12 @@ operation::ProgramWithCallbacks create_program(
         (std::uint32_t)  in0_block_w, // in0_tensor_next_block_stride
 
         (std::uint32_t)  in0_block_w, // in0_block_w
-        (std::uint32_t)  M, // in0_block_h
-        (std::uint32_t)  in0_block_w * M, //in0_block_num_tiles
+        (std::uint32_t)  per_core_M_per_batch, // in0_block_h
+        (std::uint32_t)  in0_block_num_tiles, //in0_block_num_tiles
     };
 
     std::vector<uint32_t> mm_writer_args = {
-        (std::uint32_t)  K / in0_block_w, // num_blocks
+        (std::uint32_t)  num_blocks, // num_blocks
         (std::uint32_t)  0, // batch placeholder
         (std::uint32_t)  bcast_batch, // bcast_B
         (std::uint32_t)  M * N, // MtNt
@@ -330,7 +333,7 @@ operation::ProgramWithCallbacks create_program(
 
         (std::uint32_t)  per_core_N, // in1_block_w
         (std::uint32_t)  in0_block_w, //in1_block_h
-        (std::uint32_t)  per_core_N * in0_block_w, // in1_block_num_tiles
+        (std::uint32_t)  in1_block_num_tiles, // in1_block_num_tiles
 
         (std::uint32_t) out_buffer->address(), // out_tensor_addr
         (std::uint32_t) 0, // out_tensor_start_tile_id placeholder
@@ -342,8 +345,8 @@ operation::ProgramWithCallbacks create_program(
         (std::uint32_t) out_subblock_w, // out_subblock_w
         (std::uint32_t) out_subblock_h, // out_subblock_h
         (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
-        (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
-        (std::uint32_t) (M / out_subblock_h), // out_num_subblocks_h
+        (std::uint32_t) out_num_subblocks_w, // out_num_subblocks_w
+        (std::uint32_t) out_num_subblocks_h, // out_num_subblocks_h
     };
     bool row_major = false;
     if (shard_spec.has_value()) {
@@ -362,7 +365,7 @@ operation::ProgramWithCallbacks create_program(
         mm_reader_args[5] = num_blocks_written * num_tiles_per_block_in0;
 
         mm_writer_args[1] = num_output_blocks_per_core;
-        mm_writer_args[6] = num_blocks_written * num_tiles_per_block_in1; //in1_tensor_start_tile_id
+        mm_writer_args[6] = (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1; //in1_tensor_start_tile_id
         mm_writer_args[14] = num_blocks_written * num_tiles_per_block_out; // out_tensor_start_tile_id
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
@@ -443,12 +446,11 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out) {
 
-    // Pass in a and b shapes instead
-
-    TT_FATAL(bcast_batch == false, "Bcast batch not supported for this parallelization");
 
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
+
+    TT_FATAL((bcast_batch == false) or (ashape[0] == 1), "Bcast batch not supported for this parallelization");
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype()); // in0
@@ -509,7 +511,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     uint32_t Nt = bshape[3]/TILE_WIDTH;
 
     // TODO: Generalize
-    TT_FATAL(fuse_batch, "Only fuse_batch=true is supported for bert large optimized bmm!");
+    TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
