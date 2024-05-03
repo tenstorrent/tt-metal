@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/tensor_impl_wrapper.hpp"
+#include "tensor/tensor_impl.hpp"
 
 #include "common/bfloat16.hpp"
+#include "common/bfloat4.hpp"
+#include "common/bfloat8.hpp"
 #include <bitset>
 
 namespace tt {
@@ -100,8 +103,8 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
         {DataType::FLOAT32, &to_layout<float>},
         {DataType::INT32, &to_layout<int32_t>},
         {DataType::UINT32, &to_layout<uint32_t>},
-        {DataType::BFLOAT8_B, &to_layout_bfloat8_b},
-        {DataType::BFLOAT4_B, &to_layout_bfloat4_b},
+        {DataType::BFLOAT8_B, &to_layout_bfloat<bfloat8_b>},
+        {DataType::BFLOAT4_B, &to_layout_bfloat<bfloat4_b>},
         {DataType::UINT16, &to_layout<uint16_t>},
     };
     return to_layout_map.at(tensor.get_dtype())(tensor, target_layout);
