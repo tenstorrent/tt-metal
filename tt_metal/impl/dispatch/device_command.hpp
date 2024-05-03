@@ -323,7 +323,6 @@ class DeviceCommand {
         this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
         auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
-            if (!zero_init_disable) DeviceCommand::zero(write_packed_cmd);
             write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
             write_packed_cmd->write_packed.is_multicast = multicast;
             write_packed_cmd->write_packed.count = num_sub_cmds;
@@ -357,9 +356,21 @@ class DeviceCommand {
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
+    template<typename CommandPtr, bool data=false>
+    CommandPtr reserve_space(uint32_t size_to_writeB) {
+        this->validate_cmd_write(size_to_writeB);
+        CommandPtr cmd = (CommandPtr)((char *)this->cmd_region + this->cmd_write_offsetB);
+        // Only zero out cmds
+        if constexpr(!data) {
+            if (zero_init_enable) DeviceCommand::zero(cmd);
+        }
+        this->cmd_write_offsetB += size_to_writeB;
+        return cmd;
+    }
+
    private:
 
-    static bool zero_init_disable;
+    static bool zero_init_enable;
 
     void add_prefetch_relay_inline(bool flush, uint32_t lengthB) {
         auto initialize_relay_write = [&](CQPrefetchCmd *relay_write) {
@@ -395,15 +406,6 @@ class DeviceCommand {
         }
     }
 
-    template<typename CommandPtr>
-    CommandPtr reserve_space(uint32_t size_to_writeB) {
-        this->validate_cmd_write(size_to_writeB);
-        CommandPtr cmd = (CommandPtr)((char *)this->cmd_region + this->cmd_write_offsetB);
-        if (!zero_init_disable) DeviceCommand::zero(cmd);
-        this->cmd_write_offsetB += size_to_writeB;
-        return cmd;
-    }
-
     void deepcopy(const DeviceCommand &other) {
         if (other.cmd_region_vector.empty() and other.cmd_region != nullptr) {
             this->cmd_region = other.cmd_region;
@@ -430,7 +432,7 @@ class DeviceCommand {
 };
 
 template <bool hugepage_write>
-bool DeviceCommand<hugepage_write>::zero_init_disable = tt::parse_env<bool>("TT_METAL_ZERO_INIT_DISABLE", false);
+bool DeviceCommand<hugepage_write>::zero_init_enable = tt::parse_env<bool>("TT_METAL_ZERO_INIT_ENABLE", false);
 
 using HugepageDeviceCommand = DeviceCommand<true>;
 using HostMemDeviceCommand = DeviceCommand<false>;
