@@ -37,6 +37,8 @@ using std::chrono::microseconds;
 int main(int argc, char** argv) {
     bool pass = true;
     bool bypass_check = false;
+    bool skip_read = false;
+    bool skip_write = false;
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
@@ -63,6 +65,12 @@ int main(int argc, char** argv) {
 
             std::tie(bypass_check, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
+
+            std::tie(skip_read, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-read");
+
+            std::tie(skip_write, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
 
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
@@ -94,7 +102,7 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
-            {
+            if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
                 EnqueueWriteBuffer(device->command_queue(), buffer, src_vec, false);
                 Finish(device->command_queue());
@@ -109,7 +117,7 @@ int main(int argc, char** argv) {
                     h2d_bandwidth[i]);
             }
 
-            {
+            if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
                 EnqueueReadBuffer(device->command_queue(), buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
