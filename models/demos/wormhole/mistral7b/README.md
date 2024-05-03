@@ -4,6 +4,10 @@ Demo showcasing Mistral-7B-instruct running on Wormhole, using ttnn.
 
 ## How to Run
 
+If you are running on a T3000 please set the following:
+
+`export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+
 To run the model for a single user you can use the command line input:
 
 `pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/mistral7b/demo/demo.py`
