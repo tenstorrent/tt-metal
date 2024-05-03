@@ -70,7 +70,7 @@ void NlpCreateHeadsDecode::validate(const std::vector<Tensor>& input_tensors) co
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
 
     TT_FATAL(input_shape[3] % TILE_WIDTH == 0, "Unsupported input shape");
@@ -83,6 +83,8 @@ void NlpCreateHeadsDecode::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     uint32_t num_cores = core_grid.x * core_grid.y;
+    // Support maximum 32 heads for now
+    TT_FATAL(this->num_q_heads <= 32);
     // 1 User Per Core Max and 32 users for now
     TT_FATAL(num_cores >= 32, "Need at least 32 cores for decode");
     TT_FATAL(this->num_q_heads >= this->num_kv_heads);

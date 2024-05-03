@@ -30,14 +30,26 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
 
+    uint32_t element_size = input_tensor.element_size();
+    uint32_t sub_tile_line_bytes = 16 * element_size;
     auto q_shard_spec = output[0].shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    auto in_shard_spec = input_tensor.shard_spec().value();
+    auto in_cores = in_shard_spec.grid;
+    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
-    uint32_t per_core_out_q_heads = num_q_heads / q_cores.num_cores();
-    uint32_t per_risc0_out_q_heads = div_up(per_core_out_q_heads, 2);
-    uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
-    uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
+    log_info("[xuncai] head_tiles: {}", head_tiles);
+    log_info("[xuncai] head_size: {}", head_size);
+    log_info("[xuncai] element_size: {}", element_size);
+    log_info("[xuncai] sub_tile_line_bytes: {}", sub_tile_line_bytes);
+    log_info("[xuncai] in_shard_spec: {}", in_shard_spec);
+    log_info("[xuncai] in_cores: {}", in_cores);
+    log_info("[xuncai] in_num_tiles: {}", in_num_tiles);
+
+    log_info("[xuncai] q_shard_spec: {}", q_shard_spec);
+    log_info("[xuncai] q_cores: {}", q_cores);
+    log_info("[xuncai] q_num_tiles: {}", q_num_tiles);
 
     uint32_t q_output_cb_index = CB::c_out0;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -50,6 +62,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto k_cores = k_shard_spec.grid;
     auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
+    log_info("[xuncai] k_shard_spec: {}", k_shard_spec);
+    log_info("[xuncai] k_cores: {}", k_cores);
+    log_info("[xuncai] k_num_tiles: {}", k_num_tiles);
+
     uint32_t k_output_cb_index = CB::c_out1;
     tt_metal::CircularBufferConfig cb_k_output_config =
         tt_metal::CircularBufferConfig(
@@ -61,6 +77,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto v_cores = q_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
+    log_info("[xuncai] v_shard_spec: {}", k_shard_spec);
+    log_info("[xuncai] v_cores: {}", k_cores);
+    log_info("[xuncai] v_num_tiles: {}", k_num_tiles);
+
     uint32_t v_output_cb_index = CB::c_out2;
     tt_metal::CircularBufferConfig cb_v_output_config =
         tt_metal::CircularBufferConfig(
@@ -68,145 +88,90 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             .set_page_size(v_output_cb_index, single_tile_size).set_globally_allocated_address(*output[2].buffer());
     auto cb_v_output = tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
-    uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
-    uint32_t per_core_in_kv_heads = num_kv_heads / input_tensor.shard_spec().value().num_cores();
-
     uint32_t q_base_addr = input_tensor.buffer()->address();
-    uint32_t k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
-    uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
+    uint32_t k_base_addr = q_base_addr + num_q_heads * head_tiles * single_tile_size;
+    uint32_t v_base_addr = k_base_addr + num_kv_heads * head_tiles * single_tile_size;
 
     std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) element_size,
+        (std::uint32_t) sub_tile_line_bytes,
         q_output_cb_index,
-        k_output_cb_index
-    };
-    std::vector<uint32_t> writer_compile_time_args = {
-        q_output_cb_index,
-        v_output_cb_index
+        k_output_cb_index,
+        v_output_cb_index,
     };
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
+        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
-        q_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
-
+    // cores to read and write to output
+    uint32_t num_cores = q_cores.num_cores(); // number of cores of the output
     auto core_grid = q_cores.bounding_box();
     uint32_t num_cores_x = core_grid.end.x + 1, num_cores_y = core_grid.end.y + 1;
-    uint32_t num_kv_cores = k_cores.num_cores();
-
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
 
+    // cores for input
+    uint32_t in_num_cores = in_cores.num_cores(); // number of cores of the input
+    auto in_core_grid = in_cores.bounding_box();
+    uint32_t in_num_cores_x = in_core_grid.end.x + 1, in_num_cores_y = in_core_grid.end.y + 1;
+
     std::vector<uint32_t> noc_x_coords;
-    noc_x_coords.reserve(num_cores_x);
-    for (uint32_t x = 0; x < num_cores_x; ++x) {
+    noc_x_coords.reserve(in_num_cores_x);
+    for (uint32_t x = 0; x < in_num_cores_x; ++x) {
         noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
     }
     std::vector<uint32_t> noc_y_coords;
-    noc_y_coords.reserve(num_cores_y);
-    for (uint32_t y = 0; y < num_cores_y; ++y) {
+    noc_y_coords.reserve(in_num_cores_y);
+    for (uint32_t y = 0; y < in_num_cores_y; ++y) {
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
     }
 
-    uint32_t remote_q_head_start_idx = 0;
-    uint32_t remote_kv_head_start_idx = 0;
-    uint32_t q_x = 0, q_y = 0, kv_x = 0, kv_y = 0;
     uint32_t q_start_addr = q_base_addr;
     uint32_t k_start_addr = k_base_addr;
     uint32_t v_start_addr = v_base_addr;
 
-    uint32_t remote_q_read = 0;
-    uint32_t remote_kv_read = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
+        uint32_t in_tile_offset_by_batch = i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512*element_size;
+
         const auto& core = cores[i];
-        bool read_kv_heads = i < k_cores.num_cores();
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(18 + num_cores_x + num_cores_y);
+        reader_runtime_args.reserve(10 + in_num_cores_x + in_num_cores_y);
         reader_runtime_args = {
             head_size,
-            per_risc0_out_q_heads,
-            per_core_in_q_heads,
-            remote_q_head_start_idx,
-            q_x,
-            q_y,
-            q_base_addr,
+            num_q_heads,
+            num_kv_heads,
+            head_tiles,
+            in_tile_offset_by_batch,
+            0, // start_q_x
+            0, // start_q_y
             q_start_addr,
-            0,
-            read_kv_heads,
-            per_core_out_kv_heads,
-            per_core_in_kv_heads,
-            remote_kv_head_start_idx,
-            kv_x,
-            kv_y,
-            k_base_addr,
             k_start_addr,
-            k_num_tiles,
-            num_cores_x,
+            v_start_addr,
+            in_num_cores_x,
         };
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
 
-        remote_q_read += per_risc0_out_q_heads;
-        q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
-        q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
-        remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
-        q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-
-        reader_runtime_args[1] = per_risc1_out_q_heads;
-        reader_runtime_args[3] = remote_q_head_start_idx;
-        reader_runtime_args[4] = q_x;
-        reader_runtime_args[5] = q_y;
-        reader_runtime_args[7] = q_start_addr;
-        reader_runtime_args[8] = per_risc0_out_q_heads * head_size;
-
-        if (per_risc1_out_q_heads > 0) {
-            remote_q_read += per_risc1_out_q_heads;
-            q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
-            q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
-            remote_q_head_start_idx = (per_risc1_out_q_heads + remote_q_head_start_idx) % per_core_in_q_heads;
-            q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-        }
-
-        if (read_kv_heads) {
-            reader_runtime_args[15] = v_base_addr;
-            reader_runtime_args[16] = v_start_addr;
-            remote_kv_read += per_core_out_kv_heads;
-            kv_y = (remote_kv_read / per_core_in_kv_heads) / num_cores_x;
-            kv_x = (remote_kv_read / per_core_in_kv_heads) % num_cores_x;
-            remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
-            k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
-            v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
-        }
-
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
     auto override_runtime_arguments_callback = [
             reader_kernel_id,
-            writer_kernel_id,
+            num_q_heads,
+            num_kv_heads,
             num_cores,
-            num_cores_y,
+            in_num_cores_y,
             cb_q_output,
             cb_k_output,
             cb_v_output,
             cores,
             head_size,
-            per_risc0_out_q_heads,
-            per_risc1_out_q_heads,
-            per_core_in_q_heads,
-            per_core_out_kv_heads,
-            per_core_in_kv_heads,
             head_tiles,
-            num_kv_cores,
-            single_tile_size
-        ]
+            single_tile_size,
+            element_size,
+            sub_tile_line_bytes
+    ]
     (
         const void* operation,
         Program &program,
@@ -228,43 +193,21 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
         UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
 
         uint32_t q_base_addr = input_tensors[0].buffer()->address();
-        uint32_t k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
-        uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
+        uint32_t k_base_addr = q_base_addr + num_q_heads * head_tiles * single_tile_size;
+        uint32_t v_base_addr = k_base_addr + num_kv_heads * head_tiles * single_tile_size;
 
-        uint32_t remote_q_head_start_idx = 0;
-        uint32_t remote_kv_head_start_idx = 0;
         uint32_t q_start_addr = q_base_addr;
         uint32_t k_start_addr = k_base_addr;
         uint32_t v_start_addr = v_base_addr;
 
         for (uint32_t i = 0; i < num_cores; ++i) {
+            uint32_t in_tile_offset_by_batch = i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512*element_size;
             const auto& core = cores[i];
-            bool read_kv_heads = i < num_kv_cores;
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[6] = q_base_addr;
-                runtime_args[7] = q_start_addr;
-                runtime_args[15] = k_base_addr;
-                runtime_args[16] = k_start_addr;
-                remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
-                q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-            }
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[6] = q_base_addr;
-                runtime_args[15] = v_base_addr;
-                if (per_risc1_out_q_heads > 0) {
-                    runtime_args[7] = q_start_addr;
-                    remote_q_head_start_idx = (remote_q_head_start_idx + per_risc1_out_q_heads) % per_core_in_q_heads;
-                    q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
-                }
-                if (read_kv_heads) {
-                    runtime_args[16] = v_start_addr;
-                    remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
-                    k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
-                    v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
-                }
-            }
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[4] = in_tile_offset_by_batch;
+            runtime_args[7] = q_start_addr;
+            runtime_args[8] = k_start_addr;
+            runtime_args[9] = v_start_addr;
         }
     };
 
