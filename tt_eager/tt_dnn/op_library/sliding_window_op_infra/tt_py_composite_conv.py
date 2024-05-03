@@ -29,7 +29,6 @@ from tt_lib.utils import (
 )
 
 import tt_lib as ttl
-import ttnn
 import torch
 import math
 import warnings
@@ -877,7 +876,6 @@ class TTPyCompositeConv(TTPyOp):
         if self.enable_auto_formatting and not activation.is_sharded():
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
-        ttnn.synchronize_device(self.device)
         if self.enable_auto_formatting and activation.is_sharded():
             activation = self.conv_output_sharded_to_interleaved(activation)
         return activation
