@@ -366,7 +366,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
 tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M, const uint32_t per_core_N, const bool per_core_M_equals_subblock_h_constraint, bool per_core_N_equals_subblock_w_constraint, bool fp32_dest_acc_en);
 
 // TODO: Review usage of matmul bool; should probably infer this from batch
-tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation = std::nullopt, const bool matmul = false, const std::optional<const CoreCoord> core_coord = std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+tt::operations::primary::MatmulProgramConfig get_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &output_mem_config, std::optional<UnaryWithParam> fused_activation = std::nullopt, const bool matmul = false, const std::optional<const CoreCoord> user_core_coord = std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 }  // namespace bmm_op_utils
 
 
@@ -387,7 +387,7 @@ inline Tensor matmul(
     std::optional<const DataType> output_dtype = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool untilize_out = false,
-    std::optional<const CoreCoord> core_coord = std::nullopt,
+    std::optional<const CoreCoord> user_core_coord = std::nullopt,
     std::optional<const bool> input_b_is_batched = std::nullopt) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
@@ -400,7 +400,7 @@ inline Tensor matmul(
     }
 
     operation::launch_op(
-        [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.device()->arch();
@@ -409,7 +409,7 @@ inline Tensor matmul(
             auto matmul_program_config = program_config;
 	    if (is_program_config_default(program_config) && input_tensor_a.is_sharded()) {
 	        bool bmm = input_b_is_batched.value_or(false);
-	        matmul_program_config = bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, core_coord, compute_kernel_config);
+	        matmul_program_config = bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
 	    }
             return operation::run(Matmul{matmul_program_config, broadcast_batch, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
         },
