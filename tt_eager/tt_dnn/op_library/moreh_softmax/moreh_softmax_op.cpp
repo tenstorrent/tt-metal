@@ -145,7 +145,7 @@ Tensor moreh_softmax(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config);
+    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     output_tensor = operation::run(
                MorehSoftmax{
                    .dim = dim,
@@ -173,7 +173,7 @@ Tensor moreh_softmin(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config);
+    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     output_tensor = operation::run(
                MorehSoftmax{
                    .dim = dim,
@@ -201,7 +201,7 @@ Tensor moreh_logsoftmax(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config);
+    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     output_tensor = operation::run(
         MorehSoftmax{
             .dim = dim,
