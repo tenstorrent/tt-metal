@@ -213,9 +213,12 @@ void relay_to_next_cb(uint32_t data_ptr,
         preamble_size == 0 || preamble_size == sizeof(dispatch_packet_header_t),
         "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
 
+    bool page_acquired = false;
     // The downstream packetizing stage will initialize the other fields, but it needs info on
     // the length of the transfer to be packetized.
     if (preamble_size > 0) {
+        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all availabl
+        page_acquired = true;
         uint64_t downstream_noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
         noc_inline_dw_write(downstream_noc_addr, length + preamble_size);
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
@@ -243,11 +246,16 @@ void relay_to_next_cb(uint32_t data_ptr,
                     uint32_t orphan_size = preamble_size;
                     ASSERT(dispatch_cb_end - data_ptr == preamble_size);
                     if (orphan_size != 0) {
+                        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all availabl
                         noc_async_write(data_ptr, dst, orphan_size);
                         block_noc_writes_to_clear[rd_block_idx]++;
+                        page_acquired = true;
                         length -= orphan_size;
                         xfer_size -= orphan_size;
                         downstream_cb_data_ptr += orphan_size;
+                        if (downstream_cb_data_ptr == downstream_cb_end) {
+                            downstream_cb_data_ptr = downstream_cb_base;
+                        }
                         dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
                     }
                     cb_fence = dispatch_cb_base;
@@ -276,7 +284,9 @@ void relay_to_next_cb(uint32_t data_ptr,
         }
 
         // Get downstream page
-        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all available
+        if (page_acquired == false) {
+            cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all available
+        }
         noc_async_write(data_ptr, dst, xfer_size);
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
         cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1); // XXXX optimize, take all available
@@ -287,7 +297,7 @@ void relay_to_next_cb(uint32_t data_ptr,
         if (downstream_cb_data_ptr == downstream_cb_end) {
             downstream_cb_data_ptr = downstream_cb_base;
         }
-
+        page_acquired = false;
         extra = 0;
     }
 
@@ -643,7 +653,7 @@ static void process_wait() {
     DEBUG_STATUS('P', 'W', 'W');
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
-    DPRINT << " DISPATCH WAIT " << HEX() << addr << " count " << count << ENDL();
+    DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
