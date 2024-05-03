@@ -1536,8 +1536,6 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
         uint32_t bytes_xfered = std::min(remaining_bytes_to_read, bytes_avail_in_completion_queue);
         uint32_t num_pages_xfered = (bytes_xfered + dispatch_constants::TRANSFER_PAGE_SIZE - 1) / dispatch_constants::TRANSFER_PAGE_SIZE;
 
-        this->manager.completion_queue_pop_front(num_pages_xfered, this->id);
-
         remaining_bytes_to_read -= bytes_xfered;
 
         if (linear_page_copy) {
@@ -1662,6 +1660,7 @@ void HWCommandQueue::copy_into_user_space(const detail::ReadBufferDescriptor &re
             dst_offset_bytes += num_bytes_to_copy;
             contig_dst_offset = dst_offset_bytes;
         }
+        this->manager.completion_queue_pop_front(num_pages_xfered, this->id);
     }
 }
 
