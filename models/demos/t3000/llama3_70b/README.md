@@ -76,3 +76,9 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 - **Model Functionality:** Implements decode-to-prefill strategy, where prompts are processed token-by-token to produce KV caches, followed by token generation in decode mode.
 
 Ensure you follow these guidelines to successfully run the Llama3-70B demo.
+
+## Benchmarking
+For best performance results, please do the following:
+
+- Set environment variable `TT_METAL_ASYNC_DEVICE_QUEUE=1`.
+- Ensure the cpu frequency governor is set to `performance`.
