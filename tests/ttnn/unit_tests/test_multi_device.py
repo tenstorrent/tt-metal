@@ -172,6 +172,28 @@ def test_ttnn_multi_device_all_gather(pcie_device_mesh):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
+def test_ttnn_multi_device_all_gather_all_devices(device_mesh):
+    """Multidevice API test for ttnn.all_gather CCL operation"""
+    from ttnn import ShardTensorToMesh
+
+    full_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(device_mesh, dim=3))
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for device_tensor in device_tensors:
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        device_tensor_torch_reordered = torch.clone(device_tensor_torch)
+        hamiltonian_ring_indices = [0, 7, 6, 1, 2, 5, 4, 3]
+        for i, h in enumerate(hamiltonian_ring_indices):
+            device_tensor_torch_reordered[:, :, :, h * 32 : (h + 1) * 32] = device_tensor_torch[
+                :, :, :, i * 32 : (i + 1) * 32
+            ]
+        assert torch.all(device_tensor_torch_reordered == full_tensor)
+
+
 def test_multi_device_single_op_unary(device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
