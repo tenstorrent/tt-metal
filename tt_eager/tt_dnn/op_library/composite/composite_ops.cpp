@@ -1529,6 +1529,36 @@ Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_c
     return power(input_a, exponent, output_mem_config);
 }
 
+Tensor _unary_floor(const Tensor& x, const MemoryConfig& output_mem_config) {
+    Tensor value = x;
+    Tensor orig = x;
+    value = where(logical_and(gte(value, zeros_like(value)), lt(value, ones_like(value))), zeros_like(value), value);
+    value = where(logical_and(gte(value, neg(ones_like(value))), lt(value, zeros_like(value))), neg(ones_like(value)), value);
+    for (int i=0;i<10;i++){
+        value = where(unary_gt(abs(value), 10000), sub_unary(abs(value), 10000), value);
+    }
+    for (int i=0;i<10;i++){
+        value = where(unary_gt(abs(value), 1000), sub_unary(abs(value), 1000), value);
+    }
+    for (int i=0;i<10;i++){
+        value = where(unary_gt(abs(value), 100), sub_unary(abs(value), 100), value);
+    }
+    for (int i=0;i<10;i++){
+        value = where(unary_gt(abs(value), 10), sub_unary(abs(value), 10), value);
+    }
+    for (int i=0;i<10;i++){
+        value = where(gt(abs(value), ones_like(value)), sub_unary(abs(value), 1), value);
+    }
+    value = where(gt(abs(orig), ones_like(value)),sub(abs(orig), value), value);
+    value = where(lt(orig, neg(ones_like(value))), sub_unary(neg(value), 1), value);
+    value = where(eq(sub(orig, value), ones_like(value)), add_unary(value, 1), value);
+    value = where(logical_and(lte_unary(orig, -256), gte_unary(orig, -512)), add_unary(value, 2), value);
+    return value;
+}
+Tensor unary_floor(const Tensor& a, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _unary_floor)(a, output_mem_config);
+}
+
 // Argmax returns the index of maximum element in the tensor
 Tensor _argmax(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
     auto& input_shape = input_a.get_legacy_shape();

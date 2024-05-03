@@ -477,6 +477,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.polygamma
 
+.. autofunction:: tt_lib.tensor.unary_floor
+
 Tensor relational operations
 ============================
 .. autofunction:: tt_lib.tensor.gtz
@@ -1077,7 +1079,7 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
-    
+
 .. autofunction:: tt_lib.tensor.complex_mul_bw
 
 .. autofunction:: tt_lib.tensor.complex_div_bw

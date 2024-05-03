@@ -171,6 +171,10 @@ Tensor div(
     bool accurate_mode = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor unary_floor(
+    const Tensor& input_a,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(
     const Tensor& input_a,

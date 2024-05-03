@@ -785,6 +785,10 @@ def fill_rm(x, *args, **kwargs):
     return y
 
 
+def floor(x, *args, **kwargs):
+    return torch.floor(x)
+
+
 def fill_bw(x, *args, **kwargs):
     grad_data = x.detach().clone()
 
