@@ -10,6 +10,7 @@ import ttnn.operations.binary
 
 
 @pytest.mark.eager_package_silicon
+@pytest.mark.skip("Tries to open device twice")
 def test_ttnn_import(reset_seeds):
     with ttnn.manage_device(device_id=0) as device:
         pass
