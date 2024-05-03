@@ -12,7 +12,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
+      CONFIG: Release
       SILENT: 0
       VERBOSE: 1
     environment: dev
@@ -25,7 +25,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
-          CONFIG=ci cmake -B build
+          cmake -B build
           cmake --build build --target tests -- -j`nproc`
           cmake --build build --target metal-install
 
