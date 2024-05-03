@@ -263,8 +263,7 @@ def from_torch(
             raise RuntimeError("device must be specified when memory_config is specified")
 
     if mesh_mapper:
-        device_id_to_shard_ranges = mesh_mapper.map(tensor)
-        shards = list(device_id_to_shard_ranges.values())
+        shards = mesh_mapper.map(tensor)
         tensor = ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
     else:
         tensor = ttl.tensor.Tensor(tensor, dtype)

@@ -291,17 +291,21 @@ OutputTensors run_multi_device_operation(
     OutputTensors multi_device_output_tensors;
     for (int i = 0; i < num_output_tensors_per_device; ++i)
     {
+        std::vector<int> ordered_device_ids;
         std::unordered_map<int, DeviceBuffer> buffers;
         std::unordered_map<int, Shape> shapes;
         for (Device *device : devices) {
+            const auto device_id = device->id();
             if constexpr(std::is_same_v<Tensors, std::remove_const_t<OutputTensors>>){
-                buffers.insert({device->id(), per_device_output_tensors[device][i].device_buffer()});
-                shapes.insert({device->id(),per_device_output_tensors[device][i].get_legacy_shape()});
+                ordered_device_ids.push_back(device_id);
+                buffers.emplace(device_id, per_device_output_tensors[device][i].device_buffer());
+                shapes.emplace(device_id, per_device_output_tensors[device][i].get_legacy_shape());
             }
             else if constexpr(std::is_same_v<OptionalTensors, std::remove_const_t<OutputTensors>>){
                 if(per_device_output_tensors[device][i].has_value()){
-                    buffers.insert({device->id(),per_device_output_tensors[device][i].value().device_buffer()});
-                    shapes.insert({device->id(),per_device_output_tensors[device][i].value().get_legacy_shape()});
+                    ordered_device_ids.push_back(device_id);
+                    buffers.emplace(device_id, per_device_output_tensors[device][i].value().device_buffer());
+                    shapes.emplace(device_id, per_device_output_tensors[device][i].value().get_legacy_shape());
                 }
             }
             else{
@@ -312,7 +316,7 @@ OutputTensors run_multi_device_operation(
         if constexpr(std::is_same_v<Tensors, std::remove_const_t<OutputTensors>>){
             multi_device_output_tensors.push_back(
                 Tensor{
-                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), buffers, shapes},
+                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), ordered_device_ids, buffers, shapes},
                     per_device_output_tensors[devices[0]][i].get_legacy_shape(),
                     per_device_output_tensors[devices[0]][i].get_dtype(),
                     per_device_output_tensors[devices[0]][i].get_layout()
@@ -322,7 +326,7 @@ OutputTensors run_multi_device_operation(
         else if constexpr(std::is_same_v<OptionalTensors, std::remove_const_t<OutputTensors>>){
             multi_device_output_tensors.push_back(
                 Tensor{
-                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), buffers, shapes},
+                    MultiDeviceStorage{get_distributed_tensor_config_from_tensor(input_tensors[0]), ordered_device_ids, buffers, shapes},
                     per_device_output_tensors[devices[0]][i].value().get_legacy_shape(),
                     per_device_output_tensors[devices[0]][i].value().get_dtype(),
                     per_device_output_tensors[devices[0]][i].value().get_layout()

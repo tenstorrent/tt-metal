@@ -198,6 +198,7 @@ from ttnn.multi_device import (
     open_device_mesh,
     close_device_mesh,
     get_num_pcie_devices,
+    get_num_devices,
     get_pcie_device_ids,
     get_device_ids,
     create_device_mesh,

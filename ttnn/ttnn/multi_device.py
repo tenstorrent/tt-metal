@@ -42,6 +42,10 @@ def open_device_mesh(
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
     assert len(device_ids) > 0
+    if len(device_ids) == 8:
+        # Re-ordering to T3000 device-mesh configuration
+        device_ids = [0, 7, 6, 1, 2, 5, 4, 3]
+
     return ttnn._ttnn.multi_device.DeviceMesh(
         device_grid=device_grid.as_tuple(), device_ids=device_ids, l1_small_size=l1_small_size
     )
@@ -80,7 +84,6 @@ class TensorToMesh:
 
     def __init__(self, device_mesh):
         self.device_mesh = device_mesh
-        self.device_id_to_tensor = {}
 
     def map(self, tensor: torch.tensor):
         raise NotImplementedError("Subclasses must implement this method")
@@ -109,8 +112,7 @@ class ShardTensorToMesh(TensorToMesh):
 
     def map(self, tensor: torch.tensor) -> Dict[int, ttnn.Tensor]:
         sliced_tensors = torch.chunk(tensor, self.device_mesh.get_num_devices(), dim=self.shard_dim)
-        self.device_id_to_tensor = {i: input_tensor for i, input_tensor in enumerate(sliced_tensors)}
-        return self.device_id_to_tensor
+        return list(sliced_tensors)
 
     def config(self):
         return {
@@ -124,8 +126,7 @@ class ReplicateTensorToMesh(TensorToMesh):
         super().__init__(device_mesh)
 
     def map(self, tensor: torch.tensor):
-        self.device_id_to_tensor = {i: tensor for i in range(self.device_mesh.get_num_devices())}
-        return self.device_id_to_tensor
+        return [tensor for i in range(self.device_mesh.get_num_devices())]
 
     def config(self):
         return {

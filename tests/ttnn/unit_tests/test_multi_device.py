@@ -11,6 +11,9 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
+
 #######
 # Test MultiDevice Initialization, Open/Close
 #######
@@ -68,8 +71,6 @@ def test_multi_device_open_close_using_context_manager(silicon_arch_name, silico
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_ttnn_to_multi_device_multiple_times(device_mesh, layout, memory_config, dtype):
     """Test ttnn.to_device(..) works when the tensor is already on device"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
@@ -91,8 +92,6 @@ def test_ttnn_to_multi_device_multiple_times(device_mesh, layout, memory_config,
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_ttnn_to_and_from_multi_device_shard(device_mesh, layout, memory_config, dtype):
     """Shard a tensor across devices, compose it back and verify loopback tensor is same as the original tensor"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
@@ -113,8 +112,6 @@ def test_ttnn_to_and_from_multi_device_shard(device_mesh, layout, memory_config,
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_multi_device_check_per_device_shard(device_mesh, layout, memory_config, dtype):
     """This test checks if the tensor is correctly sharded across devices"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
@@ -158,8 +155,6 @@ def test_multi_device_replicate(device_mesh, shape, layout, memory_config):
 
 def test_ttnn_multi_device_all_gather(pcie_device_mesh):
     """Multidevice API test for ttnn.all_gather CCL operation"""
-    from ttnn import ShardTensorToMesh
-
     full_tensor = torch.rand((1, 1, 32, 32 * pcie_device_mesh.get_num_devices()), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=3))
@@ -174,8 +169,6 @@ def test_ttnn_multi_device_all_gather(pcie_device_mesh):
 
 def test_multi_device_single_op_unary(device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     torch_input_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
 
@@ -193,8 +186,6 @@ def test_multi_device_single_op_unary(device_mesh):
 
 def test_multi_device_single_op_binary(device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device single-op binary"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     torch_input_a_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
     torch_input_b_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch_input_a_tensor + torch_input_b_tensor
@@ -219,8 +210,6 @@ def test_multi_device_single_op_binary(device_mesh):
 
 def test_multi_device_multi_op(device_mesh):
     """Multidevice API test: Running tensor-parallel multi-device multi-op"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     torch_input_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
     torch_output_golden = torch.exp(torch_output_golden)
@@ -240,8 +229,6 @@ def test_multi_device_multi_op(device_mesh):
 
 def test_multi_device_data_parallel_matmul_op(device_mesh):
     """Multidevice API: Data Parallel on matmul"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
-
     torch_input_a_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
     torch_input_b_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     torch_output_golden = torch_input_a_tensor @ torch_input_b_tensor
@@ -269,8 +256,6 @@ def test_multi_device_data_parallel_matmul_op(device_mesh):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
     """Multidevice API: Data Parallel on matmul using cached tensor"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
-
     torch_input_a_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
     torch_input_b_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     torch_output_golden = torch_input_a_tensor @ torch_input_b_tensor
@@ -317,8 +302,6 @@ def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_multi_device_permute(device_mesh, layout, memory_config, dtype):
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
@@ -337,8 +320,6 @@ def test_multi_device_permute(device_mesh, layout, memory_config, dtype):
 
 
 def test_max(device_mesh):
-    from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
-
     gate_logits_1SB8 = ttnn.from_torch(
         torch.randn(1, 1, 32, 8),
         dtype=ttnn.bfloat16,
@@ -349,3 +330,22 @@ def test_max(device_mesh):
     gate_logits_1SB8 = ttnn.to_device(gate_logits_1SB8, device_mesh)
     weights_ex0_1SB1 = ttnn.max(gate_logits_1SB8, dim=3)
     print(weights_ex0_1SB1)
+
+
+def test_ttnn_multi_device_all_gather_all_devices(t3k_device_mesh):
+    """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
+    if t3k_device_mesh.get_num_devices() < 8:
+        pytest.skip()
+
+    full_tensor = torch.ones((1, 1, 32, 32 * t3k_device_mesh.get_num_devices()), dtype=torch.bfloat16)
+    for i in range(t3k_device_mesh.get_num_devices()):
+        full_tensor[..., i * 32 : (i + 1) * 32] = i
+
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=3))
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
+    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for device_tensor in device_tensors:
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        assert torch.all(device_tensor_torch == full_tensor)

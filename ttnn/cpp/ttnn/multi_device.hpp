@@ -42,12 +42,12 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
+        std::vector<ttnn::Tensor> tensors;
         auto& device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        std::vector<ttnn::Tensor> tensors = std::vector<ttnn::Tensor>(device_storage.buffers.size(), Tensor());
-        for (auto& device_buf_pair : device_storage.buffers)
-        {
-            auto [device_id, buffer] = device_buf_pair;
-            tensors[device_id] = Tensor{DeviceStorage{buffer}, device_storage.shapes.at(device_id), tensor.get_dtype(), tensor.get_layout()};
+        auto devices = get_devices(tensor);
+        for (auto device : devices) {
+            auto shard = get_shard_for_device(tensor, device);
+            tensors.push_back(shard);
         }
         return tensors;
     }
@@ -76,14 +76,17 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
         auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
+        std::vector<int> ordered_device_ids;
         std::unordered_map<int, tt::tt_metal::Shape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
             Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
+            auto device_id = device->id();
+            ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
             shapes.insert({device->id(), shard.get_legacy_shape()});
         }
-        auto storage = MultiDeviceStorage{AllGatherTensor(), std::move(device_buffers), shapes};
+        auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     }
 }
