@@ -204,12 +204,15 @@ def test_multi_device_data_parallel_op_chain(pcie_device_mesh, program_cache, in
             pcie_device_mesh.get_device(device).enable_program_cache()
 
     torch_silu = torch.nn.SiLU()
+    torch_mish = torch.nn.Mish()
     for i in range(5):
         torch_input_a_tensor = torch.rand(input_a_shape, dtype=torch.bfloat16)
         torch_input_b_tensor = torch.rand((1, 1, 512, 512), dtype=torch.bfloat16)
-        torch_output_golden = torch_silu(
-            torch.nn.functional.relu(torch.nn.functional.gelu(torch_input_a_tensor @ torch_input_b_tensor))
-            @ torch.exp(torch_input_a_tensor)
+        torch_output_golden = torch_mish(
+            torch_silu(
+                torch.nn.functional.relu(torch.nn.functional.gelu(torch_input_a_tensor @ torch_input_b_tensor))
+                @ torch.exp(torch_input_a_tensor)
+            )
         )
 
         ttnn_input_a_tensor = ttnn.from_torch(
@@ -225,7 +228,11 @@ def test_multi_device_data_parallel_op_chain(pcie_device_mesh, program_cache, in
             mesh_mapper=ReplicateTensorToMesh(pcie_device_mesh),
         )
         ttnn_output_tensor = ttnn.from_device(
-            ttnn.silu(ttnn.relu(ttnn.gelu(ttnn_input_a_tensor @ ttnn_input_b_tensor)) @ ttnn.exp(ttnn_input_a_tensor))
+            ttnn.mish(
+                ttnn.silu(
+                    ttnn.relu(ttnn.gelu(ttnn_input_a_tensor @ ttnn_input_b_tensor)) @ ttnn.exp(ttnn_input_a_tensor)
+                )
+            )
         )
         ttnn_torch_output_tensor = ttnn.to_torch(
             ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(pcie_device_mesh, dim=0)
