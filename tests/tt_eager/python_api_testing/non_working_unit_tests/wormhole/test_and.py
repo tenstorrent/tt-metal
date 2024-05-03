@@ -53,7 +53,7 @@ def run_and_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, dat
 test_sweep_args = [
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
@@ -64,7 +64,7 @@ test_sweep_args = [
     ),
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B],
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
@@ -75,7 +75,7 @@ test_sweep_args = [
     ),
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
