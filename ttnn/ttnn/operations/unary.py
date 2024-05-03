@@ -43,11 +43,15 @@ def register_ttl_unary_function(name, ttl_unary_function):
         return torch_function(input_tensor)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+        if operation_name == "ttnn.atan":
+            supported_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b)
+        else:
+            supported_dtypes = (ttnn.bfloat16,)
         ttnn.validate_input_tensor(
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            dtypes=supported_dtypes,
             layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
