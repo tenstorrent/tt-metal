@@ -162,14 +162,15 @@ class EnqueueWriteInterleavedBufferCommand;
 class EnqueueWriteBufferCommand : public Command {
    private:
     SystemMemoryManager& manager;
-    const void* src;
     uint32_t command_queue_id;
     CoreType dispatch_core_type;
 
     virtual void add_dispatch_write(HugepageDeviceCommand &command) = 0;
+    virtual void add_buffer_data(HugepageDeviceCommand &command) = 0;
 
    protected:
     Device* device;
+    const void* src;
     const Buffer& buffer;
     uint32_t expected_num_workers_completed;
     uint32_t bank_base_address;
@@ -202,6 +203,7 @@ class EnqueueWriteBufferCommand : public Command {
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
    private:
     void add_dispatch_write(HugepageDeviceCommand &command) override;
+    void add_buffer_data(HugepageDeviceCommand &command) override;
 
    public:
     EnqueueWriteInterleavedBufferCommand(
@@ -234,7 +236,10 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
    private:
     void add_dispatch_write(HugepageDeviceCommand &command) override;
+    void add_buffer_data(HugepageDeviceCommand &command) override;
+
     const BufferPageMapping& buffer_page_mapping;
+    const bool width_split;
 
    public:
     EnqueueWriteShardedBufferCommand(
@@ -247,6 +252,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
         const BufferPageMapping &buffer_page_mapping,
+        bool width_split,
         uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt)
@@ -261,7 +267,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             bank_base_address,
             padded_page_size,
             dst_page_index,
-            pages_to_write), buffer_page_mapping(buffer_page_mapping) {;}
+            pages_to_write), buffer_page_mapping(buffer_page_mapping), width_split(width_split) {;}
 };
 
 class EnqueueProgramCommand : public Command {
@@ -393,24 +399,18 @@ struct ReadBufferDescriptor {
     TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
+    bool linear_page_copy;
     vector<std::optional<uint32_t> > dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
     uint32_t cur_dev_page_id;
 
-    ReadBufferDescriptor(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_dev_page_id) {
-        this->buffer_layout = buffer.buffer_layout();
-        this->page_size = buffer.page_size();
-        this->padded_page_size = padded_page_size;
-        if (this->buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or this->buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
-            this->dev_page_to_host_page_mapping = buffer_page_mapping.dev_page_to_host_page_mapping_;
+    ReadBufferDescriptor(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_dev_page_id, bool linear_page_copy = true) :
+    buffer_layout(buffer.buffer_layout()), page_size(this->page_size = buffer.page_size()), padded_page_size(padded_page_size), dst(dst), dst_offset(dst_offset), num_pages_read(num_pages_read), cur_dev_page_id(cur_dev_page_id), linear_page_copy(linear_page_copy) {
+        if (!linear_page_copy and is_sharded(this->buffer_layout)) {
+            this->dev_page_to_host_page_mapping = generate_buffer_page_mapping(buffer).dev_page_to_host_page_mapping_;
         }
-        this->dst = dst;
-        this->dst_offset = dst_offset;
-        this->num_pages_read = num_pages_read;
-        this->cur_dev_page_id = cur_dev_page_id;
     }
 };
 
