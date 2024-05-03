@@ -5,6 +5,7 @@
 import torch
 from abc import abstractmethod
 from typing import Optional, Tuple
+from tqdm import tqdm
 
 import tt_lib
 import ttnn
@@ -81,7 +82,7 @@ class TtFalconModelShared:
                 tt_cache_path=tt_cache_path,
                 global_cos_sin_cache=global_cos_sin_cache,
             )
-            for layer_num in range(num_layers)
+            for layer_num in tqdm(range(num_layers), desc="Loading decoder layers")
         ]
 
         layer_name = f"{base_url}"

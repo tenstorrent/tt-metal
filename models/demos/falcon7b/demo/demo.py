@@ -206,9 +206,7 @@ def run_falcon_demo_kv(
 
     synchronize_devices(devices)
 
-    logger.info("Moving weights to device; might take some time...")
-    profiler.start(f"moving_to_device")
-
+    logger.info("Moving weights (single layer) to device...")
     base_url = ""
 
     tt_FalconCausalLM_singlelayer = TtFalconCausalLM(
@@ -222,9 +220,7 @@ def run_falcon_demo_kv(
         tt_cache_path,
         nearest_32(num_input_tokens),
     )  # single layer only used for compile
-
-    logger.info("Moved weights to device!")
-    profiler.end(f"moving_to_device")
+    logger.info("Moved weights (single layer) to device!")
 
     synchronize_devices(devices)
 
@@ -328,6 +324,8 @@ def run_falcon_demo_kv(
     del tt_FalconCausalLM_singlelayer
     del kv_cache_singlelayer
 
+    logger.info("Moving weights (all layers) to device; might take some time...")
+    profiler.start(f"moving_to_device")
     tt_FalconCausalLM = TtFalconCausalLM(
         devices,
         state_dict,
@@ -339,13 +337,13 @@ def run_falcon_demo_kv(
         tt_cache_path,
         nearest_32(num_input_tokens),
     )
+    logger.info("Moved weights (all layers) to device!")
+    profiler.end(f"moving_to_device")
 
     ### Second prefill run without compile ###
-    profiler.enable()
     enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
-    use_cache = True
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
     logger.info("Running inference prefill stage...")
     time_prefill_inference = 0
@@ -405,8 +403,6 @@ def run_falcon_demo_kv(
     num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup) * num_devices
 
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
-
-    profiler.disable()
 
     ### Inference run decode ###
     logger.info("Running inference decode stage...")
