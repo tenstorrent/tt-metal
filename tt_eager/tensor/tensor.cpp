@@ -588,6 +588,10 @@ Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
     return this->unpad(output_tensor_start, output_tensor_end);
 }
 
+const bool Tensor::is_sharded() const {
+    return is_tensor_on_device_or_multidevice(*this) ? this->memory_config().is_sharded() : false;
+}
+
 uint32_t Tensor::element_size() const {
     return tensor_impl::element_size_bytes_wrapper(this->get_dtype());
 }
