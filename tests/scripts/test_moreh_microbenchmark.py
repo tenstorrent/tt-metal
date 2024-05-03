@@ -803,7 +803,10 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
     logger.info("DRAM read time: " + str(time))
     logger.info("DRAM read throughput: " + str(throughput))
     data.append([throughput])
-    return
+    # check within range
+    dev_freq = get_device_freq()
+    bw_bound = 240.0 * dev_freq / 1000.0
+    assert bw_bound <= throughput
 
 
 @pytest.mark.parametrize(

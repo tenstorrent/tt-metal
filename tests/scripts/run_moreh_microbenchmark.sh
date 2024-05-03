@@ -33,6 +33,7 @@ run_profiling_test() {
 
   if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_single_core_sharded -k $ARCH_NAME
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_12_core -k $ARCH_NAME
   fi
 }
 
