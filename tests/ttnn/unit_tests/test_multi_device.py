@@ -406,3 +406,31 @@ def test_sharded_matmul(t3k_device_mesh):
     )
 
     print(attn_1B4P)
+
+
+def test_4b_tensor(device_mesh):
+    tensor = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32),
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    tensor = ttnn.to_device(tensor, device_mesh)
+    x = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    x = ttnn.to_device(x, device_mesh)
+    tensor = ttnn.matmul(
+        x,
+        tensor,
+        core_grid=ttnn.CoreGrid(y=4, x=8),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
+        ),
+        use_1d_systolic_array=True,
+    )
