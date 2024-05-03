@@ -71,12 +71,12 @@ inline ttnn::Tensor matmul(
     const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
-    std::optional<CoreCoord> core_coord;
+    std::optional<CoreCoord> user_core_coord;
     if (core_grid) {
-	core_coord = CoreCoord(core_grid->x, core_grid->y);
+	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, std::nullopt /*bias*/, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/,  core_coord, input_b_is_batched);
+        input_tensor_a_4d, input_tensor_b_4d, std::nullopt /*bias*/, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/,  user_core_coord, input_b_is_batched);
     while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
@@ -110,22 +110,26 @@ inline ttnn::Tensor linear(
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
     std::optional<Tensor> bias_4d = std::nullopt;
+    bool post_process_bias = false;
     if (bias.has_value()) {
         bias_4d = ttnn::unsqueeze_to_4D(bias.value());
+	if (tt::operations::primary::is_program_config_default(program_config)) {
+	    post_process_bias = true;
+	}
     }
 
     if (width_a != height_b) {
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
-    std::optional<CoreCoord> core_coord;
+    std::optional<CoreCoord> user_core_coord;
     if (core_grid) {
-	core_coord = CoreCoord(core_grid->x, core_grid->y);
+	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, core_coord);
+        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord);
 
-    if (bias_4d.has_value() && tt::operations::primary::is_program_config_default(program_config)) {
+    if (post_process_bias) {
         output_tensor = tt::tt_metal::bcast(
             output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }
