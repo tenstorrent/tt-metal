@@ -19,6 +19,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/work_split.hpp"
+#include <yaml-cpp/yaml.h>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -124,7 +125,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         for (int j=0; j<i; ++j) {
             auto core_ = all_cores_list[j].start;
 
-            if (core_.x == core.x and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) { // same vc and same row
+            if (core_.y == core.y and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) { // same vc and same row
                 vc = (vc + 1) & 0x3;
                 break;
             }
@@ -226,7 +227,7 @@ int main(int argc, char **argv) {
     }
 
     bool pass = true;
-    bool use_device_profiler;
+    bool use_device_profiler = false;
     bool bypass_check = false;
     uint32_t df = 0;
     std::vector<double> dram_bandwidth;
@@ -313,6 +314,7 @@ int main(int argc, char **argv) {
         uint32_t block_h = kt / num_blocks;
         uint32_t block_w = nt / num_banks;
         uint32_t num_datum_per_slice = 32 * 32;
+        uint32_t eth_coord_y_phy = 6;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
         if (input_size % single_tile_size != 0) {
@@ -349,12 +351,18 @@ int main(int argc, char **argv) {
                 all_worker_cores_log.push_back(CoreCoord(i,j));
             }
         }
-        std::vector<CoreCoord> all_worker_cores_phy;
+
+        for (int i=0; i < all_worker_cores_log.size(); ++i) {
+            auto core = device->worker_core_from_logical_core(all_worker_cores_log[i]);
+            log_info("all_worker_cores_phy: {}", core);
+        }
+
+        std::vector<uint32_t> all_worker_cores_phy;
         uint32_t max_worker_y_phy = 0;
         uint32_t min_worker_y_phy = 100;
         for (int i=0; i<num_cores_y; ++i) {
             auto core_phy = device->worker_core_from_logical_core(CoreCoord(0,i));
-            all_worker_cores_phy.push_back(core_phy);
+            all_worker_cores_phy.push_back(core_phy.y);
             if (core_phy.y > max_worker_y_phy) {
                 max_worker_y_phy = core_phy.y;
             }
@@ -365,65 +373,210 @@ int main(int argc, char **argv) {
 
         log_info("min_worker_y_phy: {}, max_worker_y_phy: {}", min_worker_y_phy, max_worker_y_phy);
 
-        std::vector<CoreCoord> dram_coord_phy = {
-            CoreCoord(0,11),
-            CoreCoord(0,1),
-            CoreCoord(0,5),
-            CoreCoord(0,7),
-            CoreCoord(5,1),
-            CoreCoord(5,11),
-            CoreCoord(5,2),
-            CoreCoord(5,9),
-            CoreCoord(5,8),
-            CoreCoord(5,3),
-            CoreCoord(5,5),
-            CoreCoord(5,7)
-        };
-
-        std::vector<CoreCoord> adj_core_phy;
-
-        for (int i=0; i<num_banks; ++i) {
-            auto dram_core = dram_coord_phy[i];
-
-            bool row_unharvested = false;
-            for (int j=0; j<all_worker_cores_phy.size(); ++j) {
-                auto worker_core = all_worker_cores_phy[j];
-                if (dram_core.y == worker_core.y) {
-                    row_unharvested = true;
+        std::string filename = "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
+        YAML::Node config = YAML::LoadFile(filename);
+        std::vector<CoreCoord> dram_coord_phy;
+        if (config["dram_preferred_worker_endpoint"] && config["dram_preferred_worker_endpoint"].IsSequence()) {
+            for (const auto& endpoint : config["dram_preferred_worker_endpoint"]) {
+                std::string ep_str = endpoint.as<std::string>();
+                std::istringstream iss(ep_str);
+                int x, y;
+                char dash; // to consume the '-' character
+                if (iss >> x >> dash >> y) {
+                    dram_coord_phy.push_back(CoreCoord(x, y));
                 }
             }
+        }
+        for (const auto& endpoint : dram_coord_phy) {
+            log_info("DRAM Endpoints: {}", endpoint);
+        }
 
-            uint32_t adj_core_x, adj_core_y;
-            if (row_unharvested) {
-                adj_core_x = dram_core.x + 1;
-                adj_core_y = dram_core.y;
-            } else {
-                adj_core_x = dram_core.x + 2;
-                if (max_worker_y_phy < dram_core.y + 1) {
-                    adj_core_y = max_worker_y_phy;
-                    for (auto core: all_worker_cores_phy) {
+        std::vector<CoreCoord> adj_core_phy;
+        for (int i=0; i<num_banks; ++i) {
+            auto dram_core = dram_coord_phy[i];
+            uint32_t adj_core_x = dram_core.x + 1;
+            uint32_t adj_core_y = dram_core.y;
+            adj_core_phy.push_back(CoreCoord(adj_core_x, adj_core_y));
+        }
+        for (int i=0; i < adj_core_phy.size(); ++i) {
+            log_info("adj_core_phy: {}", adj_core_phy[i]);
+        }
 
-                        bool row_has_worker_core = false;
-                        for (int m=0; m < num_banks; ++m) {
-                            if (dram_coord_phy[m].y == core.y) {
-                                row_has_worker_core = true;
-                            }
-                        }
+        std::vector<CoreCoord> adj_core_phy_g1;
+        std::vector<size_t> adj_core_phy_y_g1;
+        std::vector<CoreCoord> adj_core_phy_g2;
+        std::vector<size_t> adj_core_phy_y_g2;
+        for (auto core: adj_core_phy) {
+            if (core.x == 1) {
+                adj_core_phy_g1.push_back(core);
+            } else if (core.x == 6) {
+                adj_core_phy_g2.push_back(core);
+            }
+        }
+        for (int i=0; i < adj_core_phy_g1.size(); ++i) {
+            log_info("adj_core_phy_g1: {}", adj_core_phy_g1[i]);
+        }
+        for (int i=0; i < adj_core_phy_g2.size(); ++i) {
+            log_info("adj_core_phy_g2: {}", adj_core_phy_g2[i]);
+        }
+        std::vector<int> indices_g1(adj_core_phy_g1.size());
+        std::vector<int> indices_g2(adj_core_phy_g2.size());
+        std::iota(indices_g1.begin(), indices_g1.end(), 0);
+        std::iota(indices_g2.begin(), indices_g2.end(), 0);
+        std::sort(indices_g1.begin(), indices_g1.end(), [&adj_core_phy_g1](int i1, int i2) {
+            return adj_core_phy_g1[i1].y < adj_core_phy_g1[i2].y;
+        });
+        std::sort(indices_g2.begin(), indices_g2.end(), [&adj_core_phy_g2](int i1, int i2) {
+            return adj_core_phy_g2[i1].y < adj_core_phy_g2[i2].y;
+        });
+        std::rotate(indices_g1.begin(), indices_g1.end() - 1, indices_g1.end());
+        std::rotate(indices_g2.begin(), indices_g2.end() - 1, indices_g2.end());
+        for (int i=0; i < indices_g1.size(); ++i) {
+            log_info("indices_g1: {}", indices_g1[i]);
+        }
+        for (int i=0; i < indices_g2.size(); ++i) {
+            log_info("indices_g2: {}", indices_g2[i]);
+        }
 
-                        if (not row_has_worker_core) {
-                            adj_core_y = core.y;
+        std::vector<int> indices_g1_realloc(adj_core_phy_g1.size());
+        std::vector<int> indices_g2_realloc(adj_core_phy_g2.size());
+        for (int new_index = 0; new_index < indices_g1.size(); ++new_index) {
+            indices_g1_realloc[indices_g1[new_index]] = new_index;
+        }
+        for (int new_index = 0; new_index < indices_g2.size(); ++new_index) {
+            indices_g2_realloc[indices_g2[new_index]] = new_index;
+        }
+        for (int i=0; i < indices_g1_realloc.size(); ++i) {
+            log_info("indices_g1_realloc: {}", indices_g1_realloc[i]);
+        }
+        for (int i=0; i < indices_g2_realloc.size(); ++i) {
+            log_info("indices_g2_realloc: {}", indices_g2_realloc[i]);
+        }
+
+        std::sort(adj_core_phy_g1.begin(), adj_core_phy_g1.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.y < b.y;
+        });
+        std::sort(adj_core_phy_g2.begin(), adj_core_phy_g2.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.y < b.y;
+        });
+        std::rotate(adj_core_phy_g1.begin(), adj_core_phy_g1.end() - 1, adj_core_phy_g1.end());
+        std::rotate(adj_core_phy_g2.begin(), adj_core_phy_g2.end() - 1, adj_core_phy_g2.end());
+
+        for (auto core: adj_core_phy_g1) {
+            adj_core_phy_y_g1.push_back(core.y);
+        }
+        for (auto core: adj_core_phy_g2) {
+            adj_core_phy_y_g2.push_back(core.y);
+        }
+        for (int i=0; i < adj_core_phy_g1.size(); ++i) {
+            log_info("adj_core_phy_g1: {}", adj_core_phy_g1[i]);
+        }
+        for (int i=0; i < adj_core_phy_g2.size(); ++i) {
+            log_info("adj_core_phy_g2: {}", adj_core_phy_g2[i]);
+        }
+
+        std::vector<uint32_t> harvested_rows;
+        std::vector<uint32_t> all_phy_coord_y = {1,2,3,4,5,7,8,9,10,11};
+        for (int i=0; i<all_phy_coord_y.size(); ++i) {
+            auto y = all_phy_coord_y[i];
+
+            if (std::find(all_worker_cores_phy.begin(), all_worker_cores_phy.end(), y) == all_worker_cores_phy.end()) {
+                harvested_rows.push_back(y);
+            }
+        }
+        for (int i=0; i < harvested_rows.size(); ++i) {
+            log_info("harvested rows phyiscal grid_y: {}", harvested_rows[i]);
+        }
+
+        uint32_t x_step = 3;
+        for (int i=0; i<adj_core_phy_g1.size(); ++i) {
+            auto y = adj_core_phy_g1[i].y;
+
+            if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() or
+                std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), y) >= 2) {
+
+                if (y >= 11) {
+                    for (int j=max_worker_y_phy; j >= min_worker_y_phy; j--) {
+                        auto temp_y = j;
+
+                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
+                            std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), temp_y) == 0) {
+
+                            adj_core_phy_g1[i].y = temp_y;
+                            adj_core_phy_g1[i].x += x_step;
+                            x_step --;
+                            break;
                         }
                     }
                 } else {
-                    adj_core_y = dram_core.y + 1;
+                    for (int j=min_worker_y_phy; j <= max_worker_y_phy; j++) {
+                        auto temp_y = j;
+                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
+                            std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), temp_y) == 0) {
+
+                            adj_core_phy_g1[i].y = temp_y;
+                            adj_core_phy_g1[i].x += x_step;
+                            x_step --;
+                            break;
+                        }
+                    }
                 }
             }
-            adj_core_phy.push_back(CoreCoord(adj_core_x, adj_core_y));
+        }
+        for (int i=0; i < adj_core_phy_g1.size(); ++i) {
+            log_info("adj_core_phy_g1: {}", adj_core_phy_g1[i]);
+        }
+
+        x_step = 3;
+        for (int i=0; i<adj_core_phy_g2.size(); ++i) {
+            auto y = adj_core_phy_g2[i].y;
+
+            if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() or
+                std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), y) >= 2) {
+
+                if (y >= 11) {
+                    for (int j=max_worker_y_phy; j >= min_worker_y_phy; j--) {
+                        auto temp_y = j;
+
+                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
+                            std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), temp_y) == 0 and temp_y != eth_coord_y_phy) {
+
+                            adj_core_phy_g2[i].y = temp_y;
+                            adj_core_phy_g2[i].x += x_step;
+                            x_step --;
+                            break;
+                        }
+                    }
+                } else {
+                    for (int j=min_worker_y_phy; j <= max_worker_y_phy; j++) {
+                        auto temp_y = j;
+                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
+                            std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), temp_y) == 0 and temp_y != eth_coord_y_phy) {
+
+                            adj_core_phy_g2[i].y = temp_y;
+                            adj_core_phy_g2[i].x += x_step;
+                            x_step --;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for (int i=0; i < adj_core_phy_g2.size(); ++i) {
+            log_info("adj_core_phy_g2: {}", adj_core_phy_g2[i]);
+        }
+
+        std::vector<CoreCoord> adj_core_phy_new;
+        for (int i=0; i<indices_g1_realloc.size(); ++i) {
+            adj_core_phy_new.push_back(adj_core_phy_g1[indices_g1_realloc[i]]);
+        }
+        for (int i=0; i<indices_g2_realloc.size(); ++i) {
+            adj_core_phy_new.push_back(adj_core_phy_g2[indices_g2_realloc[i]]);
         }
 
         std::vector<CoreRange> all_cores_list_all;
-        for (int i=0; i < adj_core_phy.size(); ++i) {
-            auto core_phy = adj_core_phy[i];
+        for (int i=0; i < adj_core_phy_new.size(); ++i) {
+            auto core_phy = adj_core_phy_new[i];
 
             for (int j=0; j < all_worker_cores_log.size(); ++j) {
                 auto core_phy_ = device->worker_core_from_logical_core(all_worker_cores_log[j]);
