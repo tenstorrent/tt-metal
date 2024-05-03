@@ -931,7 +931,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
     uint32_t index = 0;
     for (uint32_t page_id = 0; page_id < pages; page_id++) {
         uint32_t bank_id = page_id % num_dram_banks_g;
-        auto offset = device->dram_bank_offset_from_bank_id(bank_id);
+        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
         auto bank_core = device->core_from_dram_channel(dram_channel);
 
