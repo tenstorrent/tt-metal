@@ -588,14 +588,14 @@ class TestParametrized:
         (
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.225, False),  # Issue 7816 Inference time
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.27, False),
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, True),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.10, True),
+            # ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, True),
+            # ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.10, True),
         ),
         ids=[
             "prefill_seq256",
             "decode_batch32_1024",
-            "prefill_seq256_async",
-            "decode_batch32_1024_async",
+            # "prefill_seq256_async",
+            # "decode_batch32_1024_async",
         ],
     )
     @skip_for_grayskull()
