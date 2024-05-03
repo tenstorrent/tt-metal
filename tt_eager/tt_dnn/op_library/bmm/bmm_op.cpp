@@ -1130,8 +1130,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             this->compute_kernel_config,
                             2, 4, 2,
                             16, 16, false, false, std::nullopt,
-                            this->untilize_out,
-                            false
+                            this->untilize_out
                         );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
 			config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
@@ -1187,8 +1186,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation,
-                    this->untilize_out,
-                    program_config.use_noc_vc
+                    this->untilize_out
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {

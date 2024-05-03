@@ -36,14 +36,8 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
-// valid write VC range is 0-3
-#define NOC_UNICAST_WRITE_VC_RANGE_MASK 0x3
 #define NOC_MULTICAST_WRITE_VC 4
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
-// TODO: change the read req default to 0 (ie different from write req)
-#define NOC_UNICAST_READ_REQ_VC 0
-// valid read req VC range is 0-3
-#define NOC_UNICAST_READ_REQ_VC_RANGE_MASK 0x3
 
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
@@ -784,7 +778,7 @@ struct InterleavedPow2AddrGen {
     }
 };
 
-template <bool DRAM, bool use_vc = false>
+template <bool DRAM>
 struct InterleavedAddrGenFast {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     uint32_t page_size;          // Num bytes in bank unit.
@@ -827,7 +821,7 @@ struct InterleavedAddrGenFast {
     }
 
     FORCE_INLINE
-    void noc_async_read_tile(const uint32_t id, uint32_t dest_addr, const uint32_t offset = 0, uint32_t vc = 0) const {
+    void noc_async_read_tile(const uint32_t id, uint32_t dest_addr, const uint32_t offset = 0) const {
         uint32_t bank_id;
         uint32_t src_addr;
         uint32_t src_noc_xy;
@@ -862,11 +856,6 @@ struct InterleavedAddrGenFast {
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, this->page_size);
         while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
         DEBUG_STATUS('N', 'R', 'T', 'D');
-
-        if constexpr(use_vc) {
-            uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
-            NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-        }
 
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);      // (uint32_t)src_addr
@@ -1124,14 +1113,14 @@ FORCE_INLINE void noc_async_read_page(
     s.noc_async_read_page(id, dst_local_l1_addr, offset);
 }
 
-template <bool DRAM, bool use_vc = false>
+template <bool DRAM>
 FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, use_vc>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0, uint32_t vc = 0) {
+    const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    s.noc_async_read_tile(id, dst_local_l1_addr, offset, vc);
+    s.noc_async_read_tile(id, dst_local_l1_addr, offset);
 }
 
 /**
