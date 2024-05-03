@@ -349,3 +349,60 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_device_mesh):
     for device_tensor in device_tensors:
         device_tensor_torch = ttnn.to_torch(device_tensor)
         assert torch.all(device_tensor_torch == full_tensor)
+
+
+def test_sharded_matmul(t3k_device_mesh):
+    q_heads_1B4D = ttnn.from_torch(
+        torch.randn(1, 32, 32, 128),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=t3k_device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+    )
+    keys_1BDP = ttnn.from_torch(
+        torch.randn(1, 32, 128, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=t3k_device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+    )
+
+    q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_device_mesh)
+    keys_1BDP = ttnn.to_device(keys_1BDP, t3k_device_mesh)
+
+    q_heads_1B4D = ttnn.to_memory_config(
+        q_heads_1B4D,
+        ttnn.create_sharded_memory_config(
+            shape=(32, 128),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+
+    keys_1BDP = ttnn.to_memory_config(
+        keys_1BDP,
+        ttnn.create_sharded_memory_config(
+            shape=(128, 32),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+
+    compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    attn_1B4P = ttnn.matmul(
+        q_heads_1B4D,
+        keys_1BDP,
+        dtype=ttnn.bfloat16,
+        core_grid=ttnn.CoreGrid(y=4, x=8),
+        compute_kernel_config=compute_kernel_attn,
+    )
+
+    print(attn_1B4P)
