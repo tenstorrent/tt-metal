@@ -338,7 +338,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
 
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
-    logger.info(f"multidevice with {device_mesh.get_num_devices()} devices is created")
+    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
 
     ttnn.close_device_mesh(device_mesh)
@@ -362,7 +362,31 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         ttnn.DeviceGrid(1, num_pcie_devices_requested), device_ids[:num_pcie_devices_requested]
     )
 
-    logger.info(f"multidevice with {device_mesh.get_num_devices()} devices is created")
+    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
+    yield device_mesh
+
+    ttnn.close_device_mesh(device_mesh)
+    del device_mesh
+
+
+@pytest.fixture(scope="function")
+def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
+    import ttnn
+
+    if ttnn.get_num_devices() < 8:
+        pytest.skip()
+    device_ids = [0, 7, 6, 1, 2, 5, 4, 3]
+    try:
+        num_devices_requested = min(request.param, len(device_ids))
+    except (ValueError, AttributeError):
+        num_devices_requested = len(device_ids)
+
+    if num_devices_requested <= 1:
+        pytest.skip("Requires multiple devices to run")
+
+    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
+
+    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
 
     ttnn.close_device_mesh(device_mesh)

@@ -386,13 +386,14 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
         Tensor host_tensor({}, devices.size());
-        for (const auto& device : devices) {
+        for (int device_index = 0; device_index < devices.size(); ++device_index) {
+            const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);
             shard = to_host_helper<T>(shard, blocking);
             host_tensor.set_shape(tensor.get_shape());
             host_tensor.set_dtype(tensor.get_dtype());
             host_tensor.set_layout(tensor.get_layout());
-            insert_buffer_and_shape_for_device(device, shard, host_tensor);
+            insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
             host_tensor.set_populated(device);
         }
         return host_tensor;
