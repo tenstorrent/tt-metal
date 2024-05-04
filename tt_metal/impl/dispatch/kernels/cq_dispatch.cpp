@@ -213,17 +213,25 @@ void relay_to_next_cb(uint32_t data_ptr,
         preamble_size == 0 || preamble_size == sizeof(dispatch_packet_header_t),
         "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
 
+    DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length << ENDL();
+
     bool page_acquired = false;
     // The downstream packetizing stage will initialize the other fields, but it needs info on
     // the length of the transfer to be packetized.
     if (preamble_size > 0) {
         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all availabl
         page_acquired = true;
+        ASSERT(downstream_cb_data_ptr != downstream_cb_end);
+
         uint64_t downstream_noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
         noc_inline_dw_write(downstream_noc_addr, length + preamble_size);
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
         downstream_cb_data_ptr += preamble_size;
     }
+
+    // First page should be valid since it has the command
+    ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
+    ASSERT(data_ptr <= cb_fence - dispatch_cb_page_size);
 
     uint32_t extra = preamble_size;
     while (length > 0) {
