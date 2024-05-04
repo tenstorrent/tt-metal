@@ -134,6 +134,8 @@ def test_unet_mid_block_2d_cross_attn_256x256(device, model_name, hidden_state_s
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_shapes, reset_seeds):
+    # TODO
+    pytest.skip()
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()

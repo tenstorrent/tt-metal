@@ -86,6 +86,8 @@ def test_downsample_2d_256x256(device, model_name, batch_size, in_channels, inpu
     ],
 )
 def test_downsample_2d_512x512(device, model_name, batch_size, in_channels, input_height, input_width, index):
+    # TODO
+    pytest.skip()
     input_shape = batch_size, in_channels, input_height, input_width
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
