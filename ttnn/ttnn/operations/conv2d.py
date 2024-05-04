@@ -622,9 +622,14 @@ def conv2d(
             input_tensor.shape, parallel_config, tile_size=32
         )
         if input_is_on_device:
+            input_tensor_before_tm = input_tensor
             input_tensor = ttnn.to_memory_config(input_tensor, input_tensor_sharded_memory_config)
+            if conv_config.deallocate_activation:
+                ttnn.deallocate(input_tensor_before_tm)
         else:
             input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
+        # since we resharded/moved the input tensor, we can deallocate it after halo op within composite conv
+        conv_config.deallocate_activation = True
     is_1x1_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=conv_config.dtype)
