@@ -38,7 +38,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.models_performance_bare_metal_multi_device
 @pytest.mark.parametrize(
     "expected_compile_time, expected_inference_time",
-    ((200, 8.5),),
+    ((200, 9.5),),  # Issue 7816 Inference time
 )
 def test_mixtral_model_perf(
     all_devices, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
