@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
         Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-        Tensor mm = tt::operations::primary::matmul(a, b, std::nullopt, MatmulDefaultProgramConfig{}, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, std::nullopt, false, std::nullopt, true).cpu();
+        Tensor mm = tt::operations::primary::matmul(a, b, std::nullopt, tt::operations::primary::MatmulDefaultProgramConfig{}, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, std::nullopt, false, std::nullopt, true).cpu();
         Tensor mm1 = tt::operations::primary::matmul(a, b1).cpu();
 
         ////////////////////////////////////////////////////////////////////////////
