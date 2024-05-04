@@ -59,7 +59,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 12,
     };
-    auto pre_softmax_bmm_matmul = tt::operations::primary::matmul(query, key, pre_softmax_bmm_program_config, dram_memory_config);
+    auto pre_softmax_bmm_matmul = tt::operations::primary::matmul(query, key, std::nullopt /*bias*/, pre_softmax_bmm_program_config, dram_memory_config);
     query.deallocate();
     key.deallocate();
 
@@ -75,7 +75,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 2,
     };
-    auto post_softmax_bmm_output = tt::operations::primary::matmul(pre_softmax_bmm_matmul, value, post_softmax_bmm_program_config, l1_memory_config);
+    auto post_softmax_bmm_output = tt::operations::primary::matmul(pre_softmax_bmm_matmul, value, std::nullopt /*bias*/, post_softmax_bmm_program_config, l1_memory_config);
     pre_softmax_bmm_matmul.deallocate();
     value.deallocate();
 
@@ -172,7 +172,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
 Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
 
-    auto output = matmul(hidden_states, parameters.at("qa_head_weight"));
+    auto output = tt::operations::primary::matmul(hidden_states, parameters.at("qa_head_weight"));
     hidden_states.deallocate();
 
 
