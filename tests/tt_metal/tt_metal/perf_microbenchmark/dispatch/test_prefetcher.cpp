@@ -1750,14 +1750,14 @@ int main(int argc, char **argv) {
              dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
              dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
              dispatch_cb_sem, // overridden below for h
-             split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
+             split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem, // overridden below for dispatch_h
              dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
              prefetch_sync_sem,
              dev_hugepage_base_g,
              dev_hugepage_completion_buffer_base,
              DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
              dispatch_buffer_base,
-             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE * dispatch_buffer_pages,
+             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
              0, // unused on hd, filled in below for h and d
              0, // unused on hd, filled in below for h and d
              0, // unused unless tunneler is between h and d
@@ -1786,6 +1786,7 @@ int main(int argc, char **argv) {
 
             // dispatch_h
             dispatch_compile_args[3] = dispatch_h_cb_sem;
+            dispatch_compile_args[4] = dispatch_downstream_cb_sem;
             dispatch_compile_args[12] = dispatch_h_cb_sem;
             dispatch_compile_args[13] = dispatch_downstream_cb_sem;
             dispatch_compile_args[14] = 0; // preamble size
