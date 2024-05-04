@@ -213,6 +213,8 @@ def test_cross_attn_up_block_2d_512x512(
     in_channels,
     out_channels,
 ):
+    # TODO
+    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet

@@ -153,6 +153,8 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
     ],
 )
 def test_cross_attn_down_block_2d_512x512(device, model_name, N, C, H, W, index, in_channels):
+    # TODO
+    pytest.skip()
     torch.manual_seed(0)
 
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

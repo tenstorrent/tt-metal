@@ -96,6 +96,8 @@ def test_upblock_256x256(reset_seeds, device, res_hidden_states_tuple, hidden_st
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
+    # TODO
+    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet

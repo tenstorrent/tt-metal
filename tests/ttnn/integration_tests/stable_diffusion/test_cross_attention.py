@@ -6,7 +6,6 @@ import pytest
 import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
-from tracy import signpost
 
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attention import (
     cross_attention as ttnn_cross_attention,
