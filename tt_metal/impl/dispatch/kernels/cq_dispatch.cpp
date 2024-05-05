@@ -673,7 +673,9 @@ static void process_wait() {
     DEBUG_STATUS("PWD");
 
     if (clear_count) {
-        *sem_addr = 0;
+        uint32_t neg_sem_val = -(*sem_addr);
+        noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, addr), neg_sem_val);
+        noc_async_atomic_barrier();
     }
 
     if (notify_prefetch) {
