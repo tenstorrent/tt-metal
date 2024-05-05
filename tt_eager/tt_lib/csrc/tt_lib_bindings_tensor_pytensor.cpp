@@ -763,7 +763,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         )
                 )doc")
             .def(
-                py::init<>([](const py::object &tensor, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
+                py::init<>([](const py::object &tensor,
+                              std::optional<DataType> data_type,
+                              const std::unordered_map<std::string, std::string> &strategy) {
                     if (py::isinstance<py::list>(tensor)) {
                         return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, strategy);
                     }
@@ -863,7 +865,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
-            .def("track_ref_count",
+            .def(
+                "track_ref_count",
                 [](Tensor &self) { return self.track_ref_count(); },
                 R"doc(
                     Log the reference count (as seen by the main and worker threads) of a tensor as it evolves during runtime.
@@ -893,10 +896,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
-            .def(
-                "sync",
-                [](Tensor &self) { return self.wait_for_tensor_data_populated(); }
-            )
+            .def("sync", [](Tensor &self) { return self.wait_for_tensor_data_populated(); })
             .def(
                 "extract_shard",
                 [](const Tensor &self, CoreCoord core) { return self.extract_shard(core); },
@@ -963,7 +963,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             )doc")
             .def(
                 "to",
-                py::overload_cast<Layout, Device*>(&Tensor::to, py::const_),
+                py::overload_cast<Layout, Device *>(&Tensor::to, py::const_),
                 py::arg("target_layout").noconvert(),
                 py::arg("worker") = nullptr,
                 R"doc(
@@ -1180,7 +1180,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             )doc")
             .def(
                 "unpad_from_tile",
-                [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape) {
+                [](const Tensor &self, const std::vector<uint32_t> &output_tensor_shape) {
                     return self.unpad_from_tile(output_tensor_shape);
                 },
                 R"doc(
