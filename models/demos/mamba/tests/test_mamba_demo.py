@@ -10,5 +10,6 @@ import pytest
     "user_input, max_gen_len",
     ((["Hello World"], 2),),
 )
+@pytest.mark.skip(reason="#8146 ND Hang")
 def test_demo(user_input, device, use_program_cache, max_gen_len):
     return run_mamba_demo(prompts=user_input, device=device, generated_sequence_length=max_gen_len, display=False)
