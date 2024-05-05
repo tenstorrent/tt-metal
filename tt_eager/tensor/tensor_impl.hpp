@@ -180,6 +180,15 @@ static std::vector<uint32_t> to_4D_shape(const Shape& shape) {
         TT_THROW("Rank {} is not supported!", shape.rank());
     }
 }
+
+static std::vector<uint32_t> to_vector(const Shape& shape) {
+    std::vector<uint32_t> shape_vec;
+    for (int i = 0; i < shape.rank(); i++) {
+        shape_vec.push_back(shape[i]);
+    }
+    return shape_vec;
+}
+
 }  // namespace detail
 
 template <typename T, template <typename> typename BufferType>
@@ -187,14 +196,14 @@ inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const
     TT_ASSERT(
         (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
         "Unsupported shape for tensor conversion");
-    auto shape_vec = detail::to_4D_shape(shape);
-    return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+    return convert_layout(
+        data_to_convert, detail::to_vector(shape), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
 }
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
-    auto shape_vec = detail::to_4D_shape(shape);
-    return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+    return convert_layout(
+        data_to_convert, detail::to_vector(shape), TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
 // ======================================================================================
@@ -597,14 +606,6 @@ inline Tensor pad(
             for (auto i = 0; i < input_shape[dim]; i++) {
                 input_indices[dim] = i;
                 if (dim == input_shape.rank() - 1) {
-                    constexpr auto compute_flat_input_index = [](const auto& input_indices,
-                                                                 const auto& strides) {
-                        uint32_t flat_index = 0;
-                        for (auto i = 0; i < input_indices.size(); i++) {
-                            flat_index += input_indices[i] * strides[i];
-                        }
-                        return flat_index;
-                    };
                     auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
                     output_buffer[flat_output_index++] = input_buffer[flat_input_index];
                 } else {
@@ -654,45 +655,38 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
     const auto input_shape = tensor.get_legacy_shape();
     const auto input_strides = tensor.strides();
 
-    // Check if tensor start and end indices are within input tensor shape
-    TT_ASSERT(output_tensor_start[0] < input_shape[0]);
-    TT_ASSERT(output_tensor_end[0] < input_shape[0]);
-    TT_ASSERT(output_tensor_start[1] < input_shape[1]);
-    TT_ASSERT(output_tensor_end[1] < input_shape[1]);
-    TT_ASSERT(output_tensor_start[2] < input_shape[2]);
-    TT_ASSERT(output_tensor_end[2] < input_shape[2]);
-    TT_ASSERT(output_tensor_start[3] < input_shape[3]);
-    TT_ASSERT(output_tensor_end[3] < input_shape[3]);
-
-    // Check if start shape is <= end shape
-    TT_ASSERT(output_tensor_start[0] <= output_tensor_end[0]);
-    TT_ASSERT(output_tensor_start[1] <= output_tensor_end[1]);
-    TT_ASSERT(output_tensor_start[2] <= output_tensor_end[2]);
-    TT_ASSERT(output_tensor_start[3] <= output_tensor_end[3]);
-
-    // Figure out output tensor shape
-    const Shape output_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
+    // Validate inputs and compute output shape
+    std::vector<uint32_t> output_shape{};
+    for (auto i = 0; i < input_shape.rank(); i++) {
+        // Check if tensor start and end indices are within input tensor shape
+        TT_ASSERT(output_tensor_start[i] < input_shape[i]);
+        TT_ASSERT(output_tensor_end[i] < input_shape[i]);
+        // Check if start shape is <= end shape
+        TT_ASSERT(output_tensor_start[i] <= output_tensor_end[i]);
+        // Figure out output tensor shape
+        output_shape.push_back(output_tensor_end[i] - output_tensor_start[i] + 1);
+    }
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const auto& input_buffer) {
+        std::vector<uint32_t> input_indices(input_shape.rank(), 0);
+
+        auto flat_output_index = 0;
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
-        auto output_index = 0;
-        for (auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
-            for (auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
-                for (auto dim2 = output_tensor_start[2]; dim2 <= output_tensor_end[2]; dim2++) {
-                    for (auto dim3 = output_tensor_start[3]; dim3 <= output_tensor_end[3]; dim3++) {
-                        auto input_index =
-                            dim3 + input_strides[2] * dim2 + input_strides[1] * dim1 + input_strides[0] * dim0;
-                        output_buffer[output_index++] = input_buffer[input_index];
-                    }
+
+        std::function<void(std::size_t)> unpad_from_tile = [&](std::size_t dim) -> void {
+            for (auto i = output_tensor_start[dim]; i <= output_tensor_end[dim]; i++) {
+                input_indices[dim] = i;
+                if (dim == input_shape.rank() - 1) {
+                    auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
+                    output_buffer[flat_output_index++] = input_buffer[flat_input_index];
+                } else {
+                    unpad_from_tile(dim + 1);
                 }
             }
-        }
+        };
+        unpad_from_tile(0);
+
         return output_buffer;
     };
 
