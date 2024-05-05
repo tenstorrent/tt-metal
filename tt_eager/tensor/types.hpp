@@ -180,6 +180,7 @@ class Shape {
     }
 
     std::size_t rank() const;
+    std::size_t size() const;
 
     uint32_t &operator[](const std::int64_t index);
     const uint32_t operator[](const std::int64_t index) const;
@@ -675,6 +676,8 @@ struct Shape {
         return std::visit(
             []<std::size_t Rank>(const RankedShape<Rank> &shape) -> const auto { return Rank; }, this->ranked_shape);
     }
+
+    const auto size() const { return this->rank(); }
 
     Shape with_tile_padding() const {
         return std::visit(

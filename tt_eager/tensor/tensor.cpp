@@ -580,11 +580,24 @@ Tensor Tensor::pad_to_tile(float pad_value) const {
 Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
     ZoneScoped;
 
-    TT_ASSERT(this->get_legacy_shape()[0] == output_tensor_shape[0] && this->get_legacy_shape()[1] == output_tensor_shape[1], "Input shape must match output shape apart from last 2 dims");
-    TT_ASSERT(this->get_legacy_shape()[2] % TILE_HEIGHT == 0 && this->get_legacy_shape()[3] % TILE_WIDTH==0, "Last 2 dims of input shape must be multiples of 32");
-    TT_ASSERT(this->get_legacy_shape()[2] - TILE_HEIGHT < output_tensor_shape[2] && this->get_legacy_shape()[3] - TILE_WIDTH < output_tensor_shape[3], "Last 2 dims of output must be within range to have been padded to input");
-    Shape output_tensor_start = {0, 0, 0, 0};
-    Shape output_tensor_end = {output_tensor_shape[0] - 1, output_tensor_shape[1] - 1, output_tensor_shape[2] - 1, output_tensor_shape[3] - 1};
+    for (auto index = 0; index < this->get_legacy_shape().rank() - 2; index++) {
+        TT_ASSERT(
+            this->get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
+            "Input shape must match output shape apart from last 2 dims");
+    }
+    TT_ASSERT(
+        this->get_legacy_shape()[-2] % TILE_HEIGHT == 0 && this->get_legacy_shape()[-1] % TILE_WIDTH == 0,
+        "Last 2 dims of input shape must be multiples of 32");
+    TT_ASSERT(
+        this->get_legacy_shape()[-2] - TILE_HEIGHT < output_tensor_shape[-2] &&
+            this->get_legacy_shape()[-1] - TILE_WIDTH < output_tensor_shape[-1],
+        "Last 2 dims of output must be within range to have been padded to input");
+    std::vector<uint32_t> output_tensor_start{};
+    std::vector<uint32_t> output_tensor_end{};
+    for (auto index = 0; index < this->get_legacy_shape().rank(); index++) {
+        output_tensor_start.push_back(0);
+        output_tensor_end.push_back(output_tensor_shape[index] - 1);
+    }
     return this->unpad(output_tensor_start, output_tensor_end);
 }
 

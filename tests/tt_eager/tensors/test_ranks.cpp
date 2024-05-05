@@ -21,6 +21,19 @@ using namespace tt_metal;
 using namespace constants;
 
 
+bool test_2d_tensor(Device *device) {
+    bool pass = true;
+
+    Shape shape = {30, 30};
+    Tensor tensor = tt::numpy::random::random(shape);
+    tensor = tensor.pad_to_tile(0.0f);
+    tensor = tensor.to(Layout::TILE);
+    tensor = tensor.to(device);
+    pass &= tensor.get_shape().rank() == 2;
+
+    return pass;
+}
+
 bool test_3d_tensor(Device *device) {
     bool pass = true;
 
@@ -68,7 +81,7 @@ bool test_6d_tensor(Device *device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 5;
+    pass &= tensor.get_shape().rank() == 6;
 
     return pass;
 }
@@ -81,7 +94,7 @@ bool test_7d_tensor(Device *device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 5;
+    pass &= tensor.get_shape().rank() == 7;
 
     return pass;
 }
@@ -94,7 +107,7 @@ bool test_8d_tensor(Device *device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 5;
+    pass &= tensor.get_shape().rank() == 8;
 
     return pass;
 }
@@ -110,9 +123,13 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
+        pass &= test_2d_tensor(device);
         pass &= test_3d_tensor(device);
         pass &= test_4d_tensor(device);
-        //pass &= test_5d_tensor(device);
+        pass &= test_5d_tensor(device);
+        pass &= test_6d_tensor(device);
+        pass &= test_7d_tensor(device);
+        pass &= test_8d_tensor(device);
 
         pass &= tt_metal::CloseDevice(device);
 
