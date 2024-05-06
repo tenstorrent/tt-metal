@@ -26,7 +26,7 @@ namespace ckernel {
  */
 ALWI void copy_tile_to_dst_init_short(uint32_t cbid = 0, uint32_t transpose = 0)
 {
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(transpose)  ));
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(transpose, false /*transpose within 16x16 face*/, cbid)  ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)  ));
 }
 /**
