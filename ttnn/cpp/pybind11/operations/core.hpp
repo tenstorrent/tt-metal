@@ -122,7 +122,7 @@ Args:
         * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
         * :attr:`dtype`: the optional output data type.
         * :attr:`memory_config`: the optional output memory configuration.
-
+        * :attr:`device`: Device/DeviceMesh whose worker thread on host should be used for the layout conversion
     Example::
         >>> device_id = 0
         >>> device = ttnn.open_device(device_id=device_id)
@@ -130,11 +130,35 @@ Args:
         >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
         >>> print(tensor[0,0,:3])
         Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 ))doc",
-        ttnn::pybind_arguments_t{
-            py::arg("tensor"),
-            py::arg("layout"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{
+            [](const std::decay_t<decltype(ttnn::to_layout)> self,
+               const ttnn::Tensor& tensor,
+               const ttnn::Layout layout,
+               const std::optional<ttnn::DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               Device* device) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, device);
+               },
+               py::arg("tensor"),
+               py::arg("layout"),
+               py::arg("dtype") = std::nullopt,
+               py::arg("memory_config") = std::nullopt,
+               py::arg("device") = std::nullopt},
+        ttnn::pybind_overload_t{
+            [](const std::decay_t<decltype(ttnn::to_layout)> self,
+               const ttnn::Tensor& tensor,
+               const ttnn::Layout layout,
+               const std::optional<ttnn::DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               DeviceMesh* device) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, device);
+               },
+               py::arg("tensor"),
+               py::arg("layout"),
+               py::arg("dtype") = std::nullopt,
+               py::arg("memory_config") = std::nullopt,
+               py::arg("device") = std::nullopt});
+    
 }
 
 }  // namespace core

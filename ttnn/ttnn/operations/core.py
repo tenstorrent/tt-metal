@@ -266,7 +266,7 @@ def from_torch(
         tensor = ttl.tensor.Tensor(tensor, dtype)
 
     if layout is not None:
-        tensor = ttnn.to_layout(tensor, layout)
+        tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
         if memory_config is None:
@@ -316,7 +316,11 @@ class TorchTensor(torch.Tensor):
     name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors, golden_function=_golden_function
 )
 def to_torch(
-    tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None, mesh_composer: Optional[ttnn.MeshToTensor] = None
+    tensor: ttnn.Tensor,
+    *,
+    torch_rank: Optional[int] = None,
+    mesh_composer: Optional[ttnn.MeshToTensor] = None,
+    device: Optional[ttnn.Device] = None,
 ) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
@@ -334,24 +338,20 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
-    if mesh_composer:
-        return mesh_composer.compose(tensor)
-
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-        tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
+        tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
     shape_without_tile_padding = tuple(tensor.shape)
-    tensor = tensor.reshape(tensor.shape.with_tile_padding().value)
-
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
     if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
+    if mesh_composer:
+        return mesh_composer.compose(tensor)
     tensor = tensor.to_torch()
-
     slices = [slice(None, x) for x in shape_without_tile_padding]
     tensor = tensor[slices]
 

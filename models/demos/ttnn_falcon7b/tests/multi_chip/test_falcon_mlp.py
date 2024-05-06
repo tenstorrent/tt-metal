@@ -104,7 +104,9 @@ def test_falcon_mlp(
 
     passed, pcc = assert_with_pcc(
         torch_output,
-        ttnn.to_torch(ttnn_output, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).to(torch_output.dtype),
+        ttnn.to_torch(ttnn_output, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh).to(
+            torch_output.dtype
+        ),
         expected_pcc,
     )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")

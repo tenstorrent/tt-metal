@@ -220,6 +220,8 @@ struct Tensor {
 
     Tensor to(Layout target_layout, Device* worker = nullptr) const;
 
+    Tensor to(Layout target_layout, DeviceMesh* device_mesh) const;
+
     Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
 
     Tensor cpu(CommandQueue &queue, bool blocking = true) const;
