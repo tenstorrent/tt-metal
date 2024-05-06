@@ -61,21 +61,13 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(
-        torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     if torch_attention_mask is not None:
         head_masks = [
             ttnn.from_torch(
                 torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             for index in range(config.num_hidden_layers)
         ]
@@ -87,10 +79,15 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     durations = []
     for _ in range(2):
         start = time.time()
+        device_hidden_states = ttnn.to_device(hidden_states, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        device_head_masks = [
+            ttnn.to_device(head_mask, device=device, memory_config=ttnn.L1_MEMORY_CONFIG) for head_mask in head_masks
+        ]
+
         tt_output = functional_vit.vit_encoder(
             config,
-            hidden_states,
-            head_masks,
+            device_hidden_states,
+            device_head_masks,
             parameters=parameters,
         )
         tt_output = ttnn.from_device(tt_output)

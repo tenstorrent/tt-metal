@@ -25,7 +25,7 @@ inline bool any_tensor_on_multi_device(const Tensors& tensors) {
     return std::any_of(tensors.begin(), tensors.end(), [](const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE; });
 }
 
-static Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {}) {
+Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device();
@@ -647,12 +647,18 @@ void launch_op(
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors
+    const OptionalTensors optional_output_tensors,
+    bool enable_autoformat_device
 ) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
     auto& workers = output_tensors.at(0).workers;
+    if (not enable_autoformat_device and workers.empty()) {
+        // Run on the host
+        output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
+        return;
+    }
     for (auto& output_tensor : output_tensors) {
         TT_FATAL(output_tensor.workers.size(), "Worker threads must be specified for outputs populated by launch_op. This API can only be used for creating output tensors on device.");
         TT_FATAL(output_tensor.workers == workers, "Worker threads must be consistent across all outputs populated by launch_op.");
@@ -827,7 +833,10 @@ void validate_workers_and_storage(const std::vector<Tensor>& inputs, const std::
     }
 }
 
-std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs) {
+std::vector<Device*> get_workers_for_op_output(
+    const std::vector<Tensor>&& inputs,
+    const std::vector<std::optional<const Tensor>>&& optional_inputs,
+    bool enable_autoformat_device) {
     std::vector<Device*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
     // of workers used for the op (and assigned to the ouput) is the minimum
@@ -853,14 +862,15 @@ std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& input
             }
         }
     }
-    validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
-    // Workers not specified - inputs are on host and not multi-device.
-    // Use the default device from autoformat.
-    if (not workers_for_op.size()) {
-        TT_FATAL(AutoFormat::GetDefaultDevice(), "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for inputs to op.");
-        workers_for_op = {AutoFormat::GetDefaultDevice()};
+    if (enable_autoformat_device) {
+        validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
+        // Workers not specified - inputs are on host and not multi-device.
+        // Use the default device from autoformat.
+        if (not workers_for_op.size()) {
+            TT_FATAL(AutoFormat::GetDefaultDevice(), "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for inputs to op.");
+            workers_for_op = {AutoFormat::GetDefaultDevice()};
+        }
     }
     return workers_for_op;
 }
-
 }

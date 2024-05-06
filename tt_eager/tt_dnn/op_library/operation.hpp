@@ -85,6 +85,9 @@ struct function_traits<fn<TReturn, TArgs...> T::*> {
 template <class FnPtr>
 using last_arg_of_function_t = typename function_traits<FnPtr>::last_arg_t;
 
+template <class FnPtr>
+using return_arg_of_function_t = typename function_traits<FnPtr>::return_t;
+
 template<typename, typename = std::void_t<>>
 struct has_create_program : std::false_type {};
 

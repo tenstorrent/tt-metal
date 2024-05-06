@@ -226,6 +226,7 @@ from ttnn.core import (
     create_sharded_memory_config,
     dump_memory_config,
     load_memory_config,
+    dump_stack_trace_on_segfault,
 )
 
 import ttnn.reflection
