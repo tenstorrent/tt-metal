@@ -554,8 +554,8 @@ class TestParametrized:
         use_program_cache,
         async_mode,
     ):
-        pytest.skip(f"#7947")
         if async_mode:
+            pytest.skip(f"Skipping due to Issue #8133, async is hanging with FD2")  # TODO: Remove when #8133 is fixed
             if llm_mode == "prefill" and seq_len == 128:
                 pytest.skip(
                     f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
