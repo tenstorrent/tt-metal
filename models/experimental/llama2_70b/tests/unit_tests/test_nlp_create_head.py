@@ -242,17 +242,16 @@ def run_test_create_head2(
     q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch)
     logger.info(f"PCC value: {output_pcc_q}")
-    assert out_pass_q
 
     k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch)
     logger.info(f"PCC value: {output_pcc_k}")
-    assert out_pass_k
 
     v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch)
     logger.info(f"PCC value: {output_pcc_v}")
-    assert out_pass_v
+
+    assert out_pass_q and out_pass_k and out_pass_v
 
 
 @skip_for_grayskull("Requires eth connected devices to run")

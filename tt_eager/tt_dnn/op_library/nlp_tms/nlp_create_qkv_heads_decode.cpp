@@ -120,11 +120,13 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     noc_x_coords.reserve(in_num_cores_x);
     for (uint32_t x = 0; x < in_num_cores_x; ++x) {
         noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
+        log_info("[xuncai] noc_x_coords[{}]: {}", x, noc_x_coords[x]);
     }
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(in_num_cores_y);
     for (uint32_t y = 0; y < in_num_cores_y; ++y) {
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
+        log_info("[xuncai] noc_y_coords[{}]: {}", y, noc_y_coords[y]);
     }
 
     uint32_t q_start_addr = q_base_addr;
